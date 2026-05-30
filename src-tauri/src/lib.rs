@@ -10,6 +10,7 @@
 
 pub mod autostart;
 pub mod hotkey;
+pub mod keyprovider;
 mod tray;
 mod window_pos;
 

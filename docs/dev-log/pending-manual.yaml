@@ -30,3 +30,19 @@ pending:
     added_at: 2026-05-31T10:00:00Z
     status: 待确认
     note: "cursor_position 逻辑坐标 vs monitor 物理坐标混用，2x 屏可能偏移；单测仅覆盖 1x。需 Retina 屏运行验证。"
+
+  - acceptance_id: V0-F3-A03-H01
+    version: V0
+    assertion: "macOS 钥匙串密钥条目的 kSecAttrAccessible 属性精确值为 kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly，且 kSecAttrSynchronizable=false"
+    source_anchor: 设计文档§六（AfterFirstUnlockThisDeviceOnly + 绝不同步）
+    evidence_ref: docs/dev-log/v0/f3-encrypted-db/s06-keyprovider/coding.md（当前路径：回退；keyring apple-native 保证 synchronizable=false 不漫游，accessibility 精确类未强制）
+    added_at: 2026-05-31T12:00:00Z
+    status: 待确认
+    note: |
+      当前实现走回退路径：启用 keyring apple-native feature，以 kSecAttrSynchronizable=false
+      存储密钥（不漫游 iCloud），满足设计§六「不漫游」核心硬约束。但 kSecAttrAccessible 精确
+      属性未被强制设为 AfterFirstUnlockThisDeviceOnly（keyring 默认为 WhenUnlocked）。
+      强化方向：引入 security-framework crate，通过 SecAccessControl::create_with_protection(
+      Some(ProtectionMode::AccessibleAfterFirstUnlockThisDeviceOnly), 0) 存取密钥，
+      并使用 SecItemCopyMatching 回读属性验证。此项需真实 macOS 钥匙串人工验证，
+      headless 自动测试不触碰真实 Keychain。
