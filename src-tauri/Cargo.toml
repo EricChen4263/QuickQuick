@@ -1,0 +1,35 @@
+[package]
+name = "quickquick"
+version = "0.0.1"
+description = "QuickQuick - 剪贴板历史与翻译工具"
+authors = ["QuickQuick"]
+edition = "2021"
+
+[[bin]]
+name = "quickquick"
+path = "src/main.rs"
+
+[lib]
+name = "quickquick_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon"] }
+tauri-plugin-autostart = "2"
+tauri-plugin-updater = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rusqlite = { version = "0.32", features = ["bundled-sqlcipher-vendored-openssl"] }
+keyring = { version = "3", features = [] }
+uuid = { version = "1", features = ["v4"] }
+thiserror = "1"
+
+[dev-dependencies]
+tempfile = "3"
+
+[features]
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]
