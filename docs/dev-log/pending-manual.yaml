@@ -46,3 +46,30 @@ pending:
       Some(ProtectionMode::AccessibleAfterFirstUnlockThisDeviceOnly), 0) 存取密钥，
       并使用 SecItemCopyMatching 回读属性验证。此项需真实 macOS 钥匙串人工验证，
       headless 自动测试不触碰真实 Keychain。
+
+  - acceptance_id: V1-F2-A13
+    version: V1
+    assertion: "历史面板实际行为：列表+预览双栏、活动屏上中定位、失焦即隐/Esc关/选中后自动关"
+    source_anchor: 设计文档§八#1/#3/关闭行为 + §九.2
+    evidence_ref: docs/dev-log/v1/f2-history-panel/（运行录屏，GUI 人工确认）
+    added_at: 2026-05-31T15:00:00Z
+    status: 待确认
+    note: "搜索/筛选/键盘流/收藏纯逻辑已实现并测试；面板 DOM 装配与 GUI 行为需运行确认。"
+
+  - acceptance_id: V1-F2-A14
+    version: V1
+    assertion: "历史面板视觉还原设计语言：峡湾青蓝 #3A7CA5 / 中圆角~10px / 弹窗毛玻璃 / 随系统明暗"
+    source_anchor: 设计文档§九.1（视觉基调与设计语言）
+    evidence_ref: docs/dev-log/v1/f2-history-panel/（截图对照设计语言）
+    added_at: 2026-05-31T15:00:00Z
+    status: 待确认
+    note: "UI 视觉还原（Fjord Teal-Blue 设计系统）属审美人工确认，AI/headless 判不准。"
+
+  - acceptance_id: V1-F3-A15-H01
+    version: V1
+    assertion: "回写轮询 wait_for_count_increase 生产实现应加 sleep(1ms) 等待，避免忙轮询微秒级耗尽致虚假 Timeout"
+    source_anchor: 设计文档§三#3（等 changeCount 反映再粘贴）+ code-reviewer 观察
+    evidence_ref: docs/dev-log/v1/f3-paste-back/s06-paste/review.md（观察记录）
+    added_at: 2026-05-31T15:00:00Z
+    status: 待确认
+    note: "当前测试层 FakePasteBackend 写入即递增、1 次即过，不影响 V1 验收；运行期实现强化项。"
