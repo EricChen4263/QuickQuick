@@ -194,4 +194,12 @@ acceptance:
     level: 版本
     status: 待验
 
-change_log: []
+change_log:
+  - id: CL-V1-001
+    time: 2026-05-31T14:00:00Z
+    by: 编排器
+    item: [V1-F2-A09, V1-F2-A10, V1-F2-A12, V1-F3-A16]
+    field: verify.path（文件命名）
+    diff: "前端测试文件命名带前缀以匹配冻结 runner 的 vitest 子串过滤：search.test.ts→history-search.test.ts、filter.test.ts→history-filter.test.ts、keyboard.test.ts→keyboard-nav.test.ts、pasteMode.test.ts→paste-mode.test.ts（均置于 src/panels/history/）"
+    reason: "冻结 runner 用 kebab 串（如 'pnpm test history-search'），vitest 按文件路径子串过滤，原 path 文件名（search.test.ts 等）不含该串致不可命中。仅校正文件命名使 runner 可执行，assertion/expect 不变，非放宽。"
+    source: 设计文档§八#4/§九.2 + 既有冻结 runner

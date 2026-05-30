@@ -1,1 +1,1 @@
-{"root":["./src/app.tsx","./src/main.tsx","./src/smoke.test.ts","./src/shell/windowroute.test.ts","./src/shell/windowroute.ts"],"version":"5.9.3"}
+{"root":["./src/app.tsx","./src/main.tsx","./src/smoke.test.ts","./src/panels/history/filter.ts","./src/panels/history/history-filter.test.ts","./src/panels/history/history-search.test.ts","./src/panels/history/keyboard-nav.test.ts","./src/panels/history/keyboard.ts","./src/panels/history/search.ts","./src/shell/windowroute.test.ts","./src/shell/windowroute.ts"],"version":"5.9.3"}
