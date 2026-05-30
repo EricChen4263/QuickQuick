@@ -9,6 +9,7 @@
 //! - `window_pos`：预热窗口定位逻辑（光标所在显示器水平居中、靠上 15%）
 
 pub mod autostart;
+pub mod db;
 pub mod hotkey;
 pub mod keyprovider;
 mod tray;
