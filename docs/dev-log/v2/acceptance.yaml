@@ -1,0 +1,179 @@
+# 版本前置验收标准清单（开工前登记、冻结）
+# 来源：从 docs/QuickQuick-设计文档.md §四 机械派生——只翻译不发明、不放宽。
+version: V2
+title: Phase 2 翻译核心（可插拔框架 + 4家provider + 触发与呈现UX）
+source_doc: docs/QuickQuick-设计文档.md
+frozen_at: 2026-05-31T00:00:00Z
+criteria_freeze: V2-criteria@2026-05-31
+
+coverage_check:
+  功能正确性:  covered
+  测试充分性:  covered
+  工程质量:    covered
+  性能:        N/A (翻译核心无独立量化性能阈值；网络往返受外部源限制)
+  UI还原度:    covered                                   # 浮窗/固定面板还原（人工确认点）
+  资源规范:    N/A (复用既有图标资源)
+  安全:        covered                                   # 凭据 secret 进 keychain
+  留痕产出:    covered
+  人工确认点:  covered
+
+acceptance:
+  # ===== V2-F1 provider 可插拔框架 =====
+  - id: V2-F1-A01
+    assertion: "薄 provider 契约：provider 仅实现 声明能力/请求翻译/响应解析三件；缓存·限流·凭据·重试·超时·取消下沉核心框架"
+    category: 功能正确性
+    source_anchor: 设计文档§4.1#1（薄 provider + 厚核心框架）
+    kind: objective
+    verify: { type: test_id, ref: provider_trait_contract, runner: "cargo test --manifest-path src-tauri/Cargo.toml provider_contract", path: src-tauri/tests/translate.rs, expect: pass }
+    evidence_ref: docs/dev-log/v2/f1-framework/s01-trait/test.md
+    level: 小功能
+    status: 待验
+  - id: V2-F1-A02
+    assertion: "语言归一：本地检测源语言定方向（中文↔非中文走 Unicode 脚本判断）+ 内部 BCP-47 + 每 provider 映射表抹平 zh/zh-CN/zh-Hans"
+    category: 功能正确性
+    source_anchor: 设计文档§4.1#2（本地检测定方向 + BCP-47 + provider 映射表）
+    kind: objective
+    verify: { type: test_id, ref: lang_normalize_and_direction, runner: "cargo test --manifest-path src-tauri/Cargo.toml lang_norm", path: src-tauri/tests/translate.rs, expect: pass }
+    evidence_ref: docs/dev-log/v2/f1-framework/s02-lang/test.md
+    level: 小功能
+    status: 待验
+  - id: V2-F1-A03
+    assertion: "统一错误枚举：provider 原始错误归一到 quota/auth/network/ratelimit/unsupported/tooLong/serverError 等枚举"
+    category: 功能正确性
+    source_anchor: 设计文档§4.1#3（统一错误枚举）
+    kind: objective
+    verify: { type: test_id, ref: error_enum_mapping, runner: "cargo test --manifest-path src-tauri/Cargo.toml error_enum", path: src-tauri/tests/translate.rs, expect: pass }
+    evidence_ref: docs/dev-log/v2/f1-framework/s03-error/test.md
+    level: 小功能
+    status: 待验
+  - id: V2-F1-A04
+    assertion: "错误降级：同源瞬时错误(网络抖动/429)自动退避重试同一源；跨源切换永远显式（绝不自动 failover 跨源）"
+    category: 功能正确性
+    source_anchor: 设计文档§4.1#3关键区分（同源退避重试 vs 跨源显式）
+    kind: objective
+    verify: { type: test_id, ref: same_source_retry_no_cross_failover, runner: "cargo test --manifest-path src-tauri/Cargo.toml retry_policy", path: src-tauri/tests/translate.rs, expect: pass }
+    evidence_ref: docs/dev-log/v2/f1-framework/s03-error/test.md
+    level: 小功能
+    status: 待验
+  - id: V2-F1-A05
+    assertion: "凭据配置：provider 声明结构化字段 schema，框架动态渲染表单 + secret 字段进 keychain、非密存加密 DB"
+    category: 安全
+    source_anchor: 设计文档§4.1#4（provider 声明 schema + secret 进 keychain）
+    kind: objective
+    verify: { type: test_id, ref: credential_schema_keychain, runner: "cargo test --manifest-path src-tauri/Cargo.toml credential", path: src-tauri/tests/translate.rs, expect: pass }
+    evidence_ref: docs/dev-log/v2/f1-framework/s04-credential/test.md
+    level: 小功能
+    status: 待验
+  - id: V2-F1-A06
+    assertion: "缓存：键=源文+源语言+目标语+provider，落 DB 持久 + 容量 LRU 淘汰；换源必然 miss 真调新源"
+    category: 功能正确性
+    source_anchor: 设计文档§4.1#5（键含 provider，落库持久 + LRU）
+    kind: objective
+    verify: { type: test_id, ref: cache_key_includes_provider_lru, runner: "cargo test --manifest-path src-tauri/Cargo.toml cache", path: src-tauri/tests/translate.rs, expect: pass }
+    evidence_ref: docs/dev-log/v2/f1-framework/s05-cache/test.md
+    level: 小功能
+    status: 待验
+  - id: V2-F1-A07
+    assertion: "超时/取消归框架：每调用带超时驱动 network 错误枚举；连续选中即译取消在途旧请求只认最新"
+    category: 功能正确性
+    source_anchor: 设计文档§4.1+（超时/取消归核心框架，取消在途旧请求）
+    kind: objective
+    verify: { type: test_id, ref: timeout_and_cancel_inflight, runner: "cargo test --manifest-path src-tauri/Cargo.toml timeout_cancel", path: src-tauri/tests/translate.rs, expect: pass }
+    evidence_ref: docs/dev-log/v2/f1-framework/s03-error/test.md
+    level: 小功能
+    status: 待验
+  - id: V2-F1-A08
+    assertion: "编译期静态注册表（Rust trait + registry）：4 家 provider 注册可枚举"
+    category: 功能正确性
+    source_anchor: 设计文档§4.1+（编译期静态注册表）
+    kind: objective
+    verify: { type: test_id, ref: static_registry_lists_four, runner: "cargo test --manifest-path src-tauri/Cargo.toml registry", path: src-tauri/tests/translate.rs, expect: pass }
+    evidence_ref: docs/dev-log/v2/f1-framework/s01-trait/test.md
+    level: 小功能
+    status: 待验
+  # ===== V2-F2 四家 provider 适配 =====
+  - id: V2-F2-A09
+    assertion: "MyMemory 适配（默认源，无 key）：能力声明 + 请求构造 + 响应/错误解析（mock HTTP）"
+    category: 功能正确性
+    source_anchor: 设计文档§4.2（MyMemory 默认源）
+    kind: objective
+    verify: { type: test_id, ref: provider_mymemory, runner: "cargo test --manifest-path src-tauri/Cargo.toml mymemory", path: src-tauri/tests/providers.rs, expect: pass }
+    evidence_ref: docs/dev-log/v2/f2-providers/s06-mymemory/test.md
+    level: 小功能
+    status: 待验
+  - id: V2-F2-A10
+    assertion: "百度/DeepL Free/Google 三家适配：各自鉴权字段 + 请求映射 + 错误码归一（mock HTTP）"
+    category: 功能正确性
+    source_anchor: 设计文档§4.2（v1 内置 4 家：百度+DeepL Free+Google）
+    kind: objective
+    verify: { type: test_id, ref: provider_baidu_deepl_google, runner: "cargo test --manifest-path src-tauri/Cargo.toml providers_keyed", path: src-tauri/tests/providers.rs, expect: pass }
+    evidence_ref: docs/dev-log/v2/f2-providers/s07-keyed/test.md
+    level: 小功能
+    status: 待验
+  - id: V2-F2-A11
+    assertion: "撞额度/源失败显式提示并引导填邮箱或 key，不静默切换非官方源"
+    category: 功能正确性
+    source_anchor: 设计文档§4.2（失败/额度=显式提示，不静默切换）
+    kind: objective
+    verify: { type: test_id, ref: quota_explicit_no_silent_switch, runner: "cargo test --manifest-path src-tauri/Cargo.toml quota_prompt", path: src-tauri/tests/providers.rs, expect: pass }
+    evidence_ref: docs/dev-log/v2/f2-providers/s07-keyed/test.md
+    level: 小功能
+    status: 待验
+  # ===== V2-F3 触发与呈现 UX =====
+  - id: V2-F3-A12
+    assertion: "选中即译触发纪律：选中后冒不打扰小图标，点击或 Cmd+Shift+T 才译（绝非选中自动弹）"
+    category: 功能正确性
+    source_anchor: 设计文档§4.3/§八#5（选中冒图标+点按/热键才译）
+    kind: objective
+    verify: { type: test_id, ref: select_translate_icon_trigger, runner: "pnpm test select-trigger", path: src/translate/selectTrigger.test.ts, expect: pass }
+    evidence_ref: docs/dev-log/v2/f3-translate-ux/s08-select-icon/test.md
+    level: 小功能
+    status: 待验
+  - id: V2-F3-A13
+    assertion: "方向智能双向：自动识别→默认中文；本是中文→翻英文；目标语可配（前端逻辑单测）"
+    category: 功能正确性
+    source_anchor: 设计文档§4.3（智能双向方向）
+    kind: objective
+    verify: { type: test_id, ref: smart_direction, runner: "cargo test --manifest-path src-tauri/Cargo.toml smart_direction", path: src-tauri/tests/translate.rs, expect: pass }
+    evidence_ref: docs/dev-log/v2/f3-translate-ux/s09-panel/test.md
+    level: 小功能
+    status: 待验
+  - id: V2-F3-A14
+    assertion: "翻译历史与剪贴板历史分开存储；剪贴板条目一键翻译写入翻译历史"
+    category: 功能正确性
+    source_anchor: 设计文档§4.3（翻译历史与剪贴板历史分开；一键翻译）
+    kind: objective
+    verify: { type: test_id, ref: translate_history_separate, runner: "cargo test --manifest-path src-tauri/Cargo.toml translate_history", path: src-tauri/tests/translate.rs, expect: pass }
+    evidence_ref: docs/dev-log/v2/f3-translate-ux/s09-panel/test.md
+    level: 小功能
+    status: 待验
+  - id: V2-F3-A15
+    assertion: "译文操作：一键复制 + 发音朗读(SpeechSynthesis) + 切目标语/换源重译 + 存翻译历史（前端逻辑单测）"
+    category: 功能正确性
+    source_anchor: 设计文档§4.3（译文操作集）
+    kind: objective
+    verify: { type: test_id, ref: translate_actions, runner: "pnpm test translate-actions", path: src/translate/actions.test.ts, expect: pass }
+    evidence_ref: docs/dev-log/v2/f3-translate-ux/s09-panel/test.md
+    level: 小功能
+    status: 待验
+  - id: V2-F3-A16
+    assertion: "呈现形态实际行为：选中即译→光标旁轻量浮窗（点别处消失）；剪贴板/手动→固定面板上下对照"
+    category: UI还原度
+    source_anchor: 设计文档§4.3/§九.2（浮窗 vs 固定面板）
+    kind: manual_confirm
+    verify: null
+    evidence_ref: docs/dev-log/v2/f3-translate-ux/（运行录屏/截图，coder 收集）
+    level: 大功能
+    status: 待补证据
+  # ===== 留痕产出 =====
+  - id: V2-A-LOG
+    assertion: "本版每个小功能三联留痕齐 + 每个大功能报告齐"
+    category: 留痕产出
+    source_anchor: goal-dev-workflow 规范
+    kind: objective
+    verify: { type: script, ref: "for d in docs/dev-log/v2/f*/s*/; do test -f $d/coding.md && test -f $d/test.md && test -f $d/review.md || exit 1; done", expect: pass }
+    evidence_ref: docs/dev-log/v2/
+    level: 版本
+    status: 待验
+
+change_log: []

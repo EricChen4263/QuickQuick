@@ -1,0 +1,197 @@
+# 版本前置验收标准清单（开工前登记、冻结）
+# 来源：从 docs/QuickQuick-设计文档.md §三/§八/§九 机械派生——只翻译不发明、不放宽。
+version: V1
+title: Phase 1 文本剪贴板（捕获引擎 + 历史面板 + 回写粘贴）
+source_doc: docs/QuickQuick-设计文档.md
+frozen_at: 2026-05-31T00:00:00Z
+criteria_freeze: V1-criteria@2026-05-31
+
+coverage_check:
+  功能正确性:  covered
+  测试充分性:  covered
+  工程质量:    covered
+  性能:        covered                                   # 轮询~500ms、瞬开（部分归人工确认）
+  UI还原度:    covered                                   # 历史面板设计语言还原（人工确认点）
+  资源规范:    N/A (Phase 1 无新增图标/媒体资源，复用 Phase 0 图标)
+  安全:        covered                                   # 敏感跳过 + App 排除 + 软删落加密库
+  留痕产出:    covered
+  人工确认点:  covered
+
+acceptance:
+  # ===== V1-F1 剪贴板捕获引擎 =====
+  - id: V1-F1-A01
+    assertion: "捕获同存 纯文本 + 富文本/HTML 双字段（同一次复制一起存）；显示/搜索/判重走纯文本键"
+    category: 功能正确性
+    source_anchor: 设计文档§三#5（多格式存储模型：纯文本+富文本双字段）
+    kind: objective
+    verify: { type: test_id, ref: capture_dual_field, runner: "cargo test --manifest-path src-tauri/Cargo.toml capture_dual", path: src-tauri/tests/clipboard.rs, expect: pass }
+    evidence_ref: docs/dev-log/v1/f1-capture/s01-capture-core/test.md
+    level: 小功能
+    status: 待验
+  - id: V1-F1-A02
+    assertion: "~500ms 轮询 changeCount，一递增即捕获（mock changeCount 驱动）"
+    category: 功能正确性
+    source_anchor: 设计文档§三#3/关键机制（~500ms 轮询 changeCount）
+    kind: objective
+    verify: { type: test_id, ref: poll_changecount_triggers_capture, runner: "cargo test --manifest-path src-tauri/Cargo.toml poll_change", path: src-tauri/tests/clipboard.rs, expect: pass }
+    evidence_ref: docs/dev-log/v1/f1-capture/s01-capture-core/test.md
+    level: 小功能
+    status: 待验
+  - id: V1-F1-A03
+    assertion: "防自污染：工具自写剪贴板附私有 UTI 标记，轮询见标记即跳过不记"
+    category: 功能正确性
+    source_anchor: 设计文档§三#2（私有 pasteboard 类型标记防自捕）
+    kind: objective
+    verify: { type: test_id, ref: self_write_marker_skipped, runner: "cargo test --manifest-path src-tauri/Cargo.toml self_marker", path: src-tauri/tests/clipboard.rs, expect: pass }
+    evidence_ref: docs/dev-log/v1/f1-capture/s01-capture-core/test.md
+    level: 小功能
+    status: 待验
+  - id: V1-F1-A04
+    assertion: "内容去重+置顶刷新：复制已存在内容不新建，原条目移最前刷新时间戳（文本哈希判重）"
+    category: 功能正确性
+    source_anchor: 设计文档§三关键机制（去重=内容去重+置顶刷新，文本按文本哈希）
+    kind: objective
+    verify: { type: test_id, ref: dedup_and_bump, runner: "cargo test --manifest-path src-tauri/Cargo.toml dedup", path: src-tauri/tests/clipboard.rs, expect: pass }
+    evidence_ref: docs/dev-log/v1/f1-capture/s02-dedup/test.md
+    level: 小功能
+    status: 待验
+  - id: V1-F1-A05
+    assertion: "置顶刷新由业务逻辑显式改库实现，不产生新捕获记录"
+    category: 功能正确性
+    source_anchor: 设计文档§三#关键机制（置顶刷新由业务逻辑显式改库，绝不靠重新捕获）
+    kind: objective
+    verify: { type: test_id, ref: bump_no_new_record, runner: "cargo test --manifest-path src-tauri/Cargo.toml bump_no_new", path: src-tauri/tests/clipboard.rs, expect: pass }
+    evidence_ref: docs/dev-log/v1/f1-capture/s02-dedup/test.md
+    level: 小功能
+    status: 待验
+  - id: V1-F1-A06
+    assertion: "敏感跳过：concealed/transient 平台标记自动跳过，不做内容启发式识别"
+    category: 安全
+    source_anchor: 设计文档§三#6（平台 concealed/transient 标记跳过，不猜内容）
+    kind: objective
+    verify: { type: test_id, ref: concealed_skipped, runner: "cargo test --manifest-path src-tauri/Cargo.toml concealed", path: src-tauri/tests/privacy.rs, expect: pass }
+    evidence_ref: docs/dev-log/v1/f1-capture/s03-privacy/test.md
+    level: 小功能
+    status: 待验
+  - id: V1-F1-A07
+    assertion: "App 排除名单：名单内 app 来源的复制不记录"
+    category: 安全
+    source_anchor: 设计文档§三#6（App 排除名单手动补刀）
+    kind: objective
+    verify: { type: test_id, ref: app_exclude_list, runner: "cargo test --manifest-path src-tauri/Cargo.toml app_exclude", path: src-tauri/tests/privacy.rs, expect: pass }
+    evidence_ref: docs/dev-log/v1/f1-capture/s03-privacy/test.md
+    level: 小功能
+    status: 待验
+  - id: V1-F1-A08
+    assertion: "托盘暂停开关：暂停状态下不捕获"
+    category: 功能正确性
+    source_anchor: 设计文档§三关键机制（隐私三件套：托盘暂停开关）
+    kind: objective
+    verify: { type: test_id, ref: pause_stops_capture, runner: "cargo test --manifest-path src-tauri/Cargo.toml pause", path: src-tauri/tests/clipboard.rs, expect: pass }
+    evidence_ref: docs/dev-log/v1/f1-capture/s03-privacy/test.md
+    level: 小功能
+    status: 待验
+  # ===== V1-F2 历史面板 UI =====
+  - id: V1-F2-A09
+    assertion: "实时搜索：输入即过滤历史列表（前端逻辑单测）"
+    category: 功能正确性
+    source_anchor: 设计文档§八#4/§九.2（搜索框常驻焦点，输入即实时过滤）
+    kind: objective
+    verify: { type: test_id, ref: realtime_search_filter, runner: "pnpm test history-search", path: src/panels/history/search.test.ts, expect: pass }
+    evidence_ref: docs/dev-log/v1/f2-history-panel/s04-list-search/test.md
+    level: 小功能
+    status: 待验
+  - id: V1-F2-A10
+    assertion: "类型筛选下拉（全部/文本/富文本）过滤生效"
+    category: 功能正确性
+    source_anchor: 设计文档§九.2（类型筛选放搜索框右侧下拉）
+    kind: objective
+    verify: { type: test_id, ref: type_filter, runner: "pnpm test history-filter", path: src/panels/history/filter.test.ts, expect: pass }
+    evidence_ref: docs/dev-log/v1/f2-history-panel/s04-list-search/test.md
+    level: 小功能
+    status: 待验
+  - id: V1-F2-A11
+    assertion: "★ 置顶收藏：收藏项排顶部，收藏豁免清理"
+    category: 功能正确性
+    source_anchor: 设计文档§九.2（★ 置顶收藏）+ §五（收藏永远豁免）
+    kind: objective
+    verify: { type: test_id, ref: favorite_pin_and_exempt, runner: "cargo test --manifest-path src-tauri/Cargo.toml favorite", path: src-tauri/tests/clipboard.rs, expect: pass }
+    evidence_ref: docs/dev-log/v1/f2-history-panel/s05-favorite/test.md
+    level: 小功能
+    status: 待验
+  - id: V1-F2-A12
+    assertion: "键盘流逻辑：↑↓移动高亮不离搜索框、Enter 选中、Cmd+1~9 快选前九条"
+    category: 功能正确性
+    source_anchor: 设计文档§八#4（Spotlight 键盘模型 + Cmd+1~9）
+    kind: objective
+    verify: { type: test_id, ref: keyboard_nav, runner: "pnpm test keyboard-nav", path: src/panels/history/keyboard.test.ts, expect: pass }
+    evidence_ref: docs/dev-log/v1/f2-history-panel/s04-list-search/test.md
+    level: 小功能
+    status: 待验
+  - id: V1-F2-A13
+    assertion: "历史面板实际行为：列表+预览双栏、活动屏上中定位、失焦即隐/Esc关/选中后自动关"
+    category: 人工确认点
+    source_anchor: 设计文档§八#1/#3/关闭行为 + §九.2
+    kind: manual_confirm
+    verify: null
+    evidence_ref: docs/dev-log/v1/f2-history-panel/（运行录屏，coder 收集）
+    level: 大功能
+    status: 待补证据
+  - id: V1-F2-A14
+    assertion: "历史面板视觉还原设计语言：峡湾青蓝 #3A7CA5 强调色 / 中圆角 ~10px / 弹窗毛玻璃 / 随系统明暗"
+    category: UI还原度
+    source_anchor: 设计文档§九.1（视觉基调与设计语言）
+    kind: manual_confirm
+    verify: null
+    evidence_ref: docs/dev-log/v1/f2-history-panel/（截图对照设计语言，coder 收集）
+    level: 大功能
+    status: 待补证据
+  # ===== V1-F3 回写粘贴 =====
+  - id: V1-F3-A15
+    assertion: "回写时序：写回剪贴板后轮询 changeCount 反映我方写入，再发模拟粘贴（避免粘旧内容）"
+    category: 功能正确性
+    source_anchor: 设计文档§三#3（回写粘贴等 changeCount 反映再发 Cmd+V）
+    kind: objective
+    verify: { type: test_id, ref: paste_waits_changecount, runner: "cargo test --manifest-path src-tauri/Cargo.toml paste_timing", path: src-tauri/tests/paste.rs, expect: pass }
+    evidence_ref: docs/dev-log/v1/f3-paste-back/s06-paste/test.md
+    level: 小功能
+    status: 待验
+  - id: V1-F3-A16
+    assertion: "回车粘贴 / 修饰键仅复制：Enter 触发写回+粘贴，修饰键组合仅写回不粘贴"
+    category: 功能正确性
+    source_anchor: 设计文档§三关键机制（回车粘贴/修饰键仅复制）
+    kind: objective
+    verify: { type: test_id, ref: enter_paste_modifier_copy, runner: "pnpm test paste-mode", path: src/panels/history/pasteMode.test.ts, expect: pass }
+    evidence_ref: docs/dev-log/v1/f3-paste-back/s06-paste/test.md
+    level: 小功能
+    status: 待验
+  - id: V1-F3-A17
+    assertion: "焦点恢复路径：唤起前记录前台 app → 选中时隐面板 → 激活原 app → 等到前台 → 模拟粘贴（路径逻辑单测）"
+    category: 功能正确性
+    source_anchor: 设计文档§八#2（抢焦点+记住并恢复原前台 app）
+    kind: objective
+    verify: { type: test_id, ref: focus_restore_path, runner: "cargo test --manifest-path src-tauri/Cargo.toml focus_restore", path: src-tauri/tests/paste.rs, expect: pass }
+    evidence_ref: docs/dev-log/v1/f3-paste-back/s06-paste/test.md
+    level: 小功能
+    status: 待验
+  - id: V1-F3-A18
+    assertion: "粘贴后剪贴板留下被选条目 X（选取即置顶 X）"
+    category: 功能正确性
+    source_anchor: 设计文档§三#4（粘贴后剪贴板归属：留下被选条目 X）
+    kind: objective
+    verify: { type: test_id, ref: paste_leaves_selected, runner: "cargo test --manifest-path src-tauri/Cargo.toml paste_leaves", path: src-tauri/tests/paste.rs, expect: pass }
+    evidence_ref: docs/dev-log/v1/f3-paste-back/s06-paste/test.md
+    level: 小功能
+    status: 待验
+  # ===== 留痕产出 =====
+  - id: V1-A-LOG
+    assertion: "本版每个小功能三联留痕齐 + 每个大功能报告齐"
+    category: 留痕产出
+    source_anchor: goal-dev-workflow 规范
+    kind: objective
+    verify: { type: script, ref: "for d in docs/dev-log/v1/f*/s*/; do test -f $d/coding.md && test -f $d/test.md && test -f $d/review.md || exit 1; done", expect: pass }
+    evidence_ref: docs/dev-log/v1/
+    level: 版本
+    status: 待验
+
+change_log: []

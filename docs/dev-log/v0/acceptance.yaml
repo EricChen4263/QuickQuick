@@ -1,0 +1,284 @@
+# 版本前置验收标准清单（开工前登记、冻结）
+# 来源：从已冻结的 docs/QuickQuick-设计文档.md 机械派生——只翻译不发明、不放宽，每项带溯源锚。
+# 冻结后改标准须走 change_log 显式留痕。制作人逐条核对，只有核对权、没有裁量权。
+
+version: V0
+title: Phase 0 骨架（脚手架 + 托盘/热键/预热窗口 + 加密DB与schema预埋）
+source_doc: docs/QuickQuick-设计文档.md
+frozen_at: 2026-05-31T00:00:00Z
+criteria_freeze: V0-criteria@2026-05-31
+
+# 分类覆盖检查：每个声明 covered 的类别，下方 acceptance 必须至少有一个 category 匹配条目。
+coverage_check:
+  功能正确性:  covered
+  测试充分性:  covered
+  工程质量:    covered                                   # lint·类型·构建·无TODO
+  性能:        N/A (骨架阶段无量化性能阈值；预热窗口"瞬开"体感归人工确认点 V0-F2-A04)
+  UI还原度:    N/A (Phase 0 无正式 UI 面板，仅空预热窗口；UI 还原在 Phase 1+ 面板阶段验收)
+  资源规范:    covered                                   # 托盘/应用图标资源
+  安全:        covered                                   # SQLCipher 加密 + 钥匙串 + 失败不静默删
+  留痕产出:    covered
+  人工确认点:  covered                                   # 托盘显示/热键唤起/瞬开体感（GUI 行为，headless 判不准）
+
+# 大功能拆分（版本启动一次拆清，对齐验收骨架；小功能做到时滚动细拆）：
+#   V0-F1 项目脚手架与构建  /  V0-F2 托盘+全局热键+预热窗口  /  V0-F3 加密数据库与schema预埋
+acceptance:
+
+  # ========== V0-F1 项目脚手架与构建 ==========
+  - id: V0-F1-A01
+    assertion: "Tauri 2.0（Rust）后端可编译通过"
+    category: 功能正确性
+    source_anchor: 设计文档§二（技术栈：Tauri 2.0 Rust 后端）
+    kind: objective
+    verify:
+      type: command
+      ref: "cargo build --manifest-path src-tauri/Cargo.toml"
+      expect: pass
+    evidence_ref: docs/dev-log/v0/f1-scaffold/s01-tauri-init/test.md
+    level: 小功能
+    status: 待验
+
+  - id: V0-F1-A02
+    assertion: "React 前端可构建通过（tsc 类型检查 + vite 打包）"
+    category: 功能正确性
+    source_anchor: 设计文档§二（前端：React webview）
+    kind: objective
+    verify:
+      type: command
+      ref: "pnpm build"
+      expect: pass
+    evidence_ref: docs/dev-log/v0/f1-scaffold/s01-tauri-init/test.md
+    level: 小功能
+    status: 待验
+
+  - id: V0-F1-A03
+    assertion: "工程质量基线：clippy 无警告 + tsc 无类型错误 + 无遗留 TODO/FIXME"
+    category: 工程质量
+    source_anchor: 全局规范（完成定义：lint/类型检查过 + 无遗留 TODO/FIXME）
+    kind: objective
+    verify:
+      type: command
+      ref: "cargo clippy --manifest-path src-tauri/Cargo.toml -- -D warnings && pnpm exec tsc --noEmit && ! grep -rn 'TODO\\|FIXME' src src-tauri/src"
+      expect: pass
+    evidence_ref: docs/dev-log/v0/f1-scaffold/s01-tauri-init/review.md
+    level: 小功能
+    status: 待验
+
+  - id: V0-F1-A04
+    assertion: "存在并通过冒烟测试（后端单测 + 前端 vitest 各至少一例）"
+    category: 测试充分性
+    source_anchor: 全局规范（完成定义：相关测试通过）
+    kind: objective
+    verify:
+      type: test_id
+      ref: smoke
+      runner: "cargo test --manifest-path src-tauri/Cargo.toml && pnpm test"
+      path: src-tauri/tests/ ; src/**/*.test.ts
+      expect: pass
+    evidence_ref: docs/dev-log/v0/f1-scaffold/s01-tauri-init/test.md
+    level: 小功能
+    status: 待验
+
+  - id: V0-F1-A05
+    assertion: "autostart 插件接入：自启动开关配置项存在、可读写、默认开"
+    category: 功能正确性
+    source_anchor: 设计文档§二（自启动：Tauri autostart 插件，默认开）
+    kind: objective
+    verify:
+      type: test_id
+      ref: autostart_default_on
+      runner: "cargo test --manifest-path src-tauri/Cargo.toml autostart"
+      path: src-tauri/tests/autostart.rs
+      expect: pass
+    evidence_ref: docs/dev-log/v0/f2-tray-hotkey/s04-autostart/test.md
+    level: 小功能
+    status: 待验
+
+  - id: V0-F1-A06
+    assertion: "updater 插件接入：tauri 配置含 updater 段（接入存在，不要求真实发布）"
+    category: 功能正确性
+    source_anchor: 设计文档§二（自动更新：v1 即上 Tauri updater 插件）
+    kind: objective
+    verify:
+      type: script
+      ref: "grep -q 'updater' src-tauri/tauri.conf.json"
+      expect: pass
+    evidence_ref: docs/dev-log/v0/f1-scaffold/s01-tauri-init/coding.md
+    level: 小功能
+    status: 待验
+
+  # ========== V0-F2 托盘 + 全局热键 + 预热窗口 ==========
+  - id: V0-F2-A01
+    assertion: "默认热键 历史=Cmd/Ctrl+Shift+V、翻译=Cmd/Ctrl+Shift+T，且可改键（配置可读写持久化）"
+    category: 功能正确性
+    source_anchor: 设计文档§一（默认热键，必须可改键）+ §八
+    kind: objective
+    verify:
+      type: test_id
+      ref: hotkey_defaults_and_rebind
+      runner: "cargo test --manifest-path src-tauri/Cargo.toml hotkey"
+      path: src-tauri/tests/hotkey.rs
+      expect: pass
+    evidence_ref: docs/dev-log/v0/f2-tray-hotkey/s02-hotkey/test.md
+    level: 小功能
+    status: 待验
+
+  - id: V0-F2-A02
+    assertion: "热键注册冲突检测：绑定失败返回'已被占用'错误并拒绝保存，不崩溃"
+    category: 功能正确性
+    source_anchor: 设计文档§二（热键冲突：注册时检测 + 即时提示）
+    kind: objective
+    verify:
+      type: test_id
+      ref: hotkey_conflict_rejected
+      runner: "cargo test --manifest-path src-tauri/Cargo.toml hotkey_conflict"
+      path: src-tauri/tests/hotkey.rs
+      expect: pass
+    evidence_ref: docs/dev-log/v0/f2-tray-hotkey/s02-hotkey/test.md
+    level: 小功能
+    status: 待验
+
+  - id: V0-F2-A03
+    assertion: "预热窗口：单一隐藏 webview，按 V/T 路由历史/翻译不同视图（路由逻辑单测）"
+    category: 功能正确性
+    source_anchor: 设计文档§八(3)（常驻隐藏预热窗口，历史/翻译共用一窗按热键路由）
+    kind: objective
+    verify:
+      type: test_id
+      ref: window_route_by_hotkey
+      runner: "pnpm test window-route"
+      path: src/shell/windowRoute.test.ts
+      expect: pass
+    evidence_ref: docs/dev-log/v0/f2-tray-hotkey/s03-prewarm-window/test.md
+    level: 小功能
+    status: 待验
+
+  - id: V0-F2-A04
+    assertion: "托盘图标实际常驻显示 + 热键实际唤起窗口定位活动屏上中 + 预热瞬开无延迟体感"
+    category: 人工确认点
+    source_anchor: 设计文档§八(1)(3)（活动屏上中定位、瞬开无延迟）
+    kind: manual_confirm
+    verify: null
+    evidence_ref: docs/dev-log/v0/f2-tray-hotkey/s03-prewarm-window/（运行截图/录屏，coder 收集）
+    level: 大功能
+    status: 待补证据
+
+  - id: V0-F2-A05
+    assertion: "托盘/应用图标资源存在且格式正确（含多尺寸 png/ico/icns）"
+    category: 资源规范
+    source_anchor: 设计文档§九（图标线性为主；§二 托盘常驻需图标资源）
+    kind: objective
+    verify:
+      type: script
+      ref: "test -d src-tauri/icons && ls src-tauri/icons/*.png src-tauri/icons/*.ico src-tauri/icons/*.icns"
+      expect: pass
+    evidence_ref: docs/dev-log/v0/f2-tray-hotkey/s03-prewarm-window/coding.md
+    level: 小功能
+    status: 待验
+
+  # ========== V0-F3 加密数据库与 schema 预埋 ==========
+  - id: V0-F3-A01
+    assertion: "首次启动自动创建单文件 quickquick.db 于平台数据目录"
+    category: 功能正确性
+    source_anchor: 设计文档§二/§六（嵌入式 SQLCipher 单文件，首次启动自动创建）
+    kind: objective
+    verify:
+      type: test_id
+      ref: db_auto_create_on_first_run
+      runner: "cargo test --manifest-path src-tauri/Cargo.toml db_create"
+      path: src-tauri/tests/db.rs
+      expect: pass
+    evidence_ref: docs/dev-log/v0/f3-encrypted-db/s05-db-init/test.md
+    level: 小功能
+    status: 待验
+
+  - id: V0-F3-A02
+    assertion: "数据库经 SQLCipher 加密：无密钥无法打开、密文落盘（PRAGMA cipher 生效）"
+    category: 安全
+    source_anchor: 设计文档§六（嵌入式 SQLCipher 加密库）
+    kind: objective
+    verify:
+      type: test_id
+      ref: db_encrypted_wrong_key_fails
+      runner: "cargo test --manifest-path src-tauri/Cargo.toml db_encrypt"
+      path: src-tauri/tests/db.rs
+      expect: pass
+    evidence_ref: docs/dev-log/v0/f3-encrypted-db/s05-db-init/test.md
+    level: 小功能
+    status: 待验
+
+  - id: V0-F3-A03
+    assertion: "KeyProvider 抽象接口存在，v1 仅 KeychainKeyProvider 实现；密钥标记 ThisDeviceOnly 不漫游"
+    category: 安全
+    source_anchor: 设计文档§六（密钥层抽象 KeyProvider；密钥 ThisDeviceOnly 设备绑定不同步）
+    kind: objective
+    verify:
+      type: test_id
+      ref: keyprovider_abstraction_and_device_only
+      runner: "cargo test --manifest-path src-tauri/Cargo.toml keyprovider"
+      path: src-tauri/tests/keyprovider.rs
+      expect: pass
+    evidence_ref: docs/dev-log/v0/f3-encrypted-db/s06-keyprovider/test.md
+    level: 小功能
+    status: 待验
+
+  - id: V0-F3-A04
+    assertion: "schema 预埋字段：每记录 UUID(稳定唯一) + created/last_modified UTC 时间戳 + 墓碑(软删)标记；图片表拆 缩略图BLOB/原图BLOB 两字段"
+    category: 功能正确性
+    source_anchor: 设计文档§十（v1 为 v2 预埋：UUID 永不复用、UTC 时间戳、last-modified、墓碑、图片表拆分）
+    kind: objective
+    verify:
+      type: test_id
+      ref: schema_preembed_columns
+      runner: "cargo test --manifest-path src-tauri/Cargo.toml schema"
+      path: src-tauri/tests/schema.rs
+      expect: pass
+    evidence_ref: docs/dev-log/v0/f3-encrypted-db/s05-db-init/test.md
+    level: 小功能
+    status: 待验
+
+  - id: V0-F3-A05
+    assertion: "删除走软删+墓碑（非物理删），并提供本地物理清理 GC 接口"
+    category: 功能正确性
+    source_anchor: 设计文档§十（删除语义变更：软删+墓碑+本地物理清理 GC）
+    kind: objective
+    verify:
+      type: test_id
+      ref: soft_delete_and_gc
+      runner: "cargo test --manifest-path src-tauri/Cargo.toml soft_delete"
+      path: src-tauri/tests/schema.rs
+      expect: pass
+    evidence_ref: docs/dev-log/v0/f3-encrypted-db/s05-db-init/test.md
+    level: 小功能
+    status: 待验
+
+  - id: V0-F3-A06
+    assertion: "DB 失败分级：永久失败（库损坏）时旧库改名备份保留、绝不静默删，需显式确认才重建空库"
+    category: 安全
+    source_anchor: 设计文档§六（失败/恢复语义：永不静默删库，旧库改名备份保留）
+    kind: objective
+    verify:
+      type: test_id
+      ref: db_corrupt_backup_not_deleted
+      runner: "cargo test --manifest-path src-tauri/Cargo.toml db_recovery"
+      path: src-tauri/tests/db.rs
+      expect: pass
+    evidence_ref: docs/dev-log/v0/f3-encrypted-db/s05-db-init/test.md
+    level: 小功能
+    status: 待验
+
+  # ========== 留痕产出（版本级） ==========
+  - id: V0-A-LOG
+    assertion: "本版每个小功能三联留痕齐（coding/test/review）+ 每个大功能报告齐"
+    category: 留痕产出
+    source_anchor: goal-dev-workflow 规范（留痕颗粒度=小功能三联+大功能报告）
+    kind: objective
+    verify:
+      type: script
+      ref: "for d in docs/dev-log/v0/f*/s*/; do test -f $d/coding.md && test -f $d/test.md && test -f $d/review.md || exit 1; done"
+      expect: pass
+    evidence_ref: docs/dev-log/v0/（目录结构自证）
+    level: 版本
+    status: 待验
+
+change_log: []

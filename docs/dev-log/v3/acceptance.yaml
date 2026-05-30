@@ -1,0 +1,143 @@
+# 版本前置验收标准清单（开工前登记、冻结）
+# 来源：从 docs/QuickQuick-设计文档.md §五/§六/§二/§九 机械派生——只翻译不发明、不放宽。
+version: V3
+title: Phase 3 增强（图片+缩略图 + 加密落地 + 改键UI + onboarding + 导出导入）
+source_doc: docs/QuickQuick-设计文档.md
+frozen_at: 2026-05-31T00:00:00Z
+criteria_freeze: V3-criteria@2026-05-31
+
+coverage_check:
+  功能正确性:  covered
+  测试充分性:  covered
+  工程质量:    covered
+  性能:        N/A (无独立量化性能阈值；缩略图编码为局部操作)
+  UI还原度:    covered                                   # 主窗口三页+设置子项（人工确认点）
+  资源规范:    covered                                   # 缩略图规格 WebP/256px/q75
+  安全:        covered                                   # 加密失败恢复 + 导出口令保护
+  留痕产出:    covered
+  人工确认点:  covered
+
+acceptance:
+  # ===== V3-F1 图片捕获与库体积平衡 =====
+  - id: V3-F1-A01
+    assertion: "图片捕获入库：进 SQLCipher BLOB，表拆 缩略图BLOB/原图BLOB；原图原样无损存（图片字节哈希判重）"
+    category: 功能正确性
+    source_anchor: 设计文档§五#1/§十（原样无损存 + 图片表拆缩略图/原图）
+    kind: objective
+    verify: { type: test_id, ref: image_capture_lossless_split, runner: "cargo test --manifest-path src-tauri/Cargo.toml image_capture", path: src-tauri/tests/image.rs, expect: pass }
+    evidence_ref: docs/dev-log/v3/f1-image/s01-capture/test.md
+    level: 小功能
+    status: 待验
+  - id: V3-F1-A02
+    assertion: "缩略图规格：WebP / 最长边 ~256px(retina 320) / 质量 ~75"
+    category: 资源规范
+    source_anchor: 设计文档§五#3（缩略图 WebP/256px/q75）
+    kind: objective
+    verify: { type: test_id, ref: thumbnail_spec_webp_256, runner: "cargo test --manifest-path src-tauri/Cargo.toml thumbnail", path: src-tauri/tests/image.rs, expect: pass }
+    evidence_ref: docs/dev-log/v3/f1-image/s02-thumbnail/test.md
+    level: 小功能
+    status: 待验
+  - id: V3-F1-A03
+    assertion: "超大图处理：单张超阈值(默认>20MB)跳过原图、只留缩略图并标'原图过大未存'，阈值/压缩可配"
+    category: 功能正确性
+    source_anchor: 设计文档§五#2（超大图跳过原图+留缩略图+明确标记）
+    kind: objective
+    verify: { type: test_id, ref: oversize_skip_original, runner: "cargo test --manifest-path src-tauri/Cargo.toml oversize", path: src-tauri/tests/image.rs, expect: pass }
+    evidence_ref: docs/dev-log/v3/f1-image/s02-thumbnail/test.md
+    level: 小功能
+    status: 待验
+  - id: V3-F1-A04
+    assertion: "分级清理：撞总量上限(默认500MB)先删大头原图保缩略图，缩略图也满才整条删最旧非收藏；收藏永远豁免；三降级态归一为'有缩略图无本地原图'"
+    category: 功能正确性
+    source_anchor: 设计文档§五#4/关键架构收敛（分级清理 + 三态归一）
+    kind: objective
+    verify: { type: test_id, ref: tiered_cleanup_and_state_unify, runner: "cargo test --manifest-path src-tauri/Cargo.toml cleanup", path: src-tauri/tests/image.rs, expect: pass }
+    evidence_ref: docs/dev-log/v3/f1-image/s03-cleanup/test.md
+    level: 小功能
+    status: 待验
+  # ===== V3-F2 加密落地与失败恢复 =====
+  - id: V3-F2-A05
+    assertion: "密钥可访问性：AfterFirstUnlock（锁屏后台仍可读不漏记）+ ThisDeviceOnly（不漫游 iCloud/凭据）"
+    category: 安全
+    source_anchor: 设计文档§六#2（AfterFirstUnlock + 设备绑定不同步）
+    kind: objective
+    verify: { type: test_id, ref: key_accessibility_flags, runner: "cargo test --manifest-path src-tauri/Cargo.toml key_access", path: src-tauri/tests/keyprovider.rs, expect: pass }
+    evidence_ref: docs/dev-log/v3/f2-encryption/s04-key/test.md
+    level: 小功能
+    status: 待验
+  - id: V3-F2-A06
+    assertion: "失败分级：瞬时(钥匙串被拒/锁)提示重试不碰库；永久(密钥丢失/库损坏)旧库改名备份保留+显式确认才重建空库"
+    category: 安全
+    source_anchor: 设计文档§六#1（失败/恢复语义：永不静默删库）
+    kind: objective
+    verify: { type: test_id, ref: encryption_failure_tiered, runner: "cargo test --manifest-path src-tauri/Cargo.toml enc_failure", path: src-tauri/tests/db.rs, expect: pass }
+    evidence_ref: docs/dev-log/v3/f2-encryption/s05-recovery/test.md
+    level: 小功能
+    status: 待验
+  - id: V3-F2-A07
+    assertion: "导出/导入便携文件：导出生成口令保护文件，另一台输入口令导入（口令派生、加解密往返）"
+    category: 安全
+    source_anchor: 设计文档§六（备份/搬运：导出口令保护便携文件导入）
+    kind: objective
+    verify: { type: test_id, ref: export_import_passphrase, runner: "cargo test --manifest-path src-tauri/Cargo.toml export_import", path: src-tauri/tests/portable.rs, expect: pass }
+    evidence_ref: docs/dev-log/v3/f2-encryption/s06-export/test.md
+    level: 小功能
+    status: 待验
+  # ===== V3-F3 主窗口 UI + 改键 + onboarding =====
+  - id: V3-F3-A08
+    assertion: "主窗口三栏壳：左侧边栏一级入口仅 剪贴板/翻译/设置；翻译历史归翻译、剪贴板历史归剪贴板均二级（路由逻辑单测）"
+    category: 功能正确性
+    source_anchor: 设计文档§九.3（主窗口左侧边栏一级仅三个）
+    kind: objective
+    verify: { type: test_id, ref: main_window_nav, runner: "pnpm test main-nav", path: src/main-window/nav.test.ts, expect: pass }
+    evidence_ref: docs/dev-log/v3/f3-main-ui/s07-shell/test.md
+    level: 小功能
+    status: 待验
+  - id: V3-F3-A09
+    assertion: "设置-改键 UI：改键实时校验，绑定失败当场提示'已被占用'拒绝保存"
+    category: 功能正确性
+    source_anchor: 设计文档§二（热键冲突注册时检测+即时提示）+ §九.3 设置子项
+    kind: objective
+    verify: { type: test_id, ref: rebind_ui_conflict, runner: "pnpm test rebind-ui", path: src/main-window/settings/rebind.test.ts, expect: pass }
+    evidence_ref: docs/dev-log/v3/f3-main-ui/s08-settings/test.md
+    level: 小功能
+    status: 待验
+  - id: V3-F3-A10
+    assertion: "设置子项栏：通用/热键/翻译源/隐私/存储/关于 六项纵向（含 App 排除名单管理 UI）"
+    category: 功能正确性
+    source_anchor: 设计文档§九.3（设置二级纵向 6 项）+ §三（App 排除名单）
+    kind: objective
+    verify: { type: test_id, ref: settings_sections_and_exclude_ui, runner: "pnpm test settings-sections", path: src/main-window/settings/sections.test.ts, expect: pass }
+    evidence_ref: docs/dev-log/v3/f3-main-ui/s08-settings/test.md
+    level: 小功能
+    status: 待验
+  - id: V3-F3-A11
+    assertion: "mac Accessibility 引导：检测 AXIsProcessTrusted 未授权弹说明卡片+深链跳设置，未授权优雅降级不崩（自动粘贴退化为仅写回）"
+    category: 功能正确性
+    source_anchor: 设计文档§二（Accessibility 主动引导+优雅降级）
+    kind: objective
+    verify: { type: test_id, ref: accessibility_onboarding_degrade, runner: "cargo test --manifest-path src-tauri/Cargo.toml accessibility", path: src-tauri/tests/onboarding.rs, expect: pass }
+    evidence_ref: docs/dev-log/v3/f3-main-ui/s09-onboarding/test.md
+    level: 小功能
+    status: 待验
+  - id: V3-F3-A12
+    assertion: "主窗口三页视觉还原：剪贴板(列表+预览+管理)/翻译(导航|工作|历史三栏)/设置(子项栏+内容)，主窗实色、随系统明暗、峡湾青蓝"
+    category: UI还原度
+    source_anchor: 设计文档§九.1/§九.3（主窗口布局与设计语言）
+    kind: manual_confirm
+    verify: null
+    evidence_ref: docs/dev-log/v3/f3-main-ui/（三页截图对照，coder 收集）
+    level: 大功能
+    status: 待补证据
+  # ===== 留痕产出 =====
+  - id: V3-A-LOG
+    assertion: "本版每个小功能三联留痕齐 + 每个大功能报告齐"
+    category: 留痕产出
+    source_anchor: goal-dev-workflow 规范
+    kind: objective
+    verify: { type: script, ref: "for d in docs/dev-log/v3/f*/s*/; do test -f $d/coding.md && test -f $d/test.md && test -f $d/review.md || exit 1; done", expect: pass }
+    evidence_ref: docs/dev-log/v3/
+    level: 版本
+    status: 待验
+
+change_log: []
