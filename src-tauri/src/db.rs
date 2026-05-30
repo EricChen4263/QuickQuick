@@ -1,16 +1,20 @@
 //! 加密数据库模块：SQLCipher 开库、schema 预埋、软删、GC、失败恢复、去重入库
 //!
 //! 设计对齐：设计文档§六（失败/恢复语义）、§十（schema 预埋铁律）、§三（去重+置顶刷新）
+//!           §九.2（★ 置顶收藏）、§五（收藏永远豁免清理）
 //!
 //! 核心函数：
-//! - `open_or_create`  — 打开或新建加密库，并确保 schema 已初始化
-//! - `open_or_recover` — 带损坏检测的打开：损坏时改名备份，按标志决定是否重建
-//! - `soft_delete`     — 软删（置墓碑，非物理删）
-//! - `gc_purge_deleted`— 本地物理清理 GC（删除 is_deleted=1 的行）
-//! - `ingest`          — 去重入库：同 text_hash 存在则 bump，否则插入新行
-//! - `bump_to_top`     — 显式置顶：仅更新 last_modified_utc（不新建记录）
-//! - `count_live`      — 查询未软删行数（测试/业务用）
-//! - `top_id`          — 返回 last_modified_utc 最新的未软删行 id（测试/业务用）
+//! - `open_or_create`       — 打开或新建加密库，并确保 schema 已初始化
+//! - `open_or_recover`      — 带损坏检测的打开：损坏时改名备份，按标志决定是否重建
+//! - `soft_delete`          — 软删（置墓碑，非物理删）
+//! - `gc_purge_deleted`     — 本地物理清理 GC（删除 is_deleted=1 的行）
+//! - `ingest`               — 去重入库：同 text_hash 存在则 bump，否则插入新行
+//! - `bump_to_top`          — 显式置顶：仅更新 last_modified_utc（不新建记录）
+//! - `count_live`           — 查询未软删行数（测试/业务用）
+//! - `top_id`               — 返回 last_modified_utc 最新的未软删行 id（测试/业务用）
+//! - `set_favorite`         — 设置/取消收藏（is_favorite 字段）
+//! - `list_ordered`         — 返回排序后的条目列表（收藏优先，组内按最近）
+//! - `cleanup_keep_recent`  — 容量裁剪：只删非收藏的旧项，收藏永远豁免
 //!
 //! 安全约定：
 //! - 密钥以 raw key 格式传入（`PRAGMA key = "x'<hex>'"`)，不写入日志
@@ -25,8 +29,6 @@ use thiserror::Error;
 use uuid::Uuid;
 
 use crate::clipboard::CapturedItem;
-
-// ── 错误类型 ─────────────────────────────────────────────────────────────────
 
 /// 数据库操作错误
 #[derive(Debug, Error)]
@@ -46,8 +48,6 @@ pub enum DbError {
         backup_path: String,
     },
 }
-
-// ── 公共 API ─────────────────────────────────────────────────────────────────
 
 /// 打开或新建加密数据库，确保 schema 已初始化。
 ///
@@ -129,7 +129,115 @@ pub fn soft_delete(conn: &Connection, id: &str) -> Result<(), DbError> {
     Ok(())
 }
 
-// ── S02 去重/置顶 API ──────────────────────────────────────────────────────────
+/// 列表排序后的条目行（list_ordered 返回元素）。
+///
+/// 含业务排序所需的最小字段集。
+#[derive(Debug, PartialEq)]
+pub struct ClipRow {
+    /// 条目 UUID
+    pub id: String,
+    /// 收藏标记（true = 收藏）
+    pub is_favorite: bool,
+    /// 最后修改时间（UTC epoch ms）
+    pub last_modified_utc: i64,
+}
+
+/// 设置或取消收藏。
+///
+/// 同时刷新 `last_modified_utc`，使收藏操作反映到时间线。
+///
+/// # Errors
+/// `DbError::Sqlite`：SQL 执行失败（id 不存在时影响行数为 0，不报错）
+pub fn set_favorite(conn: &Connection, id: &str, fav: bool) -> Result<(), DbError> {
+    let now_ms = current_utc_ms();
+    let fav_int: i64 = if fav { 1 } else { 0 };
+    conn.execute(
+        "UPDATE clip_items
+         SET is_favorite = ?1,
+             last_modified_utc = ?2
+         WHERE id = ?3 AND is_deleted = 0",
+        rusqlite::params![fav_int, now_ms, id],
+    )?;
+    Ok(())
+}
+
+/// 返回未软删条目的排序列表：收藏优先，组内按最近修改时间降序。
+///
+/// 排序规则：`ORDER BY is_favorite DESC, last_modified_utc DESC`
+/// - 收藏项（is_favorite=1）整体排在非收藏项（is_favorite=0）之前
+/// - 同组内按 last_modified_utc 从新到旧排列
+///
+/// # Errors
+/// `DbError::Sqlite`：SQL 执行失败
+pub fn list_ordered(conn: &Connection) -> Result<Vec<ClipRow>, DbError> {
+    let mut stmt = conn.prepare(
+        "SELECT id, is_favorite, last_modified_utc
+         FROM clip_items
+         WHERE is_deleted = 0
+         ORDER BY is_favorite DESC, last_modified_utc DESC",
+    )?;
+    let rows = stmt.query_map([], |row| {
+        let id: String = row.get(0)?;
+        let is_fav_int: i64 = row.get(1)?;
+        let last_modified: i64 = row.get(2)?;
+        Ok(ClipRow {
+            id,
+            is_favorite: is_fav_int != 0,
+            last_modified_utc: last_modified,
+        })
+    })?;
+
+    let mut result = Vec::new();
+    for row in rows {
+        result.push(row?);
+    }
+    Ok(result)
+}
+
+/// 容量裁剪：只删非收藏的旧项，收藏项永远豁免。
+///
+/// 语义：非收藏的未软删条目中，按 last_modified_utc 降序保留最新 `keep_count` 条，
+/// 超出部分软删（置墓碑）。收藏项（is_favorite=1）**完全不计入也不删除**。
+///
+/// 选择软删而非物理删：与 `soft_delete` 语义一致（设计§六），GC 负责后续物理清理。
+///
+/// # Errors
+/// `DbError::Sqlite`：SQL 执行失败
+pub fn cleanup_keep_recent(conn: &Connection, keep_count: usize) -> Result<usize, DbError> {
+    let now_ms = current_utc_ms();
+    // 查询需要被软删的非收藏旧项 id：跳过最新的 keep_count 条，删除余下的
+    let mut stmt = conn.prepare(
+        "SELECT id FROM clip_items
+         WHERE is_deleted = 0 AND is_favorite = 0
+         ORDER BY last_modified_utc DESC",
+    )?;
+    let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+    let mut all_ids: Vec<String> = Vec::new();
+    for r in rows {
+        all_ids.push(r?);
+    }
+
+    // 超出 keep_count 的部分才需要清理
+    let to_delete = if all_ids.len() > keep_count {
+        &all_ids[keep_count..]
+    } else {
+        return Ok(0);
+    };
+
+    let mut deleted = 0usize;
+    for id in to_delete {
+        conn.execute(
+            "UPDATE clip_items
+             SET is_deleted = 1,
+                 deleted_at_utc = ?1,
+                 last_modified_utc = ?1
+             WHERE id = ?2",
+            rusqlite::params![now_ms, id],
+        )?;
+        deleted += 1;
+    }
+    Ok(deleted)
+}
 
 /// `ingest` 的返回结果：新建行 vs 原行置顶刷新。
 #[derive(Debug, PartialEq)]
@@ -245,8 +353,6 @@ pub fn gc_purge_deleted(conn: &Connection) -> Result<u64, DbError> {
     Ok(count as u64)
 }
 
-// ── 内部辅助函数 ──────────────────────────────────────────────────────────────
-
 /// 用指定 key 打开 SQLCipher 数据库并触发解密校验。
 ///
 /// 开库成功后立即开启外键约束（`PRAGMA foreign_keys = ON`）。
@@ -297,7 +403,8 @@ fn ensure_schema(conn: &Connection) -> Result<(), DbError> {
             last_modified_utc INTEGER NOT NULL,            -- UTC epoch ms
             is_deleted        INTEGER NOT NULL DEFAULT 0,  -- 墓碑：0=正常 1=软删
             deleted_at_utc    INTEGER,                     -- 软删时间（UTC epoch ms）
-            text_hash         TEXT                         -- 纯文本内容哈希，用于去重（非加密，判重用途）
+            text_hash         TEXT,                        -- 纯文本内容哈希，用于去重（非加密，判重用途）
+            is_favorite       INTEGER NOT NULL DEFAULT 0   -- 收藏标记：0=普通 1=收藏（§九.2 ★置顶收藏）
         );
 
         -- 图片表：缩略图/原图拆分（设计§五/§十）
@@ -367,8 +474,6 @@ fn current_utc_ms() -> i64 {
 fn hex_encode(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{:02x}", b)).collect()
 }
-
-// ── 模块内单元测试 ────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {

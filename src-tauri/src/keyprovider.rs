@@ -11,15 +11,11 @@
 
 use thiserror::Error;
 
-// ── 服务/账号标识常量 ────────────────────────────────────────────────────────
-
 /// Keychain 中存储密钥的服务名（与 App bundle 一致）
 const KEYCHAIN_SERVICE: &str = "io.quickquick.app";
 
 /// Keychain 中存储密钥的账号名（固定：当前设备的 SQLCipher 主密钥）
 const KEYCHAIN_ACCOUNT: &str = "sqlcipher_master_key";
-
-// ── KeyError ─────────────────────────────────────────────────────────────────
 
 /// KeyProvider 操作错误枚举
 #[derive(Debug, Error)]
@@ -37,8 +33,6 @@ pub enum KeyError {
     InvalidKeyLength(usize),
 }
 
-// ── KeyAccessibility ──────────────────────────────────────────────────────────
-
 /// 密钥可访问性语义（对齐设计文档§六）
 ///
 /// 仅定义 v1 所需的变体；未来可按需扩展。
@@ -49,8 +43,6 @@ pub enum KeyAccessibility {
     /// 对应 macOS Security framework kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly。
     AfterFirstUnlockThisDeviceOnly,
 }
-
-// ── KeyProvider trait ─────────────────────────────────────────────────────────
 
 /// 密钥层抽象接口——开库唯一依赖的密钥获取方式。
 ///
@@ -68,8 +60,6 @@ pub trait KeyProvider {
     fn get_or_create_key(&self) -> Result<[u8; 32], KeyError>;
 }
 
-// ── 随机密钥生成（纯函数，可单独测试）────────────────────────────────────────
-
 /// 生成 32 字节随机密钥。
 ///
 /// 实现：uuid v4 内部调用 getrandom/OS CSPRNG，两次各生成 16 字节拼接为 32 字节。
@@ -86,8 +76,6 @@ pub fn generate_random_key() -> [u8; 32] {
     key[16..].copy_from_slice(b.as_bytes());
     key
 }
-
-// ── KeychainKeyProvider ───────────────────────────────────────────────────────
 
 /// v1 唯一真实实现：使用 OS 钥匙串（keyring crate）持久化 SQLCipher 主密钥。
 ///
@@ -188,8 +176,6 @@ impl KeyProvider for KeychainKeyProvider {
         self.load_or_generate()
     }
 }
-
-// ── 模块内单元测试 ────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {

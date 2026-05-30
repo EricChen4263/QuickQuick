@@ -14,8 +14,6 @@ const KEY_A: [u8; 32] = [7u8; 32];
 /// 不同的错误密钥
 const KEY_B: [u8; 32] = [99u8; 32];
 
-// ── A01：首次启动自动创建数据库文件 ─────────────────────────────────────────
-
 /// V0-F3-A01：文件不存在 → open_or_create 后文件被创建
 #[test]
 fn db_create_auto_creates_file_on_first_run() {
@@ -52,8 +50,6 @@ fn db_create_is_idempotent_on_subsequent_opens() {
     // Assert：文件存在且可正常打开（不抛错即通过）
     assert!(db_path.exists(), "重复打开后 db 文件应仍然存在");
 }
-
-// ── A02：加密——错误密钥无法打开，密文落盘 ───────────────────────────────────
 
 /// V0-F3-A02：用正确密钥建库 → 用错误密钥打开应返回 Err
 #[test]
@@ -105,8 +101,6 @@ fn db_encrypt_ciphertext_on_disk() {
         "加密库头部不应为 SQLite 明文魔数，发现明文数据库"
     );
 }
-
-// ── A06：失败恢复——永不静默删库，旧库改名备份 ──────────────────────────────
 
 /// V0-F3-A06：损坏文件 + allow_rebuild=false → 返回 Err，备份文件存在
 #[test]

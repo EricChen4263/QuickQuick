@@ -261,3 +261,100 @@ fn pause_false_captures_normally() {
     assert_eq!(item.text, "normal text", "捕获内容应与快照一致");
     assert_eq!(last_seen, 3, "last_seen_count 应更新为 3");
 }
+
+/// A11-1：★ 置顶收藏——收藏项置顶排序（即便更旧也排第一）
+///
+/// 验收项 V1-F2-A11 favorite_pin_and_exempt（置顶部分）
+///
+/// 设计：set_favorite(A) 后 bump_to_top(B) 把 B 的 last_modified_utc 刷到最新，
+/// 使得仅靠 is_favorite DESC 才能让收藏的 A 排第一；
+/// 若实现误删 is_favorite DESC，B 会因时间戳更新而排第一，测试失败。
+#[test]
+fn favorite_pin_sorted_first() {
+    use quickquick_lib::db::{IngestOutcome, bump_to_top, ingest, list_ordered, set_favorite};
+
+    // Arrange：插入两条，A 先插（更旧），B 后插（更新）
+    let dir = tempfile::tempdir().expect("tempdir 创建失败");
+    let db_path = dir.path().join("quickquick.db");
+    let conn = db::open_or_create(&db_path, &[7u8; 32]).expect("建库应成功");
+
+    let item_a = CapturedItem { text: "older-favorite".to_owned(), html: None };
+    let item_b = CapturedItem { text: "newer-normal".to_owned(), html: None };
+
+    let id_a = match ingest(&conn, &item_a).expect("ingest A 应成功") {
+        IngestOutcome::Inserted(id) => id,
+        IngestOutcome::Bumped(_) => panic!("首次 ingest A 应为 Inserted"),
+    };
+    let id_b = match ingest(&conn, &item_b).expect("ingest B 应成功") {
+        IngestOutcome::Inserted(id) => id,
+        IngestOutcome::Bumped(_) => panic!("首次 ingest B 应为 Inserted"),
+    };
+
+    // Act：收藏 A（同时刷新 A 的 last_modified_utc）
+    set_favorite(&conn, &id_a, true).expect("set_favorite 应成功");
+
+    // 把非收藏 B 的 last_modified_utc 刷到最新，使 B 的时间戳晚于 A；
+    // 此后仅靠 is_favorite DESC 才能使 A 排第一——若 SQL 丢失该子句则测试失败。
+    bump_to_top(&conn, &id_b).expect("bump_to_top B 应成功");
+
+    // Act：按收藏置顶排序取列表
+    let ordered = list_ordered(&conn).expect("list_ordered 应成功");
+
+    // Assert：列表第一条应为收藏项 A（即便 B 的时间戳更新）
+    assert!(!ordered.is_empty(), "列表不应为空");
+    assert_eq!(
+        ordered[0].id, id_a,
+        "收藏项应排第一（is_favorite DESC 优先），实际第一: {}",
+        ordered[0].id
+    );
+    assert!(ordered[0].is_favorite, "第一条应为收藏状态");
+}
+
+/// A11-2：★ 收藏豁免清理——cleanup_keep_recent 不删收藏项
+///
+/// 验收项 V1-F2-A11 favorite_pin_and_exempt（豁免清理部分）
+#[test]
+fn favorite_exempt_from_cleanup() {
+    use quickquick_lib::db::{IngestOutcome, cleanup_keep_recent, ingest, set_favorite};
+
+    // Arrange：插入 3 条，其中 A 设为收藏；B、C 为普通条目
+    let dir = tempfile::tempdir().expect("tempdir 创建失败");
+    let db_path = dir.path().join("quickquick.db");
+    let conn = db::open_or_create(&db_path, &[7u8; 32]).expect("建库应成功");
+
+    let item_a = CapturedItem { text: "fav-item-A".to_owned(), html: None };
+    let item_b = CapturedItem { text: "normal-item-B".to_owned(), html: None };
+    let item_c = CapturedItem { text: "normal-item-C".to_owned(), html: None };
+
+    let id_a = match ingest(&conn, &item_a).expect("ingest A 应成功") {
+        IngestOutcome::Inserted(id) => id,
+        IngestOutcome::Bumped(_) => panic!("首次 ingest A 应为 Inserted"),
+    };
+    match ingest(&conn, &item_b).expect("ingest B 应成功") {
+        IngestOutcome::Inserted(_) => {}
+        IngestOutcome::Bumped(_) => panic!("首次 ingest B 应为 Inserted"),
+    }
+    match ingest(&conn, &item_c).expect("ingest C 应成功") {
+        IngestOutcome::Inserted(_) => {}
+        IngestOutcome::Bumped(_) => panic!("首次 ingest C 应为 Inserted"),
+    }
+
+    // 收藏 A
+    set_favorite(&conn, &id_a, true).expect("set_favorite 应成功");
+
+    // Act：keep_count=1，非收藏条目中最多保留 1 条（B、C 其中 1 条会被清理）
+    let cleaned = cleanup_keep_recent(&conn, 1).expect("cleanup_keep_recent 应成功");
+
+    // Assert：有条目被清理（非恒真）
+    assert!(cleaned >= 1, "应有非收藏旧项被清理，实际清理: {}", cleaned);
+
+    // Assert：收藏项 A 仍然存在（豁免）
+    let fav_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM clip_items WHERE id = ?1 AND is_deleted = 0",
+            rusqlite::params![id_a],
+            |row| row.get(0),
+        )
+        .expect("查询收藏项应成功");
+    assert_eq!(fav_count, 1, "收藏项 A 应豁免清理，仍在库中");
+}

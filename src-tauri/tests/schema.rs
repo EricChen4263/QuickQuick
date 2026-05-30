@@ -11,8 +11,6 @@ use uuid::Uuid;
 /// 固定 32 字节测试密钥，不依赖钥匙串
 const TEST_KEY: [u8; 32] = [7u8; 32];
 
-// ── A04：schema 预埋列断言 ────────────────────────────────────────────────────
-
 /// 辅助：从 PRAGMA table_info 结果中提取列名集合
 ///
 /// 白名单校验表名，防止测试辅助函数被误用于不受信任的字符串（安全§10 输入校验）。
@@ -133,8 +131,6 @@ fn schema_preembed_columns_clip_images() {
     );
 }
 
-// ── A05：软删 + GC ────────────────────────────────────────────────────────────
-
 /// V0-F3-A05：插入 → soft_delete → 行仍在且 is_deleted=1 → gc 后物理消失
 #[test]
 fn soft_delete_and_gc_full_lifecycle() {
@@ -196,8 +192,6 @@ fn soft_delete_and_gc_full_lifecycle() {
         .expect("查询应成功");
     assert_eq!(count_after, 0, "gc 后行应物理消失");
 }
-
-// ── I-03：外键约束 + foreign_keys PRAGMA 验证 ────────────────────────────────
 
 /// I-03：foreign_keys PRAGMA 在开库后应为 ON（值 = 1）
 #[test]

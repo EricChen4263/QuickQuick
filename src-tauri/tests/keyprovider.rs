@@ -35,7 +35,6 @@ impl KeyProvider for FakeKeyProvider {
 /// c) 幂等性：KeychainKeyProvider mock 模式下首次生成密钥、二次调用返回同一密钥。
 #[test]
 fn keyprovider_abstraction_and_device_only() {
-    // ── a) 抽象可用：trait object 调用 ──────────────────────────────────
     // Arrange
     let fake: &dyn KeyProvider = &FakeKeyProvider::with_fixed_key(0xAB);
 
@@ -46,7 +45,6 @@ fn keyprovider_abstraction_and_device_only() {
     assert_eq!(key.len(), 32, "密钥应为 32 字节");
     assert_eq!(key, [0xAB_u8; 32], "FakeKeyProvider 应返回预设的固定密钥");
 
-    // ── b) 设备绑定语义 ──────────────────────────────────────────────────
     // Arrange：激活 keyring mock，使 KeychainKeyProvider 不碰真实 OS 钥匙串
     keyring::set_default_credential_builder(keyring::mock::default_credential_builder());
     let provider = KeychainKeyProvider::new();
@@ -63,7 +61,6 @@ fn keyprovider_abstraction_and_device_only() {
         "accessibility() 应返回 AfterFirstUnlockThisDeviceOnly"
     );
 
-    // ── c) 幂等性：两次调用返回同一密钥 ──────────────────────────────────
     let key1 = provider
         .get_or_create_key()
         .expect("首次 get_or_create_key 不应失败");
