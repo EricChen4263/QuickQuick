@@ -1,0 +1,547 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>QuickQuick 设计文档</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg: #f8f9fa;
+  --card: #ffffff;
+  --card-2: #f3f4f5;
+  --mist: #e2e8f0;
+  --mist-hover: #f1f5f9;
+  --fjord: #05192d;
+  --ink: #191c1d;
+  --ink-2: #44474d;
+  --outline: #74777d;
+  --line: #c4c6cd;
+  --glacier: #d1d5db;
+  --accent: #3e54ac;
+  --accent-dim: #1a338b;
+  --accent-soft: #dde1ff;
+  --green-bg: #e6f0ea;
+  --green-tx: #2f6b4f;
+  --grey-bg: #ececef;
+  --grey-tx: #6b6f76;
+  --err: #ba1a1a;
+  --shadow: 0 12px 32px rgba(5,25,45,0.08);
+  --radius: 12px;
+}
+* { box-sizing: border-box; }
+html { -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility; scroll-behavior: smooth; }
+body {
+  margin: 0; background: var(--bg); color: var(--ink);
+  font-family: 'Inter', -apple-system, sans-serif;
+  font-size: 16px; font-weight: 400; line-height: 1.65; letter-spacing: -0.003em;
+}
+.mono { font-family: 'JetBrains Mono', monospace; }
+
+/* top app bar */
+.topbar {
+  position: sticky; top: 0; z-index: 50; background: rgba(248,249,250,0.85);
+  backdrop-filter: blur(12px); border-bottom: 1px solid var(--line);
+}
+.topbar-in {
+  max-width: 1040px; margin: 0 auto; height: 60px; padding: 0 32px;
+  display: flex; align-items: center; justify-content: space-between;
+}
+.topbar .brand { font-size: 15px; font-weight: 600; color: var(--fjord); letter-spacing: -0.01em; }
+.topbar .tag {
+  font-family: 'JetBrains Mono', monospace; font-size: 10.5px; letter-spacing: 0.12em;
+  text-transform: uppercase; color: var(--accent); background: var(--mist);
+  padding: 4px 10px; border-radius: 999px;
+}
+
+/* hero — blue hour fjord band */
+.hero { background: linear-gradient(160deg, #05192d 0%, #0c2440 45%, #1c2f55 100%); color: #fff; position: relative; overflow: hidden; }
+.hero::after { content: ''; position: absolute; inset: 0; background: radial-gradient(120% 90% at 78% 8%, rgba(120,150,210,0.22), transparent 60%); pointer-events: none; }
+.hero-in { max-width: 1040px; margin: 0 auto; padding: 72px 32px 64px; position: relative; z-index: 1; }
+.hero .kicker { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 22px; }
+.hero .chip-hero { font-family: 'JetBrains Mono', monospace; font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; padding: 5px 12px; border-radius: 999px; }
+.chip-hero.solid { background: var(--accent); color: #fff; }
+.chip-hero.ghost { background: rgba(255,255,255,0.1); color: #c7d2ec; border: 1px solid rgba(255,255,255,0.18); }
+.hero h1 { font-size: clamp(32px, 5.2vw, 48px); font-weight: 700; line-height: 1.1; letter-spacing: -0.025em; margin: 0 0 24px; color: #fff; }
+.hero .lede { font-size: 17px; font-weight: 400; line-height: 1.7; color: #c7d2ec; max-width: 64ch; margin: 0; }
+.hero .meta { display: flex; flex-wrap: wrap; gap: 6px 28px; margin-top: 32px; padding-top: 22px; border-top: 1px solid rgba(255,255,255,0.14); font-family: 'JetBrains Mono', monospace; font-size: 12px; color: #9fb0d0; }
+.hero .meta b { color: #d7e0f2; font-weight: 500; }
+.hero .meta a { color: #b5c8e3; text-decoration: none; border-bottom: 1px solid rgba(181,200,227,0.4); }
+
+/* layout */
+.wrap { max-width: 1040px; margin: 0 auto; padding: 64px 32px 120px; }
+section { margin-top: 72px; }
+section:first-child { margin-top: 0; }
+.sec-head { display: flex; align-items: baseline; gap: 14px; border-left: 4px solid var(--accent); padding-left: 16px; margin-bottom: 28px; }
+.sec-num { font-family: 'JetBrains Mono', monospace; font-size: 13px; font-weight: 500; color: var(--accent); flex: none; }
+h2 { font-size: 26px; font-weight: 600; color: var(--fjord); margin: 0; letter-spacing: -0.02em; line-height: 1.2; }
+.subhead { font-size: 18px; font-weight: 600; color: var(--fjord); margin: 40px 0 16px; letter-spacing: -0.01em; }
+p { margin: 0 0 16px; max-width: 70ch; color: var(--ink-2); }
+.intro { font-size: 17px; color: var(--ink-2); }
+code, .codeword { font-family: 'JetBrains Mono', monospace; font-size: 0.84em; background: var(--mist); color: var(--accent-dim); padding: 1.5px 6px; border-radius: 4px; word-break: break-word; }
+
+/* tables */
+.tablecard { border: 1px solid var(--glacier); border-radius: var(--radius); overflow: hidden; background: var(--card); margin: 4px 0; }
+table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+thead { background: var(--mist); }
+thead th { text-align: left; padding: 13px 16px; font-size: 11px; font-weight: 600; letter-spacing: 0.02em; text-transform: uppercase; color: var(--accent); }
+tbody td { padding: 13px 16px; vertical-align: top; border-top: 1px solid var(--line); color: var(--ink-2); }
+tbody tr:first-child td { border-top: none; }
+tbody tr:hover { background: var(--mist-hover); }
+td code { font-size: 12px; }
+.layer-cell { color: var(--accent); font-weight: 600; width: 38px; }
+.scode { font-family: 'JetBrains Mono', monospace; font-weight: 600; color: var(--fjord); width: 48px; }
+.pcode { font-family: 'JetBrains Mono', monospace; color: var(--outline); width: 48px; }
+.phase-num { font-family: 'JetBrains Mono', monospace; font-weight: 600; color: var(--accent); width: 34px; }
+td strong { color: var(--fjord); font-weight: 600; }
+
+/* chips / status */
+.chip { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; font-size: 11.5px; font-weight: 500; padding: 3px 10px; border-radius: 999px; }
+.chip.done { background: var(--green-bg); color: var(--green-tx); }
+.chip.moot { background: var(--grey-bg); color: var(--grey-tx); }
+.chip.wait { background: #f3ecda; color: #8a6d2f; }
+.chip.new { background: var(--accent-soft); color: var(--accent-dim); }
+.chip.meta { background: var(--card-2); color: var(--outline); font-family: 'JetBrains Mono', monospace; font-size: 10.5px; letter-spacing: 0.02em; }
+.st-cell { width: 100px; }
+.model { font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--outline); white-space: nowrap; }
+.model.opus { color: var(--accent); font-weight: 500; }
+
+/* key figures */
+.figures { display: grid; grid-template-columns: repeat(2,1fr); gap: 16px; margin: 20px 0 8px; }
+@media (min-width:680px){ .figures { grid-template-columns: repeat(4,1fr); } }
+.figure { background: var(--card); border: 1px solid var(--glacier); border-radius: var(--radius); padding: 20px; }
+.figure .val { font-family: 'JetBrains Mono', monospace; font-size: 20px; font-weight: 500; color: var(--fjord); letter-spacing: -0.02em; }
+.figure .lab { font-size: 12px; color: var(--outline); margin-top: 6px; line-height: 1.4; }
+
+/* ladder / code block */
+.ladder { background: var(--card); border: 1px solid var(--glacier); border-radius: var(--radius); padding: 22px 24px; margin: 20px 0; font-family: 'JetBrains Mono', monospace; font-size: 13px; line-height: 2; white-space: pre; overflow-x: auto; color: var(--ink-2); }
+.ladder .a { color: var(--accent); }
+.ladder b { color: var(--fjord); font-weight: 500; }
+
+/* callout (glass) */
+.callout { background: rgba(255,255,255,0.7); backdrop-filter: blur(12px); border: 1px solid var(--glacier); border-radius: var(--radius); padding: 24px 28px; margin-top: 28px; box-shadow: var(--shadow); }
+.callout .label { font-family: 'JetBrains Mono', monospace; font-size: 10.5px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--accent); display: block; margin-bottom: 12px; }
+.callout p { margin: 0; color: var(--ink-2); font-size: 15px; max-width: none; }
+
+/* card grids */
+.probs { display: grid; gap: 14px; margin-top: 4px; }
+@media (min-width:760px){ .probs { grid-template-columns: 1fr 1fr; } }
+.prob { background: var(--card); border: 1px solid var(--glacier); border-radius: var(--radius); padding: 22px 24px; }
+.prob-top { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; }
+.prob-id { font-family: 'JetBrains Mono', monospace; font-size: 12px; font-weight: 600; color: #fff; background: var(--fjord); padding: 2px 9px; border-radius: 6px; }
+.prob h3 { font-size: 16px; font-weight: 600; color: var(--fjord); margin: 0; flex: 1; min-width: 160px; line-height: 1.3; letter-spacing: -0.01em; }
+.prob p { margin: 0; font-size: 14px; color: var(--ink-2); max-width: none; line-height: 1.6; }
+.prob .resolve { margin-top: 12px; }
+
+.batches { display: grid; gap: 16px; margin-top: 4px; }
+@media (min-width:680px){ .batches { grid-template-columns: 1fr 1fr; } }
+.batch { background: var(--card); border: 1px solid var(--glacier); border-radius: var(--radius); padding: 20px 22px; }
+.batch-head { font-family: 'JetBrains Mono', monospace; font-size: 11px; font-weight: 600; letter-spacing: 0.04em; color: var(--accent); margin-bottom: 14px; }
+.batch ul { list-style: none; margin: 0; padding: 0; }
+.batch li { font-size: 13.5px; color: var(--ink-2); padding: 6px 0 6px 18px; position: relative; border-top: 1px solid var(--line); }
+.batch li:first-child { border-top: none; }
+.batch li::before { content: '›'; position: absolute; left: 2px; color: var(--accent); font-weight: 700; }
+
+/* principles */
+.pcard { background: var(--card); border: 1px solid var(--glacier); border-radius: var(--radius); padding: 6px 24px; }
+.principles { list-style: none; padding: 0; margin: 0; }
+.principles li { padding: 15px 0 15px 20px; position: relative; border-top: 1px solid var(--line); font-size: 14.5px; color: var(--ink-2); }
+.principles li:first-child { border-top: none; }
+.principles li::before { content: ''; position: absolute; left: 0; top: 22px; width: 8px; height: 2px; background: var(--accent); }
+.principles b { font-weight: 600; color: var(--fjord); }
+
+.note { font-size: 14.5px; color: var(--ink-2); }
+.note ul { padding-left: 20px; margin: 10px 0; }
+.note li { margin: 8px 0; max-width: 72ch; }
+
+.cmds { display: grid; gap: 16px; margin-top: 4px; }
+@media (min-width:680px){ .cmds { grid-template-columns: 1fr 1fr; } }
+.cmd-group { background: var(--card); border: 1px solid var(--glacier); border-radius: var(--radius); padding: 20px 22px; }
+.cmd-group h4 { font-family: 'JetBrains Mono', monospace; font-size: 10.5px; font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase; color: var(--accent); margin: 0 0 12px; }
+.cmd-group p { margin: 0; font-size: 13.5px; color: var(--ink-2); max-width: none; line-height: 2; }
+
+del { color: var(--outline); }
+
+footer { background: var(--card-2); border-top: 1px solid var(--line); margin-top: 88px; }
+.footer-in { max-width: 1040px; margin: 0 auto; padding: 28px 32px; display: flex; justify-content: space-between; flex-wrap: wrap; gap: 10px; font-family: 'JetBrains Mono', monospace; font-size: 11.5px; color: var(--outline); }
+.footer-in b { color: var(--fjord); font-weight: 600; }
+
+strong { font-weight: 600; }
+@media (max-width:560px){
+  .topbar-in, .hero-in, .wrap, .footer-in { padding-left: 20px; padding-right: 20px; }
+  table { font-size: 12.5px; } thead th, tbody td { padding: 10px 12px; }
+}
+@media print { body { background: #fff; } .topbar { position: static; } section { break-inside: avoid; } }
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="topbar-in">
+    <span class="brand">QuickQuick · 设计文档</span>
+    <span class="tag">Nordic · v2026-05-31</span>
+  </div>
+</div>
+
+<header class="hero">
+  <div class="hero-in">
+    <div class="kicker">
+      <span class="chip-hero solid">设计冻结</span>
+      <span class="chip-hero ghost">Tauri 2 · React · SQLCipher</span>
+    </div>
+    <h1>QuickQuick 设计文档<br>剪贴板历史 + 翻译，托盘常驻小工具</h1>
+    <p class="lede">跨平台（macOS + Windows）、自用、直接分发、无 App Sandbox。本文档是产品方向与架构约束的权威依据，沉淀自逐节点拷问（grill）形成的设计共识，供 feature-dev 七阶段开发参照。</p>
+    <div class="meta">
+      <span><b>适用范围</b>　v1（Phase 0–3）+ v2 跨机同步设计</span>
+      <span><b>制定</b>　2026-05-31</span>
+      <span><b>状态</b>　设计冻结，待进入实现</span>
+    </div>
+  </div>
+</header>
+
+<div class="wrap">
+
+  <!-- 一 -->
+  <section>
+    <div class="sec-head"><span class="sec-num">一</span><h2>产品定位与范围</h2></div>
+    <p class="intro">QuickQuick 是一个跨平台桌面小工具，托盘常驻 + 全局热键弹窗，主窗口仅管设置和全量历史。定位<strong>自用、直接分发、无 App Sandbox</strong>。仓库起步为空（无历史包袱）。</p>
+    <div class="tablecard">
+      <table>
+        <thead><tr><th>维度</th><th>定论</th></tr></thead>
+        <tbody>
+          <tr><td>平台</td><td>macOS + Windows</td></tr>
+          <tr><td>分发</td><td>直接分发（无商店沙盒约束）</td></tr>
+          <tr><td>核心功能</td><td>剪贴板历史 + 翻译</td></tr>
+          <tr><td>形态</td><td>托盘常驻 + 全局热键弹窗；主窗口管设置与全量历史</td></tr>
+          <tr><td>v1 范围</td><td>Phase 0 骨架 / 1 文本剪贴板 / 2 翻译核心 / 3 图片+富文本+收藏+筛选+App排除+加密+改键UI</td></tr>
+          <tr><td>v2 范围</td><td>跨机同步（数据层 v1 即预埋 UUID+时间戳+可变状态时间戳+墓碑）</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p><strong>默认热键</strong>：历史 = <code>Cmd/Ctrl+Shift+V</code>、翻译 = <code>Cmd/Ctrl+Shift+T</code>，<strong>必须可改键</strong>。</p>
+  </section>
+
+  <!-- 二 -->
+  <section>
+    <div class="sec-head"><span class="sec-num">二</span><h2>技术栈与系统形态</h2></div>
+    <div class="pcard">
+      <ul class="principles">
+        <li><b>后端</b>　Tauri 2.0（Rust）。全局热键 mac 走 Carbon <code>RegisterEventHotKey</code>（无需授权），Win 走系统热键 API。</li>
+        <li><b>前端</b>　React（webview）。</li>
+        <li><b>存储</b>　嵌入式 SQLCipher，引擎静态编入 App，数据即单文件 <code>quickquick.db</code>，首次启动自动创建。位置：mac <code>~/Library/Application Support/QuickQuick/</code>、Win <code>%APPDATA%\QuickQuick\</code>。每台机器各一份、互相独立（v1 不同步）。</li>
+        <li><b>自启动</b>　Tauri autostart 插件，onboarding 提供开关、默认开。</li>
+        <li><b>自动更新</b>　v1 即上 Tauri updater 插件（配套签名密钥 + 托管更新清单与安装包，如 GitHub Releases）。</li>
+      </ul>
+    </div>
+    <h3 class="subhead">权限与首次运行</h3>
+    <div class="tablecard">
+      <table>
+        <thead><tr><th>平台</th><th>关键授权</th><th>说明</th></tr></thead>
+        <tbody>
+          <tr><td><strong>macOS</strong></td><td>Accessibility</td><td>模拟粘贴（Cmd+V）与读取选中文字必须授权；全局热键不需要</td></tr>
+          <tr><td><strong>Windows</strong></td><td>无</td><td>剪贴板 / SendInput / 全局热键均无需特殊授权</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p><strong>Accessibility 引导 = 主动引导 + 优雅降级</strong>：检测 <code>AXIsProcessTrusted</code> → 未授权弹说明卡片 + 一键深链跳系统设置›辅助功能 → 轮询自动继续；未授权时功能降级不崩（自动粘贴退化为仅写回剪贴板）。</p>
+    <p><strong>热键冲突 = 注册时检测 + 即时提示</strong>：绑定失败当场提示"已被占用"并拒绝保存，改键实时校验，出厂默认值已验证。</p>
+  </section>
+
+  <!-- 三 -->
+  <section>
+    <div class="sec-head"><span class="sec-num">三</span><h2>剪贴板捕获 / 回写 / 隐私机制</h2></div>
+    <p class="intro">这是剪贴板工具的技术心脏——所有"操纵剪贴板"的动作（捕获、回写粘贴、选中即译读选中）共用一套机制，边角最多、最易出竞态。</p>
+    <div class="tablecard">
+      <table>
+        <thead><tr><th>#</th><th>分支</th><th>定论</th><th>否决项</th></tr></thead>
+        <tbody>
+          <tr><td class="phase-num">1</td><td>选中文字获取</td><td><strong>模拟 Cmd+C + 读后恢复原剪贴板 + 打标记防自捕</strong>（AX API 作 fast-follow）</td><td>纯 AX（覆盖率不稳）、二者结合（v1 过重）</td></tr>
+          <tr><td class="phase-num">2</td><td>防自污染</td><td><strong>私有 pasteboard 类型标记</strong></td><td>内容指纹（误判漏记）、暂停轮询（漏记窗口）</td></tr>
+          <tr><td class="phase-num">3</td><td>读取时序</td><td><strong>轮询 changeCount 直到变化或超时</strong>（500ms 兜底）</td><td>固定 sleep 魔数</td></tr>
+          <tr><td class="phase-num">4</td><td>粘贴后剪贴板归属</td><td><strong>留下被选条目 X</strong>（选取即置顶）</td><td>借用后恢复（反直觉、加竞态）</td></tr>
+          <tr><td class="phase-num">5</td><td>多格式存储模型</td><td><strong>纯文本 + 富文本/HTML 双字段，图片独立</strong></td><td>单一类型（丢格式）、任意多格式 payload</td></tr>
+          <tr><td class="phase-num">6</td><td>敏感跳过</td><td><strong>平台 concealed 标记 + App 排除名单，不猜内容</strong></td><td>启发式识别（误判动摇信任）</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <h3 class="subhead">关键机制细节</h3>
+    <div class="pcard">
+      <ul class="principles">
+        <li><b>捕获</b>　~500ms 轮询 changeCount；捕获纯文本 + 图片 + 富文本/HTML（不含文件路径）。</li>
+        <li><b>去重</b>　内容去重 + 置顶刷新——复制已存在内容时不新建，原条目移到最前并刷新时间戳（文本按文本哈希、图片按字节哈希判重）。</li>
+        <li><b>防自污染</b>　工具每次自写剪贴板都附私有 UTI 标记（mac 自定义 <code>NSPasteboard</code> type、Win 自定义剪贴板格式），轮询见标记即跳过。<strong>"置顶刷新"由业务逻辑显式改库，绝不靠重新捕获。</strong></li>
+        <li><b>时序基元</b>　模拟 Cmd+C 后轮询 changeCount，一递增立即读、500ms 超时兜底（超时判为"无选中"优雅降级）。回写粘贴同理（写完等 changeCount 反映再发 Cmd+V）。</li>
+        <li><b>回写</b>　选中条目 → 自动写回剪贴板并模拟粘贴（回车粘贴 / 修饰键仅复制）；粘贴后剪贴板留被选条目 X。</li>
+        <li><b>隐私三件套</b>　concealed/transient 平台标记自动跳过（mac <code>org.nspasteboard.ConcealedType</code>/<code>TransientType</code>、Win <code>ExcludeClipboardContentFromMonitorProcessing</code>/<code>CanIncludeInClipboardHistory=0</code>）+ App 排除名单 + 托盘暂停开关 + 数据库加密。</li>
+      </ul>
+    </div>
+    <div class="callout">
+      <span class="label">设计要点</span>
+      <p>第 3 题的"等 changeCount 就绪"机制在选中即译（读）和历史回写（写）两头复用，是 v1 操纵剪贴板的统一时序基元。</p>
+    </div>
+  </section>
+
+  <!-- 四 -->
+  <section>
+    <div class="sec-head"><span class="sec-num">四</span><h2>翻译子系统</h2></div>
+    <h3 class="subhead">4.1　provider 可插拔接口（架构骨架）</h3>
+    <p>核心目标：<strong>加一家新翻译源的边际成本最小</strong>。</p>
+    <div class="tablecard">
+      <table>
+        <thead><tr><th>#</th><th>分支</th><th>定论</th><th>否决项</th></tr></thead>
+        <tbody>
+          <tr><td class="phase-num">1</td><td>契约边界</td><td><strong>薄 provider + 厚核心框架</strong>（横切全下沉）</td><td>厚 provider（各写各的会长歪）</td></tr>
+          <tr><td class="phase-num">2</td><td>语言归一</td><td><strong>本地检测定方向 + 内部 BCP-47 统一 + 每 provider 映射表</strong></td><td>全靠 provider auto-detect（目标语来不及定）</td></tr>
+          <tr><td class="phase-num">3</td><td>错误降级</td><td><strong>统一错误枚举 + 精准提示 + 同源退避重试，跨源切换永远显式</strong></td><td>自动 failover 跨源（违背不静默切换）</td></tr>
+          <tr><td class="phase-num">4</td><td>凭据配置</td><td><strong>provider 声明 schema + 框架动态渲染 + secret 进 keychain</strong></td><td>各自 UI、通用 KV 框（丢字段语义）</td></tr>
+          <tr><td class="phase-num">5</td><td>缓存</td><td><strong>键含 provider，落库持久 + 容量 LRU 淘汰</strong></td><td>跨源共享键（劫持换源）、纯内存（重启丢）</td></tr>
+          <tr><td class="phase-num">6</td><td>配额</td><td><strong>被动撞错误 + 本地计数仅展示</strong></td><td>本地硬追踪拦截（跨设备/时区/计法不可控）</td></tr>
+          <tr><td class="phase-num">+</td><td>注册/超时</td><td>编译期静态注册表（Rust trait+registry）；超时取消归框架，连续选中即译取消在途旧请求</td><td>—</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p><strong>薄 provider 只实现</strong>：① 声明能力（支持语言/是否需 key/配额上限）；② 把内部统一请求翻成自家 HTTP 调用；③ 把响应/错误解析回统一结果 / 统一错误枚举。其余（语言归一、缓存、限流、凭据存取、重试、超时、取消）全由核心框架横切统一。</p>
+    <div class="callout">
+      <span class="label">错误降级关键区分</span>
+      <p>同源瞬时错误（网络抖动 / 429）自动退避重试<strong>同一源</strong>（不算切换）；换到另一个源永远要用户显式（"换源重译"或预配备源链）。</p>
+    </div>
+
+    <h3 class="subhead">4.2　翻译源（v1 内置 4 家）</h3>
+    <div class="tablecard">
+      <table>
+        <thead><tr><th>源</th><th>鉴权</th><th>角色</th><th>说明</th></tr></thead>
+        <tbody>
+          <tr><td><strong>MyMemory</strong></td><td>匿名 / 邮箱（可选）</td><td><span class="chip new">默认源（无 key）</span></td><td>匿名 5000、填邮箱 5 万 字符/天，支持 CORS</td></tr>
+          <tr><td>百度翻译</td><td>appid + 密钥</td><td>内置</td><td>—</td></tr>
+          <tr><td>DeepL Free</td><td>auth key</td><td>内置</td><td>—</td></tr>
+          <tr><td>Google</td><td>官方 API key</td><td>内置</td><td>走官方 key 版，不用非官方端点</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>Azure Translator / LibreTranslate 自建 / OpenAI 兼容 LLM = 接口留口、<strong>fast-follow 增量加</strong>，不进 v1。失败/额度处理 = 显式提示 + 本地缓存去重；撞额度给明确提示并引导填邮箱或 key；<strong>不静默切换非官方源</strong>。</p>
+
+    <h3 class="subhead">4.3　触发与呈现 UX</h3>
+    <div class="pcard">
+      <ul class="principles">
+        <li><b>触发（已纠偏）</b>　选中即译不再是"选中就自动弹"，而是 选中 → 光标旁冒不打扰小图标 → 用户主动点击或按 <code>Cmd+Shift+T</code> → 才展开轻量浮窗。避免高频选字时翻译窗乱弹 + 狂烧额度。</li>
+        <li><b>呈现按触发分</b>　选中即译 → 光标旁轻量浮窗（瞥一眼即走、点别处消失）；剪贴板 / 历史条目 / 手动输入 → 固定面板（原文 + 译文上下对照）。</li>
+        <li><b>方向</b>　智能双向——本地检测源语言，自动识别 → 默认中文；本是中文 → 翻英文；目标语可配。</li>
+        <li><b>译文操作</b>　一键复制 + 发音朗读（webview 原生 SpeechSynthesis，跨平台免费）+ 切目标语 / 换源重译 + 存入翻译历史。</li>
+        <li><b>单词查询</b>　v1 纯机器翻译；词典式增强（音标 / 词性 / 例句）= fast-follow，结果视图预留词典区位置。</li>
+        <li><b>历史分离</b>　翻译历史与剪贴板历史分开（翻过什么 vs 复制过什么）。剪贴板历史每条带"一键翻译"按钮 → 翻译并写入翻译历史。</li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- 五 -->
+  <section>
+    <div class="sec-head"><span class="sec-num">五</span><h2>图片存储与库体积平衡</h2></div>
+    <div class="tablecard">
+      <table>
+        <thead><tr><th>#</th><th>分支</th><th>定论</th><th>否决项</th></tr></thead>
+        <tbody>
+          <tr><td class="phase-num">1</td><td>原图存储</td><td><strong>原样无损存 + 超阈值才特殊处理</strong></td><td>全转码压缩（毁保真）、只存缩略图（功能残废）</td></tr>
+          <tr><td class="phase-num">2</td><td>超大图处理</td><td><strong>跳过原图 + 留缩略图 + 明确标记（默认），阈值/压缩可配</strong></td><td>自动有损压缩（背后改图）、不设阈值</td></tr>
+          <tr><td class="phase-num">3</td><td>缩略图规格</td><td><strong>WebP / 最长边 ~256px（retina 可 320）/ 质量 ~75</strong></td><td>JPEG（透明发黑）、PNG（体积大、不利同步）</td></tr>
+          <tr><td class="phase-num">4</td><td>清理策略</td><td><strong>分级清理：先腾原图保缩略图，再整条清最旧非收藏</strong></td><td>一刀整条清、仅按张数封顶</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="pcard">
+      <ul class="principles">
+        <li><b>图片入库</b>　进 SQLCipher 加密库（BLOB），表拆<strong>缩略图 BLOB + 原图 BLOB</strong> 两块；单张超阈值（如 &gt;20MB）默认只留缩略图并标"原图过大未存"。</li>
+        <li><b>总量封顶</b>　默认 500MB（或按张数），超出按分级清理——先删大头原图、保留缩略图预览，缩略图也满才整条删最旧非收藏；<strong>收藏永远豁免</strong>。</li>
+      </ul>
+    </div>
+    <div class="callout">
+      <span class="label">关键架构收敛</span>
+      <p>「超大图未存原图」+「本地清理腾掉原图」+「v2 同步原图按需未拉」三种情况最终都归一到<strong>同一记录状态「有缩略图、无本地原图」</strong>——UI、数据模型、"按需重取原图"逻辑只需处理这一种降级态，三处复用一套。</p>
+    </div>
+  </section>
+
+  <!-- 六 -->
+  <section>
+    <div class="sec-head"><span class="sec-num">六</span><h2>数据库与加密</h2></div>
+    <div class="tablecard">
+      <table>
+        <thead><tr><th>#</th><th>分支</th><th>定论</th><th>否决项</th></tr></thead>
+        <tbody>
+          <tr><td class="phase-num">1</td><td>失败/恢复语义</td><td><strong>分级处理 + 永不静默删库</strong></td><td>失败即重建空库、硬停卡死</td></tr>
+          <tr><td class="phase-num">2</td><td>密钥可访问性</td><td><strong>AfterFirstUnlock + 设备绑定不同步</strong></td><td>WhenUnlocked（锁屏写入空洞）、平台漫游（毁信封模型）</td></tr>
+          <tr><td class="phase-num">3</td><td>密钥层抽象</td><td><strong>抽象 KeyProvider，v1 只实现钥匙串</strong></td><td>v1 即建信封、写死不抽象</td></tr>
+          <tr><td class="phase-num">+</td><td>KDF/性能</td><td>SQLCipher 4 默认参数；搜索靠透明解密后匹配，FTS 留实现期</td><td>—</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="pcard">
+      <ul class="principles">
+        <li><b>加密密钥管理</b>　钥匙串自动密钥：随机密钥存 OS 钥匙串（mac Keychain / Win 凭据管理器），日常零摩擦不输密码。安全边界 = 能登入系统者可读（自用够）。</li>
+        <li><b>密钥可访问性</b>　<code>AfterFirstUnlock</code>（首次解锁后即可读，锁屏后台仍捕获不漏记）+ <code>ThisDeviceOnly</code>（绝不同步到 iCloud 钥匙串/凭据漫游）——这是 v2 信封模型的前提（跨设备只能走 DEK 信封端到端）。</li>
+        <li><b>失败兜底</b>　瞬时（钥匙串被拒/锁）→ 提示重试 + 引导授权、绝不碰库；永久（密钥丢失/库损坏）→ 明确告知 + 旧库改名备份保留（绝不删）+ 用户显式确认才重建空库。</li>
+        <li><b>密钥层抽象</b>　开库只依赖 <code>KeyProvider</code> 接口；v1 仅实现 <code>KeychainKeyProvider</code>，未来"主口令包裹""v2 共享 DEK"都是新增实现、开库核心不改。</li>
+        <li><b>备份 / 搬运</b>　导出生成口令保护的便携文件，在另一台输入口令导入——充当 v1 无同步时的手动搬运通道，也是加密失败时的恢复退路。</li>
+      </ul>
+    </div>
+    <div class="callout">
+      <span class="label">方法论对照</span>
+      <p>密钥层选"只留抽象接口、不预埋实现"，而数据 schema 选"预埋字段"——同一判断的两面：schema 须让数据形状先存在迁移才便宜；密钥来源靠一层薄接口就能彻底解耦。分界 = 这东西事后补的代价高不高。</p>
+    </div>
+  </section>
+
+  <!-- 七 -->
+  <section>
+    <div class="sec-head"><span class="sec-num">七</span><h2>跨机同步（v2）</h2></div>
+    <p class="intro">数据层 v1 即预埋，引擎实现推迟到 v2。</p>
+    <div class="tablecard">
+      <table>
+        <thead><tr><th>#</th><th>分支</th><th>定论</th><th>否决项</th></tr></thead>
+        <tbody>
+          <tr><td class="phase-num">1</td><td>同步粒度</td><td><strong>记录级增量合并</strong>（UUID 去重 + 时间戳收敛）</td><td>整库文件搬运（多写冲突/损坏）</td></tr>
+          <tr><td class="phase-num">2</td><td>传输架构</td><td><strong>云盘中转 + 每设备 append-only 加密日志</strong></td><td>P2P（要同时在线）、自建端点（维护重）</td></tr>
+          <tr><td class="phase-num">3</td><td>密钥/信任根</td><td><strong>信封模型：高熵随机 DEK + 一次性配对码包裹</strong></td><td>长期口令直接派生（泄露=全泄露）</td></tr>
+          <tr><td class="phase-num">4</td><td>冲突收敛</td><td><strong>LWW 后写胜 + 墓碑软删</strong></td><td>完整 CRDT（过度）、仅同步新增（割裂）</td></tr>
+          <tr><td class="phase-num">5</td><td>同步范围</td><td><strong>文本全同步 + 图片缩略图先行/原图按需；配置·密钥不同步</strong></td><td>全量含原图（云盘爆）、纯文本（丢图）</td></tr>
+          <tr><td class="phase-num">6</td><td>触发节奏</td><td><strong>本地写即时 + 可配间隔轮询 + 手动立即同步按钮</strong></td><td>—</td></tr>
+          <tr><td class="phase-num">7</td><td>日志压实</td><td><strong>全设备最低水位压实 + 墓碑 GC + 离线退役</strong></td><td>仅体积阈值（漏离线设备增量）</td></tr>
+          <tr><td class="phase-num">8</td><td>设备撤销</td><td><strong>软撤销 + 可选 DEK 轮换（分级）</strong></td><td>仅软撤销（旧设备仍能解密）</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="pcard">
+      <ul class="principles">
+        <li><b>每设备 append-only 加密日志</b>　每台设备只写自己的日志文件（<code>device-X.log</code>），别设备只读不改 → 从根上无并发写冲突；数据先 E2E 加密再落盘，云盘商只见密文。默认走 Dropbox/OneDrive（iCloud Drive 因 Windows 缺位不作默认）。</li>
+        <li><b>信封模型</b>　首台生成高熵随机 DEK（真正加解密日志的）；配对时用一次性高熵配对码当 KEK 把 DEK 包成 <code>keybundle</code> 放云盘，新设备录入配对码解出 DEK 后配对码作废。</li>
+        <li><b>LWW + 墓碑</b>　可变字段（收藏/删除/时间戳）各带 last-modified 时间戳，合并取新者；删除写墓碑标记以便传播。</li>
+        <li><b>设备撤销分级</b>　「移除设备」轻量出清单（日常换机）；「丢失/被盗」额外触发 DEK 轮换、重加密全部云盘密文使旧设备彻底作废（需至少一台在用设备在线发起）。</li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- 八 -->
+  <section>
+    <div class="sec-head"><span class="sec-num">八</span><h2>全局热键与弹窗交互</h2></div>
+    <div class="tablecard">
+      <table>
+        <thead><tr><th>#</th><th>分支</th><th>定论</th><th>否决项</th></tr></thead>
+        <tbody>
+          <tr><td class="phase-num">1</td><td>面板定位</td><td><strong>活动屏固定位（上中，类 Raycast）</strong>，活动屏取鼠标所在屏</td><td>鼠标处（键盘唤起乱冒）、记忆位</td></tr>
+          <tr><td class="phase-num">2</td><td>焦点模型</td><td><strong>抢焦点 + 记住并恢复原前台 app</strong></td><td>非激活面板（搜索框拿不到焦点）、只写回不粘贴</td></tr>
+          <tr><td class="phase-num">3</td><td>窗口生命周期</td><td><strong>常驻隐藏预热窗口</strong>，历史/翻译共用一窗按热键路由</td><td>按需新建（冷启动卡顿）、超时销毁重建</td></tr>
+          <tr><td class="phase-num">4</td><td>键盘模型</td><td><strong>搜索框常驻焦点（Spotlight）+ Cmd+1~9 快选</strong></td><td>列表焦点为主、纯数字快选</td></tr>
+          <tr><td class="phase-num">5</td><td>选中即译触发</td><td><strong>选中冒图标 + 点按/热键才译</strong></td><td>纯自动弹（骚扰+烧额度）、修饰键划词</td></tr>
+          <tr><td class="phase-num">+</td><td>关闭行为</td><td>失焦即隐 + Esc + 选中后自动关</td><td>—</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="pcard">
+      <ul class="principles">
+        <li><b>焦点恢复路径</b>　唤起前记录前台 app（mac <code>NSWorkspace.frontmostApplication</code> / Win foreground window）→ 选中条目时隐面板 → 激活原 app → 等其到前台 → 模拟粘贴。</li>
+        <li><b>预热窗口</b>　启动即建好面板 webview、平时隐藏，热键只 show + 重定位 + 聚焦，瞬开无延迟。历史面板与翻译面板共用这一个预热 webview，按 <code>Cmd+Shift+V</code> / <code>Cmd+Shift+T</code> 路由到不同视图。</li>
+        <li><b>键盘流</b>　弹出焦点在搜索框，输入即实时过滤；↑↓ 移动高亮不离搜索框；Enter 粘贴；Cmd+1~9 快选前九条。</li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- 九 -->
+  <section>
+    <div class="sec-head"><span class="sec-num">九</span><h2>界面 UI 与设计语言</h2></div>
+    <h3 class="subhead">9.1　视觉基调与设计语言</h3>
+    <p>整体基调 = <strong>原生克制·随系统明暗·半透明材质</strong>（类 Raycast / Spotlight），在此方向内细化的具体设计语言：</p>
+    <div class="tablecard">
+      <table>
+        <thead><tr><th>维度</th><th>定论</th></tr></thead>
+        <tbody>
+          <tr><td>强调色策略</td><td>固定克制品牌主色（非跟随系统）</td></tr>
+          <tr><td><strong>品牌主色</strong></td><td><strong>峡湾青蓝 Fjord Teal-Blue</strong> <code>#3A7CA5</code></td></tr>
+          <tr><td>形态调性</td><td>中圆角 ~10px + 适中密度</td></tr>
+          <tr><td>材质质感</td><td>弹窗毛玻璃 + 主窗实色 + 细描边/微色差分层</td></tr>
+          <tr><td>字体</td><td>系统原生（mac SF Pro+苹方 / Win Segoe UI+微软雅黑）</td></tr>
+          <tr><td>图标</td><td>线性为主（mac SF Symbols / Win Lucide 同风格）</td></tr>
+          <tr><td>动效</td><td>克制即时（弹窗淡入+轻微缩放 &lt;150ms 无弹跳）</td></tr>
+          <tr><td>明暗</td><td>深浅双主题随系统切换，主色各调适配明度版</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="callout">
+      <span class="label">气质统一</span>
+      <p>峡湾青蓝与已确立的 Fjord/Nordic 文档审美<strong>同源</strong>——App 与文档整条工具链气质统一。这是"克制但有自己性格"的落点。</p>
+    </div>
+
+    <h3 class="subhead">9.2　面板布局</h3>
+    <div class="tablecard">
+      <table>
+        <thead><tr><th>面板</th><th>布局</th></tr></thead>
+        <tbody>
+          <tr><td>历史面板（热键唤起）</td><td>列表 + 右侧预览双栏（类 Raycast 剪贴板）；★ 置顶收藏，类型筛选放搜索框右侧下拉</td></tr>
+          <tr><td>固定翻译面板</td><td>上下对照（方向+源条 → 原文 → 译文行内复制/朗读 → 底部预留词典区）</td></tr>
+          <tr><td>选中即译浮窗</td><td>极简（译文为主 + 复制 + 展开为完整面板）；小图标紧贴选区</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3 class="subhead">9.3　主窗口</h3>
+    <p>主窗口 = <strong>左侧边栏，一级入口仅三个：剪贴板 / 翻译 / 设置</strong>。翻译历史归「翻译」内部、剪贴板历史归「剪贴板」内部，均为二级。</p>
+    <div class="tablecard">
+      <table>
+        <thead><tr><th>一级页</th><th>内部布局</th></tr></thead>
+        <tbody>
+          <tr><td>剪贴板</td><td>复用列表+预览双栏 + 管理操作（多选删除/批量收藏/类型筛选/按时间分组）</td></tr>
+          <tr><td>翻译</td><td>工作区主体 + 翻译历史右栏（点项回填工作区），叠主窗左栏即"导航｜工作｜历史"三栏</td></tr>
+          <tr><td>设置</td><td>二级纵向子项栏（通用/热键/翻译源/隐私/存储/关于）+ 右内容（类 macOS 系统设置）</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- 十 -->
+  <section>
+    <div class="sec-head"><span class="sec-num">十</span><h2>v1 范围与 v2 预埋清单</h2></div>
+    <h3 class="subhead">v1 必做（Phase 0–3）</h3>
+    <p>骨架 / 文本剪贴板 / 翻译核心 / 图片 + 富文本 + 收藏 + 筛选 + App 排除 + 加密 + 改键 UI。</p>
+    <h3 class="subhead">v1 为 v2 同步的预埋（关键字段预埋，用户拍板）</h3>
+    <p>v1 现在就要承接的、原本不在 v1 的活：</p>
+    <div class="batches">
+      <div class="batch">
+        <div class="batch-head">v1 即承接的预埋</div>
+        <ul>
+          <li><b>删除语义变更</b>：原"物理删 + 移到最前"改为 软删 + 墓碑字段 + 本地物理清理 GC。</li>
+          <li><b>图片表拆分</b>：缩略图 BLOB / 原图 BLOB 拆两块存。</li>
+          <li><b>每条记录加</b> last-modified 时间戳 + 墓碑标记字段。</li>
+        </ul>
+      </div>
+      <div class="batch">
+        <div class="batch-head">铁律（事后补不了，第一天就要对）</div>
+        <ul>
+          <li>每条记录 UUID 稳定唯一、永不复用。</li>
+          <li>时间戳存 UTC、单调可靠。</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- 十一 -->
+  <section>
+    <div class="sec-head"><span class="sec-num">十一</span><h2>贯穿设计原则</h2></div>
+    <p class="intro">这套设计的几乎每一个"否决"，背后都是同一组判断准则：</p>
+    <div class="pcard">
+      <ul class="principles">
+        <li><b>不静默改 / 不静默删 / 不静默切</b>——敏感跳过不猜内容、超大图不偷压、换源永远显式、库失败永不静默删。诚实优先于省事。</li>
+        <li><b>能统一的横切关注点只做一次</b>——薄 provider + 厚框架、KeyProvider 抽象、图片三态归一、布局在弹窗与主窗口间复用。</li>
+        <li><b>只死守事后补不了的，其余交给迁移 / 接口</b>——UUID 与时间戳可靠性预埋，密钥来源靠薄接口解耦。分界 = 事后补的代价高不高。</li>
+      </ul>
+    </div>
+  </section>
+
+</div>
+
+<footer>
+  <div class="footer-in">
+    <span><b>QuickQuick 设计文档</b></span>
+    <span>2026-05-31 · 设计冻结，待进入 feature-dev 实现 · Nordic Serenity</span>
+  </div>
+</footer>
+
+</body>
+</html>
