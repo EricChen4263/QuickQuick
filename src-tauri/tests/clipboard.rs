@@ -1,11 +1,15 @@
-//! 集成测试：剪贴板捕获引擎（V1-F1-S01）
+//! 集成测试：剪贴板捕获引擎（V1-F1-S01）+ 去重/置顶（V1-F1-S02）
 //!
 //! 验收项：
 //! - V1-F1-A01 capture_dual_field   — 双字段同存
 //! - V1-F1-A02 poll_changecount_triggers_capture — 轮询 changeCount 驱动
 //! - V1-F1-A03 self_write_marker_skipped         — 防自污染跳过
+//! - V1-F1-A04 dedup_and_bump       — 内容去重+置顶刷新
+//! - V1-F1-A05 bump_no_new_record   — 置顶刷新不产生新记录
 
-use quickquick_lib::clipboard::{ClipboardBackend, ClipboardSnapshot, poll_once};
+use quickquick_lib::clipboard::{CapturedItem, ClipboardBackend, ClipboardSnapshot, poll_once};
+use quickquick_lib::db;
+use tempfile::tempdir;
 
 // ── FakeBackend ───────────────────────────────────────────────────────────────
 
@@ -141,4 +145,92 @@ fn poll_count_reset_defense() {
     // Act：再次调用同 count，证明不重复捕获
     let no_dup = poll_once(&backend_recovered, &mut last_seen);
     assert!(no_dup.is_none(), "相同 count 不应重复捕获");
+}
+
+// ── V1-F1-A04 dedup_and_bump ──────────────────────────────────────────────────
+
+/// A04：ingest 相同文本第二次时，返回 Bumped（不新建行），
+///      原条目成为最前（top_id == 原 id），行数仍为 2。
+#[test]
+fn dedup_and_bump() {
+    use quickquick_lib::db::{IngestOutcome, bump_to_top, count_live, ingest, top_id};
+
+    // Arrange
+    let dir = tempdir().expect("tempdir 创建失败");
+    let db_path = dir.path().join("quickquick.db");
+    let conn = db::open_or_create(&db_path, &[7u8; 32]).expect("建库应成功");
+
+    let item_x = CapturedItem { text: "content-X".to_owned(), html: None };
+    let item_y = CapturedItem { text: "content-Y".to_owned(), html: None };
+
+    // Act 1：ingest X → Inserted，库中 1 条
+    let outcome_x1 = ingest(&conn, &item_x).expect("ingest X 应成功");
+    let id_x = match outcome_x1 {
+        IngestOutcome::Inserted(id) => id,
+        IngestOutcome::Bumped(_) => panic!("首次 ingest X 应为 Inserted"),
+    };
+    assert_eq!(count_live(&conn).expect("count_live"), 1, "ingest X 后应有 1 条");
+
+    // Act 2：ingest Y → Inserted，库中 2 条；持有 id_y 用于后续显式置顶（避免 top_id 时序依赖）
+    let id_y = match ingest(&conn, &item_y).expect("ingest Y 应成功") {
+        IngestOutcome::Inserted(id) => id,
+        IngestOutcome::Bumped(_) => panic!("首次 ingest Y 应为 Inserted"),
+    };
+    assert_eq!(count_live(&conn).expect("count_live"), 2, "ingest Y 后应有 2 条");
+
+    // 将 Y 显式置顶，确保 Y 的 last_modified_utc 晚于 X（与插入顺序无关）
+    bump_to_top(&conn, &id_y).expect("bump_to_top Y 应成功");
+
+    // Act 3：再次 ingest X（相同文本）→ 应返回 Bumped，行数仍 2
+    let outcome_x2 = ingest(&conn, &item_x).expect("再次 ingest X 应成功");
+    let bumped_id = match outcome_x2 {
+        IngestOutcome::Bumped(id) => id,
+        IngestOutcome::Inserted(_) => panic!("重复 ingest X 应为 Bumped，不应新建行"),
+    };
+
+    // Assert：Bumped 返回的 id 就是原来 X 的 id
+    assert_eq!(bumped_id, id_x, "Bumped id 应与原 X 的 id 一致");
+
+    // Assert：行数仍为 2（无新行）
+    assert_eq!(count_live(&conn).expect("count_live"), 2, "去重后行数应仍为 2");
+
+    // Assert：X 现在是最前（last_modified_utc 最新）
+    let top = top_id(&conn).expect("top_id").expect("应有最前条目");
+    assert_eq!(top, id_x, "置顶刷新后 X 应成为最前条目");
+}
+
+// ── V1-F1-A05 bump_no_new_record ─────────────────────────────────────────────
+
+/// A05：显式调 bump_to_top 不产生新记录，X 移到最前，行数仍为 2。
+#[test]
+fn bump_no_new_record() {
+    use quickquick_lib::db::{IngestOutcome, bump_to_top, count_live, ingest, top_id};
+
+    // Arrange：插入 X、Y，共 2 条，Y 更新（置顶 Y）
+    let dir = tempdir().expect("tempdir 创建失败");
+    let db_path = dir.path().join("quickquick.db");
+    let conn = db::open_or_create(&db_path, &[7u8; 32]).expect("建库应成功");
+
+    let item_x = CapturedItem { text: "bump-X".to_owned(), html: None };
+    let item_y = CapturedItem { text: "bump-Y".to_owned(), html: None };
+
+    let id_x = match ingest(&conn, &item_x).expect("ingest X") {
+        IngestOutcome::Inserted(id) => id,
+        IngestOutcome::Bumped(_) => panic!("首次 ingest X 应为 Inserted"),
+    };
+    match ingest(&conn, &item_y).expect("ingest Y") {
+        IngestOutcome::Inserted(_) => {}
+        IngestOutcome::Bumped(_) => panic!("首次 ingest Y 应为 Inserted"),
+    }
+    assert_eq!(count_live(&conn).expect("count_live 初始"), 2, "初始应有 2 条");
+
+    // Act：显式 bump X 到最前
+    bump_to_top(&conn, &id_x).expect("bump_to_top X 应成功");
+
+    // Assert：行数仍为 2（没有新记录产生）
+    assert_eq!(count_live(&conn).expect("count_live 后"), 2, "bump 后行数应仍为 2，无新记录");
+
+    // Assert：X 现在是最前
+    let top = top_id(&conn).expect("top_id").expect("应有最前条目");
+    assert_eq!(top, id_x, "bump_to_top 后 X 应成为最前条目");
 }

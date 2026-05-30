@@ -70,6 +70,12 @@ fn schema_preembed_columns_clip_items() {
         "clip_items 应含 deleted_at_utc 列；实际列: {:?}",
         cols
     );
+    // Assert：text_hash（S02 去重字段）
+    assert!(
+        cols.contains(&"text_hash".to_string()),
+        "clip_items 应含 text_hash 列（S02 去重字段）；实际: {:?}",
+        cols
+    );
 }
 
 /// V0-F3-A04：clip_images 表含缩略图/原图两字段及墓碑列

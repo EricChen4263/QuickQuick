@@ -1,12 +1,16 @@
-//! 加密数据库模块：SQLCipher 开库、schema 预埋、软删、GC、失败恢复
+//! 加密数据库模块：SQLCipher 开库、schema 预埋、软删、GC、失败恢复、去重入库
 //!
-//! 设计对齐：设计文档§六（失败/恢复语义）、§十（schema 预埋铁律）
+//! 设计对齐：设计文档§六（失败/恢复语义）、§十（schema 预埋铁律）、§三（去重+置顶刷新）
 //!
 //! 核心函数：
 //! - `open_or_create`  — 打开或新建加密库，并确保 schema 已初始化
 //! - `open_or_recover` — 带损坏检测的打开：损坏时改名备份，按标志决定是否重建
 //! - `soft_delete`     — 软删（置墓碑，非物理删）
 //! - `gc_purge_deleted`— 本地物理清理 GC（删除 is_deleted=1 的行）
+//! - `ingest`          — 去重入库：同 text_hash 存在则 bump，否则插入新行
+//! - `bump_to_top`     — 显式置顶：仅更新 last_modified_utc（不新建记录）
+//! - `count_live`      — 查询未软删行数（测试/业务用）
+//! - `top_id`          — 返回 last_modified_utc 最新的未软删行 id（测试/业务用）
 //!
 //! 安全约定：
 //! - 密钥以 raw key 格式传入（`PRAGMA key = "x'<hex>'"`)，不写入日志
@@ -16,8 +20,11 @@
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension};
 use thiserror::Error;
+use uuid::Uuid;
+
+use crate::clipboard::CapturedItem;
 
 // ── 错误类型 ─────────────────────────────────────────────────────────────────
 
@@ -122,6 +129,108 @@ pub fn soft_delete(conn: &Connection, id: &str) -> Result<(), DbError> {
     Ok(())
 }
 
+// ── S02 去重/置顶 API ──────────────────────────────────────────────────────────
+
+/// `ingest` 的返回结果：新建行 vs 原行置顶刷新。
+#[derive(Debug, PartialEq)]
+pub enum IngestOutcome {
+    /// 内容不存在，插入了新行；携带新行的 id
+    Inserted(String),
+    /// 内容已存在，原行已置顶刷新（last_modified_utc 已更新）；携带原行 id
+    Bumped(String),
+}
+
+/// 去重入库：将捕获到的 `CapturedItem` 写入数据库，自动去重。
+///
+/// 流程：
+/// 1. 计算 `item.text` 的 `text_hash`
+/// 2. 查询 `clip_items` 中是否有未软删的同 hash 行
+/// 3. 命中 → 调用 `bump_to_top`（刷新 `last_modified_utc`），返回 `Bumped(id)`
+/// 4. 未命中 → 插入新行，返回 `Inserted(id)`
+///
+/// # Errors
+/// `DbError::Sqlite`：SQL 执行失败
+pub fn ingest(conn: &Connection, item: &CapturedItem) -> Result<IngestOutcome, DbError> {
+    let hash = text_hash(&item.text);
+    let now_ms = current_utc_ms();
+
+    // 查询是否已有未软删的同 hash 行
+    let existing_id: Option<String> = conn
+        .query_row(
+            "SELECT id FROM clip_items WHERE text_hash = ?1 AND is_deleted = 0 LIMIT 1",
+            rusqlite::params![hash],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?;
+
+    if let Some(id) = existing_id {
+        // 命中：置顶刷新，不新建行
+        bump_to_top(conn, &id)?;
+        return Ok(IngestOutcome::Bumped(id));
+    }
+
+    // 未命中：插入新行
+    let new_id = Uuid::new_v4().to_string();
+    conn.execute(
+        "INSERT INTO clip_items
+             (id, content, kind, created_utc, last_modified_utc, is_deleted, text_hash)
+         VALUES (?1, ?2, 'text', ?3, ?3, 0, ?4)",
+        rusqlite::params![new_id, item.text, now_ms, hash],
+    )?;
+
+    Ok(IngestOutcome::Inserted(new_id))
+}
+
+/// 显式置顶：仅更新 `last_modified_utc = now`，不新建任何记录。
+///
+/// 列表按 `last_modified_utc DESC` 排序时，该行将排到最前。
+/// 业务语义：「置顶」由本函数**显式改库**实现，绝不通过重新捕获产生新记录。
+///
+/// # Errors
+/// `DbError::Sqlite`：SQL 执行失败（id 不存在时影响行数为 0，不报错）
+pub fn bump_to_top(conn: &Connection, id: &str) -> Result<(), DbError> {
+    let now_ms = current_utc_ms();
+    conn.execute(
+        "UPDATE clip_items SET last_modified_utc = ?1 WHERE id = ?2",
+        rusqlite::params![now_ms, id],
+    )?;
+    Ok(())
+}
+
+/// 返回未软删的行数。
+///
+/// 用于测试断言和业务层「历史条目总数」查询。
+///
+/// # Errors
+/// `DbError::Sqlite`：SQL 执行失败
+pub fn count_live(conn: &Connection) -> Result<i64, DbError> {
+    let n = conn.query_row(
+        "SELECT COUNT(*) FROM clip_items WHERE is_deleted = 0",
+        [],
+        |row| row.get(0),
+    )?;
+    Ok(n)
+}
+
+/// 返回 `last_modified_utc` 最新的未软删行的 `id`（即当前「最前」条目）。
+///
+/// 用于测试断言和业务层「取最新条目」查询。
+/// 库为空或全部软删时返回 `Ok(None)`。
+///
+/// # Errors
+/// `DbError::Sqlite`：SQL 执行失败
+pub fn top_id(conn: &Connection) -> Result<Option<String>, DbError> {
+    let result = conn
+        .query_row(
+            "SELECT id FROM clip_items WHERE is_deleted = 0
+             ORDER BY last_modified_utc DESC LIMIT 1",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?;
+    Ok(result)
+}
+
 /// 物理清理 GC：删除所有 `is_deleted=1` 的行，返回清理条数。
 ///
 /// 仅删除已标记软删的行；正常行不受影响。
@@ -187,7 +296,8 @@ fn ensure_schema(conn: &Connection) -> Result<(), DbError> {
             created_utc       INTEGER NOT NULL,            -- UTC epoch ms
             last_modified_utc INTEGER NOT NULL,            -- UTC epoch ms
             is_deleted        INTEGER NOT NULL DEFAULT 0,  -- 墓碑：0=正常 1=软删
-            deleted_at_utc    INTEGER                      -- 软删时间（UTC epoch ms）
+            deleted_at_utc    INTEGER,                     -- 软删时间（UTC epoch ms）
+            text_hash         TEXT                         -- 纯文本内容哈希，用于去重（非加密，判重用途）
         );
 
         -- 图片表：缩略图/原图拆分（设计§五/§十）
@@ -231,6 +341,18 @@ fn backup_corrupt_file(path: &Path) -> Result<std::path::PathBuf, DbError> {
 
     std::fs::rename(path, &backup_path)?;
     Ok(backup_path)
+}
+
+/// 计算文本判重哈希（显式稳定 FNV-1a 64-bit，跨 Rust 版本/构建一致；非加密，仅用于内容去重）。
+fn text_hash(text: &str) -> String {
+    const FNV_PRIME: u64 = 0x0000_0100_0000_01B3;
+    const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
+    let mut hash = FNV_OFFSET;
+    for byte in text.as_bytes() {
+        hash ^= *byte as u64;
+        hash = hash.wrapping_mul(FNV_PRIME);
+    }
+    format!("{hash:016x}")
 }
 
 /// 获取当前 UTC 时间戳（毫秒）。
