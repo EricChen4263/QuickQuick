@@ -8,11 +8,13 @@
 //! - `tray`：系统托盘菜单构建（setup 阶段调用）
 //! - `window_pos`：预热窗口定位逻辑（光标所在显示器水平居中、靠上 15%）
 
+pub mod autostart;
 pub mod hotkey;
 mod tray;
 mod window_pos;
 
 use tauri::{Emitter, Manager, WindowEvent};
+use tauri_plugin_autostart::ManagerExt as AutostartManagerExt;
 use tauri_plugin_global_shortcut::GlobalShortcutExt;
 
 /// 启动 Tauri 应用。
@@ -38,6 +40,7 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .setup(|app| {
+            apply_autostart_preference(app);
             register_hotkeys(app.handle());
             tray::setup_tray(app)?;
             setup_window_focus_hide(app)?;
@@ -45,6 +48,39 @@ pub fn run() {
         })
         .run(tauri::generate_context!())
         .expect("Tauri 应用启动失败");
+}
+
+/// 读取自启动偏好配置并应用到 OS LaunchAgent。
+///
+/// 配置路径优先用 `app_config_dir()`；若拿不到则跳过（仅 eprintln 不 panic）。
+/// 调用 enable/disable 失败时同样仅 eprintln，不阻断启动。
+fn apply_autostart_preference(app: &mut tauri::App) {
+    // 计算配置文件路径；拿不到目录时优雅降级
+    let config_path = match app.path().app_config_dir() {
+        Ok(dir) => {
+            // 目录可能尚未创建（首次启动），尝试创建；失败则跳过
+            if let Err(e) = std::fs::create_dir_all(&dir) {
+                eprintln!("[QuickQuick] 无法创建配置目录，跳过自启动偏好应用: {e}");
+                return;
+            }
+            dir.join("autostart.json")
+        }
+        Err(e) => {
+            eprintln!("[QuickQuick] 无法获取配置目录，跳过自启动偏好应用: {e}");
+            return;
+        }
+    };
+
+    let pref = autostart::AutostartConfig::load_or_default(&config_path);
+    let mgr = app.autolaunch();
+
+    if pref.enabled {
+        if let Err(e) = mgr.enable() {
+            eprintln!("[QuickQuick] 自启动 enable 失败（不影响启动）: {e}");
+        }
+    } else if let Err(e) = mgr.disable() {
+        eprintln!("[QuickQuick] 自启动 disable 失败（不影响启动）: {e}");
+    }
 }
 
 /// 注册全局热键（history / translate）。
