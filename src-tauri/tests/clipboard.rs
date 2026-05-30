@@ -7,11 +7,10 @@
 //! - V1-F1-A04 dedup_and_bump       — 内容去重+置顶刷新
 //! - V1-F1-A05 bump_no_new_record   — 置顶刷新不产生新记录
 
-use quickquick_lib::clipboard::{CapturedItem, ClipboardBackend, ClipboardSnapshot, poll_once};
+use quickquick_lib::clipboard::{CapturedItem, ClipboardBackend, ClipboardSnapshot, poll_once, poll_once_with_policy};
 use quickquick_lib::db;
+use quickquick_lib::privacy::{CapturePolicy, ExcludeList};
 use tempfile::tempdir;
-
-// ── FakeBackend ───────────────────────────────────────────────────────────────
 
 /// 可编程的假剪贴板后端，驱动 poll_once 逻辑测试（无 OS 依赖）。
 struct FakeBackend {
@@ -20,6 +19,8 @@ struct FakeBackend {
 }
 
 impl FakeBackend {
+    /// 构造假后端。`is_concealed` 与 `source_app` 填默认安全值（false/None），
+    /// 保持 S01/S02 测试行为不变。
     fn new(count: u64, text: Option<&str>, html: Option<&str>, has_self_marker: bool) -> Self {
         Self {
             count,
@@ -27,6 +28,8 @@ impl FakeBackend {
                 text: text.map(str::to_owned),
                 html: html.map(str::to_owned),
                 has_self_marker,
+                is_concealed: false,
+                source_app: None,
             },
         }
     }
@@ -41,8 +44,6 @@ impl ClipboardBackend for FakeBackend {
         self.snapshot.clone()
     }
 }
-
-// ── V1-F1-A01 capture_dual_field ─────────────────────────────────────────────
 
 /// A01：快照含 text + html 时，poll_once 返回双字段都在的 CapturedItem；
 ///      纯文本键（text）作为显示/搜索/判重基础字段。
@@ -65,8 +66,6 @@ fn capture_dual_field() {
     );
     assert_eq!(last_seen, 2, "last_seen_count 应更新为新计数");
 }
-
-// ── V1-F1-A02 poll_changecount_triggers_capture ───────────────────────────────
 
 /// A02：changeCount 不变 → None；递增一次 → Some 并更新 last_seen_count；
 ///      再次调用同值 → None（一递增只捕获一次）。
@@ -94,8 +93,6 @@ fn poll_changecount_triggers_capture() {
     assert!(no_dup.is_none(), "相同 count 不应重复捕获");
 }
 
-// ── V1-F1-A03 self_write_marker_skipped ──────────────────────────────────────
-
 /// A03：快照带本工具私有标记时，poll_once 跳过不记（返回 None），
 ///      但 last_seen_count 仍推进（避免反复触发）。
 #[test]
@@ -112,8 +109,6 @@ fn self_write_marker_skipped() {
     // last_seen_count 仍推进，防止下次轮询（count 不变）再次触发读取
     assert_eq!(last_seen, 10, "即使跳过，last_seen_count 也应更新为新计数");
 }
-
-// ── I-01 防御：OS 计数重置（降序）─────────────────────────────────────────────
 
 /// I-01 防御测试：OS 计数从大降到小（如 Windows 进程重启致 GetClipboardSequenceNumber
 /// 归零），poll_once 应返回 None 且将基线下调为当前值；随后计数正向递增时正常捕获一次，
@@ -146,8 +141,6 @@ fn poll_count_reset_defense() {
     let no_dup = poll_once(&backend_recovered, &mut last_seen);
     assert!(no_dup.is_none(), "相同 count 不应重复捕获");
 }
-
-// ── V1-F1-A04 dedup_and_bump ──────────────────────────────────────────────────
 
 /// A04：ingest 相同文本第二次时，返回 Bumped（不新建行），
 ///      原条目成为最前（top_id == 原 id），行数仍为 2。
@@ -199,8 +192,6 @@ fn dedup_and_bump() {
     assert_eq!(top, id_x, "置顶刷新后 X 应成为最前条目");
 }
 
-// ── V1-F1-A05 bump_no_new_record ─────────────────────────────────────────────
-
 /// A05：显式调 bump_to_top 不产生新记录，X 移到最前，行数仍为 2。
 #[test]
 fn bump_no_new_record() {
@@ -233,4 +224,40 @@ fn bump_no_new_record() {
     // Assert：X 现在是最前
     let top = top_id(&conn).expect("top_id").expect("应有最前条目");
     assert_eq!(top, id_x, "bump_to_top 后 X 应成为最前条目");
+}
+
+/// A08-1：paused=true 时，poll_once_with_policy 对正常可捕获快照返回 None，
+///        但 last_seen_count 仍推进（防止下次重复触发读取）。
+#[test]
+fn pause_stops_capture() {
+    // Arrange：正常快照，count 递增，策略为暂停
+    let backend = FakeBackend::new(3, Some("normal text"), None, false);
+    let mut last_seen = 2u64;
+    let exclude = ExcludeList::default();
+    let policy = CapturePolicy { paused: true, exclude: &exclude };
+
+    // Act
+    let result = poll_once_with_policy(&backend, &mut last_seen, &policy);
+
+    // Assert：暂停时应跳过
+    assert!(result.is_none(), "paused=true 时应返回 None，不捕获");
+    assert_eq!(last_seen, 3, "即使跳过，last_seen_count 也应推进到 3");
+}
+
+/// A08-2：paused=false 时，同一快照正常捕获，证明开关有效。
+#[test]
+fn pause_false_captures_normally() {
+    // Arrange：相同快照，策略为未暂停
+    let backend = FakeBackend::new(3, Some("normal text"), None, false);
+    let mut last_seen = 2u64;
+    let exclude = ExcludeList::default();
+    let policy = CapturePolicy { paused: false, exclude: &exclude };
+
+    // Act
+    let result = poll_once_with_policy(&backend, &mut last_seen, &policy);
+
+    // Assert：未暂停时应正常捕获
+    let item = result.expect("paused=false 时应返回 CapturedItem");
+    assert_eq!(item.text, "normal text", "捕获内容应与快照一致");
+    assert_eq!(last_seen, 3, "last_seen_count 应更新为 3");
 }

@@ -13,6 +13,7 @@ pub mod clipboard;
 pub mod db;
 pub mod hotkey;
 pub mod keyprovider;
+pub mod privacy;
 mod tray;
 mod window_pos;
 
