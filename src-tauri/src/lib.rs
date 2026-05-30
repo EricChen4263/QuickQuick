@@ -15,6 +15,7 @@ pub mod hotkey;
 pub mod keyprovider;
 pub mod paste;
 pub mod privacy;
+pub mod translate;
 mod tray;
 mod window_pos;
 
