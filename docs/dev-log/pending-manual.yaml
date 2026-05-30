@@ -1,0 +1,32 @@
+# 全局未决审美/人工确认清单（跨版本滚动累积，不阻塞推进、不遗忘）
+# 来源：manual_confirm 验收项 + 运行期人工确认观察项（AI/headless 判不准）。
+# 治理：用户批量回看 → 确认消账(已确认) / 打回(已打回→派生修复小功能走正常流程)。
+# 位置固定：docs/dev-log/pending-manual.yaml
+
+pending:
+  - acceptance_id: V0-F2-A04
+    version: V0
+    assertion: "托盘图标实际常驻显示 + 热键实际唤起窗口定位活动屏上中 + 预热瞬开无延迟体感"
+    source_anchor: 设计文档§八(1)(3)（活动屏上中定位、瞬开无延迟）
+    evidence_ref: docs/dev-log/v0/f2-tray-hotkey/s03-prewarm-window/coding.md（功能已实现；headless 无法截图/录屏取证）
+    added_at: 2026-05-31T10:00:00Z
+    status: 待确认
+    note: "功能代码已实现（conf 自动建托盘 + global-shortcut 唤起 + 活动屏上中定位 + 失焦即隐）。需在真实 GUI 桌面运行确认。"
+
+  - acceptance_id: V0-F2-A04-H01
+    version: V0
+    assertion: "托盘左键点击后窗口稳定可见（show+set_focus 与失焦隐藏无时序冲突导致闪现即消）"
+    source_anchor: 设计文档§八(2)(3)（焦点模型 + 失焦即隐）
+    evidence_ref: docs/dev-log/v0/f2-tray-hotkey/s03-prewarm-window/review.md#H-01
+    added_at: 2026-05-31T10:00:00Z
+    status: 待确认
+    note: "code-reviewer 提出的运行期时序观察项，静态无法确证。"
+
+  - acceptance_id: V0-F2-A04-H02
+    version: V0
+    assertion: "高 DPI / Retina(2x) 屏幕下热键唤起窗口落点仍在活动屏上中区域"
+    source_anchor: 设计文档§八(1)（活动屏上中定位）
+    evidence_ref: docs/dev-log/v0/f2-tray-hotkey/s03-prewarm-window/review.md#H-02
+    added_at: 2026-05-31T10:00:00Z
+    status: 待确认
+    note: "cursor_position 逻辑坐标 vs monitor 物理坐标混用，2x 屏可能偏移；单测仅覆盖 1x。需 Retina 屏运行验证。"

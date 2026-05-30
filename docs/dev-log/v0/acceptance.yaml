@@ -146,7 +146,7 @@ acceptance:
     verify:
       type: test_id
       ref: window_route_by_hotkey
-      runner: "pnpm test window-route"
+      runner: "pnpm test windowRoute"   # 见 change_log CL-V0-001：原 'window-route' 与 path 内 camelCase 文件名笔误不符，校正为 windowRoute（不改 assertion/expect）
       path: src/shell/windowRoute.test.ts
       expect: pass
     evidence_ref: docs/dev-log/v0/f2-tray-hotkey/s03-prewarm-window/test.md
@@ -281,4 +281,12 @@ acceptance:
     level: 版本
     status: 待验
 
-change_log: []
+change_log:
+  - id: CL-V0-001
+    time: 2026-05-31T09:00:00Z
+    by: 编排器
+    item: V0-F2-A03
+    field: verify.runner
+    diff: "'pnpm test window-route' → 'pnpm test windowRoute'"
+    reason: "冻结标准内部笔误：runner 用 kebab 'window-route'，但 vitest 按文件名子串匹配，同条目 path 指向 camelCase 'windowRoute.test.ts'，二者不一致导致客观项不可满足。仅校正 runner 拼写以与 path 一致，assertion 与 expect=pass 不变，非放宽。"
+    source: 设计文档§八(3) + 既有 src/shell/windowRoute.test.ts

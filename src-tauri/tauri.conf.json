@@ -12,11 +12,14 @@
   "app": {
     "windows": [
       {
+        "label": "main",
         "title": "QuickQuick",
         "width": 400,
         "height": 600,
         "resizable": false,
-        "visible": false
+        "visible": false,
+        "decorations": false,
+        "alwaysOnTop": false
       }
     ],
     "security": {
