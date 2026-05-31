@@ -73,3 +73,21 @@ pending:
     added_at: 2026-05-31T15:00:00Z
     status: 待确认
     note: "当前测试层 FakePasteBackend 写入即递增、1 次即过，不影响 V1 验收；运行期实现强化项。"
+
+  - acceptance_id: V2-F3-A16
+    version: V2
+    assertion: "呈现形态实际行为：选中即译→光标旁轻量浮窗(点别处消失)；剪贴板/手动→固定面板上下对照"
+    source_anchor: 设计文档§4.3/§九.2（浮窗 vs 固定面板）
+    evidence_ref: docs/dev-log/v2/f3-translate-ux/（运行录屏/截图）
+    added_at: 2026-05-31T18:00:00Z
+    status: 待确认
+    note: "触发纪律/方向/操作纯逻辑已实现测试；浮窗与固定面板 DOM 呈现需运行确认。"
+
+  - acceptance_id: V2-F3-A17
+    version: V2
+    assertion: "选中即译浮窗淡入动效手感自然（弹窗淡入+轻微缩放 <150ms 无弹跳）"
+    source_anchor: 设计文档§九.1（动效：克制即时 <150ms 无弹跳）
+    evidence_ref: docs/dev-log/v2/f3-translate-ux/（动效录屏）
+    added_at: 2026-05-31T18:00:00Z
+    status: 待确认
+    note: "CL-V2-001 补的人工确认点（动效手感），AI/headless 判不准。"
