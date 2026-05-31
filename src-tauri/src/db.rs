@@ -47,6 +47,10 @@ pub enum DbError {
         /// 备份文件路径（改名后的路径）
         backup_path: String,
     },
+
+    /// 其他业务层错误（如缩略图编码失败等不属于 SQL/IO 的失败）
+    #[error("操作失败：{0}")]
+    Other(String),
 }
 
 /// 打开或新建加密数据库，确保 schema 已初始化。
