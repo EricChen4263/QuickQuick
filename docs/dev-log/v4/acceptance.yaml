@@ -38,7 +38,7 @@ acceptance:
     verify: { type: test_id, ref: ipc_translate, runner: "cargo test --manifest-path src-tauri/Cargo.toml ipc_translate", path: src-tauri/tests/ipc_translate.rs, expect: pass }
     evidence_ref: docs/dev-log/v4/f1-ipc/s02-translate-cmd/test.md
     level: 小功能
-    status: 待验
+    status: 已验通过
   - id: V4-F1-A03
     assertion: "设置 IPC 命令往返：读写 热键绑定 / App 排除名单 / 翻译源 持久化，写入后再读回值一致"
     category: 功能正确性

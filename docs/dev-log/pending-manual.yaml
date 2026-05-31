@@ -109,3 +109,12 @@ pending:
     added_at: 2026-05-31T20:30:00Z
     status: 待确认
     note: "CL-V3-001 补的人工确认点（材质+动效手感），AI/headless 判不准。"
+
+  - acceptance_id: V4-F1-A02-H01
+    version: V4
+    assertion: "翻译真实 provider 网络往返：UreqExecutor 对 MyMemory（及未来需 key 的 provider）真实 HTTP 调用、超时/错误映射、译文正确返回"
+    source_anchor: 设计文档§4.2/§4.3（内置翻译源 + 真实翻译）
+    evidence_ref: docs/dev-log/v4/f1-ipc/s02-translate-cmd/coding.md（UreqExecutor 已实现；objective 测试全程 FakeExecutor 隔离网络）
+    added_at: 2026-05-31T23:50:00Z
+    status: 待确认
+    note: "翻译编排/方向/历史写入纯逻辑已 objective 测过（FakeExecutor）；真实网络往返 headless 无法自动测，需联网运行确认。reviewer 备忘：ureq Error::Status 的 Display 会含请求 URL（MyMemory 路径仅含用户查询文本、非密钥）；未来接需 key 的 provider 时须确保 key 不入错误串/日志。"

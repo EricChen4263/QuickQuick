@@ -7,6 +7,7 @@
 //! - `clipboard`：剪贴板取数/管理命令（list/delete/toggle_favorite）
 
 pub mod clipboard;
+pub mod translate;
 
 /// Tauri 托管状态：持有数据库连接（Mutex 包裹保证跨命令线程安全）。
 ///

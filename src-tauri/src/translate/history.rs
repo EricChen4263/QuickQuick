@@ -86,6 +86,48 @@ pub fn translate_clip_item(
     )
 }
 
+/// 按创建时间倒序列出 `translate_history` 表中的全部记录。
+///
+/// 返回的顺序为最新翻译排在最前，供翻译页历史栏（A08）回填使用。
+///
+/// # Errors
+/// `DbError::Sqlite`：SQL 执行失败
+pub fn list_translate_history(conn: &Connection) -> Result<Vec<TranslateHistoryRow>, DbError> {
+    let mut stmt = conn.prepare(
+        "SELECT id, source_text, translated_text, source_lang, target_lang, provider_id, created_utc
+         FROM translate_history
+         ORDER BY created_utc DESC",
+    )?;
+    let rows = stmt.query_map([], |row| {
+        Ok(TranslateHistoryRow {
+            id: row.get(0)?,
+            source_text: row.get(1)?,
+            translated_text: row.get(2)?,
+            source_lang: row.get(3)?,
+            target_lang: row.get(4)?,
+            provider_id: row.get(5)?,
+            created_utc: row.get(6)?,
+        })
+    })?;
+
+    let mut result = Vec::new();
+    for row in rows {
+        result.push(row?);
+    }
+    Ok(result)
+}
+
+/// 翻译历史一行的原始数据（供 IPC 层转 DTO 使用）。
+pub struct TranslateHistoryRow {
+    pub id: String,
+    pub source_text: String,
+    pub translated_text: String,
+    pub source_lang: String,
+    pub target_lang: String,
+    pub provider_id: String,
+    pub created_utc: i64,
+}
+
 /// 获取当前 UTC 时间戳（毫秒）。
 fn current_utc_ms() -> i64 {
     std::time::SystemTime::now()
