@@ -127,3 +127,12 @@ pending:
     added_at: 2026-06-01T00:30:00Z
     status: 待确认
     note: "open_app_db/capture_and_ingest 装配逻辑 + DB 不可用守卫（with_db→Err 不 panic）已 objective 测过（boot_pipeline 4 + ipc_clipboard 8 含 2 守卫，2 变异如期变红）。真实 keychain/arboard/轮询线程/命令 invoke 往返/热键持久化 headless 无法自动测，需真机运行确认。开库失败已优雅降级（manage None，命令返回'数据库不可用'而非崩）。"
+
+  - acceptance_id: V4-F3-A11-H01
+    version: V4
+    assertion: "真机菜单栏只出现一个 QuickQuick 托盘图标，且托盘右键菜单（显示/退出）+ 左键单击显示窗口均正常工作"
+    source_anchor: 设计文档§八（托盘常驻：单一图标）+ 缺陷修复（双图标）
+    evidence_ref: docs/dev-log/v4/f3-tray-design/s10-tray-single/（配置守卫已 objective 拦双图标回归）
+    added_at: 2026-06-01T01:10:00Z
+    status: 待确认
+    note: "已删 conf 的 app.trayIcon、配置守卫测试（加回即变红）objective 拦回归；真机目视确认仅一个图标 + 托盘交互正常需运行确认。"

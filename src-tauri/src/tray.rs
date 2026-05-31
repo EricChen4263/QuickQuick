@@ -1,7 +1,7 @@
 //! 系统托盘模块：构建托盘菜单并绑定事件处理
 //!
-//! 策略：tauri.conf.json 已声明 `app.trayIcon`（自动建图标+常驻托盘）。
-//! 本模块在 setup 阶段额外附加右键菜单与事件回调。
+//! 策略：托盘由本模块 setup_tray() 唯一构建（带右键菜单+事件回调）；
+//! tauri.conf.json 不声明 app.trayIcon，避免"配置自动建 + 代码建"双图标。
 //! 图标使用 `app.default_window_icon()` 取自 bundle，无需手动读文件。
 //!
 //! 菜单项：
