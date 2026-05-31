@@ -91,3 +91,21 @@ pending:
     added_at: 2026-05-31T18:00:00Z
     status: 待确认
     note: "CL-V2-001 补的人工确认点（动效手感），AI/headless 判不准。"
+
+  - acceptance_id: V3-F3-A12
+    version: V3
+    assertion: "主窗口三页视觉还原：剪贴板(列表+预览+管理)/翻译(导航|工作|历史三栏)/设置(子项栏+内容)，主窗实色、随系统明暗、峡湾青蓝"
+    source_anchor: 设计文档§九.1/§九.3（主窗口布局与设计语言）
+    evidence_ref: docs/dev-log/v3/f3-main-ui/（三页截图对照）
+    added_at: 2026-05-31T20:30:00Z
+    status: 待确认
+    note: "主窗口导航/改键/设置子项纯逻辑已实现测试；三页视觉还原需运行确认。"
+
+  - acceptance_id: V3-F3-A13
+    version: V3
+    assertion: "主窗口/弹窗动效与材质手感：弹窗毛玻璃+主窗实色+克制即时动效(淡入+轻微缩放 <150ms 无弹跳)"
+    source_anchor: 设计文档§九.1（材质质感 + 动效）
+    evidence_ref: docs/dev-log/v3/f3-main-ui/（动效/材质录屏）
+    added_at: 2026-05-31T20:30:00Z
+    status: 待确认
+    note: "CL-V3-001 补的人工确认点（材质+动效手感），AI/headless 判不准。"
