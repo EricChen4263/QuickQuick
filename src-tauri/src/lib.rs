@@ -19,6 +19,7 @@ pub mod onboarding;
 pub mod paste;
 pub mod portable;
 pub mod privacy;
+pub mod settings;
 pub mod translate;
 mod tray;
 mod window_pos;

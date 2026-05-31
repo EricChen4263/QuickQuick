@@ -47,7 +47,7 @@ acceptance:
     verify: { type: test_id, ref: ipc_settings, runner: "cargo test --manifest-path src-tauri/Cargo.toml ipc_settings", path: src-tauri/tests/ipc_settings.rs, expect: pass }
     evidence_ref: docs/dev-log/v4/f1-ipc/s03-settings-cmd/test.md
     level: 小功能
-    status: 待验
+    status: 已验通过
   - id: V4-F1-A04
     assertion: "启动数据管道装配：捕获回调装配函数把 clipboard.poll_once 捕获项经 db.ingest 写入库（临时库往返：复制内容→入库→list 可见）；开库走 keyprovider 抽象"
     category: 功能正确性
