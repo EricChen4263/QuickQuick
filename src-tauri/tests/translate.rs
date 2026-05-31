@@ -1184,3 +1184,161 @@ fn credential_schema_keychain_unknown_field_returns_err_and_does_not_write_db() 
         .expect("查询应成功");
     assert_eq!(count, 0, "未知 field_key 的值不应写入 DB（不静默降级）");
 }
+
+// V2-F3-A13 smart_direction
+
+/// A13-a：英文输入 → 自动识别为 en，默认目标 zh（非中文→中文方向）。
+#[test]
+fn smart_direction_english_input_resolves_to_en_zh() {
+    // Arrange
+    let text = "Hello, world!";
+
+    // Act
+    let (source, target) = resolve_direction(text, None);
+
+    // Assert
+    assert_eq!(source.as_str(), "en", "英文输入源语言应为 en");
+    assert_eq!(target.as_str(), "zh", "英文输入默认目标应为 zh（自动识别→默认中文）");
+}
+
+/// A13-b：中文输入 → 识别为 zh，默认目标 en（本是中文→翻英文）。
+#[test]
+fn smart_direction_chinese_input_resolves_to_zh_en() {
+    // Arrange
+    let text = "今天天气真好";
+
+    // Act
+    let (source, target) = resolve_direction(text, None);
+
+    // Assert
+    assert_eq!(source.as_str(), "zh", "中文输入源语言应为 zh");
+    assert_eq!(target.as_str(), "en", "中文输入默认目标应为 en（本是中文→翻英文）");
+}
+
+/// A13-c：configured_target=Some(ja) 时，不论输入语言，目标语强制为 ja（目标语可配）。
+#[test]
+fn smart_direction_configured_target_ja_overrides_default() {
+    // Arrange：英文输入，但用户指定目标为日语
+    let text = "Good morning";
+    let configured = Some(Lang::new("ja"));
+
+    // Act
+    let (source, target) = resolve_direction(text, configured);
+
+    // Assert
+    assert_eq!(source.as_str(), "en", "源语言仍应检测为 en");
+    assert_eq!(target.as_str(), "ja", "configured_target=ja 应覆盖默认目标");
+}
+
+/// A13-d：非恒真：中文输入 + configured_target=Some(fr) → 目标 fr（验证 configured 优先于 default）。
+#[test]
+fn smart_direction_chinese_input_with_configured_fr_resolves_to_zh_fr() {
+    // Arrange
+    let text = "你好世界";
+    let configured = Some(Lang::new("fr"));
+
+    // Act
+    let (source, target) = resolve_direction(text, configured);
+
+    // Assert
+    assert_eq!(source.as_str(), "zh", "中文输入源语言应为 zh");
+    assert_eq!(target.as_str(), "fr", "configured_target=fr 应覆盖默认 en 目标");
+}
+
+// V2-F3-A14 translate_history_separate
+
+use quickquick_lib::translate::history::{
+    add_translate_history, translate_clip_item, translate_history_count,
+};
+
+/// A14-a：translate_clip_item 将剪贴板条目写入 translate_history，
+///         translate_history 有该条、clip_items 数量不变（两者分开存储、互不混入）。
+#[test]
+fn translate_history_separate_clip_item_writes_to_history_not_clip_items() {
+    // Arrange
+    let dir = tempdir().expect("tempdir 创建失败");
+    let db_path = dir.path().join("th_separate.db");
+    let conn = db::open_or_create(&db_path, &TEST_DB_KEY).expect("建库应成功");
+
+    // 插入一条 clip_item
+    let clip_id = uuid::Uuid::new_v4().to_string();
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("系统时间应在 epoch 之后")
+        .as_millis() as i64;
+    conn.execute(
+        "INSERT INTO clip_items (id, content, kind, created_utc, last_modified_utc, is_deleted)
+         VALUES (?1, ?2, 'text', ?3, ?3, 0)",
+        rusqlite::params![clip_id, "Hello, world!", now_ms],
+    )
+    .expect("插入 clip_item 应成功");
+
+    // Act：一键翻译——剪贴板条目写入 translate_history
+    let history_id = translate_clip_item(
+        &conn,
+        &clip_id,
+        "你好，世界！",
+        "en",
+        "zh",
+        "mymemory",
+    )
+    .expect("translate_clip_item 应成功");
+
+    // Assert：translate_history 有该条
+    let history_count = translate_history_count(&conn).expect("translate_history_count 应成功");
+    assert_eq!(history_count, 1, "translate_history 应有 1 条记录");
+
+    // Assert：新增的历史条目 id 有效
+    assert!(!history_id.is_empty(), "返回的 history_id 不应为空");
+
+    // Assert：clip_items 数量不变（仍为 1，没有新增）
+    let clip_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM clip_items WHERE is_deleted = 0",
+            [],
+            |row| row.get(0),
+        )
+        .expect("查询 clip_items 应成功");
+    assert_eq!(
+        clip_count, 1,
+        "translate_clip_item 不应改变 clip_items 的数量，两者分开存储"
+    );
+}
+
+/// A14-b：add_translate_history 直接插入一条翻译历史，可查回（独立存储验证）。
+#[test]
+fn translate_history_separate_add_and_retrieve() {
+    // Arrange
+    let dir = tempdir().expect("tempdir 创建失败");
+    let db_path = dir.path().join("th_add.db");
+    let conn = db::open_or_create(&db_path, &TEST_DB_KEY).expect("建库应成功");
+
+    // Act
+    let id = add_translate_history(
+        &conn,
+        "Good morning",
+        "早上好",
+        "en",
+        "zh",
+        "mymemory",
+    )
+    .expect("add_translate_history 应成功");
+
+    // Assert：可查回该条记录
+    let count = translate_history_count(&conn).expect("translate_history_count 应成功");
+    assert_eq!(count, 1, "add_translate_history 后应有 1 条记录");
+    assert!(!id.is_empty(), "返回 id 不应为空");
+
+    // Assert：clip_items 表无记录（与剪贴板历史完全分开）
+    let clip_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM clip_items",
+            [],
+            |row| row.get(0),
+        )
+        .expect("查询应成功");
+    assert_eq!(
+        clip_count, 0,
+        "翻译历史不应写入 clip_items 表（独立存储）"
+    );
+}

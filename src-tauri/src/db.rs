@@ -443,6 +443,18 @@ fn ensure_schema(conn: &Connection) -> Result<(), DbError> {
             created_utc    INTEGER NOT NULL,
             last_used_utc  INTEGER NOT NULL
         );
+
+        -- 翻译历史表（V2-F3-A14）：独立于 clip_items，记录用户主动翻译的历史
+        -- 剪贴板条目一键翻译后写入此表，两者互不混入
+        CREATE TABLE IF NOT EXISTS translate_history (
+            id              TEXT PRIMARY KEY NOT NULL,
+            source_text     TEXT NOT NULL,
+            translated_text TEXT NOT NULL,
+            source_lang     TEXT NOT NULL,
+            target_lang     TEXT NOT NULL,
+            provider_id     TEXT NOT NULL,
+            created_utc     INTEGER NOT NULL
+        );
         ",
     )?;
     Ok(())

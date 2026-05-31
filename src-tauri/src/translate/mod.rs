@@ -11,6 +11,7 @@ pub mod cancel;
 pub mod credential;
 pub mod cache;
 pub mod providers;
+pub mod history;
 
 pub use providers::registry;
 

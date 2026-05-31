@@ -16,8 +16,15 @@ const TEST_KEY: [u8; 32] = [7u8; 32];
 /// 白名单校验表名，防止测试辅助函数被误用于不受信任的字符串（安全§10 输入校验）。
 fn table_columns(conn: &rusqlite::Connection, table: &str) -> Vec<String> {
     assert!(
-        matches!(table, "clip_items" | "clip_images" | "provider_config" | "translation_cache"),
-        "未知表名 '{table}'，仅允许 clip_items / clip_images / provider_config / translation_cache"
+        matches!(
+            table,
+            "clip_items"
+                | "clip_images"
+                | "provider_config"
+                | "translation_cache"
+                | "translate_history"
+        ),
+        "未知表名 '{table}'，仅允许 clip_items / clip_images / provider_config / translation_cache / translate_history"
     );
     let sql = format!("PRAGMA table_info({})", table);
     let mut stmt = conn.prepare(&sql).expect("PRAGMA table_info 应成功");
@@ -379,6 +386,62 @@ fn schema_preembed_provider_config_table_exists_with_required_columns() {
     assert!(
         cols.contains(&"value".to_string()),
         "provider_config 应含 value 列；实际列: {:?}",
+        cols
+    );
+}
+
+/// V2-F3-A14：translate_history 表由 ensure_schema 预埋，含必要列
+/// 验证翻译历史与剪贴板历史独立存储（独立表）
+#[test]
+fn schema_preembed_translate_history_table_exists_with_required_columns() {
+    // Arrange
+    let dir = tempdir().expect("tempdir 创建失败");
+    let db_path = dir.path().join("quickquick.db");
+    let conn = db::open_or_create(&db_path, &TEST_KEY).expect("建库应成功");
+
+    // Act
+    let cols = table_columns(&conn, "translate_history");
+
+    // Assert：UUID 主键
+    assert!(
+        cols.contains(&"id".to_string()),
+        "translate_history 应含 id 列；实际列: {:?}",
+        cols
+    );
+    // Assert：原文
+    assert!(
+        cols.contains(&"source_text".to_string()),
+        "translate_history 应含 source_text 列；实际列: {:?}",
+        cols
+    );
+    // Assert：译文
+    assert!(
+        cols.contains(&"translated_text".to_string()),
+        "translate_history 应含 translated_text 列；实际列: {:?}",
+        cols
+    );
+    // Assert：源语言
+    assert!(
+        cols.contains(&"source_lang".to_string()),
+        "translate_history 应含 source_lang 列；实际列: {:?}",
+        cols
+    );
+    // Assert：目标语言
+    assert!(
+        cols.contains(&"target_lang".to_string()),
+        "translate_history 应含 target_lang 列；实际列: {:?}",
+        cols
+    );
+    // Assert：provider 标识
+    assert!(
+        cols.contains(&"provider_id".to_string()),
+        "translate_history 应含 provider_id 列；实际列: {:?}",
+        cols
+    );
+    // Assert：创建时间
+    assert!(
+        cols.contains(&"created_utc".to_string()),
+        "translate_history 应含 created_utc 列；实际列: {:?}",
         cols
     );
 }
