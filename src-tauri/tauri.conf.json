@@ -47,10 +47,6 @@
       "endpoints": [
         "https://placeholder.example.com/quickquick/{{target}}/{{arch}}/{{current_version}}"
       ]
-    },
-    "autostart": {
-      "args": false,
-      "macos-auto-start-at-login-enabled": true
     }
   }
 }

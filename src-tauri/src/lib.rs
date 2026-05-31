@@ -22,32 +22,41 @@ pub mod translate;
 mod tray;
 mod window_pos;
 
-use tauri::{Emitter, Manager, WindowEvent};
+use tauri::{Emitter, Manager, Runtime, WindowEvent};
 use tauri_plugin_autostart::ManagerExt as AutostartManagerExt;
 use tauri_plugin_global_shortcut::GlobalShortcutExt;
 
-/// 启动 Tauri 应用。
+/// 将所有插件注册到给定的 builder 并返回。
 ///
-/// 注册插件：
-/// - `tauri-plugin-autostart`：开机自启（默认开，行为由 OS 侧控制）
+/// 注册的插件：
+/// - `tauri-plugin-autostart`：开机自启（行为由运行期 `apply_autostart_preference` 控制）
 /// - `tauri-plugin-updater`：应用自动更新（endpoints 在 tauri.conf.json 配置）
 /// - `tauri-plugin-global-shortcut`：全局热键注册
 ///
-/// setup 阶段：
-/// - 注册两个全局热键（history/translate），失败时记录但不 panic
-/// - 构建系统托盘菜单（显示/退出）
-/// - 监听失焦事件 → 隐藏窗口
-///
-/// # Panics
-/// 若 Tauri builder 初始化失败则 panic（属于不可恢复的启动错误）。
-pub fn run() {
-    tauri::Builder::default()
+/// 函数签名对 Runtime 泛型化，允许生产代码（`Wry`）和测试（`MockRuntime`）共用同一套
+/// 插件注册逻辑，避免测试与生产漂移。
+pub fn register_plugins<R: Runtime>(builder: tauri::Builder<R>) -> tauri::Builder<R> {
+    builder
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             None,
         ))
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
+}
+
+/// 启动 Tauri 应用。
+///
+/// 插件注册委托给 `register_plugins`；setup 阶段：
+/// - 读取并应用自启动偏好（`apply_autostart_preference`）
+/// - 注册全局热键（history / translate），失败时仅记录不 panic
+/// - 构建系统托盘菜单
+/// - 监听主窗口失焦事件 → 自动隐藏
+///
+/// # Panics
+/// 若 Tauri builder 初始化失败则 panic（属于不可恢复的启动错误）。
+pub fn run() {
+    register_plugins(tauri::Builder::default())
         .setup(|app| {
             apply_autostart_preference(app);
             register_hotkeys(app.handle());
