@@ -5,6 +5,7 @@ import { topLevelEntries, type TopLevel } from "./main-window/nav";
 import { type HotkeyTrigger } from "./shell/windowRoute";
 import ClipboardPage from "./panels/clipboard/ClipboardPage";
 import TranslatePage from "./panels/translate/TranslatePage";
+import SettingsPage from "./panels/settings/SettingsPage";
 import "./theme/theme.css";
 
 /** 热键路由 payload 类型（与后端 emit 的字符串对应） */
@@ -103,7 +104,7 @@ function App() {
           data-testid="page-settings"
           style={{ display: activeTop === "settings" ? "block" : "none" }}
         >
-          设置
+          <SettingsPage />
         </section>
       </main>
     </div>

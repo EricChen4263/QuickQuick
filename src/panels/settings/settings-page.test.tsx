@@ -1,0 +1,264 @@
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import { render, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import SettingsPage from "./SettingsPage";
+
+// Mock IPC client：隔离 Tauri 运行时
+vi.mock("../../ipc/ipc-client", () => ({
+  getHotkeys: vi.fn(),
+  setHotkey: vi.fn(),
+  getExcludeList: vi.fn(),
+  setExcludeList: vi.fn(),
+  getTranslateProviders: vi.fn(),
+  getSelectedProvider: vi.fn(),
+  setSelectedProvider: vi.fn(),
+}));
+
+import {
+  getHotkeys,
+  setHotkey,
+  getExcludeList,
+  setExcludeList,
+  getTranslateProviders,
+  getSelectedProvider,
+  setSelectedProvider,
+} from "../../ipc/ipc-client";
+
+const mockGetHotkeys = vi.mocked(getHotkeys);
+const mockSetHotkey = vi.mocked(setHotkey);
+const mockGetExcludeList = vi.mocked(getExcludeList);
+const mockSetExcludeList = vi.mocked(setExcludeList);
+const mockGetTranslateProviders = vi.mocked(getTranslateProviders);
+const mockGetSelectedProvider = vi.mocked(getSelectedProvider);
+const mockSetSelectedProvider = vi.mocked(setSelectedProvider);
+
+const MOCK_HOTKEYS = { history: "CmdOrCtrl+Shift+H", translate: "CmdOrCtrl+Shift+T" };
+const MOCK_PROVIDERS = [
+  { id: "google", name: "Google 翻译", needsKey: false },
+  { id: "deepl", name: "DeepL", needsKey: true },
+];
+const MOCK_EXCLUDE_LIST = ["Xcode", "Terminal"];
+
+describe("settings-page", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockGetHotkeys.mockResolvedValue(MOCK_HOTKEYS);
+    mockSetHotkey.mockResolvedValue(undefined);
+    mockGetExcludeList.mockResolvedValue(MOCK_EXCLUDE_LIST);
+    mockSetExcludeList.mockResolvedValue(undefined);
+    mockGetTranslateProviders.mockResolvedValue(MOCK_PROVIDERS);
+    mockGetSelectedProvider.mockResolvedValue("google");
+    mockSetSelectedProvider.mockResolvedValue(undefined);
+  });
+
+  it("settings-page: 左侧纵向子项栏渲染六个子项（通用/热键/翻译源/隐私/存储/关于）", async () => {
+    // Arrange & Act
+    render(<SettingsPage />);
+
+    // Assert：六个子项全部渲染
+    const nav = screen.getByRole("navigation", { name: "设置子项" });
+    expect(within(nav).getByRole("button", { name: "通用" })).toBeInTheDocument();
+    expect(within(nav).getByRole("button", { name: "热键" })).toBeInTheDocument();
+    expect(within(nav).getByRole("button", { name: "翻译源" })).toBeInTheDocument();
+    expect(within(nav).getByRole("button", { name: "隐私" })).toBeInTheDocument();
+    expect(within(nav).getByRole("button", { name: "存储" })).toBeInTheDocument();
+    expect(within(nav).getByRole("button", { name: "关于" })).toBeInTheDocument();
+  });
+
+  it("settings-page: 默认选中通用，点击热键后右内容切换（DOM 变化）", async () => {
+    // Arrange
+    const user = userEvent.setup();
+    render(<SettingsPage />);
+
+    // Assert：默认通用内容可见
+    const nav = screen.getByRole("navigation", { name: "设置子项" });
+    expect(within(nav).getByRole("button", { name: "通用" })).toHaveAttribute("aria-current", "page");
+
+    // Act：点击热键
+    await user.click(within(nav).getByRole("button", { name: "热键" }));
+
+    // Assert：热键子项获得选中态
+    expect(within(nav).getByRole("button", { name: "热键" })).toHaveAttribute("aria-current", "page");
+    expect(within(nav).getByRole("button", { name: "通用" })).not.toHaveAttribute("aria-current");
+  });
+
+  it("settings-page: 热键面板——输入与另一动作相同的键显示已被占用且不调用 setHotkey", async () => {
+    // Arrange
+    const user = userEvent.setup();
+    render(<SettingsPage />);
+
+    const nav = screen.getByRole("navigation", { name: "设置子项" });
+    await user.click(within(nav).getByRole("button", { name: "热键" }));
+
+    // 等待热键数据加载完成
+    await waitFor(() => {
+      expect(screen.getByDisplayValue("CmdOrCtrl+Shift+H")).toBeInTheDocument();
+    });
+
+    // Act：修改 history 热键输入框，输入 translate 热键的当前值（已被占用）
+    const historyInput = screen.getByDisplayValue("CmdOrCtrl+Shift+H");
+    await user.clear(historyInput);
+    await user.type(historyInput, "CmdOrCtrl+Shift+T");
+
+    // 点击保存
+    const saveButtons = screen.getAllByRole("button", { name: "保存" });
+    await user.click(saveButtons[0]);
+
+    // Assert：显示"已被占用"，setHotkey 不被调用
+    expect(screen.getByText("已被占用")).toBeInTheDocument();
+    expect(mockSetHotkey).not.toHaveBeenCalled();
+  });
+
+  it("settings-page: 热键面板——输入不冲突键后调用 setHotkey(正确参数)", async () => {
+    // Arrange
+    const user = userEvent.setup();
+    render(<SettingsPage />);
+
+    const nav = screen.getByRole("navigation", { name: "设置子项" });
+    await user.click(within(nav).getByRole("button", { name: "热键" }));
+
+    await waitFor(() => {
+      expect(screen.getByDisplayValue("CmdOrCtrl+Shift+H")).toBeInTheDocument();
+    });
+
+    // Act：修改 history 热键为不冲突的键
+    const historyInput = screen.getByDisplayValue("CmdOrCtrl+Shift+H");
+    await user.clear(historyInput);
+    await user.type(historyInput, "CmdOrCtrl+Shift+Y");
+
+    const saveButtons = screen.getAllByRole("button", { name: "保存" });
+    await user.click(saveButtons[0]);
+
+    // Assert：调用 setHotkey 传正确参数
+    await waitFor(() => {
+      expect(mockSetHotkey).toHaveBeenCalledWith("history", "CmdOrCtrl+Shift+Y");
+    });
+  });
+
+  it("settings-page: 隐私面板——添加一项后列表出现该项且调 setExcludeList(含该项)", async () => {
+    // Arrange
+    const user = userEvent.setup();
+    render(<SettingsPage />);
+
+    const nav = screen.getByRole("navigation", { name: "设置子项" });
+    await user.click(within(nav).getByRole("button", { name: "隐私" }));
+
+    // 等待排除名单加载
+    await waitFor(() => {
+      expect(screen.getByText("Xcode")).toBeInTheDocument();
+    });
+
+    // Act：输入新 App 名称并添加
+    const addInput = screen.getByPlaceholderText(/应用名称/);
+    await user.type(addInput, "Safari");
+    await user.click(screen.getByRole("button", { name: "添加" }));
+
+    // Assert：列表出现 Safari，setExcludeList 被调用且含 Safari
+    await waitFor(() => {
+      expect(screen.getByText("Safari")).toBeInTheDocument();
+    });
+    expect(mockSetExcludeList).toHaveBeenCalledWith(
+      expect.arrayContaining(["Xcode", "Terminal", "Safari"])
+    );
+  });
+
+  it("settings-page: 隐私面板——删除一项后调 setExcludeList(不含该项)", async () => {
+    // Arrange
+    const user = userEvent.setup();
+    render(<SettingsPage />);
+
+    const nav = screen.getByRole("navigation", { name: "设置子项" });
+    await user.click(within(nav).getByRole("button", { name: "隐私" }));
+
+    await waitFor(() => {
+      expect(screen.getByText("Xcode")).toBeInTheDocument();
+    });
+
+    // Act：点击 Xcode 的删除按钮
+    const deleteButtons = screen.getAllByRole("button", { name: /删除/ });
+    await user.click(deleteButtons[0]);
+
+    // Assert：setExcludeList 被调用且不含 Xcode
+    await waitFor(() => {
+      expect(mockSetExcludeList).toHaveBeenCalledWith(
+        expect.not.arrayContaining(["Xcode"])
+      );
+    });
+    expect(mockSetExcludeList).toHaveBeenCalledWith(["Terminal"]);
+  });
+
+  it("settings-page: 翻译源面板——渲染 providers 列表，选一个调 setSelectedProvider(id)", async () => {
+    // Arrange
+    const user = userEvent.setup();
+    render(<SettingsPage />);
+
+    const nav = screen.getByRole("navigation", { name: "设置子项" });
+    await user.click(within(nav).getByRole("button", { name: "翻译源" }));
+
+    // 等待 providers 加载
+    await waitFor(() => {
+      expect(screen.getByText("Google 翻译")).toBeInTheDocument();
+      expect(screen.getByText("DeepL")).toBeInTheDocument();
+    });
+
+    // Act：选择 DeepL
+    await user.click(screen.getByRole("radio", { name: "DeepL" }));
+
+    // Assert：调用 setSelectedProvider("deepl")
+    await waitFor(() => {
+      expect(mockSetSelectedProvider).toHaveBeenCalledWith("deepl");
+    });
+  });
+
+  it("settings-page: 热键面板加载失败时显示错误提示（role=alert）", async () => {
+    // Arrange
+    mockGetHotkeys.mockRejectedValue(new Error("IPC error"));
+    const user = userEvent.setup();
+    render(<SettingsPage />);
+
+    const nav = screen.getByRole("navigation", { name: "设置子项" });
+    await user.click(within(nav).getByRole("button", { name: "热键" }));
+
+    // Assert：显示错误提示
+    await waitFor(() => {
+      expect(screen.getByRole("alert")).toBeInTheDocument();
+    });
+  });
+
+  it("settings-page: 翻译源面板——setSelectedProvider reject 时列表仍可见且显示 opError 提示", async () => {
+    // Arrange
+    mockSetSelectedProvider.mockRejectedValue(new Error("IPC error"));
+    const user = userEvent.setup();
+    render(<SettingsPage />);
+
+    const nav = screen.getByRole("navigation", { name: "设置子项" });
+    await user.click(within(nav).getByRole("button", { name: "翻译源" }));
+
+    await waitFor(() => {
+      expect(screen.getByText("Google 翻译")).toBeInTheDocument();
+      expect(screen.getByText("DeepL")).toBeInTheDocument();
+    });
+
+    // Act：点击 DeepL，setSelectedProvider 将 reject
+    await user.click(screen.getByRole("radio", { name: "DeepL" }));
+
+    // Assert：provider 列表仍在 DOM 中（未被替换）
+    await waitFor(() => {
+      expect(screen.getByRole("alert")).toBeInTheDocument();
+    });
+    expect(screen.getByText("Google 翻译")).toBeInTheDocument();
+    expect(screen.getByText("DeepL")).toBeInTheDocument();
+  });
+
+  it("settings-page: 关于面板显示应用名 QuickQuick", async () => {
+    // Arrange
+    const user = userEvent.setup();
+    render(<SettingsPage />);
+
+    const nav = screen.getByRole("navigation", { name: "设置子项" });
+    await user.click(within(nav).getByRole("button", { name: "关于" }));
+
+    // Assert：关于页显示应用名
+    expect(screen.getByText("QuickQuick")).toBeInTheDocument();
+  });
+});

@@ -145,3 +145,12 @@ pending:
     added_at: 2026-06-01T01:25:00Z
     status: 待确认
     note: "theme.css 的毛玻璃(.qq-popover backdrop-filter)+主窗实色(.qq-main)内容已 grep 实证；动效 <150ms 无弹跳的手感属审美，AI/headless 判不准，需运行确认。darkTheme.accent #5B9FC4 对比度约 4.6:1(AA)，如审美需微调改一处即可。"
+
+  - acceptance_id: V4-F2-A10
+    version: V4
+    assertion: "主窗口三页视觉还原：剪贴板(列表+预览+管理)/翻译(导航|工作|历史三栏)/设置(子项栏+内容)布局还原，主窗实色、随系统明暗、峡湾青蓝"
+    source_anchor: 设计文档§九.1/§九.3（主窗口布局与设计语言）
+    evidence_ref: docs/dev-log/v4/f2-ui/（三页结构已 objective 测：app-shell 6 + clipboard-page 10 + translate-page 10 + settings-page 10）
+    added_at: 2026-06-01T00:50:00Z
+    status: 待确认
+    note: "三页结构与交互已 objective 渲染测试覆盖（列表+预览双栏、翻译三栏、设置六子项、搜索/筛选/键盘/改键冲突/排除名单增删）；纯视觉还原度（配色/间距/圆角/明暗对照设计§9.1）属审美，AI/headless 判不准，需真机截图对照确认。窗口已从 400×600 弹窗改为 960×640 带边框主窗口。"
