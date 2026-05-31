@@ -65,7 +65,7 @@ acceptance:
     verify: { type: test_id, ref: ipc-client, runner: "pnpm test ipc-client", path: src/ipc/ipc-client.test.ts, expect: pass }
     evidence_ref: docs/dev-log/v4/f1-ipc/s05-ipc-client/test.md
     level: 小功能
-    status: 待验
+    status: 已验通过
   - id: V4-F1-A14
     assertion: "IPC 安全面：命令参数校验（非法 id/越界输入返回 Err 不 panic）+ 不经任何 IPC 命令暴露密钥/口令明文/原始密钥字节"
     category: 安全
