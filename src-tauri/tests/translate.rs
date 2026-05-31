@@ -35,11 +35,13 @@ impl TranslateProvider for StubProvider {
 
     fn build_request(&self, req: &TranslateRequest) -> ProviderHttpRequest {
         ProviderHttpRequest {
+            method: "GET",
             url: format!(
                 "https://stub.example.com/translate?q={}&source={}&target={}",
                 req.text, req.source_lang.as_str(), req.target_lang.as_str()
             ),
             body: None,
+            headers: vec![],
         }
     }
 

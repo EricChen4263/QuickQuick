@@ -71,10 +71,17 @@ pub struct ProviderCapability {
 /// 这样超时/取消/重试逻辑可集中管理。
 #[derive(Debug, Clone)]
 pub struct ProviderHttpRequest {
+    /// HTTP 方法（"GET" / "POST"）。
+    pub method: &'static str,
     /// 目标 URL（含查询参数）。
     pub url: String,
     /// POST body（GET 请求为 None）。
     pub body: Option<String>,
+    /// 额外请求头（key → value 键值对列表）。
+    ///
+    /// 大多数 provider 不需要自定义头部，默认空列表即可。
+    /// DeepL 等需要 Authorization 头的 provider 在此声明。
+    pub headers: Vec<(String, String)>,
 }
 
 /// 统一翻译错误枚举（s03 归一映射）。
