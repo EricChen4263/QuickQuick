@@ -51,6 +51,90 @@ pub enum DbError {
     /// 其他业务层错误（如缩略图编码失败等不属于 SQL/IO 的失败）
     #[error("操作失败：{0}")]
     Other(String),
+
+    /// 瞬时钥匙串错误（钥匙串被拒/系统锁定；不代表数据损坏，仅需重试）
+    ///
+    /// 与 KeyError::Backend 对应的数据库层表示：上层 KeyProvider 返回 Backend 错误后，
+    /// 调用方可通过此变体向 db 层传递"瞬时失败"语义，触发 Transient 分级。
+    #[error("瞬时钥匙串错误：{0}")]
+    TransientKeychain(String),
+}
+
+impl DbError {
+    /// 构造瞬时钥匙串错误（测试与业务层用）。
+    ///
+    /// 对应设计§六#1 中"钥匙串被拒/锁"路径——仅提示重试，绝不碰库文件。
+    pub fn transient_keychain_error(msg: impl Into<String>) -> Self {
+        Self::TransientKeychain(msg.into())
+    }
+}
+
+/// 错误失败分级：区分可重试的瞬时失败与需要恢复的永久失败。
+///
+/// 设计§六#1 失败/恢复语义：
+/// - `Transient`：钥匙串被拒/系统锁定等，库文件完好，仅需重试
+/// - `Permanent`：密钥丢失/库损坏/解密失败，需备份旧库并（显式确认后）重建
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FailureTier {
+    /// 瞬时失败：库文件完好，仅需提示用户重试，绝不改动库文件
+    Transient,
+    /// 永久失败：密钥不可用或库已损坏，须备份旧库，显式确认后才可重建
+    Permanent,
+}
+
+/// 失败后的恢复动作。
+///
+/// 由 `recovery_action(tier)` 根据 `FailureTier` 返回，供调用方决策。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RecoveryAction {
+    /// 仅提示用户重试，绝不改名/删除/重建库文件（对应 Transient）
+    RetryNoTouch,
+    /// 将旧库改名备份，等待显式用户确认后才重建空库（对应 Permanent）
+    BackupAndConfirmRebuild,
+}
+
+/// 将 `DbError` 分类为瞬时或永久失败。
+///
+/// 分类规则（设计§六#1）：
+/// - `TransientKeychain`       → `Transient`（钥匙串被拒/锁，库文件完好）
+/// - `Corrupt` / `Sqlite`      → `Permanent`（库损坏或解密失败，需备份恢复）
+/// - `Io` / `Other`            → `Permanent`（保守归类，IO 失败视为需人工介入）
+pub fn classify_failure(err: &DbError) -> FailureTier {
+    match err {
+        DbError::TransientKeychain(_) => FailureTier::Transient,
+        DbError::Corrupt { .. } | DbError::Sqlite(_) | DbError::Io(_) | DbError::Other(_) => {
+            FailureTier::Permanent
+        }
+    }
+}
+
+/// 根据失败分级返回对应的恢复动作。
+///
+/// - `Transient` → `RetryNoTouch`：仅提示重试，不触碰库文件
+/// - `Permanent` → `BackupAndConfirmRebuild`：改名备份，显式确认才重建
+pub fn recovery_action(tier: FailureTier) -> RecoveryAction {
+    match tier {
+        FailureTier::Transient => RecoveryAction::RetryNoTouch,
+        FailureTier::Permanent => RecoveryAction::BackupAndConfirmRebuild,
+    }
+}
+
+/// 执行恢复动作：将 `RecoveryAction` 的语义落地到文件系统操作。
+///
+/// - `RetryNoTouch`        → 不碰文件，直接返回 `Ok(())`（库文件原样保留）
+/// - `BackupAndConfirmRebuild` → 调用 `backup_corrupt_file` 将旧库改名备份
+///
+/// # Errors
+/// - `DbError::Io`：`BackupAndConfirmRebuild` 路径下 rename 失败
+/// - `DbError::Io`：`path` 无文件名分量（`backup_corrupt_file` 报错）
+pub fn apply_recovery_action(path: &Path, action: RecoveryAction) -> Result<(), DbError> {
+    match action {
+        RecoveryAction::RetryNoTouch => Ok(()),
+        RecoveryAction::BackupAndConfirmRebuild => {
+            backup_corrupt_file(path)?;
+            Ok(())
+        }
+    }
 }
 
 /// 打开或新建加密数据库，确保 schema 已初始化。
@@ -478,7 +562,12 @@ fn backup_corrupt_file(path: &Path) -> Result<std::path::PathBuf, DbError> {
 
     let original_name = path
         .file_name()
-        .unwrap_or_default()
+        .ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "backup_corrupt_file: 路径无文件名分量",
+            )
+        })?
         .to_string_lossy();
     let backup_name = format!("{}.corrupt-{}", original_name, utc_secs);
 
