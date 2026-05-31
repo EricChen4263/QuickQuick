@@ -158,3 +158,44 @@ cargo build: Finished dev profile, EXIT 0
 - [x] 断言非恒真：None 守卫测试断言具体错误子串"数据库不可用"；Some 测试断言列表为空
 - [x] TDD：RED（编译失败，unresolved import `with_db`）→ GREEN（8 passed）→ REFACTOR（无需）
 - [x] I-2：`#[must_use]` 标注在函数级别，含说明消息，符合 Rust 惯例
+
+## 打回修复 R2（producer V4-A-QUALITY clippy dead_code）
+
+### 问题描述
+
+`cargo clippy --all-targets -- -D warnings` 在 `tests/boot_pipeline.rs:53` 报 `dead_code` warning（被 `-D warnings` 升级为 error）：
+
+```
+error: method `set_text` is never used
+```
+
+`FakeClipboardBackend::set_text` 是测试辅助方法，用于在测试中变更 fake 剪贴板的文本内容。检查 4 个测试用例，`set_count` 在 `boot_pipeline_dedup_bumped` 中调用（模拟 change_count 递增），但 `set_text` 从未被任何测试调用。
+
+### 修法
+
+选择**删除**而非 `#[allow(dead_code)]`，理由：
+
+1. 4 个测试用例无一需要在测试过程中切换 fake 文本——初始文本通过构造函数 `new(count, text)` 传入，测试运行中不需要动态变更。
+2. 保留无用方法只会增加阅读噪音，违反 YAGNI；若后续测试确实需要，届时重新添加即可。
+3. `ClipboardBackend` trait 不要求 `set_text`，删除后 trait 实现仍然完整（trait 只要求 `change_count` 和 `read`）。
+
+改动：删除 `src-tauri/tests/boot_pipeline.rs` 中的 `set_text` 方法（第 53-55 行）。
+
+### 实跑结论
+
+clippy：
+```
+Finished `dev` profile [unoptimized + debuginfo] target(s) in 2.35s
+exit 0，无 error，无 warning
+```
+
+boot_pipeline 4 测试：
+```
+test boot_pipeline_open_db ... ok
+test boot_pipeline_no_change_none ... ok
+test boot_pipeline_ingest_visible ... ok
+test boot_pipeline_dedup_bumped ... ok
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+```
+
+全量 cargo test exit 0，所有 test result: ok。

@@ -102,3 +102,109 @@
 **放行**
 
 所有三档全通过，无打回项，无覆盖缺口，无真实缺陷。
+
+---
+
+## 打回修复 R2 验证
+
+### 开工 git 快照
+
+```
+ M docs/dev-log/v4/f1-ipc/s02-translate-cmd/coding.md
+ M docs/dev-log/v4/f1-ipc/s04-boot-pipeline/coding.md
+ M src-tauri/src/translate/history.rs
+ M src-tauri/tests/boot_pipeline.rs
+```
+
+---
+
+### 档位一：命中校验
+
+#### V4-F1-A02：ipc_translate 连续 3 次
+
+| 次数 | ipc_translate_list_history_returns_entries_in_desc_order | 6 passed | exit |
+|------|----------------------------------------------------------|----------|------|
+| 1    | ok                                                       | ok. 6 passed; 0 failed | 0 |
+| 2    | ok                                                       | ok. 6 passed; 0 failed | 0 |
+| 3    | ok                                                       | ok. 6 passed; 0 failed | 0 |
+
+命中 6 个：`ipc_translate_empty_text_returns_error_without_calling_executor`、`ipc_translate_whitespace_text_returns_error_without_calling_executor`、`ipc_translate_chinese_text_produces_zh_to_en_direction`、`ipc_translate_english_text_produces_en_to_zh_direction`、`ipc_translate_writes_to_history_after_success`、`ipc_translate_list_history_returns_entries_in_desc_order`。无假绿、连续稳定。
+
+#### V4-A-QUALITY：clippy -D warnings
+
+```
+cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+Finished `dev` profile — exit 0，无 error/warning
+```
+
+`FakeClipboardBackend::set_text` 已删除，dead_code 警告消除。
+
+#### 全量 cargo test
+
+全部 22 个 test result 块：0 failed，exit 0。
+
+---
+
+### 档位二：变异 sanity
+
+备份：`cp src-tauri/src/translate/history.rs /tmp/history.rs.bak`
+
+#### 变异一：去掉 `, rowid DESC`，只留 `ORDER BY created_utc DESC`
+
+- 改坏方式：sed 替换，退回原始 flaky 根因
+- 连跑3次 `ipc_translate_list_history_returns_entries_in_desc_order`：
+  - RUN1：**1 passed**（偶发通过）
+  - RUN2：**1 FAILED**（偶发失败）
+  - RUN3：**1 passed**（偶发通过）
+- 结论：去掉 `rowid DESC` 后测试出现 flaky（RUN2 FAILED），**证明 `rowid DESC` 是必要的确定性兜底**
+
+#### 变异二：改 `DESC` → `ASC`（完全正序）
+
+- 改坏方式：sed 替换为 `ORDER BY created_utc ASC`
+- 连跑3次：
+  - RUN1：**FAILED**
+  - RUN2：**FAILED**
+  - RUN3：**FAILED**
+- 结论：改为正序后测试稳定变红，测试判别力强，非恒真/非旁路
+
+#### 还原与快照
+
+- 复原：`cp /tmp/history.rs.bak src-tauri/src/translate/history.rs`
+- `ORDER BY created_utc DESC, rowid DESC` 已恢复，确认
+- 结束快照与开工快照逐行一致：**是**
+
+---
+
+### 档位三：边界探测
+
+利用现有 6 个 ipc_translate 测试覆盖边界：
+
+| 边界场景 | 对应测试 | 结果 |
+|----------|----------|------|
+| 空文本 translate | `ipc_translate_empty_text_returns_error_without_calling_executor` | ok |
+| 纯空白文本 translate | `ipc_translate_whitespace_text_returns_error_without_calling_executor` | ok |
+| 空历史 list | 含在 `ipc_translate_writes_to_history_after_success` 前置断言 | ok |
+| 多条（2条）倒序 | `ipc_translate_list_history_returns_entries_in_desc_order` | ok（连续稳定） |
+
+变异一实验额外证实：同毫秒并列时 rowid DESC 是真实防线，非多余防御。
+
+---
+
+### 结束 git 快照
+
+```
+ M docs/dev-log/v4/f1-ipc/s02-translate-cmd/coding.md
+ M docs/dev-log/v4/f1-ipc/s04-boot-pipeline/coding.md
+ M src-tauri/src/translate/history.rs
+ M src-tauri/tests/boot_pipeline.rs
+```
+
+与开工快照逐行一致，工作树还原干净，无新增/丢失文件。
+
+---
+
+### 门禁结论
+
+**放行**
+
+V4-F1-A02（排序确定性修复）和 V4-A-QUALITY（clippy dead_code 修复）均通过动态证伪三件套，无假绿，无恒真，无真实缺陷遗留。

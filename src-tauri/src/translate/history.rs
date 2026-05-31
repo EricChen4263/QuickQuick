@@ -96,7 +96,7 @@ pub fn list_translate_history(conn: &Connection) -> Result<Vec<TranslateHistoryR
     let mut stmt = conn.prepare(
         "SELECT id, source_text, translated_text, source_lang, target_lang, provider_id, created_utc
          FROM translate_history
-         ORDER BY created_utc DESC",
+         ORDER BY created_utc DESC, rowid DESC",
     )?;
     let rows = stmt.query_map([], |row| {
         Ok(TranslateHistoryRow {

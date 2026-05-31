@@ -65,3 +65,42 @@ test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 | 安全：无密钥入库、参数化查询、输入校验、日志不泄密 | `add_translate_history` 参数化查询；`text` 空值在 IPC 层校验；`UreqExecutor` 无日志打印；API Key 不经过本模块 |
 | 装饰性分隔注释 | 无 `═══/───/━━━/=====` 横线分隔 |
 | TODO/FIXME 残留 | 无 |
+
+## 打回修复 R2（producer V4-F1-A02 假绿）
+
+### 根因
+
+`list_translate_history` 的 SQL 查询仅有 `ORDER BY created_utc DESC`，当同一毫秒内连续插入多条记录时（测试用 in-memory SQLite 运行速度极快，多条插入往往落在同一毫秒），`created_utc` 值相等，SQLite 回退到未定义的自然存储顺序（通常为插入正序），导致 `history[0].source_text` 拿到最早插入的 "你好" 而非最晚插入的 "世界"，断言失败。
+
+此前假绿的原因：偶发情况下 SQLite 在无次级排序时恰好以插入逆序返回，导致测试有时通过；producer 重跑时失败暴露了不确定性。
+
+### 修法
+
+将查询的 `ORDER BY` 子句由：
+
+```sql
+ORDER BY created_utc DESC
+```
+
+改为：
+
+```sql
+ORDER BY created_utc DESC, rowid DESC
+```
+
+`rowid` 是 SQLite 内置的单调递增行标识符（每次 INSERT 分配，严格递增，即使无显式 INTEGER PRIMARY KEY 也存在），同毫秒并列时按 `rowid DESC` 兜底，保证最后写入的行始终排最前，消除不确定性。
+
+改动文件：`src-tauri/src/translate/history.rs`，第 99 行。
+
+### 为什么此前是假绿
+
+集成测试 `ipc_translate_list_history_returns_entries_in_desc_order` 连续插入 "你好" 和 "世界" 后调 `list_translate_history_impl`。在 in-memory SQLite 上两次插入几乎必然落在同一毫秒，`created_utc` 完全相同。原查询无次级排序，SQLite 返回顺序由内部实现决定，恰好在部分运行中以逆序返回而非正序，造成测试偶发通过（假绿）。producer 重跑暴露失败：5 passed / 1 failed。
+
+### 实跑结论
+
+```
+test ipc_translate_list_history_returns_entries_in_desc_order ... ok
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+```
+
+clippy（-D warnings）exit 0，无 error/warning。全量 cargo test exit 0，所有 test result: ok。

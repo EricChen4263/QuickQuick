@@ -49,10 +49,6 @@ impl FakeClipboardBackend {
     fn set_count(&self, c: u64) {
         *self.count.lock().unwrap() = c;
     }
-
-    fn set_text(&self, t: Option<&str>) {
-        *self.text.lock().unwrap() = t.map(str::to_owned);
-    }
 }
 
 impl ClipboardBackend for FakeClipboardBackend {
