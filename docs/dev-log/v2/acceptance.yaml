@@ -78,7 +78,7 @@ acceptance:
     category: 功能正确性
     source_anchor: 设计文档§4.1+（超时/取消归核心框架，取消在途旧请求）
     kind: objective
-    verify: { type: test_id, ref: timeout_and_cancel_inflight, runner: "cargo test --manifest-path src-tauri/Cargo.toml timeout_cancel", path: src-tauri/tests/translate.rs, expect: pass }
+    verify: { type: test_id, ref: timeout_and_cancel_inflight, runner: "cargo test --manifest-path src-tauri/Cargo.toml timeout_and_cancel_inflight", path: src-tauri/tests/translate.rs, expect: pass }   # CL-V2-003：runner filter 校正至匹配 ref/实际测试名
     evidence_ref: docs/dev-log/v2/f1-framework/s03-error/test.md
     level: 小功能
     status: 待验
@@ -115,7 +115,7 @@ acceptance:
     category: 功能正确性
     source_anchor: 设计文档§4.2（失败/额度=显式提示，不静默切换）
     kind: objective
-    verify: { type: test_id, ref: quota_explicit_no_silent_switch, runner: "cargo test --manifest-path src-tauri/Cargo.toml quota_prompt", path: src-tauri/tests/providers.rs, expect: pass }
+    verify: { type: test_id, ref: quota_explicit_no_silent_switch, runner: "cargo test --manifest-path src-tauri/Cargo.toml quota_explicit_no_silent_switch", path: src-tauri/tests/providers.rs, expect: pass }   # CL-V2-003：runner filter 校正至匹配 ref/实际测试名
     evidence_ref: docs/dev-log/v2/f2-providers/s07-keyed/test.md
     level: 小功能
     status: 待验
@@ -222,3 +222,11 @@ change_log:
     diff: "前端测试文件命名带前缀匹配冻结 runner：selectTrigger.test.ts→select-trigger.test.ts、actions.test.ts→translate-actions.test.ts（置于 src/translate/）"
     reason: "冻结 runner 用 kebab（'pnpm test select-trigger'/'translate-actions'），vitest 按路径子串过滤，原 path 文件名不含该串致不可命中。仅校正文件命名使 runner 可执行，assertion/expect 不变，非放宽（同 CL-V1-001）。"
     source: 设计文档§4.3/§八#5 + 既有冻结 runner
+  - id: CL-V2-003
+    time: 2026-05-31T19:00:00Z
+    by: 编排器（依 producer V2 首轮裁决"runner 0 匹配"打回）
+    item: [V2-F1-A07, V2-F2-A11]
+    field: verify.runner
+    diff: "A07 'cargo test timeout_cancel'→'cargo test timeout_and_cancel_inflight'；A11 'cargo test quota_prompt'→'cargo test quota_explicit_no_silent_switch'"
+    reason: "冻结 runner filter 子串与同条目 ref 字段（timeout_and_cancel_inflight / quota_explicit_no_silent_switch，即实际测试函数名）内部不一致：cargo test 用错误子串匹配 0 个测试、空匹配仍 exit 0，致 verify 形同失效（producer 机械校验逮住）。校正 runner 至匹配 ref/实际测试名，assertion 与 expect=pass 不变、测试本就存在且通过，非放宽。"
+    source: 同条目 ref 字段 + 既有测试 timeout_and_cancel_inflight_*/quota_explicit_no_silent_switch_*
