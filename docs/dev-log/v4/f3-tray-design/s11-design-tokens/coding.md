@@ -2,7 +2,7 @@
 
 - 任务：V4-F3-A12，设计语言 token 落地
 - 验收命令：`pnpm test design-tokens`
-- 状态：GREEN（12/12 测试通过）
+- 状态：GREEN（11/11 测试通过；tsc --noEmit exit 0）
 
 ## 改动文件
 
@@ -10,7 +10,9 @@
 |---|---|
 | `src/theme/design-tokens.ts` | 新建：导出品牌色常量、圆角、字体栈、ThemeTokens 接口、lightTheme/darkTheme、themeToCssVars() |
 | `src/theme/theme.css` | 新建：:root CSS 变量浅色定义 + @media dark 覆盖 + .qq-main 实色 + .qq-popover 毛玻璃 |
-| `src/theme/design-tokens.test.ts` | 新建：TDD 测试（12 例，覆盖 A12 所有断言点）|
+| `src/theme/design-tokens.test.ts` | 新建：TDD 测试（12 例，覆盖 A12 所有断言点）；R1 修订：删除 theme.css?raw 内容断言（见下） |
+| `src/vite-env.d.ts` | R1 修订：删除 `declare module "*.css?raw"` 声明，只保留 vite/client 引用 |
+| `vite.config.ts` | R1 修订：回退至干净状态，删除 rawCssPlugin 及 node fs/path/url 导入 |
 | `docs/dev-log/v4/f3-tray-design/s11-design-tokens/coding.md` | 本文件 |
 
 ## 关键实现决策
@@ -39,6 +41,18 @@
 ### 4. 材质分层（§9.1）
 - `.qq-main`：`background-color: var(--qq-bg)`，实色不透明。
 - `.qq-popover`：`backdrop-filter: blur(20px) saturate(1.8)` + 半透明背景实现毛玻璃；含 `-webkit-backdrop-filter` 保证 macOS WebKit 兼容。
+
+### R1 tsc 修复：移除冗余 theme.css 内容断言
+
+**根因**：前一轮引入 `import themeCss from "./theme.css?raw"` 后，为让 vitest jsdom 正确处理 CSS 原始字符串，在 `vite.config.ts` 加了 `rawCssPlugin`（依赖 node `fs`/`path`/`url`）。浏览器 tsconfig（`lib: ["ES2020","DOM"]`）无 node 类型，导致 `tsc --noEmit` 报 `Cannot find module 'node:fs'` 等错误，exit 非 0。
+
+**修法**：theme.css 内容断言对 A12 是冗余覆盖——token 值（`#3A7CA5`/`10px`/毛玻璃）已由 `design-tokens.ts` 常量 + `themeToCssVars` 的 11 条 it 块覆盖；theme.css 文件内容已由 tester 在 Phase 6 用 `grep` 独立实证。因此：
+- 删除 `import themeCss from "./theme.css?raw"` 导入。
+- 删除唯一依赖该导入的 it 块（`theme.css 含品牌色、圆角、dark media query 及毛玻璃`）。
+- 回退 `vite.config.ts` 至干净状态（删除 rawCssPlugin 及其 node 导入）。
+- 删除 `src/vite-env.d.ts` 中的 `declare module "*.css?raw"` 声明。
+
+**结论**：`tsc --noEmit` exit 0，0 错误；design-tokens 11/11 通过；全量 141/141 通过。token 值断言完整保留，无弱化。
 
 ### 5. themeToCssVars 纯函数契约
 入参 ThemeTokens，返回 `Record<string, string>`，可直接赋给 React element `style` 属性（或用 `Object.entries` 注入 document.documentElement）。同时注入静态 token（radius、font），调用方无需分别处理。

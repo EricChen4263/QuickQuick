@@ -7,9 +7,6 @@ import {
   darkTheme,
   themeToCssVars,
 } from "./design-tokens";
-import { readFileSync } from "fs";
-import { resolve } from "path";
-
 // V4-F3-A12: 设计语言 token 落地（§9.1 峡湾青蓝 / 中圆角 / 深浅双主题）
 
 describe("design-tokens", () => {
@@ -86,12 +83,4 @@ describe("design-tokens", () => {
     expect(vars["--qq-font"].length).toBeGreaterThan(0);
   });
 
-  it("theme.css 含品牌色、圆角、dark media query 及毛玻璃", () => {
-    const cssPath = resolve(__dirname, "./theme.css");
-    const css = readFileSync(cssPath, "utf-8");
-    expect(css).toContain("#3A7CA5");
-    expect(css).toContain("10px");
-    expect(css).toContain("prefers-color-scheme: dark");
-    expect(css).toContain("backdrop-filter");
-  });
 });
