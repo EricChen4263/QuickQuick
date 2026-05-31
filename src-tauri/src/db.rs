@@ -423,7 +423,8 @@ fn ensure_schema(conn: &Connection) -> Result<(), DbError> {
             created_utc       INTEGER NOT NULL,            -- UTC epoch ms
             last_modified_utc INTEGER NOT NULL,            -- UTC epoch ms
             is_deleted        INTEGER NOT NULL DEFAULT 0,  -- 墓碑
-            deleted_at_utc    INTEGER                      -- 软删时间
+            deleted_at_utc    INTEGER,                     -- 软删时间
+            is_favorite       INTEGER NOT NULL DEFAULT 0  -- 收藏标记：0=普通 1=收藏（分级清理豁免，V3-F1-A04）
         );
 
         -- provider 非密凭据表（§十预埋铁律）

@@ -142,6 +142,12 @@ fn schema_preembed_columns_clip_images() {
         "clip_images 应含 image_hash 列（原图字节哈希判重）；实际列: {:?}",
         cols
     );
+    // Assert：收藏标记（V3-F1-A04 分级清理豁免）
+    assert!(
+        cols.contains(&"is_favorite".to_string()),
+        "clip_images 应含 is_favorite 列（分级清理收藏豁免）；实际列: {:?}",
+        cols
+    );
 }
 
 /// V0-F3-A05：插入 → soft_delete → 行仍在且 is_deleted=1 → gc 后物理消失

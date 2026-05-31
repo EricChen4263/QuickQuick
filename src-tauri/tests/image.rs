@@ -214,6 +214,156 @@ fn oversize_skip_original_policy_configurable() {
     assert_eq!(orig_normal, another_png, "未超阈值时原图应无损存储");
 }
 
+/// V3-F1-A04：分级清理 + 三态归一
+///
+/// 验证：
+/// 1. 第一级：最旧非收藏的原图被 strip（original_present=0、original BLOB 空、缩略图仍在）
+/// 2. 收藏豁免：收藏项原图和整条记录都保持不变
+/// 3. 三态归一：strip 后 is_degraded=true（与超大图未存同一状态）
+/// 4. 第二级：缩略图也满时整条删最旧非收藏
+#[test]
+fn tiered_cleanup_and_state_unify_strips_oldest_nonfavorite_preserves_favorite() {
+    use quickquick_lib::image::{CleanupPolicy, tiered_cleanup, is_degraded, get_original_present};
+
+    // Arrange
+    let dir = tempdir().expect("tempdir 创建失败");
+    let db_path = dir.path().join("quickquick.db");
+    let conn = db::open_or_create(&db_path, &TEST_KEY).expect("建库应成功");
+
+    // 生成 3 张 PNG：oldest（最旧）、middle（中间）、newest（最新，收藏）
+    let oldest_png = make_test_png(10, 10, [255u8, 0u8, 0u8]);
+    let middle_png = make_test_png(10, 10, [0u8, 255u8, 0u8]);
+    let newest_png = make_test_png(10, 10, [0u8, 0u8, 255u8]);
+
+    // 按时间顺序插入（created_utc 递增）
+    let oldest_id = insert_image_with_ts(&conn, &oldest_png, 1000, false);
+    let _middle_id = insert_image_with_ts(&conn, &middle_png, 2000, false);
+    // newest 标记为收藏
+    let newest_id = insert_image_with_ts(&conn, &newest_png, 3000, true);
+
+    // 确认初始状态：3 条记录都有原图
+    assert_eq!(img::image_count(&conn).expect("image_count"), 3);
+    assert_eq!(img::get_original_present(&conn, &oldest_id).expect("ok").expect("some"), 1);
+    assert_eq!(img::get_original_present(&conn, &newest_id).expect("ok").expect("some"), 1);
+
+    // 计算当前总量，设 limit = 总量 - oldest原图大小，
+    // 使得 strip oldest 原图后总量刚好 ≤ limit（触发第一级但不触发第二级）。
+    // 这样可以断言 oldest 被 strip 后行仍存活（is_deleted=0）。
+    let total_before = img::total_image_bytes(&conn).expect("total_image_bytes 应成功");
+    // 从 DB 查询 length(original)，固化"DB 实际存储大小"而非依赖内存 PNG 字节数推算
+    let oldest_orig_size: i64 = conn.query_row(
+        "SELECT COALESCE(length(original), 0) FROM clip_images WHERE id = ?1",
+        rusqlite::params![oldest_id],
+        |row| row.get(0),
+    ).expect("查询 oldest 原图大小应成功");
+    // limit = 总量 - oldest原图大小（strip后总量降至此值，刚好 ≤ limit）
+    let limit = total_before - oldest_orig_size;
+    let policy = CleanupPolicy { max_total_bytes: limit };
+    let report = tiered_cleanup(&conn, &policy).expect("tiered_cleanup 应成功");
+
+    // Assert 1：第一级 strip 了原图（oldest 最旧非收藏先被 strip）
+    assert!(report.stripped_originals >= 1, "应至少 strip 1 条原图，实际: {}", report.stripped_originals);
+
+    // Assert 2：oldest 被 strip——original_present=0、BLOB 空
+    let oldest_present = get_original_present(&conn, &oldest_id)
+        .expect("get_original_present 应成功")
+        .expect("oldest 行应仍存在");
+    assert_eq!(oldest_present, 0, "oldest 的 original_present 应被置为 0");
+
+    let oldest_orig = img::get_image_original(&conn, &oldest_id).expect("ok");
+    assert!(
+        oldest_orig.is_none_or(|v| v.is_empty()),
+        "oldest 的原图 BLOB 应被清空"
+    );
+
+    // Assert 3：oldest 缩略图仍在（不删缩略图）
+    let oldest_thumb = img::get_image_thumbnail(&conn, &oldest_id)
+        .expect("ok")
+        .expect("oldest 缩略图应仍存在");
+    assert!(!oldest_thumb.is_empty(), "oldest 缩略图不应被清空");
+
+    // Assert 4：三态归一——is_degraded=true（与超大图未存同一状态）
+    assert!(
+        is_degraded(&conn, &oldest_id).expect("is_degraded 应成功"),
+        "strip 后 is_degraded 应为 true（三态归一）"
+    );
+
+    // Assert 5：收藏豁免——newest 原图和整条记录完整
+    let newest_present = get_original_present(&conn, &newest_id)
+        .expect("ok")
+        .expect("newest 行应仍存在");
+    assert_eq!(newest_present, 1, "收藏项 original_present 应仍为 1（豁免）");
+
+    let newest_orig = img::get_image_original(&conn, &newest_id)
+        .expect("ok")
+        .expect("收藏项原图应仍存在");
+    assert!(!newest_orig.is_empty(), "收藏项原图不应被清空");
+
+    // Assert 6：收藏整条存活
+    let fav_count: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM clip_images WHERE id = ?1 AND is_deleted = 0",
+        rusqlite::params![newest_id],
+        |row| row.get(0),
+    ).expect("查询应成功");
+    assert_eq!(fav_count, 1, "收藏项整条不应被删");
+}
+
+/// V3-F1-A04（第二级）：缩略图也超限时整条删最旧非收藏
+#[test]
+fn tiered_cleanup_deletes_whole_row_when_thumbnails_also_exceed_limit() {
+    use quickquick_lib::image::{CleanupPolicy, tiered_cleanup};
+
+    // Arrange
+    let dir = tempdir().expect("tempdir 创建失败");
+    let db_path = dir.path().join("quickquick.db");
+    let conn = db::open_or_create(&db_path, &TEST_KEY).expect("建库应成功");
+
+    // 插入 2 张非收藏图片，设 0 字节上限强制第二级触发
+    let png1 = make_test_png(10, 10, [100u8, 0u8, 0u8]);
+    let png2 = make_test_png(10, 10, [0u8, 100u8, 0u8]);
+    let id1 = insert_image_with_ts(&conn, &png1, 1000, false);
+    let _id2 = insert_image_with_ts(&conn, &png2, 2000, false);
+
+    // max_total_bytes=0：所有原图 strip 后缩略图还是 > 0 → 触发第二级整条删
+    let policy = CleanupPolicy { max_total_bytes: 0 };
+    let report = tiered_cleanup(&conn, &policy).expect("tiered_cleanup 应成功");
+
+    // Assert：第二级至少整条删了最旧的 id1
+    assert!(report.deleted_rows >= 1, "应至少整条删 1 行，实际: {}", report.deleted_rows);
+
+    // Assert：id1 的行已软删或物理删（is_deleted=1 或不存在）
+    let count: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM clip_images WHERE id = ?1 AND is_deleted = 0",
+        rusqlite::params![id1],
+        |row| row.get(0),
+    ).expect("查询应成功");
+    assert_eq!(count, 0, "最旧非收藏行应被整条删除（软删）");
+}
+
+/// 辅助：插入一条 clip_images 行（含真实缩略图），返回 id。
+/// created_utc 用于控制排序（越小越旧）。
+fn insert_image_with_ts(
+    conn: &rusqlite::Connection,
+    original: &[u8],
+    created_utc: i64,
+    is_favorite: bool,
+) -> String {
+    let id = uuid::Uuid::new_v4().to_string();
+    let thumbnail = img::make_thumbnail(original).expect("make_thumbnail 应成功");
+    let hash = img::image_hash(original);
+    let fav: i32 = if is_favorite { 1 } else { 0 };
+
+    conn.execute(
+        "INSERT INTO clip_images
+             (id, thumbnail, original, original_present, image_hash,
+              created_utc, last_modified_utc, is_deleted, is_favorite)
+         VALUES (?1, ?2, ?3, 1, ?4, ?5, ?5, 0, ?6)",
+        rusqlite::params![id, thumbnail, original, hash, created_utc, fav],
+    ).expect("插入 clip_images 应成功");
+
+    id
+}
+
 /// 程序生成指定尺寸纯色 PNG 字节（用于测试，无需磁盘文件）。
 fn make_test_png(width: u32, height: u32, rgb: [u8; 3]) -> Vec<u8> {
     use image::{ImageBuffer, Rgb};

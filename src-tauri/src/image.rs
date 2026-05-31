@@ -317,6 +317,176 @@ pub fn image_count(conn: &Connection) -> Result<i64, DbError> {
     Ok(n)
 }
 
+/// 分级清理策略。`max_total_bytes` 可在测试中设为较小值验证可配性。
+#[derive(Debug, Clone)]
+pub struct CleanupPolicy {
+    /// 图片总字节上限（原图 + 缩略图合计）。超出时触发分级清理。
+    pub max_total_bytes: i64,
+}
+
+impl Default for CleanupPolicy {
+    fn default() -> Self {
+        Self { max_total_bytes: DEFAULT_MAX_TOTAL }
+    }
+}
+
+/// 分级清理报告：记录本次清理腾掉的原图数和整条删除数。
+#[derive(Debug, Default, PartialEq)]
+pub struct CleanupReport {
+    /// 第一级：腾掉原图（strip original）的行数
+    pub stripped_originals: usize,
+    /// 第二级：整条软删的行数
+    pub deleted_rows: usize,
+}
+
+/// 默认图片总量上限（500 MiB）。
+pub const DEFAULT_MAX_TOTAL: i64 = 500 * 1024 * 1024;
+
+/// 计算未软删图片行的总字节数（原图 BLOB + 缩略图 BLOB 合计）。
+///
+/// SQLite 的 `length()` 对 NULL 返回 NULL，`COALESCE` 保证空/NULL BLOB 计为 0。
+///
+/// # Errors
+/// `DbError::Sqlite`：SQL 执行失败
+pub fn total_image_bytes(conn: &Connection) -> Result<i64, DbError> {
+    let total = conn.query_row(
+        "SELECT COALESCE(SUM(COALESCE(length(original), 0) + COALESCE(length(thumbnail), 0)), 0)
+         FROM clip_images WHERE is_deleted = 0",
+        [],
+        |row| row.get::<_, i64>(0),
+    )?;
+    Ok(total)
+}
+
+/// 判断指定行是否处于降级态（original_present=0，即无本地原图）。
+///
+/// 三种情形统一映射：超大图未存 / 本地清理腾掉 / v2 同步未拉，
+/// 均表示为 `original_present=0`，通过本函数统一判断。
+///
+/// 行不存在或已软删时返回 `Ok(false)`。
+///
+/// # Errors
+/// `DbError::Sqlite`：SQL 执行失败
+pub fn is_degraded(conn: &Connection, id: &str) -> Result<bool, DbError> {
+    let result = conn
+        .query_row(
+            "SELECT original_present FROM clip_images WHERE id = ?1 AND is_deleted = 0",
+            rusqlite::params![id],
+            |row| row.get::<_, i32>(0),
+        )
+        .optional()?;
+    Ok(result.is_some_and(|v| v == 0))
+}
+
+/// 腾空指定行的原图 BLOB，并将 `original_present` 置为 0（降级态）。
+///
+/// 缩略图保留不动。调用后该行进入与超大图未存相同的"有缩略图无本地原图"状态。
+/// 仅操作未软删行（`AND is_deleted = 0`），软删行静默跳过，不触发语义不一致。
+///
+/// # Errors
+/// `DbError::Sqlite`：SQL 执行失败
+pub fn strip_original(conn: &Connection, id: &str) -> Result<(), DbError> {
+    conn.execute(
+        "UPDATE clip_images SET original = X'', original_present = 0 WHERE id = ?1 AND is_deleted = 0",
+        rusqlite::params![id],
+    )?;
+    Ok(())
+}
+
+/// 分级清理：按 `policy.max_total_bytes` 控制图片总存储量。
+///
+/// 两级策略：
+///
+/// **第一级**：当 total > max，按 `created_utc` 最旧优先、仅非收藏（`is_favorite=0`），
+/// 逐个调用 `strip_original`（清掉原图 BLOB、`original_present=0`、保留缩略图），
+/// 直到 total ≤ max 或无可腾原图的非收藏行。
+///
+/// **第二级**：若第一级完成后 total 仍 > max（缩略图本身也超限），
+/// 按 `created_utc` 最旧优先、仅非收藏，逐行软删（`is_deleted=1`），
+/// 直到 total ≤ max 或仅剩收藏行。
+///
+/// **收藏永远豁免**：`is_favorite=1` 的行不参与任何清理。
+///
+/// # Errors
+/// `DbError::Sqlite`：SQL 执行失败
+pub fn tiered_cleanup(conn: &Connection, policy: &CleanupPolicy) -> Result<CleanupReport, DbError> {
+    // 第一级：strip 最旧非收藏原图
+    let stripped_originals = strip_oldest_originals(conn, policy.max_total_bytes)?;
+
+    // 第二级：若 strip 后仍超限，整条软删最旧非收藏
+    let deleted_rows = if total_image_bytes(conn)? > policy.max_total_bytes {
+        delete_oldest_nonfavorite_rows(conn, policy.max_total_bytes)?
+    } else {
+        0
+    };
+
+    Ok(CleanupReport { stripped_originals, deleted_rows })
+}
+
+/// 第一级清理：strip 最旧非收藏行的原图，直到总量 ≤ max 或无可腾行。
+///
+/// 本地累计已释放字节以减少全表扫描：候选查询时一并 SELECT length(original)，
+/// 每次 strip 后直接从估算总量中减去该行原图大小，仅当本地估算超限时继续下一条，
+/// 避免每条都触发全表 SUM 扫描（O(N²) → O(N)）。
+///
+/// 返回实际 strip 的行数。
+fn strip_oldest_originals(conn: &Connection, max_bytes: i64) -> Result<usize, DbError> {
+    // 候选查询同时取 length(original)，一并传入避免额外 SELECT
+    let mut stmt = conn.prepare(
+        "SELECT id, COALESCE(length(original), 0) FROM clip_images
+         WHERE is_deleted = 0 AND is_favorite = 0 AND original_present = 1
+         ORDER BY created_utc ASC",
+    )?;
+    let candidates: Vec<(String, i64)> = stmt
+        .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)))?
+        .collect::<Result<_, _>>()?;
+
+    // 取一次当前总量作为基准；后续用本地累计释放量估算，不再循环全表扫
+    let mut estimated_total = total_image_bytes(conn)?;
+    let mut stripped = 0usize;
+    for (id, orig_len) in &candidates {
+        if estimated_total <= max_bytes {
+            break;
+        }
+        strip_original(conn, id)?;
+        // strip 后原图 BLOB 置为 X''（0 字节），减去已知大小更新估算
+        estimated_total -= orig_len;
+        stripped += 1;
+    }
+    Ok(stripped)
+}
+
+/// 第二级清理：软删最旧非收藏行（整条），直到总量 ≤ max 或无可删行。
+///
+/// 选择软删而非物理删：与 `db::soft_delete` 语义一致，GC 后续负责物理清理。
+/// 返回实际软删的行数。
+fn delete_oldest_nonfavorite_rows(conn: &Connection, max_bytes: i64) -> Result<usize, DbError> {
+    let mut stmt = conn.prepare(
+        "SELECT id FROM clip_images
+         WHERE is_deleted = 0 AND is_favorite = 0
+         ORDER BY created_utc ASC",
+    )?;
+    let ids: Vec<String> = stmt
+        .query_map([], |row| row.get::<_, String>(0))?
+        .collect::<Result<_, _>>()?;
+
+    let now_ms = current_utc_ms();
+    let mut deleted = 0usize;
+    for id in &ids {
+        if total_image_bytes(conn)? <= max_bytes {
+            break;
+        }
+        conn.execute(
+            "UPDATE clip_images
+             SET is_deleted = 1, deleted_at_utc = ?1, last_modified_utc = ?1
+             WHERE id = ?2",
+            rusqlite::params![now_ms, id],
+        )?;
+        deleted += 1;
+    }
+    Ok(deleted)
+}
+
 /// 获取当前 UTC 时间戳（毫秒）。
 fn current_utc_ms() -> i64 {
     SystemTime::now()
