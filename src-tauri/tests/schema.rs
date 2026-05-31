@@ -16,8 +16,8 @@ const TEST_KEY: [u8; 32] = [7u8; 32];
 /// 白名单校验表名，防止测试辅助函数被误用于不受信任的字符串（安全§10 输入校验）。
 fn table_columns(conn: &rusqlite::Connection, table: &str) -> Vec<String> {
     assert!(
-        matches!(table, "clip_items" | "clip_images"),
-        "未知表名 '{table}'，仅允许 clip_items / clip_images"
+        matches!(table, "clip_items" | "clip_images" | "provider_config"),
+        "未知表名 '{table}'，仅允许 clip_items / clip_images / provider_config"
     );
     let sql = format!("PRAGMA table_info({})", table);
     let mut stmt = conn.prepare(&sql).expect("PRAGMA table_info 应成功");
@@ -290,6 +290,35 @@ fn gc_cascade_deletes_clip_images_on_clip_item_removal() {
         img_count, 0,
         "clip_items 删除后，关联的 clip_images 应级联删除，实际仍有: {}",
         img_count
+    );
+}
+
+/// I-2：provider_config 表由 ensure_schema 预埋，含必要列 provider_id / field_key / value
+#[test]
+fn schema_preembed_provider_config_table_exists_with_required_columns() {
+    // Arrange
+    let dir = tempdir().expect("tempdir 创建失败");
+    let db_path = dir.path().join("quickquick.db");
+    let conn = db::open_or_create(&db_path, &TEST_KEY).expect("建库应成功");
+
+    // Act
+    let cols = table_columns(&conn, "provider_config");
+
+    // Assert：三列均存在
+    assert!(
+        cols.contains(&"provider_id".to_string()),
+        "provider_config 应含 provider_id 列；实际列: {:?}",
+        cols
+    );
+    assert!(
+        cols.contains(&"field_key".to_string()),
+        "provider_config 应含 field_key 列；实际列: {:?}",
+        cols
+    );
+    assert!(
+        cols.contains(&"value".to_string()),
+        "provider_config 应含 value 列；实际列: {:?}",
+        cols
     );
 }
 

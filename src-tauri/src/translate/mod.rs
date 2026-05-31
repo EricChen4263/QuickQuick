@@ -8,6 +8,7 @@ pub mod lang;
 pub mod error;
 pub mod retry;
 pub mod cancel;
+pub mod credential;
 mod providers;
 
 pub use providers::registry;

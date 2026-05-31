@@ -5,6 +5,7 @@
 //! - V2-F1-A02 lang_normalize_and_direction：语言归一，本地检测定方向，BCP-47，provider 映射表
 //! - V2-F1-A03 error_enum_mapping：统一错误枚举，provider 原始错误归一到具体变体
 //! - V2-F1-A04 same_source_retry_no_cross_failover：错误降级，同源退避重试，绝不自动跨源
+//! - V2-F1-A05 credential_schema_keychain：provider 声明结构化字段 schema，secret→keychain，非密→加密 DB
 //! - V2-F1-A07 timeout_and_cancel_inflight：超时归 Network，连续选中只认最新请求
 //! - V2-F1-A08 static_registry_lists_four：静态注册表枚举 4 家 provider
 
@@ -695,4 +696,261 @@ fn timeout_and_cancel_inflight_single_begin_remains_current() {
 
     // Assert
     assert!(tracker.is_current(gen), "唯一的 generation 应为 current");
+}
+
+// V2-F1-A05 credential_schema_keychain
+
+use quickquick_lib::translate::credential::{
+    credential_schema, load_credentials, save_credentials, CredError, CredStore,
+};
+use quickquick_lib::db;
+use tempfile::tempdir;
+use std::collections::HashMap;
+use std::sync::Mutex;
+
+const TEST_DB_KEY: [u8; 32] = [42u8; 32];
+
+/// 测试用内存 CredStore——不触碰 OS keychain，headless，线程安全。
+struct MockCredStore {
+    inner: Mutex<HashMap<String, String>>,
+}
+
+impl MockCredStore {
+    fn new() -> Self {
+        Self {
+            inner: Mutex::new(HashMap::new()),
+        }
+    }
+
+    /// 直接查询内部存储（用于路由正确性负向断言）
+    fn contains_key(&self, provider_id: &str, field_key: &str) -> bool {
+        let k = format!("{provider_id}.{field_key}");
+        self.inner.lock().unwrap().contains_key(&k)
+    }
+}
+
+impl CredStore for MockCredStore {
+    fn set_secret(
+        &self,
+        provider_id: &str,
+        field_key: &str,
+        value: &str,
+    ) -> Result<(), CredError> {
+        let k = format!("{provider_id}.{field_key}");
+        self.inner.lock().unwrap().insert(k, value.to_string());
+        Ok(())
+    }
+
+    fn get_secret(
+        &self,
+        provider_id: &str,
+        field_key: &str,
+    ) -> Result<Option<String>, CredError> {
+        let k = format!("{provider_id}.{field_key}");
+        Ok(self.inner.lock().unwrap().get(&k).cloned())
+    }
+}
+
+/// A05-a：百度 schema 含 app_id(非密必填) + secret_key(密必填)
+#[test]
+fn credential_schema_keychain_baidu_has_app_id_and_secret_key() {
+    // Arrange + Act
+    let fields = credential_schema("baidu");
+
+    // Assert：必须含 app_id
+    let app_id = fields.iter().find(|f| f.key == "app_id");
+    assert!(app_id.is_some(), "百度 schema 应含 app_id 字段");
+    let app_id = app_id.unwrap();
+    assert!(!app_id.is_secret, "app_id 应为非密字段");
+    assert!(app_id.required, "app_id 应为必填");
+
+    // Assert：必须含 secret_key
+    let secret_key = fields.iter().find(|f| f.key == "secret_key");
+    assert!(secret_key.is_some(), "百度 schema 应含 secret_key 字段");
+    let secret_key = secret_key.unwrap();
+    assert!(secret_key.is_secret, "secret_key 应为 secret 字段");
+    assert!(secret_key.required, "secret_key 应为必填");
+}
+
+/// A05-b：DeepL schema 含 auth_key(密必填)
+#[test]
+fn credential_schema_keychain_deepl_has_auth_key() {
+    // Arrange + Act
+    let fields = credential_schema("deepl_free");
+
+    // Assert
+    let auth_key = fields.iter().find(|f| f.key == "auth_key");
+    assert!(auth_key.is_some(), "DeepL schema 应含 auth_key");
+    let auth_key = auth_key.unwrap();
+    assert!(auth_key.is_secret, "auth_key 应为 secret");
+    assert!(auth_key.required, "auth_key 应为必填");
+}
+
+/// A05-c：Google schema 含 api_key(密必填)
+#[test]
+fn credential_schema_keychain_google_has_api_key() {
+    // Arrange + Act
+    let fields = credential_schema("google");
+
+    // Assert
+    let api_key = fields.iter().find(|f| f.key == "api_key");
+    assert!(api_key.is_some(), "Google schema 应含 api_key");
+    let api_key = api_key.unwrap();
+    assert!(api_key.is_secret, "api_key 应为 secret");
+    assert!(api_key.required, "api_key 应为必填");
+}
+
+/// A05-d：MyMemory schema 含 email(非密可选)
+#[test]
+fn credential_schema_keychain_mymemory_has_optional_email() {
+    // Arrange + Act
+    let fields = credential_schema("mymemory");
+
+    // Assert
+    let email = fields.iter().find(|f| f.key == "email");
+    assert!(email.is_some(), "MyMemory schema 应含 email");
+    let email = email.unwrap();
+    assert!(!email.is_secret, "email 应为非密字段");
+    assert!(!email.required, "email 应为可选");
+}
+
+/// A05-e：save 百度凭据后，secret_key 存 MockCredStore 可读回，app_id 存 DB 可读回；
+///         路由正确：secret_key 不在 DB，app_id 不在 store（不触碰 OS keychain）。
+#[test]
+fn credential_schema_keychain_secret_routes_to_keychain_non_secret_routes_to_db() {
+    // Arrange
+    let store = MockCredStore::new();
+    let dir = tempdir().expect("tempdir 应成功");
+    let db_path = dir.path().join("cred_test.db");
+    let conn = db::open_or_create(&db_path, &TEST_DB_KEY).expect("建库应成功");
+
+    let values = vec![
+        ("app_id", "my_app_123"),
+        ("secret_key", "super_secret_456"),
+    ];
+
+    // Act
+    save_credentials("baidu", &values, &store, &conn).expect("save_credentials 应成功");
+
+    // Assert：secret_key 存在 store（可读回且值一致）
+    let kc_val = store
+        .get_secret("baidu", "secret_key")
+        .expect("get_secret 不应返回 Err");
+    assert_eq!(
+        kc_val,
+        Some("super_secret_456".to_string()),
+        "store 中 secret_key 值应与写入一致"
+    );
+
+    // Assert：app_id 存在 DB（可读回）
+    let db_val: String = conn
+        .query_row(
+            "SELECT value FROM provider_config WHERE provider_id = 'baidu' AND field_key = 'app_id'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("DB 中应能读回 app_id");
+    assert_eq!(db_val, "my_app_123", "DB 中 app_id 值应与写入一致");
+
+    // Assert：路由正确——secret_key 不在 DB
+    let secret_in_db: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM provider_config WHERE provider_id = 'baidu' AND field_key = 'secret_key'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("查询应成功");
+    assert_eq!(secret_in_db, 0, "secret_key 绝不应写入 DB（路由正确性）");
+
+    // Assert：路由正确——app_id 不在 store
+    assert!(
+        !store.contains_key("baidu", "app_id"),
+        "app_id 不应写入 store（路由正确性）"
+    );
+}
+
+/// A05-f：load_credentials 读回 save 写入的完整凭据（store + DB 均能读回）
+#[test]
+fn credential_schema_keychain_load_returns_saved_values() {
+    // Arrange
+    let store = MockCredStore::new();
+    let dir = tempdir().expect("tempdir 应成功");
+    let db_path = dir.path().join("cred_load_test.db");
+    let conn = db::open_or_create(&db_path, &TEST_DB_KEY).expect("建库应成功");
+
+    let values = vec![
+        ("app_id", "load_app_id"),
+        ("secret_key", "load_secret"),
+    ];
+    save_credentials("baidu", &values, &store, &conn).expect("save 应成功");
+
+    // Act
+    let loaded = load_credentials("baidu", &store, &conn).expect("load_credentials 应成功");
+
+    // Assert：两个字段均能读回
+    let app_id = loaded.iter().find(|(k, _)| k == "app_id");
+    assert!(app_id.is_some(), "load 应包含 app_id");
+    assert_eq!(app_id.unwrap().1, "load_app_id");
+
+    let secret_key = loaded.iter().find(|(k, _)| k == "secret_key");
+    assert!(secret_key.is_some(), "load 应包含 secret_key");
+    assert_eq!(secret_key.unwrap().1, "load_secret");
+}
+
+// A05 负向用例（对应 I-1/I-3 修复）
+
+/// A05-g：未知 provider_id 调 save_credentials 应返回 UnknownProvider 错误，而非静默写入。
+#[test]
+fn credential_schema_keychain_unknown_provider_returns_err() {
+    // Arrange
+    let store = MockCredStore::new();
+    let dir = tempdir().expect("tempdir 应成功");
+    let db_path = dir.path().join("cred_neg_provider.db");
+    let conn = db::open_or_create(&db_path, &TEST_DB_KEY).expect("建库应成功");
+
+    let values = vec![("some_field", "some_value")];
+
+    // Act
+    let result = save_credentials("nonexistent_provider", &values, &store, &conn);
+
+    // Assert：应返回错误，不静默成功
+    assert!(result.is_err(), "未知 provider 应返回 Err");
+    assert!(
+        matches!(result.unwrap_err(), CredError::UnknownProvider(_)),
+        "应为 UnknownProvider 变体"
+    );
+}
+
+/// A05-h：百度 provider 传未在 schema 中的 field_key 应返回 UnknownField 错误，
+///         且该值未写入 DB（证明不静默降级）。
+#[test]
+fn credential_schema_keychain_unknown_field_returns_err_and_does_not_write_db() {
+    // Arrange
+    let store = MockCredStore::new();
+    let dir = tempdir().expect("tempdir 应成功");
+    let db_path = dir.path().join("cred_neg_field.db");
+    let conn = db::open_or_create(&db_path, &TEST_DB_KEY).expect("建库应成功");
+
+    // "secret_keys" 不在百度 schema（正确 key 为 "secret_key"，单数）
+    let values = vec![("secret_keys", "typo_value")];
+
+    // Act
+    let result = save_credentials("baidu", &values, &store, &conn);
+
+    // Assert：应返回错误
+    assert!(result.is_err(), "未知 field_key 应返回 Err");
+    assert!(
+        matches!(result.unwrap_err(), CredError::UnknownField { .. }),
+        "应为 UnknownField 变体"
+    );
+
+    // Assert：值未写入 DB（不静默降级）
+    let count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM provider_config WHERE provider_id = 'baidu' AND field_key = 'secret_keys'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("查询应成功");
+    assert_eq!(count, 0, "未知 field_key 的值不应写入 DB（不静默降级）");
 }

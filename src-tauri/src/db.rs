@@ -420,6 +420,15 @@ fn ensure_schema(conn: &Connection) -> Result<(), DbError> {
             is_deleted        INTEGER NOT NULL DEFAULT 0,  -- 墓碑
             deleted_at_utc    INTEGER                      -- 软删时间
         );
+
+        -- provider 非密凭据表（§十预埋铁律）
+        -- secret 字段绝不入库（路由到 keychain），此表只存 is_secret=false 的字段
+        CREATE TABLE IF NOT EXISTS provider_config (
+            provider_id  TEXT NOT NULL,
+            field_key    TEXT NOT NULL,
+            value        TEXT NOT NULL,
+            PRIMARY KEY (provider_id, field_key)
+        );
         ",
     )?;
     Ok(())
