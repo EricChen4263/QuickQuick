@@ -4,6 +4,7 @@
 //! 缓存、限流、凭据、重试、超时、取消等横切关注点不在 trait 上，
 //! 由核心框架层（后续小功能 s03–s05）实现。
 
+pub mod lang;
 mod providers;
 
 pub use providers::registry;

@@ -2,14 +2,16 @@
 //!
 //! 覆盖：
 //! - V2-F1-A01 provider_trait_contract：薄 provider 契约三件职责可用，缓存/限流等不在 trait 上
+//! - V2-F1-A02 lang_normalize_and_direction：语言归一，本地检测定方向，BCP-47，provider 映射表
 //! - V2-F1-A08 static_registry_lists_four：静态注册表枚举 4 家 provider
 
 use quickquick_lib::translate::{
     Lang, ProviderCapability, ProviderHttpRequest, TranslateError, TranslateProvider,
     TranslateRequest, TranslateResponse, registry,
 };
+use quickquick_lib::translate::lang::{detect_is_chinese, detect_lang, map_lang_for_provider, resolve_direction};
 
-// ──────────── 测试用 stub provider ────────────
+// 测试用 stub provider
 
 /// 最小 stub provider，仅实现 trait 规定的三件职责。
 /// 缓存、限流、凭据、重试、超时、取消均不在此 trait 上——由核心框架横切（后续小功能实现）。
@@ -45,7 +47,7 @@ impl TranslateProvider for StubProvider {
     }
 }
 
-// ────────── V2-F1-A01 provider_trait_contract ──────────
+// V2-F1-A01 provider_trait_contract
 
 /// A01：薄 provider 契约——三件职责均可调用，且不含缓存/限流/凭据等横切关注点。
 #[test]
@@ -123,7 +125,7 @@ fn provider_contract_parse_response_returns_error_on_missing_field() {
     assert!(matches!(result.unwrap_err(), TranslateError::ParseError(_)));
 }
 
-// ────────── V2-F1-A08 static_registry_lists_four ──────────
+// V2-F1-A08 static_registry_lists_four
 
 /// A08：静态注册表枚举 4 家 provider。
 #[test]
@@ -199,4 +201,192 @@ fn static_registry_keyed_providers_need_key() {
             cap.id
         );
     }
+}
+
+// V2-F1-A02 lang_normalize_and_direction
+
+/// A02-a：detect_is_chinese 对中文串返回 true，对纯英文串返回 false。
+#[test]
+fn lang_norm_detect_is_chinese_returns_true_for_cjk_text() {
+    // Arrange
+    let chinese_text = "你好，世界！";
+
+    // Act
+    let result = detect_is_chinese(chinese_text);
+
+    // Assert
+    assert!(result, "含 CJK 字符的串应判定为中文");
+}
+
+#[test]
+fn lang_norm_detect_is_chinese_returns_false_for_ascii_text() {
+    // Arrange
+    let english_text = "Hello, world!";
+
+    // Act
+    let result = detect_is_chinese(english_text);
+
+    // Assert
+    assert!(!result, "纯 ASCII 串不应判定为中文");
+}
+
+#[test]
+fn lang_norm_detect_is_chinese_returns_false_for_japanese_kana() {
+    // Arrange：片假名不属于 CJK 统一表意文字区
+    let kana_text = "こんにちは";
+
+    // Act
+    let result = detect_is_chinese(kana_text);
+
+    // Assert：假名不在 CJK 表意文字区间，应返回 false
+    assert!(!result, "纯假名不应判定为中文");
+}
+
+#[test]
+fn lang_norm_detect_is_chinese_returns_true_for_mixed_text() {
+    // Arrange：中英混合文本，含 CJK 字符即判中文（§4.3）
+    let mixed_text = "hello 你好";
+
+    // Act
+    let result = detect_is_chinese(mixed_text);
+
+    // Assert
+    assert!(result, "含 CJK 字符的混合文本应判定为中文");
+}
+
+/// A02-b：resolve_direction——中文输入 → (zh, en)；英文输入 → (en, zh)；configured_target 覆盖默认。
+#[test]
+fn lang_norm_direction_chinese_input_targets_english() {
+    // Arrange
+    let chinese_text = "今天天气很好";
+
+    // Act
+    let (source, target) = resolve_direction(chinese_text, None);
+
+    // Assert
+    assert_eq!(source.as_str(), "zh", "中文输入源语言应为 zh");
+    assert_eq!(target.as_str(), "en", "中文输入默认目标应为 en");
+}
+
+#[test]
+fn lang_norm_direction_english_input_targets_chinese() {
+    // Arrange
+    let english_text = "The weather is nice today";
+
+    // Act
+    let (source, target) = resolve_direction(english_text, None);
+
+    // Assert
+    assert_eq!(source.as_str(), "en", "英文输入源语言应为 en");
+    assert_eq!(target.as_str(), "zh", "英文输入默认目标应为 zh");
+}
+
+#[test]
+fn lang_norm_direction_configured_target_overrides_default() {
+    // Arrange：英文输入，但用户指定目标为日语
+    let english_text = "Hello";
+    let configured = Some(Lang::new("ja"));
+
+    // Act
+    let (source, target) = resolve_direction(english_text, configured);
+
+    // Assert
+    assert_eq!(source.as_str(), "en", "源语言仍应检测为 en");
+    assert_eq!(target.as_str(), "ja", "configured_target 应覆盖默认目标");
+}
+
+/// A02-c：map_lang_for_provider——zh/zh-CN/zh-Hans 经各 provider 映射表归一。
+#[test]
+fn lang_norm_deepl_maps_zh_variants_to_zh_uppercase() {
+    // Arrange：DeepL 期望大写 "ZH"
+    let zh = Lang::new("zh");
+    let zh_cn = Lang::new("zh-CN");
+    let zh_hans = Lang::new("zh-Hans");
+
+    // Act + Assert：三种中文变体都应映射到 DeepL 的 "ZH"
+    assert_eq!(map_lang_for_provider("deepl_free", &zh), "ZH");
+    assert_eq!(map_lang_for_provider("deepl_free", &zh_cn), "ZH");
+    assert_eq!(map_lang_for_provider("deepl_free", &zh_hans), "ZH");
+}
+
+#[test]
+fn lang_norm_deepl_maps_en_to_en_uppercase() {
+    // Arrange
+    let en = Lang::new("en");
+
+    // Act
+    let result = map_lang_for_provider("deepl_free", &en);
+
+    // Assert
+    assert_eq!(result, "EN", "DeepL 英语代码应为大写 EN");
+}
+
+#[test]
+fn lang_norm_mymemory_maps_zh_variants_to_zh_cn() {
+    // Arrange：MyMemory 期望 "zh-CN"
+    let zh = Lang::new("zh");
+    let zh_hans = Lang::new("zh-Hans");
+
+    // Act + Assert
+    assert_eq!(map_lang_for_provider("mymemory", &zh), "zh-CN");
+    assert_eq!(map_lang_for_provider("mymemory", &zh_hans), "zh-CN");
+}
+
+#[test]
+fn lang_norm_baidu_maps_zh_variants_to_zh() {
+    // Arrange：百度期望 "zh"
+    let zh_cn = Lang::new("zh-CN");
+    let zh_hans = Lang::new("zh-Hans");
+
+    // Act + Assert
+    assert_eq!(map_lang_for_provider("baidu", &zh_cn), "zh");
+    assert_eq!(map_lang_for_provider("baidu", &zh_hans), "zh");
+}
+
+#[test]
+fn lang_norm_google_maps_zh_variants_to_zh_cn() {
+    // Arrange：Google 期望 "zh-CN"
+    let zh = Lang::new("zh");
+    let zh_hans = Lang::new("zh-Hans");
+
+    // Act + Assert
+    assert_eq!(map_lang_for_provider("google", &zh), "zh-CN");
+    assert_eq!(map_lang_for_provider("google", &zh_hans), "zh-CN");
+}
+
+#[test]
+fn lang_norm_unknown_provider_passes_through_lang_as_is() {
+    // Arrange：未知 provider 应原样返回内部代码，不 panic
+    let lang = Lang::new("fr");
+
+    // Act
+    let result = map_lang_for_provider("unknown_provider", &lang);
+
+    // Assert
+    assert_eq!(result, "fr", "未知 provider 应原样透传语言代码");
+}
+
+/// detect_lang 至少能区分中文与非中文。
+#[test]
+fn lang_norm_detect_lang_returns_zh_for_chinese() {
+    // Arrange
+    let text = "这是中文";
+
+    // Act
+    let lang = detect_lang(text);
+
+    // Assert
+    assert_eq!(lang.as_str(), "zh", "中文文本应检测为 zh");
+}
+
+#[test]
+fn lang_norm_detect_lang_returns_en_for_ascii() {
+    // Arrange
+    let text = "This is English";
+
+    // Act
+    let lang = detect_lang(text);
+
+    // Assert：ASCII 文本默认检测为 en
+    assert_eq!(lang.as_str(), "en", "ASCII 文本应检测为 en");
 }
