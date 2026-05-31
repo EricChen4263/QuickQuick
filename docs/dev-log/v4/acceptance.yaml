@@ -141,7 +141,7 @@ acceptance:
     verify: { type: test_id, ref: design-tokens, runner: "pnpm test design-tokens", path: src/theme/design-tokens.test.ts, expect: pass }
     evidence_ref: docs/dev-log/v4/f3-tray-design/s11-design-tokens/test.md
     level: 小功能
-    status: 待验
+    status: 已验通过
   - id: V4-F3-A13
     assertion: "主窗口/弹窗动效与材质手感：弹窗毛玻璃 + 主窗实色 + 克制即时动效（淡入+轻微缩放 <150ms 无弹跳）"
     category: 人工确认点

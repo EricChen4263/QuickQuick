@@ -136,3 +136,12 @@ pending:
     added_at: 2026-06-01T01:10:00Z
     status: 待确认
     note: "已删 conf 的 app.trayIcon、配置守卫测试（加回即变红）objective 拦回归；真机目视确认仅一个图标 + 托盘交互正常需运行确认。"
+
+  - acceptance_id: V4-F3-A13
+    version: V4
+    assertion: "主窗口/弹窗动效与材质手感：弹窗毛玻璃 + 主窗实色 + 克制即时动效（淡入+轻微缩放 <150ms 无弹跳）"
+    source_anchor: 设计文档§九.1（材质质感 + 动效）
+    evidence_ref: docs/dev-log/v4/f3-tray-design/s11-design-tokens/（theme.css 毛玻璃/实色已 objective 测内容存在；动效手感需运行确认）
+    added_at: 2026-06-01T01:25:00Z
+    status: 待确认
+    note: "theme.css 的毛玻璃(.qq-popover backdrop-filter)+主窗实色(.qq-main)内容已 grep 实证；动效 <150ms 无弹跳的手感属审美，AI/headless 判不准，需运行确认。darkTheme.accent #5B9FC4 对比度约 4.6:1(AA)，如审美需微调改一处即可。"
