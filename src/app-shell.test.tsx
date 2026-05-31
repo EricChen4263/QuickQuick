@@ -14,6 +14,14 @@ vi.mock("@tauri-apps/api/window", () => ({
   }),
 }));
 
+// Mock IPC client：listClipItems 返回永远 pending 的 Promise，避免 ClipboardPage 挂载后
+// 异步 state 更新在 act() 边界外触发警告。app-shell 测试只验证导航结构，不关心剪贴板数据。
+vi.mock("./ipc/ipc-client", () => ({
+  listClipItems: vi.fn().mockReturnValue(new Promise(() => {})),
+  deleteClipItem: vi.fn().mockResolvedValue(undefined),
+  toggleFavoriteClip: vi.fn().mockResolvedValue(undefined),
+}));
+
 // V4-F2-A06: 主窗口外壳渲染测试（jsdom + @testing-library/react）
 describe("app-shell", () => {
   beforeEach(() => {

@@ -3,6 +3,7 @@ import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { topLevelEntries, type TopLevel } from "./main-window/nav";
 import { type HotkeyTrigger } from "./shell/windowRoute";
+import ClipboardPage from "./panels/clipboard/ClipboardPage";
 import "./theme/theme.css";
 
 /** 热键路由 payload 类型（与后端 emit 的字符串对应） */
@@ -42,6 +43,8 @@ function App() {
       } else {
         unlisten = fn;
       }
+    }).catch((err: unknown) => {
+      console.error("[QuickQuick] route 监听注册失败:", err);
     });
 
     return () => {
@@ -87,7 +90,7 @@ function App() {
           data-testid="page-clipboard"
           style={{ display: activeTop === "clipboard" ? "block" : "none" }}
         >
-          剪贴板
+          <ClipboardPage />
         </section>
         <section
           data-testid="page-translate"
