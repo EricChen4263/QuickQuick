@@ -147,3 +147,106 @@ test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
 | 边界探测 | 通过：超长 id、SQL 注入字符均安全处理，无 panic |
 
 无失败项，无覆盖缺口，工作树干净。V4/F1/S01 硬门禁**通过**，可进入下一小功能。
+
+---
+
+## 打回修复 R2 验证（producer 打回：并发 flaky rowid DESC 兜底）
+
+执行时间：2026-06-01
+被测修复：`src-tauri/src/db.rs` — `list_items_full`（行 251）与 `list_ordered`（行 321）ORDER BY 追加 `, rowid DESC` 确定性兜底
+
+开工快照（git status --porcelain）：
+```
+ M docs/dev-log/v4/f1-ipc/s01-clip-cmd/coding.md
+ M src-tauri/src/db.rs
+```
+
+---
+
+### 档位一：命中校验 + 抗 flaky（全量连跑 6 次）
+
+命令：`cargo test --manifest-path src-tauri/Cargo.toml`（全量）
+
+| 次数 | exit | FAILED | 结论 |
+|------|------|--------|------|
+| RUN1 | 0 | 0 | 全绿 |
+| RUN2 | 0 | 0 | 全绿 |
+| RUN3 | 0 | 0 | 全绿 |
+| RUN4 | 0 | 0 | 全绿 |
+| RUN5 | 0 | 0 | 全绿 |
+| RUN6 | 0 | 0 | 全绿 |
+
+每次约 22 个测试套、合计数百测试，`ipc_clipboard_toggle_favorite_puts_item_first` 6 次均 ok，无任何 FAILED。
+
+clippy：`cargo clippy --all-targets -- -D warnings` → exit 0，无 error/warning。
+
+pnpm test：17 个测试文件，141 个测试，全绿，前端无回归。
+
+**档位一结论：通过。抗 flaky 6 连跑零 FAILED，clippy 干净，pnpm test 全绿。**
+
+---
+
+### 档位二：变异 sanity（验 rowid DESC 兜底必要性）
+
+改坏操作：去掉 `list_items_full` 行 251 的 `, rowid DESC`（仅保留 `ORDER BY is_favorite DESC, last_modified_utc DESC`）
+
+- 备份：`cp src-tauri/src/db.rs /tmp/db.rs.bak`（改前）
+- 变异：`sed -i '' '251s/, rowid DESC//'`
+- 连跑 8 次全量 `cargo test`：
+
+| 次数 | exit | FAILED | 失败测试 |
+|------|------|--------|---------|
+| RUN1 | 0 | 0 | — |
+| **RUN2** | **101** | **1** | **`ipc_clipboard_toggle_favorite_puts_item_first ... FAILED`** |
+| RUN3 | 0 | 0 | — |
+| RUN4 | 0 | 0 | — |
+| RUN5 | 0 | 0 | — |
+| RUN6 | 0 | 0 | — |
+| RUN7 | 0 | 0 | — |
+| RUN8 | 0 | 0 | — |
+
+**第 2 次命中 flaky**，`ipc_clipboard_toggle_favorite_puts_item_first` 如期 FAILED。证明：
+1. 去掉 `rowid DESC` 后，同毫秒并列时排序不确定，测试偶发失败
+2. 该测试非恒真/旁路，对 rowid DESC 兜底有真实判别力
+3. `rowid DESC` 修复是必要且有效的
+
+复原：`cp /tmp/db.rs.bak src-tauri/src/db.rs`（从备份，未用 git checkout/restore）
+复原验证：行 251 重现 `ORDER BY is_favorite DESC, last_modified_utc DESC, rowid DESC`
+
+结束 git status：
+```
+ M docs/dev-log/v4/f1-ipc/s01-clip-cmd/coding.md
+ M src-tauri/src/db.rs
+```
+与开工快照逐行一致，无新增/丢失。
+
+**档位二结论：通过。去掉兜底后第 2 次即暴露 flaky，测试有真实判别力；已从备份复原，git 快照一致。**
+
+---
+
+### 档位三：边界探测
+
+边界验证（通过阅读测试逻辑 + 修复后最终全量确认）：
+
+| 边界场景 | 验证方式 | 结论 |
+|---------|---------|------|
+| 多条同 favorite=1 时内部按 last_modified_utc DESC + rowid DESC 稳定 | 现有测试 `ipc_clipboard_toggle_favorite_puts_item_first` 覆盖（最新收藏排最前） | 通过 |
+| 收藏项整体置顶于非收藏项 | 现有测试 `ipc_clipboard_toggle_favorite_puts_item_first` 覆盖 | 通过 |
+| 取消收藏后回归 last_modified 排序 | 现有测试 `ipc_clipboard_toggle_favorite_unset_restores_order` 覆盖 | 通过 |
+| 同毫秒并列时 rowid 确定性兜底 | 变异 sanity 8次连跑已验证（去掉后第2次 flaky）| 通过 |
+
+**档位三结论：通过。收藏置顶、组内稳定、取消恢复均有测试覆盖；并发并列场景已由变异 sanity 验证。**
+
+---
+
+## 门禁结论（R2 修复）：**放行**
+
+| 档位 | 结论 |
+|------|------|
+| 命中校验 + 抗 flaky（全量 6 连跑）| 通过：6 次全绿，零 FAILED，`ipc_clipboard_toggle_favorite_puts_item_first` 稳定 |
+| clippy | 通过：exit 0，无 warning/error |
+| pnpm test | 通过：141 个前端测试全绿，无回归 |
+| 变异 sanity（去 rowid DESC）| 通过：第 2 次命中 flaky，证明兜底必要且有效；已复原，git 干净 |
+| 边界探测 | 通过：收藏置顶、排序稳定、并发并列均覆盖 |
+
+无失败项，无覆盖缺口，工作树干净。R2 打回修复验证**通过**，硬门禁放行。

@@ -238,6 +238,9 @@ pub struct ClipItemRow {
 ///
 /// 与 `list_ordered` 排序规则相同，但返回前端展示所需的全量字段。
 ///
+/// 排序兜底：`rowid DESC` 确保同毫秒并列时最后插入的条目稳定排前，
+/// 消除并发测试下因时间戳精度导致的不确定顺序（flaky 根因：同毫秒两次 ingest）。
+///
 /// # Errors
 /// `DbError::Sqlite`：SQL 执行失败
 pub fn list_items_full(conn: &Connection) -> Result<Vec<ClipItemRow>, DbError> {
@@ -245,7 +248,7 @@ pub fn list_items_full(conn: &Connection) -> Result<Vec<ClipItemRow>, DbError> {
         "SELECT id, content, kind, is_favorite, last_modified_utc
          FROM clip_items
          WHERE is_deleted = 0
-         ORDER BY is_favorite DESC, last_modified_utc DESC",
+         ORDER BY is_favorite DESC, last_modified_utc DESC, rowid DESC",
     )?;
     let rows = stmt.query_map([], |row| {
         let id: String = row.get(0)?;
@@ -303,9 +306,10 @@ pub fn set_favorite(conn: &Connection, id: &str, fav: bool) -> Result<(), DbErro
 
 /// 返回未软删条目的排序列表：收藏优先，组内按最近修改时间降序。
 ///
-/// 排序规则：`ORDER BY is_favorite DESC, last_modified_utc DESC`
+/// 排序规则：`ORDER BY is_favorite DESC, last_modified_utc DESC, rowid DESC`
 /// - 收藏项（is_favorite=1）整体排在非收藏项（is_favorite=0）之前
 /// - 同组内按 last_modified_utc 从新到旧排列
+/// - `rowid DESC` 兜底：同毫秒并列时最后插入的条目稳定排前，保证确定性
 ///
 /// # Errors
 /// `DbError::Sqlite`：SQL 执行失败
@@ -314,7 +318,7 @@ pub fn list_ordered(conn: &Connection) -> Result<Vec<ClipRow>, DbError> {
         "SELECT id, is_favorite, last_modified_utc
          FROM clip_items
          WHERE is_deleted = 0
-         ORDER BY is_favorite DESC, last_modified_utc DESC",
+         ORDER BY is_favorite DESC, last_modified_utc DESC, rowid DESC",
     )?;
     let rows = stmt.query_map([], |row| {
         let id: String = row.get(0)?;

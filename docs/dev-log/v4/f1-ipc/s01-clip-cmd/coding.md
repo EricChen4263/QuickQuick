@@ -87,3 +87,37 @@ test result: ok. 6 passed; 0 failed; 0 ignored
 - `ipc_input_validation_toggle_favorite_whitespace_id_returns_err`
 - `ipc_input_validation_delete_valid_nonexistent_id_passes_validation`
 - `ipc_input_validation_toggle_favorite_valid_id_passes_validation`
+
+## 打回修复 R2（producer V4-A-TESTS flaky 排序）
+
+修复时间：2026-06-01
+修复者：coder agent（claude-sonnet-4.6）
+
+### 根因
+
+`list_items_full` 与 `list_ordered` 的 ORDER BY 均为 `is_favorite DESC, last_modified_utc DESC`，缺少确定性兜底。全量并发测试下，同一测试内连续两次 `ingest` 调用的 `current_utc_ms()` 易落入同一毫秒，导致两行 `last_modified_utc` 并列，SQLite 在并列时返回顺序不定。`ipc_clipboard_toggle_favorite_puts_item_first` 断言"最新 ingest 的条目排第一"，约 1/4 概率偶发 FAILED。单独跑 `--test ipc_clipboard` 因无并发压力、每次 ingest 间距够大，稳定通过。与 V4-F1-A02 翻译历史倒序同毫秒并列是同一类根因。
+
+### 修法
+
+`src-tauri/src/db.rs` 中两处 ORDER BY 均追加 `, rowid DESC` 兜底：
+
+- `list_items_full`：`ORDER BY is_favorite DESC, last_modified_utc DESC, rowid DESC`
+- `list_ordered`：`ORDER BY is_favorite DESC, last_modified_utc DESC, rowid DESC`
+
+`rowid` 是 SQLite 隐式单调递增整数主键，同一毫秒并列时最后插入的行 rowid 最大，排在最前，与"最新条目排最前"语义完全一致。不改测试、不加 serial_test 串行化，改的是生产排序确定性。
+
+### 连跑 5 次全量测试结论
+
+| 轮次 | exit | FAILED |
+|---|---|---|
+| run1 | 0 | 无 |
+| run2 | 0 | 无 |
+| run3 | 0 | 无 |
+| run4 | 0 | 无 |
+| run5 | 0 | 无 |
+
+全量测试每次 5 个 test binary 共 115 个测试（5+32+10+67+1）全部通过，无 FAILED。
+
+ipc_clipboard 集成测试单独连跑 3 次，每次 8 passed（含 `ipc_clipboard_toggle_favorite_puts_item_first`），exit 0。
+
+clippy `--all-targets -D warnings` exit 0，无新 warning。
