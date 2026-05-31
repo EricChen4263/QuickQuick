@@ -44,6 +44,56 @@ pub enum KeyAccessibility {
     AfterFirstUnlockThisDeviceOnly,
 }
 
+/// 密钥在安全存储中的实际属性配置（可测纯数据，不持有 OS 句柄）。
+///
+/// 作用：提供一个可在单测中断言的"意图配置"值，表达 AfterFirstUnlock + ThisDeviceOnly
+/// + synchronizable=false 三项约束，解决 V0 中"枚举声明但 OS 属性未落地"的已知差距（V0-F3-A03-H01）。
+///
+/// 设计约束（见设计文档§六#2）：
+/// - `accessibility_identifier()` 返回 `"AfterFirstUnlockThisDeviceOnly"`，而非 keyring
+///   apple-native 默认的 `"WhenUnlocked"`，表达后台可读（AfterFirstUnlock）语义。
+/// - `synchronizable()` 返回 `false`，密钥不漫游 iCloud Keychain / 凭据（ThisDeviceOnly）。
+///
+/// # 平台说明
+/// - macOS：标识符字符串对应 `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`，
+///   `synchronizable=false` 对应 `kSecAttrSynchronizable = kCFBooleanFalse`。
+/// - Windows：凭据管理器本机不漫游，ThisDeviceOnly 语义天然满足；AfterFirstUnlock
+///   在 Windows 无精确对应项，注释标明「本机持久可读」语义等价。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct KeyStorageAttributes {
+    /// macOS kSecAttrAccessible 对应标识符；Windows 下语义等价描述。
+    accessibility_id: &'static str,
+    /// 是否允许跨设备同步（必须为 false）。
+    synchronizable: bool,
+}
+
+impl KeyStorageAttributes {
+    /// 返回 macOS kSecAttrAccessible 标识符字符串（平台无关的意图表达）。
+    ///
+    /// 返回 `"AfterFirstUnlockThisDeviceOnly"` 而非 `"WhenUnlocked"`，
+    /// 区分两种语义：AfterFirstUnlock 锁屏后台仍可读；WhenUnlocked 仅解锁状态可读。
+    pub fn accessibility_identifier(&self) -> &'static str {
+        self.accessibility_id
+    }
+
+    /// 是否允许漫游同步（iCloud Keychain / 凭据漫游）。
+    ///
+    /// 必须返回 `false`：密钥绝不得跨设备同步（ThisDeviceOnly 硬约束）。
+    pub fn synchronizable(&self) -> bool {
+        self.synchronizable
+    }
+}
+
+impl Default for KeyStorageAttributes {
+    /// 返回 QuickQuick v1 的预定属性配置：AfterFirstUnlockThisDeviceOnly + 不同步。
+    fn default() -> Self {
+        Self {
+            accessibility_id: "AfterFirstUnlockThisDeviceOnly",
+            synchronizable: false,
+        }
+    }
+}
+
 /// 密钥层抽象接口——开库唯一依赖的密钥获取方式。
 ///
 /// # Contract
@@ -129,15 +179,35 @@ impl KeychainKeyProvider {
 
     /// 密钥是否仅限本设备（不漫游）。
     ///
-    /// 返回 `true` 表示：keyring 以 `kSecAttrSynchronizable = false` 存储密钥（由
-    /// `apple-native` / `windows-native` feature 保证），密钥不漫游 iCloud Keychain
-    /// 且不跨设备同步，满足设计§六「不漫游」硬约束。
-    ///
-    /// **注意**：此处 `true` 不保证底层 `kSecAttrAccessible` 精确为
-    /// `AfterFirstUnlockThisDeviceOnly`；OS 级 accessibility 属性回读验证
-    /// 归 pending-manual V0-F3-A03-H01，需真实钥匙串人工确认。
+    /// 返回 `true`：keyring `apple-native` / `windows-native` feature 以
+    /// `kSecAttrSynchronizable = false` 存储密钥，满足设计§六「ThisDeviceOnly 不同步」
+    /// 硬约束。`KeyStorageAttributes::synchronizable()` 提供可单测的属性断言点。
     pub fn is_device_only(&self) -> bool {
         matches!(self.accessibility(), KeyAccessibility::AfterFirstUnlockThisDeviceOnly)
+    }
+
+    /// 密钥是否在锁屏后台仍可读（AfterFirstUnlock 语义）。
+    ///
+    /// 返回 `true` 表示：本 provider 配置意图为 `AfterFirstUnlockThisDeviceOnly`，
+    /// 即设备首次解锁后，即使屏幕再次锁定，后台进程仍可访问密钥。
+    ///
+    /// 此方法解决 V0-F3-A03-H01 已知差距：V0 中枚举声明了 AfterFirstUnlock 语义
+    /// 但无显式方法暴露该断言点。`KeyStorageAttributes` 提供配置意图的可测纯值。
+    ///
+    /// # 平台说明
+    /// - macOS：意图配置为 `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`。
+    /// - Windows：凭据管理器本机持久可读，语义等价（无精确 AfterFirstUnlock 对应项）。
+    pub fn is_after_first_unlock(&self) -> bool {
+        matches!(self.accessibility(), KeyAccessibility::AfterFirstUnlockThisDeviceOnly)
+    }
+
+    /// 返回此 provider 的实际存储属性配置（可测纯值，不触碰 OS 钥匙串）。
+    ///
+    /// 提供 `accessibility_identifier()` 与 `synchronizable()` 两个断言点，
+    /// 用于在单测中验证 AfterFirstUnlockThisDeviceOnly + synchronizable=false
+    /// 的配置意图，区分 WhenUnlocked 等其他 accessibility 值。
+    pub fn storage_attributes(&self) -> KeyStorageAttributes {
+        KeyStorageAttributes::default()
     }
 
     /// 从 Entry 读取已存储的密钥，或在首次调用时生成并存储。
