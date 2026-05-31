@@ -14,6 +14,7 @@ pub mod db;
 pub mod hotkey;
 pub mod image;
 pub mod keyprovider;
+pub mod onboarding;
 pub mod paste;
 pub mod portable;
 pub mod privacy;
