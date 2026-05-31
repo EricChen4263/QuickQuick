@@ -12,6 +12,7 @@ pub mod autostart;
 pub mod clipboard;
 pub mod db;
 pub mod hotkey;
+pub mod image;
 pub mod keyprovider;
 pub mod paste;
 pub mod privacy;

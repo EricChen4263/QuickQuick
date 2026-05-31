@@ -136,6 +136,12 @@ fn schema_preembed_columns_clip_images() {
         "clip_images 应含 is_deleted 列；实际列: {:?}",
         cols
     );
+    // Assert：图片字节哈希判重列（V3-F1-A01）
+    assert!(
+        cols.contains(&"image_hash".to_string()),
+        "clip_images 应含 image_hash 列（原图字节哈希判重）；实际列: {:?}",
+        cols
+    );
 }
 
 /// V0-F3-A05：插入 → soft_delete → 行仍在且 is_deleted=1 → gc 后物理消失

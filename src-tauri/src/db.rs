@@ -412,9 +412,10 @@ fn ensure_schema(conn: &Connection) -> Result<(), DbError> {
         CREATE TABLE IF NOT EXISTS clip_images (
             id                TEXT PRIMARY KEY NOT NULL,  -- UUID，永不复用
             clip_item_id      TEXT REFERENCES clip_items(id) ON DELETE CASCADE,
-            thumbnail         BLOB,                       -- 缩略图 BLOB
-            original          BLOB,                       -- 原图 BLOB
+            thumbnail         BLOB,                       -- 缩略图 BLOB（拆分存储）
+            original          BLOB,                       -- 原图 BLOB（拆分存储，原样无损）
             original_present  INTEGER NOT NULL DEFAULT 0, -- 1=有原图 0=仅缩略图（降级态）
+            image_hash        TEXT,                       -- 原图字节哈希，用于判重（FNV-1a 64-bit）
             created_utc       INTEGER NOT NULL,            -- UTC epoch ms
             last_modified_utc INTEGER NOT NULL,            -- UTC epoch ms
             is_deleted        INTEGER NOT NULL DEFAULT 0,  -- 墓碑
