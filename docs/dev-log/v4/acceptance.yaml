@@ -1,0 +1,192 @@
+# 版本前置验收标准清单（开工前登记、冻结）
+# 来源：从 docs/QuickQuick-设计文档.md §八/§九.1/§九.2/§九.3 机械派生——只翻译不发明、不放宽。
+# 主题：把 V0–V3 各自建好的「后端业务逻辑」与「前端纯逻辑」两座孤岛，
+#       经 IPC 桥 + 启动数据管道 + React 三页 UI 接成可用主窗口；并修托盘双图标、落设计语言。
+version: V4
+title: 主窗口 UI 落地（IPC 桥接 + 启动数据管道 + 三页 React UI + 托盘去重 + 设计语言）
+source_doc: docs/QuickQuick-设计文档.md
+frozen_at: 2026-05-31T23:30:00Z
+criteria_freeze: V4-criteria@2026-05-31
+
+coverage_check:
+  功能正确性:  covered
+  测试充分性:  covered
+  工程质量:    covered
+  性能:        N/A (本版无独立量化性能阈值；预热瞬开体感归人工确认点 A13/既有 pending)
+  UI还原度:    covered                                   # 三页视觉还原（A10，人工确认）
+  资源规范:    covered                                   # 设计 token 规格：峡湾青蓝/圆角/明暗（A12）
+  安全:        covered                                   # IPC 命令输入校验 + 不经 IPC 泄露密钥/明文（A14）
+  留痕产出:    covered
+  人工确认点:  covered
+
+acceptance:
+  # ===== V4-F1 IPC 桥接 + 启动数据管道 =====
+  - id: V4-F1-A01
+    assertion: "剪贴板 IPC 命令往返：暴露 list/soft_delete/set_favorite/筛选取数命令，命令层调既有 db 业务函数，给定库状态返回正确条目（含软删后不返回、收藏置位）"
+    category: 功能正确性
+    source_anchor: 设计文档§九.3（剪贴板页 列表+管理：多选删除/批量收藏/类型筛选）+ 既有 db.rs(list_ordered/soft_delete/set_favorite)
+    kind: objective
+    verify: { type: test_id, ref: ipc_clipboard, runner: "cargo test --manifest-path src-tauri/Cargo.toml ipc_clipboard", path: src-tauri/tests/ipc_clipboard.rs, expect: pass }
+    evidence_ref: docs/dev-log/v4/f1-ipc/s01-clip-cmd/test.md
+    level: 小功能
+    status: 待验
+  - id: V4-F1-A02
+    assertion: "翻译 IPC 命令往返：暴露 translate_text 命令，调既有 translate 逻辑返回 {译文, 方向}（智能双向：中→英 / 非中→中）"
+    category: 功能正确性
+    source_anchor: 设计文档§4.3（智能双向 + 译文呈现）+ §九.3（翻译页工作区）
+    kind: objective
+    verify: { type: test_id, ref: ipc_translate, runner: "cargo test --manifest-path src-tauri/Cargo.toml ipc_translate", path: src-tauri/tests/ipc_translate.rs, expect: pass }
+    evidence_ref: docs/dev-log/v4/f1-ipc/s02-translate-cmd/test.md
+    level: 小功能
+    status: 待验
+  - id: V4-F1-A03
+    assertion: "设置 IPC 命令往返：读写 热键绑定 / App 排除名单 / 翻译源 持久化，写入后再读回值一致"
+    category: 功能正确性
+    source_anchor: 设计文档§九.3（设置：热键/翻译源/隐私即 App 排除名单）+ §二（改键持久化）
+    kind: objective
+    verify: { type: test_id, ref: ipc_settings, runner: "cargo test --manifest-path src-tauri/Cargo.toml ipc_settings", path: src-tauri/tests/ipc_settings.rs, expect: pass }
+    evidence_ref: docs/dev-log/v4/f1-ipc/s03-settings-cmd/test.md
+    level: 小功能
+    status: 待验
+  - id: V4-F1-A04
+    assertion: "启动数据管道装配：捕获回调装配函数把 clipboard.poll_once 捕获项经 db.ingest 写入库（临时库往返：复制内容→入库→list 可见）；开库走 keyprovider 抽象"
+    category: 功能正确性
+    source_anchor: 设计文档§八（常驻预热 + 剪贴板捕获入库）+ §六（开库依赖 KeyProvider 抽象）
+    kind: objective
+    verify: { type: test_id, ref: boot_pipeline, runner: "cargo test --manifest-path src-tauri/Cargo.toml boot_pipeline", path: src-tauri/tests/boot_pipeline.rs, expect: pass }
+    evidence_ref: docs/dev-log/v4/f1-ipc/s04-boot-pipeline/test.md
+    level: 小功能
+    status: 待验
+  - id: V4-F1-A05
+    assertion: "前端 IPC 封装层：src/ipc 提供类型化 invoke 封装（列表/删除/收藏/翻译/设置），错误优雅返回（不裸抛 unknown），命令名与后端一致"
+    category: 功能正确性
+    source_anchor: 设计文档§九.3（前端各页取数依赖统一 IPC 通道）+ 前端规范（禁 any、错误有意义）
+    kind: objective
+    verify: { type: test_id, ref: ipc-client, runner: "pnpm test ipc-client", path: src/ipc/ipc-client.test.ts, expect: pass }
+    evidence_ref: docs/dev-log/v4/f1-ipc/s05-ipc-client/test.md
+    level: 小功能
+    status: 待验
+  - id: V4-F1-A14
+    assertion: "IPC 安全面：命令参数校验（非法 id/越界输入返回 Err 不 panic）+ 不经任何 IPC 命令暴露密钥/口令明文/原始密钥字节"
+    category: 安全
+    source_anchor: 全局安全红线（用户输入校验 + 不泄敏感 + 第三方/边界不 panic）+ 设计文档§六（密钥不外泄）
+    kind: objective
+    verify: { type: test_id, ref: ipc_input_validation, runner: "cargo test --manifest-path src-tauri/Cargo.toml ipc_input_validation", path: src-tauri/tests/ipc_validation.rs, expect: pass }
+    evidence_ref: docs/dev-log/v4/f1-ipc/s01-clip-cmd/test.md
+    level: 大功能
+    status: 待验
+
+  # ===== V4-F2 主窗口三页 React UI =====
+  - id: V4-F2-A06
+    assertion: "主窗口外壳：App 挂载左侧边栏一级三入口（剪贴板/翻译/设置），点击切换一级页、对应页 DOM 出现（渲染测试，非纯逻辑）；引入 jsdom/testing-library 渲染测试框架"
+    category: 功能正确性
+    source_anchor: 设计文档§九.3（左栏一级仅三入口）
+    kind: objective
+    verify: { type: test_id, ref: app-shell, runner: "pnpm test app-shell", path: src/app-shell.test.tsx, expect: pass }
+    evidence_ref: docs/dev-log/v4/f2-ui/s06-app-shell/test.md
+    level: 小功能
+    status: 待验
+  - id: V4-F2-A07
+    assertion: "剪贴板页渲染+交互：列表+右侧预览双栏渲染，接 IPC 数据显示条目；搜索框输入实时过滤、类型筛选下拉、↑↓键盘高亮接既有 search/filter/keyboard 逻辑生效（渲染测试断言 DOM 随交互变化）"
+    category: 功能正确性
+    source_anchor: 设计文档§九.2/§九.3（列表+预览双栏 + 类型筛选 + 键盘流）+ §八#4（搜索框常驻焦点+实时过滤）
+    kind: objective
+    verify: { type: test_id, ref: clipboard-page, runner: "pnpm test clipboard-page", path: src/panels/clipboard/clipboard-page.test.tsx, expect: pass }
+    evidence_ref: docs/dev-log/v4/f2-ui/s07-clipboard-page/test.md
+    level: 小功能
+    status: 待验
+  - id: V4-F2-A08
+    assertion: "翻译页渲染+交互：导航|工作|历史三栏渲染，工作区输入→调 IPC translate→显示原文/译文对照，翻译历史右栏点项回填工作区（渲染测试断言回填）"
+    category: 功能正确性
+    source_anchor: 设计文档§九.3（翻译页三栏：工作区主体+翻译历史右栏点项回填）+ §九.2（上下对照）
+    kind: objective
+    verify: { type: test_id, ref: translate-page, runner: "pnpm test translate-page", path: src/panels/translate/translate-page.test.tsx, expect: pass }
+    evidence_ref: docs/dev-log/v4/f2-ui/s08-translate-page/test.md
+    level: 小功能
+    status: 待验
+  - id: V4-F2-A09
+    assertion: "设置页渲染+交互：六子项纵向栏（通用/热键/翻译源/隐私/存储/关于）渲染，改键 UI 接 validateRebind 冲突当场拒绝并提示，隐私页 App 排除名单增删接 add/removeExcludedApp（渲染测试）"
+    category: 功能正确性
+    source_anchor: 设计文档§九.3（设置二级纵向 6 项）+ §二（改键冲突即时提示）+ §三（App 排除名单）
+    kind: objective
+    verify: { type: test_id, ref: settings-page, runner: "pnpm test settings-page", path: src/main-window/settings/settings-page.test.tsx, expect: pass }
+    evidence_ref: docs/dev-log/v4/f2-ui/s09-settings-page/test.md
+    level: 小功能
+    status: 待验
+  - id: V4-F2-A10
+    assertion: "主窗口三页视觉还原：剪贴板(列表+预览+管理)/翻译(导航|工作|历史三栏)/设置(子项栏+内容)布局还原，主窗实色、随系统明暗、峡湾青蓝"
+    category: UI还原度
+    source_anchor: 设计文档§九.1/§九.3（主窗口布局与设计语言）
+    kind: manual_confirm
+    verify: null
+    evidence_ref: docs/dev-log/v4/f2-ui/（三页截图对照，coder 收集）
+    level: 大功能
+    status: 待补证据
+
+  # ===== V4-F3 托盘去重 + 设计语言落地 =====
+  - id: V4-F3-A11
+    assertion: "托盘单一来源：tauri.conf.json 不再声明 app.trayIcon（消除自动建的第二个图标），托盘仅由 tray.rs 构建一个（带菜单）；配置守卫断言 conf 无 app.trayIcon 键"
+    category: 功能正确性
+    source_anchor: 设计文档§八（托盘常驻：单一托盘图标）+ 缺陷修复（conf 自动建 + 代码建 = 双图标）
+    kind: objective
+    verify: { type: test_id, ref: tray_single_source, runner: "cargo test --manifest-path src-tauri/Cargo.toml tray_single_source", path: src-tauri/tests/boot_smoke.rs, expect: pass }
+    evidence_ref: docs/dev-log/v4/f3-tray-design/s10-tray-single/test.md
+    level: 小功能
+    status: 待验
+  - id: V4-F3-A12
+    assertion: "设计语言 token 落地：主题模块导出并被页面引用 峡湾青蓝 #3A7CA5 / 中圆角 ~10px / 深浅双主题（CSS 变量随系统明暗），token 值与设计文档§九.1 一致"
+    category: 资源规范
+    source_anchor: 设计文档§九.1（品牌主色 #3A7CA5 / 中圆角 ~10px / 随系统明暗双主题）
+    kind: objective
+    verify: { type: test_id, ref: design-tokens, runner: "pnpm test design-tokens", path: src/theme/design-tokens.test.ts, expect: pass }
+    evidence_ref: docs/dev-log/v4/f3-tray-design/s11-design-tokens/test.md
+    level: 小功能
+    status: 待验
+  - id: V4-F3-A13
+    assertion: "主窗口/弹窗动效与材质手感：弹窗毛玻璃 + 主窗实色 + 克制即时动效（淡入+轻微缩放 <150ms 无弹跳）"
+    category: 人工确认点
+    source_anchor: 设计文档§九.1（材质质感 + 动效）
+    kind: manual_confirm
+    verify: null
+    evidence_ref: docs/dev-log/v4/f3-tray-design/（动效/材质录屏，coder 收集）
+    level: 大功能
+    status: 待补证据
+
+  # ===== 工程质量 / 测试充分性 / 留痕产出（版本级）=====
+  - id: V4-A-QUALITY
+    assertion: "工程质量基线：clippy 无警告(含测试) + tsc 无类型错误 + 无遗留 TODO/FIXME"
+    category: 工程质量
+    source_anchor: 全局规范（完成定义：lint/类型检查过 + 无遗留 TODO/FIXME）
+    kind: objective
+    verify: { type: command, ref: "cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings && pnpm exec tsc --noEmit && ! grep -rn 'TODO\\|FIXME' src src-tauri/src", expect: pass }
+    evidence_ref: docs/dev-log/v4/（各小功能 review/test）
+    level: 版本
+    status: 待验
+  - id: V4-A-TESTS
+    assertion: "测试充分性：后端 cargo test 全绿 + 前端 pnpm test 全绿（覆盖 IPC 往返/启动管道/三页渲染交互/托盘/设计 token）"
+    category: 测试充分性
+    source_anchor: 全局规范（完成定义：相关测试通过）+ 设计文档§八/§九
+    kind: objective
+    verify: { type: command, ref: "cargo test --manifest-path src-tauri/Cargo.toml && pnpm test", expect: pass }
+    evidence_ref: docs/dev-log/v4/（各小功能 test.md）
+    level: 版本
+    status: 待验
+  - id: V4-A-LOG
+    assertion: "本版每个小功能三联留痕齐 + 每个大功能报告齐"
+    category: 留痕产出
+    source_anchor: goal-dev-workflow 规范
+    kind: objective
+    verify: { type: script, ref: "for d in docs/dev-log/v4/f*/s*/; do test -f $d/coding.md && test -f $d/test.md && test -f $d/review.md || exit 1; done", expect: pass }
+    evidence_ref: docs/dev-log/v4/
+    level: 版本
+    status: 待验
+
+change_log:
+  - id: CL-V4-001
+    time: 2026-05-31T23:30:00Z
+    by: 编排器（版本启动织全三网）
+    item: [V4-F2-A06, V4-F1-A04, V4-F3-A11]
+    field: 派生说明（防假绿设计）
+    diff: "objective UI 项（A06/A07/A08/A09）一律用渲染测试（jsdom/testing-library 断言 DOM 随交互变化），不复用 V0–V3 的纯逻辑单测套路；A04 启动管道测可单测的装配函数（捕获回调→ingest 临时库往返），真实后台线程归 manual；A11 托盘以配置守卫（conf 无 app.trayIcon 键）objective 化。"
+    reason: "V0–V3 把渲染/集成全归 manual_confirm 致主窗口长期未建（本次缺陷根因）。V4 必须把'UI 真挂载、IPC 真通、托盘单一'变为可机检 objective 门禁，加严非放宽。"
+    source: 设计文档§八/§九 + goal-dev-workflow 三网 + 本轮缺陷复盘
