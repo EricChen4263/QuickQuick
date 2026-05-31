@@ -64,15 +64,10 @@ pub enum CredError {
 /// 测试实现：`MockCredStore`（内存 HashMap，headless 不弹窗）
 pub trait CredStore {
     /// 写入 secret（field_value 不得出现在任何日志/错误消息中）
-    fn set_secret(&self, provider_id: &str, field_key: &str, value: &str)
-        -> Result<(), CredError>;
+    fn set_secret(&self, provider_id: &str, field_key: &str, value: &str) -> Result<(), CredError>;
 
     /// 读取 secret；未找到时返回 None（不算错误）
-    fn get_secret(
-        &self,
-        provider_id: &str,
-        field_key: &str,
-    ) -> Result<Option<String>, CredError>;
+    fn get_secret(&self, provider_id: &str, field_key: &str) -> Result<Option<String>, CredError>;
 }
 
 /// 生产用 CredStore：调用 keyring crate 写 OS keychain。
@@ -81,12 +76,7 @@ pub trait CredStore {
 pub struct KeyringCredStore;
 
 impl CredStore for KeyringCredStore {
-    fn set_secret(
-        &self,
-        provider_id: &str,
-        field_key: &str,
-        value: &str,
-    ) -> Result<(), CredError> {
+    fn set_secret(&self, provider_id: &str, field_key: &str, value: &str) -> Result<(), CredError> {
         let account = keychain_account(provider_id, field_key);
         let entry = keyring::Entry::new("io.quickquick.app", &account)
             .map_err(|e| CredError::Keychain(e.to_string()))?;
@@ -95,11 +85,7 @@ impl CredStore for KeyringCredStore {
             .map_err(|e| CredError::Keychain(e.to_string()))
     }
 
-    fn get_secret(
-        &self,
-        provider_id: &str,
-        field_key: &str,
-    ) -> Result<Option<String>, CredError> {
+    fn get_secret(&self, provider_id: &str, field_key: &str) -> Result<Option<String>, CredError> {
         let account = keychain_account(provider_id, field_key);
         let entry = keyring::Entry::new("io.quickquick.app", &account)
             .map_err(|e| CredError::Keychain(e.to_string()))?;
@@ -182,12 +168,14 @@ pub fn save_credentials(
     }
 
     for (field_key, field_value) in values {
-        let field = schema.iter().find(|f| f.key == *field_key).ok_or_else(|| {
-            CredError::UnknownField {
-                provider: provider_id.to_string(),
-                field: field_key.to_string(),
-            }
-        })?;
+        let field =
+            schema
+                .iter()
+                .find(|f| f.key == *field_key)
+                .ok_or_else(|| CredError::UnknownField {
+                    provider: provider_id.to_string(),
+                    field: field_key.to_string(),
+                })?;
 
         if field.is_secret {
             store.set_secret(provider_id, field_key, field_value)?;

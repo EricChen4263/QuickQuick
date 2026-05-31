@@ -36,9 +36,17 @@ pub fn map_provider_error(http_status: u16, provider_code: Option<&str>) -> Tran
 /// 使用精确集合匹配而非子串 contains，避免 `quota_remaining`/`unsupported_format` 等
 /// 含相同子串但语义不同的 code 被误命中。
 fn map_by_provider_code(code: &str) -> Option<TranslateError> {
-    const QUOTA_CODES: &[&str] = &["quota_exceeded", "insufficient_quota", "quota_limit_exceeded"];
+    const QUOTA_CODES: &[&str] = &[
+        "quota_exceeded",
+        "insufficient_quota",
+        "quota_limit_exceeded",
+    ];
     const TOO_LONG_CODES: &[&str] = &["text_too_long", "too_long", "content_too_large"];
-    const UNSUPPORTED_CODES: &[&str] = &["unsupported_lang", "unsupported_language", "language_not_supported"];
+    const UNSUPPORTED_CODES: &[&str] = &[
+        "unsupported_lang",
+        "unsupported_language",
+        "language_not_supported",
+    ];
 
     if QUOTA_CODES.contains(&code) {
         return Some(TranslateError::Quota(format!("配额超限: {code}")));

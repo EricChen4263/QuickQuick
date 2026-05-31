@@ -7,7 +7,9 @@
 //! - V1-F1-A04 dedup_and_bump       — 内容去重+置顶刷新
 //! - V1-F1-A05 bump_no_new_record   — 置顶刷新不产生新记录
 
-use quickquick_lib::clipboard::{CapturedItem, ClipboardBackend, ClipboardSnapshot, poll_once, poll_once_with_policy};
+use quickquick_lib::clipboard::{
+    poll_once, poll_once_with_policy, CapturedItem, ClipboardBackend, ClipboardSnapshot,
+};
 use quickquick_lib::db;
 use quickquick_lib::privacy::{CapturePolicy, ExcludeList};
 use tempfile::tempdir;
@@ -123,7 +125,10 @@ fn poll_count_reset_defense() {
     let result_on_reset = poll_once(&backend_reset, &mut last_seen);
 
     // Assert：降序不捕获
-    assert!(result_on_reset.is_none(), "计数降序（OS 重置）时应返回 None，不误捕");
+    assert!(
+        result_on_reset.is_none(),
+        "计数降序（OS 重置）时应返回 None，不误捕"
+    );
     assert_eq!(last_seen, 5, "降序时 last_seen_count 应下调为当前值 5");
 
     // Arrange：紧接着计数正向递增到 6
@@ -134,7 +139,10 @@ fn poll_count_reset_defense() {
 
     // Assert：正常捕获，证明重置后不漏
     let item = result_after_reset.expect("重置后计数递增应正常捕获");
-    assert_eq!(item.text, "normal capture", "重置后恢复的第一次变化应被捕获");
+    assert_eq!(
+        item.text, "normal capture",
+        "重置后恢复的第一次变化应被捕获"
+    );
     assert_eq!(last_seen, 6, "捕获后 last_seen_count 应更新为 6");
 
     // Act：再次调用同 count，证明不重复捕获
@@ -146,15 +154,21 @@ fn poll_count_reset_defense() {
 ///      原条目成为最前（top_id == 原 id），行数仍为 2。
 #[test]
 fn dedup_and_bump() {
-    use quickquick_lib::db::{IngestOutcome, bump_to_top, count_live, ingest, top_id};
+    use quickquick_lib::db::{bump_to_top, count_live, ingest, top_id, IngestOutcome};
 
     // Arrange
     let dir = tempdir().expect("tempdir 创建失败");
     let db_path = dir.path().join("quickquick.db");
     let conn = db::open_or_create(&db_path, &[7u8; 32]).expect("建库应成功");
 
-    let item_x = CapturedItem { text: "content-X".to_owned(), html: None };
-    let item_y = CapturedItem { text: "content-Y".to_owned(), html: None };
+    let item_x = CapturedItem {
+        text: "content-X".to_owned(),
+        html: None,
+    };
+    let item_y = CapturedItem {
+        text: "content-Y".to_owned(),
+        html: None,
+    };
 
     // Act 1：ingest X → Inserted，库中 1 条
     let outcome_x1 = ingest(&conn, &item_x).expect("ingest X 应成功");
@@ -162,14 +176,22 @@ fn dedup_and_bump() {
         IngestOutcome::Inserted(id) => id,
         IngestOutcome::Bumped(_) => panic!("首次 ingest X 应为 Inserted"),
     };
-    assert_eq!(count_live(&conn).expect("count_live"), 1, "ingest X 后应有 1 条");
+    assert_eq!(
+        count_live(&conn).expect("count_live"),
+        1,
+        "ingest X 后应有 1 条"
+    );
 
     // Act 2：ingest Y → Inserted，库中 2 条；持有 id_y 用于后续显式置顶（避免 top_id 时序依赖）
     let id_y = match ingest(&conn, &item_y).expect("ingest Y 应成功") {
         IngestOutcome::Inserted(id) => id,
         IngestOutcome::Bumped(_) => panic!("首次 ingest Y 应为 Inserted"),
     };
-    assert_eq!(count_live(&conn).expect("count_live"), 2, "ingest Y 后应有 2 条");
+    assert_eq!(
+        count_live(&conn).expect("count_live"),
+        2,
+        "ingest Y 后应有 2 条"
+    );
 
     // 将 Y 显式置顶，确保 Y 的 last_modified_utc 晚于 X（与插入顺序无关）
     bump_to_top(&conn, &id_y).expect("bump_to_top Y 应成功");
@@ -185,7 +207,11 @@ fn dedup_and_bump() {
     assert_eq!(bumped_id, id_x, "Bumped id 应与原 X 的 id 一致");
 
     // Assert：行数仍为 2（无新行）
-    assert_eq!(count_live(&conn).expect("count_live"), 2, "去重后行数应仍为 2");
+    assert_eq!(
+        count_live(&conn).expect("count_live"),
+        2,
+        "去重后行数应仍为 2"
+    );
 
     // Assert：X 现在是最前（last_modified_utc 最新）
     let top = top_id(&conn).expect("top_id").expect("应有最前条目");
@@ -195,15 +221,21 @@ fn dedup_and_bump() {
 /// A05：显式调 bump_to_top 不产生新记录，X 移到最前，行数仍为 2。
 #[test]
 fn bump_no_new_record() {
-    use quickquick_lib::db::{IngestOutcome, bump_to_top, count_live, ingest, top_id};
+    use quickquick_lib::db::{bump_to_top, count_live, ingest, top_id, IngestOutcome};
 
     // Arrange：插入 X、Y，共 2 条，Y 更新（置顶 Y）
     let dir = tempdir().expect("tempdir 创建失败");
     let db_path = dir.path().join("quickquick.db");
     let conn = db::open_or_create(&db_path, &[7u8; 32]).expect("建库应成功");
 
-    let item_x = CapturedItem { text: "bump-X".to_owned(), html: None };
-    let item_y = CapturedItem { text: "bump-Y".to_owned(), html: None };
+    let item_x = CapturedItem {
+        text: "bump-X".to_owned(),
+        html: None,
+    };
+    let item_y = CapturedItem {
+        text: "bump-Y".to_owned(),
+        html: None,
+    };
 
     let id_x = match ingest(&conn, &item_x).expect("ingest X") {
         IngestOutcome::Inserted(id) => id,
@@ -213,13 +245,21 @@ fn bump_no_new_record() {
         IngestOutcome::Inserted(_) => {}
         IngestOutcome::Bumped(_) => panic!("首次 ingest Y 应为 Inserted"),
     }
-    assert_eq!(count_live(&conn).expect("count_live 初始"), 2, "初始应有 2 条");
+    assert_eq!(
+        count_live(&conn).expect("count_live 初始"),
+        2,
+        "初始应有 2 条"
+    );
 
     // Act：显式 bump X 到最前
     bump_to_top(&conn, &id_x).expect("bump_to_top X 应成功");
 
     // Assert：行数仍为 2（没有新记录产生）
-    assert_eq!(count_live(&conn).expect("count_live 后"), 2, "bump 后行数应仍为 2，无新记录");
+    assert_eq!(
+        count_live(&conn).expect("count_live 后"),
+        2,
+        "bump 后行数应仍为 2，无新记录"
+    );
 
     // Assert：X 现在是最前
     let top = top_id(&conn).expect("top_id").expect("应有最前条目");
@@ -234,7 +274,10 @@ fn pause_stops_capture() {
     let backend = FakeBackend::new(3, Some("normal text"), None, false);
     let mut last_seen = 2u64;
     let exclude = ExcludeList::default();
-    let policy = CapturePolicy { paused: true, exclude: &exclude };
+    let policy = CapturePolicy {
+        paused: true,
+        exclude: &exclude,
+    };
 
     // Act
     let result = poll_once_with_policy(&backend, &mut last_seen, &policy);
@@ -251,7 +294,10 @@ fn pause_false_captures_normally() {
     let backend = FakeBackend::new(3, Some("normal text"), None, false);
     let mut last_seen = 2u64;
     let exclude = ExcludeList::default();
-    let policy = CapturePolicy { paused: false, exclude: &exclude };
+    let policy = CapturePolicy {
+        paused: false,
+        exclude: &exclude,
+    };
 
     // Act
     let result = poll_once_with_policy(&backend, &mut last_seen, &policy);
@@ -271,15 +317,21 @@ fn pause_false_captures_normally() {
 /// 若实现误删 is_favorite DESC，B 会因时间戳更新而排第一，测试失败。
 #[test]
 fn favorite_pin_sorted_first() {
-    use quickquick_lib::db::{IngestOutcome, bump_to_top, ingest, list_ordered, set_favorite};
+    use quickquick_lib::db::{bump_to_top, ingest, list_ordered, set_favorite, IngestOutcome};
 
     // Arrange：插入两条，A 先插（更旧），B 后插（更新）
     let dir = tempfile::tempdir().expect("tempdir 创建失败");
     let db_path = dir.path().join("quickquick.db");
     let conn = db::open_or_create(&db_path, &[7u8; 32]).expect("建库应成功");
 
-    let item_a = CapturedItem { text: "older-favorite".to_owned(), html: None };
-    let item_b = CapturedItem { text: "newer-normal".to_owned(), html: None };
+    let item_a = CapturedItem {
+        text: "older-favorite".to_owned(),
+        html: None,
+    };
+    let item_b = CapturedItem {
+        text: "newer-normal".to_owned(),
+        html: None,
+    };
 
     let id_a = match ingest(&conn, &item_a).expect("ingest A 应成功") {
         IngestOutcome::Inserted(id) => id,
@@ -315,16 +367,25 @@ fn favorite_pin_sorted_first() {
 /// 验收项 V1-F2-A11 favorite_pin_and_exempt（豁免清理部分）
 #[test]
 fn favorite_exempt_from_cleanup() {
-    use quickquick_lib::db::{IngestOutcome, cleanup_keep_recent, ingest, set_favorite};
+    use quickquick_lib::db::{cleanup_keep_recent, ingest, set_favorite, IngestOutcome};
 
     // Arrange：插入 3 条，其中 A 设为收藏；B、C 为普通条目
     let dir = tempfile::tempdir().expect("tempdir 创建失败");
     let db_path = dir.path().join("quickquick.db");
     let conn = db::open_or_create(&db_path, &[7u8; 32]).expect("建库应成功");
 
-    let item_a = CapturedItem { text: "fav-item-A".to_owned(), html: None };
-    let item_b = CapturedItem { text: "normal-item-B".to_owned(), html: None };
-    let item_c = CapturedItem { text: "normal-item-C".to_owned(), html: None };
+    let item_a = CapturedItem {
+        text: "fav-item-A".to_owned(),
+        html: None,
+    };
+    let item_b = CapturedItem {
+        text: "normal-item-B".to_owned(),
+        html: None,
+    };
+    let item_c = CapturedItem {
+        text: "normal-item-C".to_owned(),
+        html: None,
+    };
 
     let id_a = match ingest(&conn, &item_a).expect("ingest A 应成功") {
         IngestOutcome::Inserted(id) => id,

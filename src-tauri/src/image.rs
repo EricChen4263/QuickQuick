@@ -46,7 +46,9 @@ pub struct OversizePolicy {
 
 impl Default for OversizePolicy {
     fn default() -> Self {
-        Self { max_original_bytes: DEFAULT_MAX_ORIGINAL }
+        Self {
+            max_original_bytes: DEFAULT_MAX_ORIGINAL,
+        }
     }
 }
 
@@ -101,9 +103,15 @@ fn scale_to_max_edge(img: image::DynamicImage, max_edge: u32) -> image::DynamicI
     }
     // 等比缩放：target_w/h 按最长边比例计算
     let (target_w, target_h) = if w >= h {
-        (max_edge, (h as f64 * max_edge as f64 / w as f64).round() as u32)
+        (
+            max_edge,
+            (h as f64 * max_edge as f64 / w as f64).round() as u32,
+        )
     } else {
-        ((w as f64 * max_edge as f64 / h as f64).round() as u32, max_edge)
+        (
+            (w as f64 * max_edge as f64 / h as f64).round() as u32,
+            max_edge,
+        )
     };
     img.resize_exact(target_w, target_h, FilterType::Lanczos3)
 }
@@ -162,8 +170,8 @@ pub fn ingest_image_with_policy(
         return Ok(IngestImageOutcome::Bumped(id));
     }
 
-    let thumbnail = make_thumbnail(original)
-        .map_err(|e| DbError::Other(format!("缩略图生成失败: {e}")))?;
+    let thumbnail =
+        make_thumbnail(original).map_err(|e| DbError::Other(format!("缩略图生成失败: {e}")))?;
 
     let is_oversize = original.len() > policy.max_original_bytes;
     let (stored_original, original_present): (&[u8], i32) = if is_oversize {
@@ -190,10 +198,7 @@ pub fn ingest_image_with_policy(
 ///
 /// # Errors
 /// `DbError::Sqlite`：SQL 执行失败
-pub fn get_original_present(
-    conn: &Connection,
-    id: &str,
-) -> Result<Option<i32>, DbError> {
+pub fn get_original_present(conn: &Connection, id: &str) -> Result<Option<i32>, DbError> {
     let result = conn
         .query_row(
             "SELECT original_present FROM clip_images WHERE id = ?1 AND is_deleted = 0",
@@ -268,10 +273,7 @@ pub fn ingest_image(
 ///
 /// # Errors
 /// `DbError::Sqlite`：SQL 执行失败
-pub fn get_image_original(
-    conn: &Connection,
-    id: &str,
-) -> Result<Option<Vec<u8>>, DbError> {
+pub fn get_image_original(conn: &Connection, id: &str) -> Result<Option<Vec<u8>>, DbError> {
     let result = conn
         .query_row(
             "SELECT original FROM clip_images WHERE id = ?1 AND is_deleted = 0",
@@ -288,10 +290,7 @@ pub fn get_image_original(
 ///
 /// # Errors
 /// `DbError::Sqlite`：SQL 执行失败
-pub fn get_image_thumbnail(
-    conn: &Connection,
-    id: &str,
-) -> Result<Option<Vec<u8>>, DbError> {
+pub fn get_image_thumbnail(conn: &Connection, id: &str) -> Result<Option<Vec<u8>>, DbError> {
     let result = conn
         .query_row(
             "SELECT thumbnail FROM clip_images WHERE id = ?1 AND is_deleted = 0",
@@ -326,7 +325,9 @@ pub struct CleanupPolicy {
 
 impl Default for CleanupPolicy {
     fn default() -> Self {
-        Self { max_total_bytes: DEFAULT_MAX_TOTAL }
+        Self {
+            max_total_bytes: DEFAULT_MAX_TOTAL,
+        }
     }
 }
 
@@ -420,7 +421,10 @@ pub fn tiered_cleanup(conn: &Connection, policy: &CleanupPolicy) -> Result<Clean
         0
     };
 
-    Ok(CleanupReport { stripped_originals, deleted_rows })
+    Ok(CleanupReport {
+        stripped_originals,
+        deleted_rows,
+    })
 }
 
 /// 第一级清理：strip 最旧非收藏行的原图，直到总量 ≤ max 或无可腾行。
@@ -438,7 +442,9 @@ fn strip_oldest_originals(conn: &Connection, max_bytes: i64) -> Result<usize, Db
          ORDER BY created_utc ASC",
     )?;
     let candidates: Vec<(String, i64)> = stmt
-        .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)))?
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+        })?
         .collect::<Result<_, _>>()?;
 
     // 取一次当前总量作为基准；后续用本地累计释放量估算，不再循环全表扫

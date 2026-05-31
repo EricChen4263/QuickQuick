@@ -30,7 +30,11 @@ pub fn is_transient(err: &TranslateError) -> bool {
 /// - 测试：记录被调用值的闭包（可断言退避序列），不引入真实阻塞
 ///
 /// **不含任何跨 provider 切换逻辑**——保证同源语义。
-pub fn retry_with_backoff<T, F, S>(max_attempts: u32, mut op: F, sleep_fn: S) -> Result<T, TranslateError>
+pub fn retry_with_backoff<T, F, S>(
+    max_attempts: u32,
+    mut op: F,
+    sleep_fn: S,
+) -> Result<T, TranslateError>
 where
     F: FnMut() -> Result<T, TranslateError>,
     S: Fn(u64),

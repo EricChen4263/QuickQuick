@@ -6,8 +6,8 @@
 
 use quickquick_lib::clipboard::CapturedItem;
 use quickquick_lib::onboarding::{
-    AccessibilityProbe, OnboardingAction, PasteCapability, ACCESSIBILITY_DEEPLINK,
-    onboarding_action, paste_capability, perform_paste_or_degrade,
+    onboarding_action, paste_capability, perform_paste_or_degrade, AccessibilityProbe,
+    OnboardingAction, PasteCapability, ACCESSIBILITY_DEEPLINK,
 };
 use quickquick_lib::paste::PasteBackend;
 
@@ -121,7 +121,11 @@ fn accessibility_onboarding_degrade_untrusted_write_back_only_no_paste() {
     let result = perform_paste_or_degrade(&probe, &mut backend, &item);
 
     // Assert：函数返回降级标识（Ok 且未发送粘贴）
-    assert!(result.is_ok(), "降级路径不应 panic 或返回错误，实际: {:?}", result);
+    assert!(
+        result.is_ok(),
+        "降级路径不应 panic 或返回错误，实际: {:?}",
+        result
+    );
 
     // Assert：剪贴板内容已写入（write_with_marker 被调用）
     assert_eq!(

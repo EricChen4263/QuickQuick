@@ -98,23 +98,33 @@ fn apply_autostart_preference(app: &mut tauri::App) {
 /// 错误在函数内部消化，永不向上传播。
 fn register_hotkeys(handle: &tauri::AppHandle) {
     let config = hotkey::HotkeyConfig::default();
-    let history_key = config.get_accelerator(hotkey::HotkeyAction::History).to_string();
-    let translate_key = config.get_accelerator(hotkey::HotkeyAction::Translate).to_string();
+    let history_key = config
+        .get_accelerator(hotkey::HotkeyAction::History)
+        .to_string();
+    let translate_key = config
+        .get_accelerator(hotkey::HotkeyAction::Translate)
+        .to_string();
 
     let handle_history = handle.clone();
     let handle_translate = handle.clone();
 
     // 注册 history 热键；失败则记录并优雅降级
-    if let Err(e) = handle.global_shortcut().on_shortcut(history_key.as_str(), move |_app, _shortcut, _event| {
-        trigger_window(&handle_history, "history");
-    }) {
+    if let Err(e) = handle.global_shortcut().on_shortcut(
+        history_key.as_str(),
+        move |_app, _shortcut, _event| {
+            trigger_window(&handle_history, "history");
+        },
+    ) {
         eprintln!("[QuickQuick] history 热键注册失败（可能已被占用）: {e}");
     }
 
     // 注册 translate 热键；失败则记录并优雅降级
-    if let Err(e) = handle.global_shortcut().on_shortcut(translate_key.as_str(), move |_app, _shortcut, _event| {
-        trigger_window(&handle_translate, "translate");
-    }) {
+    if let Err(e) = handle.global_shortcut().on_shortcut(
+        translate_key.as_str(),
+        move |_app, _shortcut, _event| {
+            trigger_window(&handle_translate, "translate");
+        },
+    ) {
         eprintln!("[QuickQuick] translate 热键注册失败（可能已被占用）: {e}");
     }
 }
@@ -179,8 +189,14 @@ mod tests {
         // Assert: 两字段非空且等于设计文档规定值
         assert!(!history.is_empty(), "history 热键不应为空");
         assert!(!translate.is_empty(), "translate 热键不应为空");
-        assert_eq!(history, "CmdOrCtrl+Shift+V", "history 热键应为 CmdOrCtrl+Shift+V");
-        assert_eq!(translate, "CmdOrCtrl+Shift+T", "translate 热键应为 CmdOrCtrl+Shift+T");
+        assert_eq!(
+            history, "CmdOrCtrl+Shift+V",
+            "history 热键应为 CmdOrCtrl+Shift+V"
+        );
+        assert_eq!(
+            translate, "CmdOrCtrl+Shift+T",
+            "translate 热键应为 CmdOrCtrl+Shift+T"
+        );
     }
 
     /// 验证热键默认值符合设计文档要求

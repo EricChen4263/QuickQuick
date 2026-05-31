@@ -9,14 +9,16 @@
 //! - V2-F1-A07 timeout_and_cancel_inflight：超时归 Network，连续选中只认最新请求
 //! - V2-F1-A08 static_registry_lists_four：静态注册表枚举 4 家 provider
 
-use quickquick_lib::translate::{
-    Lang, ProviderCapability, ProviderHttpRequest, TranslateError, TranslateProvider,
-    TranslateRequest, TranslateResponse, registry,
-};
-use quickquick_lib::translate::lang::{detect_is_chinese, detect_lang, map_lang_for_provider, resolve_direction};
-use quickquick_lib::translate::error::{map_provider_error, classify_timeout};
-use quickquick_lib::translate::retry::{is_transient, retry_with_backoff};
 use quickquick_lib::translate::cancel::InflightTracker;
+use quickquick_lib::translate::error::{classify_timeout, map_provider_error};
+use quickquick_lib::translate::lang::{
+    detect_is_chinese, detect_lang, map_lang_for_provider, resolve_direction,
+};
+use quickquick_lib::translate::retry::{is_transient, retry_with_backoff};
+use quickquick_lib::translate::{
+    registry, Lang, ProviderCapability, ProviderHttpRequest, TranslateError, TranslateProvider,
+    TranslateRequest, TranslateResponse,
+};
 
 // 测试用 stub provider
 
@@ -38,7 +40,9 @@ impl TranslateProvider for StubProvider {
             method: "GET",
             url: format!(
                 "https://stub.example.com/translate?q={}&source={}&target={}",
-                req.text, req.source_lang.as_str(), req.target_lang.as_str()
+                req.text,
+                req.source_lang.as_str(),
+                req.target_lang.as_str()
             ),
             body: None,
             headers: vec![],
@@ -204,11 +208,7 @@ fn static_registry_keyed_providers_need_key() {
 
     // Assert：百度/DeepL/Google 均需要 key
     for cap in providers.iter().filter(|p| p.id != "mymemory") {
-        assert!(
-            cap.needs_key,
-            "provider '{}' 应为 needs_key=true",
-            cap.id
-        );
+        assert!(cap.needs_key, "provider '{}' 应为 needs_key=true", cap.id);
     }
 }
 
@@ -438,7 +438,10 @@ fn error_enum_mapping_429_maps_to_rate_limit() {
     let err = map_provider_error(status, None);
 
     // Assert
-    assert!(matches!(err, TranslateError::RateLimit(_)), "429 应归一为 RateLimit");
+    assert!(
+        matches!(err, TranslateError::RateLimit(_)),
+        "429 应归一为 RateLimit"
+    );
 }
 
 /// A03：5xx 归一为 ServerError。
@@ -451,7 +454,10 @@ fn error_enum_mapping_5xx_maps_to_server_error() {
     let err = map_provider_error(status, None);
 
     // Assert
-    assert!(matches!(err, TranslateError::ServerError(_)), "500 应归一为 ServerError");
+    assert!(
+        matches!(err, TranslateError::ServerError(_)),
+        "500 应归一为 ServerError"
+    );
 }
 
 /// A03：provider_code "quota_exceeded" 归一为 Quota。
@@ -464,7 +470,10 @@ fn error_enum_mapping_quota_code_maps_to_quota() {
     let err = map_provider_error(status, Some("quota_exceeded"));
 
     // Assert
-    assert!(matches!(err, TranslateError::Quota(_)), "quota_exceeded 应归一为 Quota");
+    assert!(
+        matches!(err, TranslateError::Quota(_)),
+        "quota_exceeded 应归一为 Quota"
+    );
 }
 
 /// A03：provider_code "text_too_long" 归一为 TooLong。
@@ -477,7 +486,10 @@ fn error_enum_mapping_too_long_code_maps_to_too_long() {
     let err = map_provider_error(status, Some("text_too_long"));
 
     // Assert
-    assert!(matches!(err, TranslateError::TooLong(_)), "text_too_long 应归一为 TooLong");
+    assert!(
+        matches!(err, TranslateError::TooLong(_)),
+        "text_too_long 应归一为 TooLong"
+    );
 }
 
 /// A03：provider_code "unsupported_lang" 归一为 Unsupported。
@@ -490,7 +502,10 @@ fn error_enum_mapping_unsupported_lang_maps_to_unsupported() {
     let err = map_provider_error(status, Some("unsupported_lang"));
 
     // Assert
-    assert!(matches!(err, TranslateError::Unsupported(_)), "unsupported_lang 应归一为 Unsupported");
+    assert!(
+        matches!(err, TranslateError::Unsupported(_)),
+        "unsupported_lang 应归一为 Unsupported"
+    );
 }
 
 /// A03：status=0（网络层失败）归一为 Network。
@@ -503,7 +518,10 @@ fn error_enum_mapping_status_zero_maps_to_network() {
     let err = map_provider_error(status, None);
 
     // Assert
-    assert!(matches!(err, TranslateError::Network(_)), "status=0 应归一为 Network");
+    assert!(
+        matches!(err, TranslateError::Network(_)),
+        "status=0 应归一为 Network"
+    );
 }
 
 /// A03（P3 边界）：provider_code "quota_remaining" 含子串 "quota" 但不在已知集合中，不应误判为 Quota。
@@ -631,9 +649,17 @@ fn retry_policy_same_source_retry_no_cross_failover_succeeds_on_third_attempt() 
 
     // sleep_fn 被调用 2 次（前 2 次失败各触发一次退避），且退避值符合指数序列
     let sleeps = sleep_calls.borrow();
-    assert_eq!(sleeps.len(), 2, "应退避 2 次（对应 2 次瞬时失败），实际: {sleeps:?}");
+    assert_eq!(
+        sleeps.len(),
+        2,
+        "应退避 2 次（对应 2 次瞬时失败），实际: {sleeps:?}"
+    );
     assert_eq!(sleeps[0], 500, "第 1 次退避应为 500ms，实际: {}", sleeps[0]);
-    assert_eq!(sleeps[1], 1000, "第 2 次退避应为 1000ms，实际: {}", sleeps[1]);
+    assert_eq!(
+        sleeps[1], 1000,
+        "第 2 次退避应为 1000ms，实际: {}",
+        sleeps[1]
+    );
 }
 
 /// A04：永久错误（Auth）立即返回，不触发重试，sleep_fn 不被调用。
@@ -667,7 +693,10 @@ fn timeout_and_cancel_inflight_timeout_classified_as_network() {
     let err = classify_timeout();
 
     // Assert：超时驱动 network 错误枚举
-    assert!(matches!(err, TranslateError::Network(_)), "超时应归一为 Network 错误");
+    assert!(
+        matches!(err, TranslateError::Network(_)),
+        "超时应归一为 Network 错误"
+    );
 }
 
 /// A07：InflightTracker 连续两次 begin 后，旧 generation is_current=false，新 generation=true。
@@ -684,7 +713,10 @@ fn timeout_and_cancel_inflight_old_gen_invalidated_by_new_begin() {
 
     // Assert：只认最新，旧请求应被取消
     assert!(!tracker.is_current(old_gen), "旧 generation 应已失效");
-    assert!(tracker.is_current(new_gen), "新 generation 应为当前有效请求");
+    assert!(
+        tracker.is_current(new_gen),
+        "新 generation 应为当前有效请求"
+    );
 }
 
 /// A07：单次 begin 后，该 generation 仍为 current（未被后续 begin 覆盖）。
@@ -702,13 +734,13 @@ fn timeout_and_cancel_inflight_single_begin_remains_current() {
 
 // V2-F1-A05 credential_schema_keychain
 
+use quickquick_lib::db;
 use quickquick_lib::translate::credential::{
     credential_schema, load_credentials, save_credentials, CredError, CredStore,
 };
-use quickquick_lib::db;
-use tempfile::tempdir;
 use std::collections::HashMap;
 use std::sync::Mutex;
+use tempfile::tempdir;
 
 const TEST_DB_KEY: [u8; 32] = [42u8; 32];
 
@@ -732,22 +764,13 @@ impl MockCredStore {
 }
 
 impl CredStore for MockCredStore {
-    fn set_secret(
-        &self,
-        provider_id: &str,
-        field_key: &str,
-        value: &str,
-    ) -> Result<(), CredError> {
+    fn set_secret(&self, provider_id: &str, field_key: &str, value: &str) -> Result<(), CredError> {
         let k = format!("{provider_id}.{field_key}");
         self.inner.lock().unwrap().insert(k, value.to_string());
         Ok(())
     }
 
-    fn get_secret(
-        &self,
-        provider_id: &str,
-        field_key: &str,
-    ) -> Result<Option<String>, CredError> {
+    fn get_secret(&self, provider_id: &str, field_key: &str) -> Result<Option<String>, CredError> {
         let k = format!("{provider_id}.{field_key}");
         Ok(self.inner.lock().unwrap().get(&k).cloned())
     }
@@ -826,10 +849,7 @@ fn credential_schema_keychain_secret_routes_to_keychain_non_secret_routes_to_db(
     let db_path = dir.path().join("cred_test.db");
     let conn = db::open_or_create(&db_path, &TEST_DB_KEY).expect("建库应成功");
 
-    let values = vec![
-        ("app_id", "my_app_123"),
-        ("secret_key", "super_secret_456"),
-    ];
+    let values = vec![("app_id", "my_app_123"), ("secret_key", "super_secret_456")];
 
     // Act
     save_credentials("baidu", &values, &store, &conn).expect("save_credentials 应成功");
@@ -880,10 +900,7 @@ fn credential_schema_keychain_load_returns_saved_values() {
     let db_path = dir.path().join("cred_load_test.db");
     let conn = db::open_or_create(&db_path, &TEST_DB_KEY).expect("建库应成功");
 
-    let values = vec![
-        ("app_id", "load_app_id"),
-        ("secret_key", "load_secret"),
-    ];
+    let values = vec![("app_id", "load_app_id"), ("secret_key", "load_secret")];
     save_credentials("baidu", &values, &store, &conn).expect("save 应成功");
 
     // Act
@@ -1026,8 +1043,7 @@ fn cache_key_includes_provider_lru_cross_provider_cache_get_is_miss() {
     let tgt = "zh";
 
     // Act：用 mymemory 写入
-    cache_put(&conn, text, src, tgt, "mymemory", "你好", 100)
-        .expect("cache_put 应成功");
+    cache_put(&conn, text, src, tgt, "mymemory", "你好", 100).expect("cache_put 应成功");
 
     // 用 deepl_free 的 key 查询
     let deepl_key = cache_key(text, src, tgt, "deepl_free");
@@ -1056,8 +1072,7 @@ fn cache_key_includes_provider_lru_put_then_get_hits_with_correct_value() {
     let translated = "早上好";
 
     // Act
-    cache_put(&conn, text, src, tgt, provider, translated, 100)
-        .expect("cache_put 应成功");
+    cache_put(&conn, text, src, tgt, provider, translated, 100).expect("cache_put 应成功");
 
     let key = cache_key(text, src, tgt, provider);
     let result = cache_get(&conn, &key).expect("cache_get 不应返回 Err");
@@ -1091,37 +1106,65 @@ fn cache_key_includes_provider_lru_evicts_least_recently_used_on_overflow() {
     // t=100：put A（初始 last_used=100）
     cache_put_at(
         &conn,
-        &CacheEntry { source_text: "apple", source_lang: "en", target_lang: "zh", provider_id: provider, translated: "苹果" },
+        &CacheEntry {
+            source_text: "apple",
+            source_lang: "en",
+            target_lang: "zh",
+            provider_id: provider,
+            translated: "苹果",
+        },
         capacity,
         100,
-    ).expect("put A 应成功");
+    )
+    .expect("put A 应成功");
 
     // t=200：put B（last_used=200）；此时表内 2 条，未超 capacity，不淘汰
     cache_put_at(
         &conn,
-        &CacheEntry { source_text: "banana", source_lang: "en", target_lang: "zh", provider_id: provider, translated: "香蕉" },
+        &CacheEntry {
+            source_text: "banana",
+            source_lang: "en",
+            target_lang: "zh",
+            provider_id: provider,
+            translated: "香蕉",
+        },
         capacity,
         200,
-    ).expect("put B 应成功");
+    )
+    .expect("put B 应成功");
 
     // t=300：刷新 A 的 last_used（UPSERT 同值、时间戳=300）
     // cache_get 内部用 current_utc_ms() 刷新，此处用 put_at 注入确定性时间戳
     cache_put_at(
         &conn,
-        &CacheEntry { source_text: "apple", source_lang: "en", target_lang: "zh", provider_id: provider, translated: "苹果" },
+        &CacheEntry {
+            source_text: "apple",
+            source_lang: "en",
+            target_lang: "zh",
+            provider_id: provider,
+            translated: "苹果",
+        },
         999,
         300,
-    ).expect("刷新 A 的 last_used 应成功");
+    )
+    .expect("刷新 A 的 last_used 应成功");
 
     // 此时：A.last_used=300，B.last_used=200 → B 是 LRU
 
     // t=400：put C，capacity=2，触发淘汰，应删 B（last_used 最旧=200）
     cache_put_at(
         &conn,
-        &CacheEntry { source_text: "cherry", source_lang: "en", target_lang: "zh", provider_id: provider, translated: "樱桃" },
+        &CacheEntry {
+            source_text: "cherry",
+            source_lang: "en",
+            target_lang: "zh",
+            provider_id: provider,
+            translated: "樱桃",
+        },
         capacity,
         400,
-    ).expect("put C 应成功");
+    )
+    .expect("put C 应成功");
 
     // Assert：B 已被淘汰（LRU，last_used=200 最旧）
     let key_b = cache_key("banana", "en", "zh", provider);
@@ -1198,7 +1241,11 @@ fn smart_direction_english_input_resolves_to_en_zh() {
 
     // Assert
     assert_eq!(source.as_str(), "en", "英文输入源语言应为 en");
-    assert_eq!(target.as_str(), "zh", "英文输入默认目标应为 zh（自动识别→默认中文）");
+    assert_eq!(
+        target.as_str(),
+        "zh",
+        "英文输入默认目标应为 zh（自动识别→默认中文）"
+    );
 }
 
 /// A13-b：中文输入 → 识别为 zh，默认目标 en（本是中文→翻英文）。
@@ -1212,7 +1259,11 @@ fn smart_direction_chinese_input_resolves_to_zh_en() {
 
     // Assert
     assert_eq!(source.as_str(), "zh", "中文输入源语言应为 zh");
-    assert_eq!(target.as_str(), "en", "中文输入默认目标应为 en（本是中文→翻英文）");
+    assert_eq!(
+        target.as_str(),
+        "en",
+        "中文输入默认目标应为 en（本是中文→翻英文）"
+    );
 }
 
 /// A13-c：configured_target=Some(ja) 时，不论输入语言，目标语强制为 ja（目标语可配）。
@@ -1242,7 +1293,11 @@ fn smart_direction_chinese_input_with_configured_fr_resolves_to_zh_fr() {
 
     // Assert
     assert_eq!(source.as_str(), "zh", "中文输入源语言应为 zh");
-    assert_eq!(target.as_str(), "fr", "configured_target=fr 应覆盖默认 en 目标");
+    assert_eq!(
+        target.as_str(),
+        "fr",
+        "configured_target=fr 应覆盖默认 en 目标"
+    );
 }
 
 // V2-F3-A14 translate_history_separate
@@ -1274,15 +1329,8 @@ fn translate_history_separate_clip_item_writes_to_history_not_clip_items() {
     .expect("插入 clip_item 应成功");
 
     // Act：一键翻译——剪贴板条目写入 translate_history
-    let history_id = translate_clip_item(
-        &conn,
-        &clip_id,
-        "你好，世界！",
-        "en",
-        "zh",
-        "mymemory",
-    )
-    .expect("translate_clip_item 应成功");
+    let history_id = translate_clip_item(&conn, &clip_id, "你好，世界！", "en", "zh", "mymemory")
+        .expect("translate_clip_item 应成功");
 
     // Assert：translate_history 有该条
     let history_count = translate_history_count(&conn).expect("translate_history_count 应成功");
@@ -1314,15 +1362,8 @@ fn translate_history_separate_add_and_retrieve() {
     let conn = db::open_or_create(&db_path, &TEST_DB_KEY).expect("建库应成功");
 
     // Act
-    let id = add_translate_history(
-        &conn,
-        "Good morning",
-        "早上好",
-        "en",
-        "zh",
-        "mymemory",
-    )
-    .expect("add_translate_history 应成功");
+    let id = add_translate_history(&conn, "Good morning", "早上好", "en", "zh", "mymemory")
+        .expect("add_translate_history 应成功");
 
     // Assert：可查回该条记录
     let count = translate_history_count(&conn).expect("translate_history_count 应成功");
@@ -1331,14 +1372,7 @@ fn translate_history_separate_add_and_retrieve() {
 
     // Assert：clip_items 表无记录（与剪贴板历史完全分开）
     let clip_count: i64 = conn
-        .query_row(
-            "SELECT COUNT(*) FROM clip_items",
-            [],
-            |row| row.get(0),
-        )
+        .query_row("SELECT COUNT(*) FROM clip_items", [], |row| row.get(0))
         .expect("查询应成功");
-    assert_eq!(
-        clip_count, 0,
-        "翻译历史不应写入 clip_items 表（独立存储）"
-    );
+    assert_eq!(clip_count, 0, "翻译历史不应写入 clip_items 表（独立存储）");
 }

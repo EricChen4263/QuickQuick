@@ -6,10 +6,11 @@
 //! - V2-F2-A10 providers_keyed：百度/DeepL Free/Google 三家适配（鉴权字段 + 请求映射 + 错误码归一）
 //! - V2-F2-A11 quota_explicit_no_silent_switch：撞额度显式提示，不自动切换 provider
 
-use quickquick_lib::translate::{Lang, TranslateError, TranslateProvider, TranslateRequest};
 use quickquick_lib::translate::providers::{
-    BaiduProvider, DeepLFreeProvider, GoogleProvider, UserPromptKind, baidu_sign, on_quota_or_failure,
+    baidu_sign, on_quota_or_failure, BaiduProvider, DeepLFreeProvider, GoogleProvider,
+    UserPromptKind,
 };
+use quickquick_lib::translate::{Lang, TranslateError, TranslateProvider, TranslateRequest};
 
 // 构造测试用 TranslateRequest 的辅助函数
 fn make_request(text: &str, src: &str, tgt: &str) -> TranslateRequest {
@@ -64,9 +65,9 @@ fn provider_mymemory_build_request_url_encoding() {
 #[test]
 fn provider_mymemory_build_request_includes_email_when_provided() {
     // Arrange
-    let provider = quickquick_lib::translate::providers::MyMemoryProvider::new(
-        Some("user@example.com".to_string()),
-    );
+    let provider = quickquick_lib::translate::providers::MyMemoryProvider::new(Some(
+        "user@example.com".to_string(),
+    ));
     let req = make_request("hi", "en", "zh");
 
     // Act
@@ -74,7 +75,8 @@ fn provider_mymemory_build_request_includes_email_when_provided() {
 
     // Assert
     assert!(
-        http_req.url.contains("de=user%40example.com") || http_req.url.contains("de=user@example.com"),
+        http_req.url.contains("de=user%40example.com")
+            || http_req.url.contains("de=user@example.com"),
         "提供 email 时 URL 须含 de= 参数，实际 URL: {}",
         http_req.url
     );
@@ -212,9 +214,15 @@ fn providers_keyed_baidu_capability() {
 fn providers_keyed_baidu_sign_pure_function_deterministic() {
     // 固定输入 → 固定输出；不依赖任何 feature flag。
     // 预期值：MD5("2015063000000001apple143566028812345678") 的十六进制。
-    let expected = format!("{:x}", md5::compute(b"2015063000000001apple143566028812345678"));
+    let expected = format!(
+        "{:x}",
+        md5::compute(b"2015063000000001apple143566028812345678")
+    );
     let actual = baidu_sign("2015063000000001", "apple", "1435660288", "12345678");
-    assert_eq!(actual, expected, "baidu_sign 纯函数结果应与手动计算 MD5 一致");
+    assert_eq!(
+        actual, expected,
+        "baidu_sign 纯函数结果应与手动计算 MD5 一致"
+    );
 }
 
 /// A10-2b: 百度 build_request 包含 sign/appid/salt/q 参数，
@@ -232,10 +240,16 @@ fn providers_keyed_baidu_build_request_sign() {
 
     // Assert: POST 到百度端点
     assert_eq!(http_req.method, "POST");
-    assert_eq!(http_req.url, "https://fanyi-api.baidu.com/api/trans/vip/translate");
+    assert_eq!(
+        http_req.url,
+        "https://fanyi-api.baidu.com/api/trans/vip/translate"
+    );
 
     let body = http_req.body.expect("百度请求应有 POST body");
-    assert!(body.contains("appid=2015063000000001"), "body 须含 appid，实际: {body}");
+    assert!(
+        body.contains("appid=2015063000000001"),
+        "body 须含 appid，实际: {body}"
+    );
     assert!(body.contains("q=apple"), "body 须含 q 参数，实际: {body}");
     assert!(body.contains("salt="), "body 须含 salt，实际: {body}");
     assert!(body.contains("sign="), "body 须含 sign，实际: {body}");
@@ -354,7 +368,9 @@ fn providers_keyed_deepl_build_request_auth_header() {
     assert_eq!(http_req.method, "POST");
     assert_eq!(http_req.url, "https://api-free.deepl.com/v2/translate");
 
-    let auth_header = http_req.headers.iter()
+    let auth_header = http_req
+        .headers
+        .iter()
         .find(|(k, _)| k == "Authorization")
         .map(|(_, v)| v.as_str());
     assert_eq!(
@@ -364,9 +380,18 @@ fn providers_keyed_deepl_build_request_auth_header() {
     );
 
     let body = http_req.body.expect("DeepL 请求应有 POST body");
-    assert!(body.contains("text=Hello"), "body 须含 text 参数，实际: {body}");
-    assert!(body.contains("source_lang=EN"), "body 须含大写 source_lang，实际: {body}");
-    assert!(body.contains("target_lang=ZH"), "body 须含大写 target_lang，实际: {body}");
+    assert!(
+        body.contains("text=Hello"),
+        "body 须含 text 参数，实际: {body}"
+    );
+    assert!(
+        body.contains("source_lang=EN"),
+        "body 须含大写 source_lang，实际: {body}"
+    );
+    assert!(
+        body.contains("target_lang=ZH"),
+        "body 须含大写 target_lang，实际: {body}"
+    );
 }
 
 /// A10-9: DeepL Free parse_response 成功路径
@@ -455,15 +480,23 @@ fn providers_keyed_google_build_request_key_and_body() {
         http_req.url
     );
     assert!(
-        http_req.url.starts_with("https://translation.googleapis.com/language/translate/v2"),
+        http_req
+            .url
+            .starts_with("https://translation.googleapis.com/language/translate/v2"),
         "URL 须指向 Google Translation API，实际: {}",
         http_req.url
     );
 
     let body = http_req.body.expect("Google 请求应有 POST body");
     assert!(body.contains("q=hello"), "body 须含 q 参数，实际: {body}");
-    assert!(body.contains("source=en"), "body 须含 source 参数，实际: {body}");
-    assert!(body.contains("target=zh-CN"), "body 须含 target 参数（中文映射为 zh-CN），实际: {body}");
+    assert!(
+        body.contains("source=en"),
+        "body 须含 source 参数，实际: {body}"
+    );
+    assert!(
+        body.contains("target=zh-CN"),
+        "body 须含 target 参数（中文映射为 zh-CN），实际: {body}"
+    );
 }
 
 /// A10-14: Google parse_response 成功路径
@@ -486,7 +519,8 @@ fn providers_keyed_google_parse_response_success() {
 fn providers_keyed_google_parse_response_auth_error() {
     // Arrange
     let provider = GoogleProvider::new("key");
-    let raw = r#"{"error":{"code":403,"status":"PERMISSION_DENIED","message":"API key not valid"}}"#;
+    let raw =
+        r#"{"error":{"code":403,"status":"PERMISSION_DENIED","message":"API key not valid"}}"#;
 
     // Act
     let result = provider.parse_response(raw);

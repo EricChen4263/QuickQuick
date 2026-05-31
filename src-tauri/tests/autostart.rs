@@ -13,10 +13,7 @@ fn autostart_default_on() {
     let config = AutostartConfig::default();
 
     // Assert：默认值必须为 true，与设计文档§二"默认开"严格对齐
-    assert!(
-        config.enabled,
-        "自启动偏好默认值应为 true（默认开）"
-    );
+    assert!(config.enabled, "自启动偏好默认值应为 true（默认开）");
 }
 
 /// 验证自启动偏好可持久化读写（改为 false → save → load → 仍为 false）
@@ -37,10 +34,7 @@ fn autostart_persist_read_write() {
     let loaded = AutostartConfig::load(path).expect("load 不应失败");
 
     // Assert：加载回来的值应与写入一致
-    assert!(
-        !loaded.enabled,
-        "持久化后 load 回来的 enabled 应为 false"
-    );
+    assert!(!loaded.enabled, "持久化后 load 回来的 enabled 应为 false");
 }
 
 /// 验证文件不存在时 load_or_default 回退到默认值（enabled=true）

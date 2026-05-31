@@ -5,7 +5,7 @@
 //! - V1-F1-A07 app_exclude_list    — 名单内 app 来源的复制不记录
 
 use quickquick_lib::clipboard::ClipboardSnapshot;
-use quickquick_lib::privacy::{CapturePolicy, ExcludeList, SkipReason, should_skip};
+use quickquick_lib::privacy::{should_skip, CapturePolicy, ExcludeList, SkipReason};
 
 /// A06-1：is_concealed=true 的快照 → should_skip 返回 Some(Concealed)。
 ///
@@ -21,7 +21,10 @@ fn concealed_skipped() {
         source_app: None,
     };
     let exclude = ExcludeList::new_with_apps([]);
-    let policy = CapturePolicy { paused: false, exclude: &exclude };
+    let policy = CapturePolicy {
+        paused: false,
+        exclude: &exclude,
+    };
 
     // Act
     let reason = should_skip(&snapshot, &policy);
@@ -46,15 +49,17 @@ fn concealed_no_heuristic() {
         source_app: None,
     };
     let exclude = ExcludeList::new_with_apps([]);
-    let policy = CapturePolicy { paused: false, exclude: &exclude };
+    let policy = CapturePolicy {
+        paused: false,
+        exclude: &exclude,
+    };
 
     // Act
     let reason = should_skip(&snapshot, &policy);
 
     // Assert：不看内容，不跳过
     assert_eq!(
-        reason,
-        None,
+        reason, None,
         "is_concealed=false 时即使内容像密码也不应跳过（不做启发式识别）"
     );
 }
@@ -71,7 +76,10 @@ fn app_exclude_list() {
         source_app: Some("com.foo.secret".to_owned()),
     };
     let exclude = ExcludeList::new_with_apps(["com.foo.secret"]);
-    let policy = CapturePolicy { paused: false, exclude: &exclude };
+    let policy = CapturePolicy {
+        paused: false,
+        exclude: &exclude,
+    };
 
     // Act
     let reason = should_skip(&snapshot, &policy);
@@ -96,17 +104,16 @@ fn app_not_in_exclude_list() {
         source_app: Some("com.apple.textedit".to_owned()),
     };
     let exclude = ExcludeList::new_with_apps(["com.foo.secret"]);
-    let policy = CapturePolicy { paused: false, exclude: &exclude };
+    let policy = CapturePolicy {
+        paused: false,
+        exclude: &exclude,
+    };
 
     // Act
     let reason = should_skip(&snapshot, &policy);
 
     // Assert：不在名单，不跳过
-    assert_eq!(
-        reason,
-        None,
-        "source_app 不在排除名单内时不应跳过"
-    );
+    assert_eq!(reason, None, "source_app 不在排除名单内时不应跳过");
 }
 
 /// A07-3：source_app 为 None（来源未知）且不在名单 → 不跳过。
@@ -121,7 +128,10 @@ fn app_exclude_none_source() {
         source_app: None,
     };
     let exclude = ExcludeList::new_with_apps(["com.foo.secret"]);
-    let policy = CapturePolicy { paused: false, exclude: &exclude };
+    let policy = CapturePolicy {
+        paused: false,
+        exclude: &exclude,
+    };
 
     // Act
     let reason = should_skip(&snapshot, &policy);

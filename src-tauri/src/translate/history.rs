@@ -30,7 +30,15 @@ pub fn add_translate_history(
         "INSERT INTO translate_history
              (id, source_text, translated_text, source_lang, target_lang, provider_id, created_utc)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-        rusqlite::params![id, source_text, translated_text, source_lang, target_lang, provider_id, now_ms],
+        rusqlite::params![
+            id,
+            source_text,
+            translated_text,
+            source_lang,
+            target_lang,
+            provider_id,
+            now_ms
+        ],
     )?;
     Ok(id)
 }
@@ -42,11 +50,9 @@ pub fn add_translate_history(
 /// # Errors
 /// `DbError::Sqlite`：SQL 执行失败
 pub fn translate_history_count(conn: &Connection) -> Result<i64, DbError> {
-    let n = conn.query_row(
-        "SELECT COUNT(*) FROM translate_history",
-        [],
-        |row| row.get(0),
-    )?;
+    let n = conn.query_row("SELECT COUNT(*) FROM translate_history", [], |row| {
+        row.get(0)
+    })?;
     Ok(n)
 }
 
@@ -70,7 +76,14 @@ pub fn translate_clip_item(
         rusqlite::params![clip_id],
         |row| row.get(0),
     )?;
-    add_translate_history(conn, &source_text, translated_text, source_lang, target_lang, provider_id)
+    add_translate_history(
+        conn,
+        &source_text,
+        translated_text,
+        source_lang,
+        target_lang,
+        provider_id,
+    )
 }
 
 /// 获取当前 UTC 时间戳（毫秒）。

@@ -434,10 +434,7 @@ pub fn top_id(conn: &Connection) -> Result<Option<String>, DbError> {
 /// # Errors
 /// `DbError::Sqlite`：SQL 执行失败
 pub fn gc_purge_deleted(conn: &Connection) -> Result<u64, DbError> {
-    let count = conn.execute(
-        "DELETE FROM clip_items WHERE is_deleted = 1",
-        [],
-    )?;
+    let count = conn.execute("DELETE FROM clip_items WHERE is_deleted = 1", [])?;
     Ok(count as u64)
 }
 
@@ -458,7 +455,7 @@ fn open_with_key(path: &Path, key: &[u8; 32]) -> Result<Connection, DbError> {
     //   - hex_key 来自受控 [u8;32]，内容仅 64 位十六进制字符（0-9/a-f），不可注入；
     //   - 未启用 SQLite trace 钩子，故 PRAGMA 语句不会写入日志或泄漏密钥材料。
     let hex_key = hex_encode(key);
-    conn.execute_batch(&format!("PRAGMA key = \"x'{hex_key}'\";" ))?;
+    conn.execute_batch(&format!("PRAGMA key = \"x'{hex_key}'\";"))?;
 
     // 轻量查询触发解密校验：错误密钥在此暴露，避免延迟到写操作时才报错
     conn.execute_batch("PRAGMA user_version;")?;
@@ -614,7 +611,10 @@ mod tests {
         let key = [0xabu8; 32];
         let hex = hex_encode(&key);
         assert_eq!(hex.len(), 64, "32 字节应编码为 64 个十六进制字符");
-        assert!(hex.chars().all(|c| c.is_ascii_hexdigit()), "应全为十六进制字符");
+        assert!(
+            hex.chars().all(|c| c.is_ascii_hexdigit()),
+            "应全为十六进制字符"
+        );
     }
 
     #[test]

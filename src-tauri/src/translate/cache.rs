@@ -69,11 +69,7 @@ pub fn cache_get(conn: &Connection, key: &str) -> Result<Option<String>, DbError
 ///
 /// # Errors
 /// `DbError::Sqlite`：SQL 执行失败
-pub fn cache_get_at(
-    conn: &Connection,
-    key: &str,
-    now_ms: i64,
-) -> Result<Option<String>, DbError> {
+pub fn cache_get_at(conn: &Connection, key: &str, now_ms: i64) -> Result<Option<String>, DbError> {
     use rusqlite::OptionalExtension;
 
     let result: Option<String> = conn
@@ -168,11 +164,9 @@ pub fn cache_put_at(
 /// # Errors
 /// `DbError::Sqlite`：SQL 执行失败
 pub fn cache_evict_lru(conn: &Connection, capacity: usize) -> Result<usize, DbError> {
-    let count: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM translation_cache",
-        [],
-        |row| row.get(0),
-    )?;
+    let count: i64 = conn.query_row("SELECT COUNT(*) FROM translation_cache", [], |row| {
+        row.get(0)
+    })?;
 
     let cap = capacity as i64;
     if count <= cap {

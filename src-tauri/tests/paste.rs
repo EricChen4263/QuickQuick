@@ -7,7 +7,7 @@
 
 use quickquick_lib::clipboard::CapturedItem;
 use quickquick_lib::paste::{
-    FocusStep, PasteBackend, PasteError, focus_restore_sequence, write_then_paste,
+    focus_restore_sequence, write_then_paste, FocusStep, PasteBackend, PasteError,
 };
 
 /// 可控的假粘贴后端，记录 send_paste 发送时机。
@@ -80,11 +80,14 @@ fn paste_timing_paste_waits_changecount() {
     let result = write_then_paste(&mut backend, &item);
 
     // Assert：写入成功，无超时错误
-    assert!(result.is_ok(), "write_then_paste 应成功，错误: {:?}", result);
+    assert!(
+        result.is_ok(),
+        "write_then_paste 应成功，错误: {:?}",
+        result
+    );
 
     // Assert：send_paste 在 change_count 递增（反映我方写入）之后才发
-    let sent_at = backend.paste_sent_at_count
-        .expect("send_paste 应已被调用");
+    let sent_at = backend.paste_sent_at_count.expect("send_paste 应已被调用");
     assert!(
         sent_at > count_before_write,
         "send_paste 应在 change_count 反映写入后才发（sent_at={sent_at} 应 > 写前={count_before_write}）"
@@ -127,12 +130,33 @@ fn focus_restore_path_sequence_matches_spec() {
     let steps = focus_restore_sequence();
 
     // Assert：恰好 5 步，顺序与设计文档完全一致
-    assert_eq!(steps.len(), 5, "焦点恢复序列应恰好 5 步，实际: {}", steps.len());
-    assert_eq!(steps[0], FocusStep::RecordFrontmost, "步骤 0 应为 RecordFrontmost");
-    assert_eq!(steps[1], FocusStep::HidePanel,        "步骤 1 应为 HidePanel");
-    assert_eq!(steps[2], FocusStep::ActivateOriginalApp, "步骤 2 应为 ActivateOriginalApp");
-    assert_eq!(steps[3], FocusStep::WaitForeground,   "步骤 3 应为 WaitForeground");
-    assert_eq!(steps[4], FocusStep::SimulatePaste,    "步骤 4 应为 SimulatePaste");
+    assert_eq!(
+        steps.len(),
+        5,
+        "焦点恢复序列应恰好 5 步，实际: {}",
+        steps.len()
+    );
+    assert_eq!(
+        steps[0],
+        FocusStep::RecordFrontmost,
+        "步骤 0 应为 RecordFrontmost"
+    );
+    assert_eq!(steps[1], FocusStep::HidePanel, "步骤 1 应为 HidePanel");
+    assert_eq!(
+        steps[2],
+        FocusStep::ActivateOriginalApp,
+        "步骤 2 应为 ActivateOriginalApp"
+    );
+    assert_eq!(
+        steps[3],
+        FocusStep::WaitForeground,
+        "步骤 3 应为 WaitForeground"
+    );
+    assert_eq!(
+        steps[4],
+        FocusStep::SimulatePaste,
+        "步骤 4 应为 SimulatePaste"
+    );
 }
 
 /// A18（paste_leaves_selected）：
@@ -151,7 +175,11 @@ fn paste_leaves_selected_item_on_clipboard() {
     let result = write_then_paste(&mut backend, &item_x);
 
     // Assert：操作成功
-    assert!(result.is_ok(), "write_then_paste 应成功，错误: {:?}", result);
+    assert!(
+        result.is_ok(),
+        "write_then_paste 应成功，错误: {:?}",
+        result
+    );
 
     // Assert：剪贴板留下 X（不恢复到旧内容）
     assert_eq!(

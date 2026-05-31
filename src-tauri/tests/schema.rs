@@ -199,7 +199,11 @@ fn soft_delete_and_gc_full_lifecycle() {
     let purged = db::gc_purge_deleted(&conn).expect("gc_purge_deleted 应成功");
 
     // Assert 3：返回清理条数 >= 1
-    assert!(purged >= 1, "gc_purge_deleted 应返回清理条数 >= 1，实际: {}", purged);
+    assert!(
+        purged >= 1,
+        "gc_purge_deleted 应返回清理条数 >= 1，实际: {}",
+        purged
+    );
 
     // Assert 4：行物理消失
     let count_after: i64 = conn
@@ -226,7 +230,11 @@ fn foreign_keys_pragma_is_enabled_after_open() {
         .expect("PRAGMA foreign_keys 查询应成功");
 
     // Assert：外键约束必须在运行期开启
-    assert_eq!(fk_on, 1, "foreign_keys PRAGMA 应为 1（ON），实际: {}", fk_on);
+    assert_eq!(
+        fk_on, 1,
+        "foreign_keys PRAGMA 应为 1（ON），实际: {}",
+        fk_on
+    );
 }
 
 /// I-03：clip_images 向不存在的 clip_item_id 插入应被外键约束拒绝（ON DELETE CASCADE 语义验证）

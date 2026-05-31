@@ -183,7 +183,10 @@ impl KeychainKeyProvider {
     /// `kSecAttrSynchronizable = false` 存储密钥，满足设计§六「ThisDeviceOnly 不同步」
     /// 硬约束。`KeyStorageAttributes::synchronizable()` 提供可单测的属性断言点。
     pub fn is_device_only(&self) -> bool {
-        matches!(self.accessibility(), KeyAccessibility::AfterFirstUnlockThisDeviceOnly)
+        matches!(
+            self.accessibility(),
+            KeyAccessibility::AfterFirstUnlockThisDeviceOnly
+        )
     }
 
     /// 密钥是否在锁屏后台仍可读（AfterFirstUnlock 语义）。
@@ -198,7 +201,10 @@ impl KeychainKeyProvider {
     /// - macOS：意图配置为 `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`。
     /// - Windows：凭据管理器本机持久可读，语义等价（无精确 AfterFirstUnlock 对应项）。
     pub fn is_after_first_unlock(&self) -> bool {
-        matches!(self.accessibility(), KeyAccessibility::AfterFirstUnlockThisDeviceOnly)
+        matches!(
+            self.accessibility(),
+            KeyAccessibility::AfterFirstUnlockThisDeviceOnly
+        )
     }
 
     /// 返回此 provider 的实际存储属性配置（可测纯值，不触碰 OS 钥匙串）。
@@ -274,7 +280,10 @@ mod tests {
             "KeychainKeyProvider 必须标记为 ThisDeviceOnly"
         );
         assert!(
-            matches!(provider.accessibility(), KeyAccessibility::AfterFirstUnlockThisDeviceOnly),
+            matches!(
+                provider.accessibility(),
+                KeyAccessibility::AfterFirstUnlockThisDeviceOnly
+            ),
             "accessibility() 应返回 AfterFirstUnlockThisDeviceOnly"
         );
     }

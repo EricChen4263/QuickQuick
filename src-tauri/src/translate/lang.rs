@@ -28,7 +28,9 @@ const CJK_RANGES: &[(u32, u32)] = &[
 /// 判断字符是否落在 CJK 表意文字区间内。
 fn is_cjk_char(c: char) -> bool {
     let cp = c as u32;
-    CJK_RANGES.iter().any(|&(start, end)| cp >= start && cp <= end)
+    CJK_RANGES
+        .iter()
+        .any(|&(start, end)| cp >= start && cp <= end)
 }
 
 /// 判断文本是否包含中文（CJK 统一表意文字）字符。

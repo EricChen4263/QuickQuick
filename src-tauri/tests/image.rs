@@ -5,9 +5,9 @@
 //! - V3-F1-A02 thumbnail_spec_webp_256
 //! - V3-F1-A03 oversize_skip_original
 
+use quickquick_lib::db;
 use quickquick_lib::image as img;
 use tempfile::tempdir;
-use quickquick_lib::db;
 
 /// 固定 32 字节测试密钥，不依赖钥匙串
 const TEST_KEY: [u8; 32] = [7u8; 32];
@@ -24,8 +24,8 @@ fn image_capture_lossless_split_insert_dedup_and_different() {
     let thumbnail_bytes: Vec<u8> = vec![0xFF, 0xD8, 0xFF, 0xE0, 0x0A, 0x0B];
 
     // Act 1：首次入库
-    let outcome1 = img::ingest_image(&conn, &original_bytes, &thumbnail_bytes)
-        .expect("ingest_image 应成功");
+    let outcome1 =
+        img::ingest_image(&conn, &original_bytes, &thumbnail_bytes).expect("ingest_image 应成功");
 
     // Assert 1：首次入库返回 Inserted
     let first_id = match outcome1 {
@@ -74,7 +74,10 @@ fn image_capture_lossless_split_insert_dedup_and_different() {
 
     // Assert 6：计数仍为 1（未新建行）
     let count2 = img::image_count(&conn).expect("image_count 应成功");
-    assert_eq!(count2, 1, "相同原图字节再次入库后计数应仍为 1（字节哈希判重）");
+    assert_eq!(
+        count2, 1,
+        "相同原图字节再次入库后计数应仍为 1（字节哈希判重）"
+    );
 
     // Act 3：不同 original 字节入库
     let different_original: Vec<u8> = vec![0x47, 0x49, 0x46, 0x38, 0x39, 0x61, 0x01, 0x00];
@@ -114,8 +117,16 @@ fn thumbnail_spec_webp_256_format_and_size() {
         thumb_webp.len() >= 12,
         "WebP 文件至少 12 字节（含 RIFF+size+WEBP 头）"
     );
-    assert_eq!(&thumb_webp[0..4], b"RIFF", "缩略图前 4 字节应为 RIFF（WebP 魔数）");
-    assert_eq!(&thumb_webp[8..12], b"WEBP", "缩略图第 8-12 字节应为 WEBP（WebP 魔数）");
+    assert_eq!(
+        &thumb_webp[0..4],
+        b"RIFF",
+        "缩略图前 4 字节应为 RIFF（WebP 魔数）"
+    );
+    assert_eq!(
+        &thumb_webp[8..12],
+        b"WEBP",
+        "缩略图第 8-12 字节应为 WEBP（WebP 魔数）"
+    );
 
     // Assert 3：解码缩略图后最长边 ≤ 256（THUMB_MAX_EDGE 精确上限）
     let decoded = image::load_from_memory(&thumb_webp).expect("缩略图应可被 image crate 解码");
@@ -161,7 +172,9 @@ fn oversize_skip_original_policy_configurable() {
     let small_png = make_test_png(10, 10, [0u8, 128u8, 255u8]);
 
     // Act 1：小阈值（10 字节），small_png.len() > 10 → 应跳过原图
-    let tiny_policy = img::OversizePolicy { max_original_bytes: 10 };
+    let tiny_policy = img::OversizePolicy {
+        max_original_bytes: 10,
+    };
     let outcome_over = img::ingest_image_with_policy(&conn, &small_png, &tiny_policy)
         .expect("ingest_image_with_policy 应成功（超大跳过路径）");
 
@@ -174,11 +187,13 @@ fn oversize_skip_original_policy_configurable() {
     let present_over = img::get_original_present(&conn, &id_over)
         .expect("get_original_present 应成功")
         .expect("应能取到行");
-    assert_eq!(present_over, 0, "超阈值时 original_present 应为 0（原图过大未存）");
+    assert_eq!(
+        present_over, 0,
+        "超阈值时 original_present 应为 0（原图过大未存）"
+    );
 
     // Assert 2：original BLOB 为空/NULL
-    let orig_over = img::get_image_original(&conn, &id_over)
-        .expect("get_image_original 应成功");
+    let orig_over = img::get_image_original(&conn, &id_over).expect("get_image_original 应成功");
     assert!(
         orig_over.is_none_or(|v| v.is_empty()),
         "超阈值时原图 BLOB 应为空"
@@ -192,7 +207,9 @@ fn oversize_skip_original_policy_configurable() {
 
     // Act 2：不同颜色图片 + 宽松阈值（usize::MAX），应正常存原图
     let another_png = make_test_png(10, 10, [255u8, 0u8, 0u8]);
-    let big_policy = img::OversizePolicy { max_original_bytes: usize::MAX };
+    let big_policy = img::OversizePolicy {
+        max_original_bytes: usize::MAX,
+    };
     let outcome_normal = img::ingest_image_with_policy(&conn, &another_png, &big_policy)
         .expect("ingest_image_with_policy 应成功（正常路径）");
 
@@ -223,7 +240,7 @@ fn oversize_skip_original_policy_configurable() {
 /// 4. 第二级：缩略图也满时整条删最旧非收藏
 #[test]
 fn tiered_cleanup_and_state_unify_strips_oldest_nonfavorite_preserves_favorite() {
-    use quickquick_lib::image::{CleanupPolicy, tiered_cleanup, is_degraded, get_original_present};
+    use quickquick_lib::image::{get_original_present, is_degraded, tiered_cleanup, CleanupPolicy};
 
     // Arrange
     let dir = tempdir().expect("tempdir 创建失败");
@@ -243,26 +260,44 @@ fn tiered_cleanup_and_state_unify_strips_oldest_nonfavorite_preserves_favorite()
 
     // 确认初始状态：3 条记录都有原图
     assert_eq!(img::image_count(&conn).expect("image_count"), 3);
-    assert_eq!(img::get_original_present(&conn, &oldest_id).expect("ok").expect("some"), 1);
-    assert_eq!(img::get_original_present(&conn, &newest_id).expect("ok").expect("some"), 1);
+    assert_eq!(
+        img::get_original_present(&conn, &oldest_id)
+            .expect("ok")
+            .expect("some"),
+        1
+    );
+    assert_eq!(
+        img::get_original_present(&conn, &newest_id)
+            .expect("ok")
+            .expect("some"),
+        1
+    );
 
     // 计算当前总量，设 limit = 总量 - oldest原图大小，
     // 使得 strip oldest 原图后总量刚好 ≤ limit（触发第一级但不触发第二级）。
     // 这样可以断言 oldest 被 strip 后行仍存活（is_deleted=0）。
     let total_before = img::total_image_bytes(&conn).expect("total_image_bytes 应成功");
     // 从 DB 查询 length(original)，固化"DB 实际存储大小"而非依赖内存 PNG 字节数推算
-    let oldest_orig_size: i64 = conn.query_row(
-        "SELECT COALESCE(length(original), 0) FROM clip_images WHERE id = ?1",
-        rusqlite::params![oldest_id],
-        |row| row.get(0),
-    ).expect("查询 oldest 原图大小应成功");
+    let oldest_orig_size: i64 = conn
+        .query_row(
+            "SELECT COALESCE(length(original), 0) FROM clip_images WHERE id = ?1",
+            rusqlite::params![oldest_id],
+            |row| row.get(0),
+        )
+        .expect("查询 oldest 原图大小应成功");
     // limit = 总量 - oldest原图大小（strip后总量降至此值，刚好 ≤ limit）
     let limit = total_before - oldest_orig_size;
-    let policy = CleanupPolicy { max_total_bytes: limit };
+    let policy = CleanupPolicy {
+        max_total_bytes: limit,
+    };
     let report = tiered_cleanup(&conn, &policy).expect("tiered_cleanup 应成功");
 
     // Assert 1：第一级 strip 了原图（oldest 最旧非收藏先被 strip）
-    assert!(report.stripped_originals >= 1, "应至少 strip 1 条原图，实际: {}", report.stripped_originals);
+    assert!(
+        report.stripped_originals >= 1,
+        "应至少 strip 1 条原图，实际: {}",
+        report.stripped_originals
+    );
 
     // Assert 2：oldest 被 strip——original_present=0、BLOB 空
     let oldest_present = get_original_present(&conn, &oldest_id)
@@ -292,7 +327,10 @@ fn tiered_cleanup_and_state_unify_strips_oldest_nonfavorite_preserves_favorite()
     let newest_present = get_original_present(&conn, &newest_id)
         .expect("ok")
         .expect("newest 行应仍存在");
-    assert_eq!(newest_present, 1, "收藏项 original_present 应仍为 1（豁免）");
+    assert_eq!(
+        newest_present, 1,
+        "收藏项 original_present 应仍为 1（豁免）"
+    );
 
     let newest_orig = img::get_image_original(&conn, &newest_id)
         .expect("ok")
@@ -300,18 +338,20 @@ fn tiered_cleanup_and_state_unify_strips_oldest_nonfavorite_preserves_favorite()
     assert!(!newest_orig.is_empty(), "收藏项原图不应被清空");
 
     // Assert 6：收藏整条存活
-    let fav_count: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM clip_images WHERE id = ?1 AND is_deleted = 0",
-        rusqlite::params![newest_id],
-        |row| row.get(0),
-    ).expect("查询应成功");
+    let fav_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM clip_images WHERE id = ?1 AND is_deleted = 0",
+            rusqlite::params![newest_id],
+            |row| row.get(0),
+        )
+        .expect("查询应成功");
     assert_eq!(fav_count, 1, "收藏项整条不应被删");
 }
 
 /// V3-F1-A04（第二级）：缩略图也超限时整条删最旧非收藏
 #[test]
 fn tiered_cleanup_deletes_whole_row_when_thumbnails_also_exceed_limit() {
-    use quickquick_lib::image::{CleanupPolicy, tiered_cleanup};
+    use quickquick_lib::image::{tiered_cleanup, CleanupPolicy};
 
     // Arrange
     let dir = tempdir().expect("tempdir 创建失败");
@@ -329,14 +369,20 @@ fn tiered_cleanup_deletes_whole_row_when_thumbnails_also_exceed_limit() {
     let report = tiered_cleanup(&conn, &policy).expect("tiered_cleanup 应成功");
 
     // Assert：第二级至少整条删了最旧的 id1
-    assert!(report.deleted_rows >= 1, "应至少整条删 1 行，实际: {}", report.deleted_rows);
+    assert!(
+        report.deleted_rows >= 1,
+        "应至少整条删 1 行，实际: {}",
+        report.deleted_rows
+    );
 
     // Assert：id1 的行已软删或物理删（is_deleted=1 或不存在）
-    let count: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM clip_images WHERE id = ?1 AND is_deleted = 0",
-        rusqlite::params![id1],
-        |row| row.get(0),
-    ).expect("查询应成功");
+    let count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM clip_images WHERE id = ?1 AND is_deleted = 0",
+            rusqlite::params![id1],
+            |row| row.get(0),
+        )
+        .expect("查询应成功");
     assert_eq!(count, 0, "最旧非收藏行应被整条删除（软删）");
 }
 
@@ -359,7 +405,8 @@ fn insert_image_with_ts(
               created_utc, last_modified_utc, is_deleted, is_favorite)
          VALUES (?1, ?2, ?3, 1, ?4, ?5, ?5, 0, ?6)",
         rusqlite::params![id, thumbnail, original, hash, created_utc, fav],
-    ).expect("插入 clip_images 应成功");
+    )
+    .expect("插入 clip_images 应成功");
 
     id
 }
@@ -369,8 +416,7 @@ fn make_test_png(width: u32, height: u32, rgb: [u8; 3]) -> Vec<u8> {
     use image::{ImageBuffer, Rgb};
     use std::io::Cursor;
 
-    let img: ImageBuffer<Rgb<u8>, Vec<u8>> =
-        ImageBuffer::from_fn(width, height, |_, _| Rgb(rgb));
+    let img: ImageBuffer<Rgb<u8>, Vec<u8>> = ImageBuffer::from_fn(width, height, |_, _| Rgb(rgb));
 
     let mut buf = Cursor::new(Vec::new());
     img.write_to(&mut buf, image::ImageFormat::Png)

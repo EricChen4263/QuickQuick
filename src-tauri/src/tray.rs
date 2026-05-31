@@ -24,9 +24,7 @@ pub fn setup_tray(app: &mut tauri::App) -> tauri::Result<()> {
     let show_item = MenuItemBuilder::new("显示 QuickQuick")
         .id("show")
         .build(app)?;
-    let quit_item = MenuItemBuilder::new("退出")
-        .id("quit")
-        .build(app)?;
+    let quit_item = MenuItemBuilder::new("退出").id("quit").build(app)?;
 
     let menu = MenuBuilder::new(app)
         .items(&[&show_item, &quit_item])

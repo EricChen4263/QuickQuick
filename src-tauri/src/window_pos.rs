@@ -45,10 +45,7 @@ pub fn compute_window_position(window: &WebviewWindow) -> PhysicalPosition<i32> 
 }
 
 /// 在给定显示器列表中查找包含点 `(x, y)` 的显示器。
-fn find_monitor_at(
-    (cx, cy): (f64, f64),
-    monitors: &[tauri::Monitor],
-) -> Option<tauri::Monitor> {
+fn find_monitor_at((cx, cy): (f64, f64), monitors: &[tauri::Monitor]) -> Option<tauri::Monitor> {
     monitors
         .iter()
         .find(|m| {

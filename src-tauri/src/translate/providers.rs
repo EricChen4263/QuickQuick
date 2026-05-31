@@ -4,9 +4,8 @@
 //! HTTP 执行、重试、超时、凭据读取等横切关注点由核心框架层统一处理。
 
 use super::{
-    lang::map_lang_for_provider,
-    ProviderCapability, ProviderHttpRequest, TranslateError, TranslateProvider, TranslateRequest,
-    TranslateResponse,
+    lang::map_lang_for_provider, ProviderCapability, ProviderHttpRequest, TranslateError,
+    TranslateProvider, TranslateRequest, TranslateResponse,
 };
 
 /// 返回编译期静态注册表：4 家 provider 的能力声明列表。
@@ -106,7 +105,10 @@ impl TranslateProvider for MyMemoryProvider {
 /// MyMemory 用 403 表示配额耗尽（`responseDetails` 含 "FREE TRANSLATIONS" 文案）；
 /// 429 表示频率超限；其余 4xx/5xx 保守归入 `Auth` 或 `ServerError`。
 fn map_mymemory_error(status: u64, v: &serde_json::Value) -> TranslateError {
-    let detail = v["responseDetails"].as_str().unwrap_or("").to_ascii_uppercase();
+    let detail = v["responseDetails"]
+        .as_str()
+        .unwrap_or("")
+        .to_ascii_uppercase();
 
     match status {
         403 if detail.contains("FREE TRANSLATIONS") || detail.contains("QUOTA") => {
@@ -172,9 +174,10 @@ impl TranslateProvider for BaiduProvider {
             method: "POST",
             url: "https://fanyi-api.baidu.com/api/trans/vip/translate".to_string(),
             body: Some(body),
-            headers: vec![
-                ("Content-Type".to_string(), "application/x-www-form-urlencoded".to_string()),
-            ],
+            headers: vec![(
+                "Content-Type".to_string(),
+                "application/x-www-form-urlencoded".to_string(),
+            )],
         }
     }
 
@@ -268,8 +271,14 @@ impl TranslateProvider for DeepLFreeProvider {
             url: "https://api-free.deepl.com/v2/translate".to_string(),
             body: Some(body),
             headers: vec![
-                ("Authorization".to_string(), format!("DeepL-Auth-Key {}", self.auth_key)),
-                ("Content-Type".to_string(), "application/x-www-form-urlencoded".to_string()),
+                (
+                    "Authorization".to_string(),
+                    format!("DeepL-Auth-Key {}", self.auth_key),
+                ),
+                (
+                    "Content-Type".to_string(),
+                    "application/x-www-form-urlencoded".to_string(),
+                ),
             ],
         }
     }
@@ -292,9 +301,7 @@ impl TranslateProvider for DeepLFreeProvider {
 
         let translated = v["translations"][0]["text"]
             .as_str()
-            .ok_or_else(|| {
-                TranslateError::ParseError("missing translations[0].text".to_string())
-            })?
+            .ok_or_else(|| TranslateError::ParseError("missing translations[0].text".to_string()))?
             .to_string();
 
         Ok(TranslateResponse { translated })
@@ -328,7 +335,9 @@ pub fn map_deepl_http_status(status: u16, body: &str) -> TranslateError {
         403 => TranslateError::Auth(format!("DeepL Free 认证失败: HTTP 403 {body}")),
         429 => TranslateError::RateLimit(format!("DeepL Free 频率超限: HTTP 429 {body}")),
         456 => TranslateError::Quota(format!("DeepL Free 配额耗尽: HTTP 456 {body}")),
-        500..=599 => TranslateError::ServerError(format!("DeepL Free 服务端错误: HTTP {status} {body}")),
+        500..=599 => {
+            TranslateError::ServerError(format!("DeepL Free 服务端错误: HTTP {status} {body}"))
+        }
         _ => TranslateError::ServerError(format!("DeepL Free 未知错误: HTTP {status} {body}")),
     }
 }
@@ -381,9 +390,10 @@ impl TranslateProvider for GoogleProvider {
             method: "POST",
             url,
             body: Some(body),
-            headers: vec![
-                ("Content-Type".to_string(), "application/x-www-form-urlencoded".to_string()),
-            ],
+            headers: vec![(
+                "Content-Type".to_string(),
+                "application/x-www-form-urlencoded".to_string(),
+            )],
         }
     }
 
@@ -430,7 +440,9 @@ fn map_google_error(error: &serde_json::Value) -> TranslateError {
     match code {
         403 => TranslateError::Auth(format!("Google 翻译认证失败: HTTP 403 {msg}")),
         429 => TranslateError::RateLimit(format!("Google 翻译频率超限: HTTP 429 {msg}")),
-        500..=599 => TranslateError::ServerError(format!("Google 翻译服务端错误: HTTP {code} {msg}")),
+        500..=599 => {
+            TranslateError::ServerError(format!("Google 翻译服务端错误: HTTP {code} {msg}"))
+        }
         _ => TranslateError::ServerError(format!("Google 翻译未知错误 {code}: {msg}")),
     }
 }

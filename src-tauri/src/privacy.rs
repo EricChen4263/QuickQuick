@@ -67,7 +67,6 @@ impl ExcludeList {
             apps: iter.into_iter().map(str::to_owned).collect(),
         }
     }
-
 }
 
 /// 捕获策略：聚合当前运行时的跳过规则。

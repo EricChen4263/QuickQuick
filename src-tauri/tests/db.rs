@@ -240,8 +240,16 @@ fn enc_failure_transient_leaves_db_file_untouched() {
     let transient_err = DbError::transient_keychain_error("瞬时锁定");
     let tier = classify_failure(&transient_err);
     let action = recovery_action(tier);
-    assert_eq!(tier, FailureTier::Transient, "TransientKeychain 应分类为 Transient");
-    assert_eq!(action, RecoveryAction::RetryNoTouch, "Transient 应映射到 RetryNoTouch");
+    assert_eq!(
+        tier,
+        FailureTier::Transient,
+        "TransientKeychain 应分类为 Transient"
+    );
+    assert_eq!(
+        action,
+        RecoveryAction::RetryNoTouch,
+        "Transient 应映射到 RetryNoTouch"
+    );
 
     // Act：执行恢复调度薄函数（RetryNoTouch 语义 = 不碰文件）
     apply_recovery_action(&db_path, RecoveryAction::RetryNoTouch)
@@ -280,11 +288,7 @@ fn enc_failure_corrupt_db_classifies_as_permanent() {
     let tier = classify_failure(&corrupt_err);
 
     // Assert：库损坏 → Permanent
-    assert_eq!(
-        tier,
-        FailureTier::Permanent,
-        "库损坏应分类为 Permanent"
-    );
+    assert_eq!(tier, FailureTier::Permanent, "库损坏应分类为 Permanent");
 }
 
 /// V3-F2-A06 (enc_failure)：SQLite 解密失败 → classify_failure 返回 Permanent

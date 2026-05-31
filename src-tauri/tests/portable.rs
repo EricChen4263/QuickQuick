@@ -13,12 +13,10 @@ fn export_import_passphrase_roundtrip() {
     let passphrase = "correct-horse-battery-staple";
 
     // Act: 导出
-    let blob = export_portable(plaintext, passphrase)
-        .expect("export_portable 应成功");
+    let blob = export_portable(plaintext, passphrase).expect("export_portable 应成功");
 
     // Act: 用正确口令导入
-    let recovered = import_portable(&blob, passphrase)
-        .expect("import_portable 用正确口令应成功");
+    let recovered = import_portable(&blob, passphrase).expect("import_portable 用正确口令应成功");
 
     // Assert: 还原结果与原始数据完全一致
     assert_eq!(recovered, plaintext, "导入数据应与导出前原始数据完全一致");
@@ -33,17 +31,13 @@ fn export_import_passphrase_wrong_passphrase_returns_err() {
     let wrong = "wrong-passphrase-attacker";
 
     // Act: 导出
-    let blob = export_portable(plaintext, correct)
-        .expect("export_portable 应成功");
+    let blob = export_portable(plaintext, correct).expect("export_portable 应成功");
 
     // Act: 用错误口令导入
     let result = import_portable(&blob, wrong);
 
     // Assert: 必须返回 Err，不能 panic，不能解出数据
-    assert!(
-        result.is_err(),
-        "错误口令导入必须返回 Err，实际返回了 Ok"
-    );
+    assert!(result.is_err(), "错误口令导入必须返回 Err，实际返回了 Ok");
 
     // 确认错误类型是解密相关（非格式错误）
     match result.unwrap_err() {
@@ -60,16 +54,12 @@ fn export_import_passphrase_ciphertext_does_not_contain_plaintext() {
     let passphrase = "any-passphrase-for-encryption-test";
 
     // Act
-    let blob = export_portable(plaintext, passphrase)
-        .expect("export_portable 应成功");
+    let blob = export_portable(plaintext, passphrase).expect("export_portable 应成功");
 
     // Assert: blob 中不含明文的任何 8 字节以上连续片段
     let marker = b"UNIQUE_PLAINTEXT_MARKER_XYZZY";
     let found = blob.windows(marker.len()).any(|w| w == marker);
-    assert!(
-        !found,
-        "导出的便携文件不应包含明文内容（加密必须生效）"
-    );
+    assert!(!found, "导出的便携文件不应包含明文内容（加密必须生效）");
 }
 
 /// I-1 导出随机性：相同明文+相同口令两次导出，blob 必须不同（salt/nonce 每次随机）
@@ -83,10 +73,8 @@ fn export_produces_distinct_blobs_each_call() {
     let passphrase = "same-passphrase-for-both-calls";
 
     // Act: 相同明文 + 相同口令，连续两次独立导出
-    let blob1 = export_portable(plaintext, passphrase)
-        .expect("第一次 export_portable 应成功");
-    let blob2 = export_portable(plaintext, passphrase)
-        .expect("第二次 export_portable 应成功");
+    let blob1 = export_portable(plaintext, passphrase).expect("第一次 export_portable 应成功");
+    let blob2 = export_portable(plaintext, passphrase).expect("第二次 export_portable 应成功");
 
     // Assert: 两次 blob 必须不同（salt/nonce 均为 CSPRNG 随机，碰撞概率 ≈ 2^-192）
     assert_ne!(
@@ -102,8 +90,7 @@ fn export_import_passphrase_truncated_blob_returns_format_err() {
     let plaintext = b"some data";
     let passphrase = "some-pass";
 
-    let blob = export_portable(plaintext, passphrase)
-        .expect("export_portable 应成功");
+    let blob = export_portable(plaintext, passphrase).expect("export_portable 应成功");
 
     // 截断为前 8 字节（远小于最小有效格式）
     let truncated = &blob[..8.min(blob.len())];
@@ -112,10 +99,7 @@ fn export_import_passphrase_truncated_blob_returns_format_err() {
     let result = import_portable(truncated, passphrase);
 
     // Assert
-    assert!(
-        result.is_err(),
-        "截断的 blob 必须返回 Err"
-    );
+    assert!(result.is_err(), "截断的 blob 必须返回 Err");
     match result.unwrap_err() {
         PortableError::Format => {}
         other => panic!("截断 blob 应返回 Format 错误，实际: {other:?}"),

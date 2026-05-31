@@ -105,7 +105,10 @@ pub trait ClipboardBackend {
 ///
 /// # 返回
 /// 捕获到新文本内容时返回 `Some(CapturedItem)`，否则 `None`。
-pub fn poll_once(backend: &dyn ClipboardBackend, last_seen_count: &mut u64) -> Option<CapturedItem> {
+pub fn poll_once(
+    backend: &dyn ClipboardBackend,
+    last_seen_count: &mut u64,
+) -> Option<CapturedItem> {
     let current = backend.change_count();
 
     if current <= *last_seen_count {

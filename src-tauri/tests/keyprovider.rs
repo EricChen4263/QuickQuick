@@ -9,7 +9,7 @@
 //! - Fake 实现 FakeKeyProvider 证明 trait 是可用抽象。
 //! - 断言 KeychainKeyProvider 的 is_device_only 与 accessibility 语义。
 
-use quickquick_lib::keyprovider::{KeyAccessibility, KeychainKeyProvider, KeyProvider};
+use quickquick_lib::keyprovider::{KeyAccessibility, KeyProvider, KeychainKeyProvider};
 
 /// Fake KeyProvider 实现，用于证明 trait 是可用抽象（不依赖 Keychain）
 struct FakeKeyProvider {
@@ -38,7 +38,9 @@ fn keyprovider_abstraction_and_device_only() {
     let fake: &dyn KeyProvider = &FakeKeyProvider::with_fixed_key(0xAB);
 
     // Act
-    let key = fake.get_or_create_key().expect("FakeKeyProvider 不应返回错误");
+    let key = fake
+        .get_or_create_key()
+        .expect("FakeKeyProvider 不应返回错误");
 
     // Assert：确实得到 32 字节，且值与预期一致（非恒真）
     assert_eq!(key.len(), 32, "密钥应为 32 字节");
@@ -56,7 +58,10 @@ fn keyprovider_abstraction_and_device_only() {
 
     // Assert：accessibility() 返回 AfterFirstUnlockThisDeviceOnly 变体
     assert!(
-        matches!(provider.accessibility(), KeyAccessibility::AfterFirstUnlockThisDeviceOnly),
+        matches!(
+            provider.accessibility(),
+            KeyAccessibility::AfterFirstUnlockThisDeviceOnly
+        ),
         "accessibility() 应返回 AfterFirstUnlockThisDeviceOnly"
     );
 
@@ -87,7 +92,10 @@ fn key_accessibility_flags() {
 
     // Assert a：accessibility 语义枚举
     assert!(
-        matches!(provider.accessibility(), KeyAccessibility::AfterFirstUnlockThisDeviceOnly),
+        matches!(
+            provider.accessibility(),
+            KeyAccessibility::AfterFirstUnlockThisDeviceOnly
+        ),
         "accessibility() 应返回 AfterFirstUnlockThisDeviceOnly"
     );
 

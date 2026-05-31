@@ -18,7 +18,7 @@
 //! - `perform_paste_or_degrade`— 执行粘贴：已授权走完整路径，未授权仅写回不崩
 
 use crate::clipboard::CapturedItem;
-use crate::paste::{PasteBackend, write_then_paste};
+use crate::paste::{write_then_paste, PasteBackend};
 
 /// macOS 辅助功能深链常量，跳转到系统设置 › 隐私与安全性 › 辅助功能。
 ///

@@ -4,14 +4,14 @@
 //! 缓存、限流、凭据、重试、超时、取消等横切关注点不在 trait 上，
 //! 由核心框架层（s03–s05）实现。
 
-pub mod lang;
-pub mod error;
-pub mod retry;
+pub mod cache;
 pub mod cancel;
 pub mod credential;
-pub mod cache;
-pub mod providers;
+pub mod error;
 pub mod history;
+pub mod lang;
+pub mod providers;
+pub mod retry;
 
 pub use providers::registry;
 
