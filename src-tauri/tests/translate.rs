@@ -3,6 +3,9 @@
 //! 覆盖：
 //! - V2-F1-A01 provider_trait_contract：薄 provider 契约三件职责可用，缓存/限流等不在 trait 上
 //! - V2-F1-A02 lang_normalize_and_direction：语言归一，本地检测定方向，BCP-47，provider 映射表
+//! - V2-F1-A03 error_enum_mapping：统一错误枚举，provider 原始错误归一到具体变体
+//! - V2-F1-A04 same_source_retry_no_cross_failover：错误降级，同源退避重试，绝不自动跨源
+//! - V2-F1-A07 timeout_and_cancel_inflight：超时归 Network，连续选中只认最新请求
 //! - V2-F1-A08 static_registry_lists_four：静态注册表枚举 4 家 provider
 
 use quickquick_lib::translate::{
@@ -10,6 +13,9 @@ use quickquick_lib::translate::{
     TranslateRequest, TranslateResponse, registry,
 };
 use quickquick_lib::translate::lang::{detect_is_chinese, detect_lang, map_lang_for_provider, resolve_direction};
+use quickquick_lib::translate::error::{map_provider_error, classify_timeout};
+use quickquick_lib::translate::retry::{is_transient, retry_with_backoff};
+use quickquick_lib::translate::cancel::InflightTracker;
 
 // 测试用 stub provider
 
@@ -389,4 +395,304 @@ fn lang_norm_detect_lang_returns_en_for_ascii() {
 
     // Assert：ASCII 文本默认检测为 en
     assert_eq!(lang.as_str(), "en", "ASCII 文本应检测为 en");
+}
+
+// V2-F1-A03 error_enum_mapping
+
+/// A03：401/403 HTTP 状态码归一为 Auth 变体。
+#[test]
+fn error_enum_mapping_401_maps_to_auth() {
+    // Arrange
+    let status = 401_u16;
+
+    // Act
+    let err = map_provider_error(status, None);
+
+    // Assert
+    assert!(matches!(err, TranslateError::Auth(_)), "401 应归一为 Auth");
+}
+
+/// A03：403 归一为 Auth。
+#[test]
+fn error_enum_mapping_403_maps_to_auth() {
+    // Arrange
+    let status = 403_u16;
+
+    // Act
+    let err = map_provider_error(status, None);
+
+    // Assert
+    assert!(matches!(err, TranslateError::Auth(_)), "403 应归一为 Auth");
+}
+
+/// A03：429 归一为 RateLimit。
+#[test]
+fn error_enum_mapping_429_maps_to_rate_limit() {
+    // Arrange
+    let status = 429_u16;
+
+    // Act
+    let err = map_provider_error(status, None);
+
+    // Assert
+    assert!(matches!(err, TranslateError::RateLimit(_)), "429 应归一为 RateLimit");
+}
+
+/// A03：5xx 归一为 ServerError。
+#[test]
+fn error_enum_mapping_5xx_maps_to_server_error() {
+    // Arrange
+    let status = 500_u16;
+
+    // Act
+    let err = map_provider_error(status, None);
+
+    // Assert
+    assert!(matches!(err, TranslateError::ServerError(_)), "500 应归一为 ServerError");
+}
+
+/// A03：provider_code "quota_exceeded" 归一为 Quota。
+#[test]
+fn error_enum_mapping_quota_code_maps_to_quota() {
+    // Arrange：200 状态码但带配额超限 provider_code
+    let status = 200_u16;
+
+    // Act
+    let err = map_provider_error(status, Some("quota_exceeded"));
+
+    // Assert
+    assert!(matches!(err, TranslateError::Quota(_)), "quota_exceeded 应归一为 Quota");
+}
+
+/// A03：provider_code "text_too_long" 归一为 TooLong。
+#[test]
+fn error_enum_mapping_too_long_code_maps_to_too_long() {
+    // Arrange
+    let status = 400_u16;
+
+    // Act
+    let err = map_provider_error(status, Some("text_too_long"));
+
+    // Assert
+    assert!(matches!(err, TranslateError::TooLong(_)), "text_too_long 应归一为 TooLong");
+}
+
+/// A03：provider_code "unsupported_lang" 归一为 Unsupported。
+#[test]
+fn error_enum_mapping_unsupported_lang_maps_to_unsupported() {
+    // Arrange
+    let status = 400_u16;
+
+    // Act
+    let err = map_provider_error(status, Some("unsupported_lang"));
+
+    // Assert
+    assert!(matches!(err, TranslateError::Unsupported(_)), "unsupported_lang 应归一为 Unsupported");
+}
+
+/// A03：status=0（网络层失败）归一为 Network。
+#[test]
+fn error_enum_mapping_status_zero_maps_to_network() {
+    // Arrange：0 表示未收到 HTTP 响应（网络层失败）
+    let status = 0_u16;
+
+    // Act
+    let err = map_provider_error(status, None);
+
+    // Assert
+    assert!(matches!(err, TranslateError::Network(_)), "status=0 应归一为 Network");
+}
+
+/// A03（P3 边界）：provider_code "quota_remaining" 含子串 "quota" 但不在已知集合中，不应误判为 Quota。
+#[test]
+fn error_enum_mapping_quota_remaining_does_not_map_to_quota() {
+    // Arrange：quota_remaining 表示"剩余配额"，语义与超限相反，不应触发 Quota 变体
+    let status = 200_u16;
+
+    // Act
+    let err = map_provider_error(status, Some("quota_remaining"));
+
+    // Assert：应回落到 HTTP 状态码兜底（200 → ServerError），而非误判为 Quota
+    assert!(
+        !matches!(err, TranslateError::Quota(_)),
+        "quota_remaining 不应误命中 Quota 变体"
+    );
+}
+
+/// A03（P3 边界）：provider_code "unsupported_format" 含子串 "unsupported" 但不在已知集合中，不应误判为 Unsupported。
+#[test]
+fn error_enum_mapping_unsupported_format_does_not_map_to_unsupported() {
+    // Arrange：unsupported_format 是格式不支持，与语言不支持语义不同
+    let status = 400_u16;
+
+    // Act
+    let err = map_provider_error(status, Some("unsupported_format"));
+
+    // Assert：应回落到 HTTP 状态码兜底（400 → ServerError），而非误判为 Unsupported
+    assert!(
+        !matches!(err, TranslateError::Unsupported(_)),
+        "unsupported_format 不应误命中 Unsupported 变体"
+    );
+}
+
+// V2-F1-A04 same_source_retry_no_cross_failover
+
+/// A04：is_transient 对瞬时错误返回 true。
+#[test]
+fn retry_policy_network_error_is_transient() {
+    // Arrange
+    let err = TranslateError::Network("连接超时".to_string());
+
+    // Act + Assert
+    assert!(is_transient(&err), "Network 错误应为瞬时可重试");
+}
+
+/// A04：is_transient 对 RateLimit 返回 true。
+#[test]
+fn retry_policy_rate_limit_is_transient() {
+    // Arrange
+    let err = TranslateError::RateLimit("请求频率过高".to_string());
+
+    // Act + Assert
+    assert!(is_transient(&err), "RateLimit 应为瞬时可重试");
+}
+
+/// A04：is_transient 对 ServerError 返回 true。
+#[test]
+fn retry_policy_server_error_is_transient() {
+    // Arrange
+    let err = TranslateError::ServerError("服务器内部错误".to_string());
+
+    // Act + Assert
+    assert!(is_transient(&err), "ServerError 应为瞬时可重试");
+}
+
+/// A04：is_transient 对永久错误 Auth 返回 false。
+#[test]
+fn retry_policy_auth_error_is_not_transient() {
+    // Arrange
+    let err = TranslateError::Auth("API Key 无效".to_string());
+
+    // Act + Assert
+    assert!(!is_transient(&err), "Auth 错误应为永久不重试");
+}
+
+/// A04：is_transient 对 Quota 返回 false。
+#[test]
+fn retry_policy_quota_error_is_not_transient() {
+    // Arrange
+    let err = TranslateError::Quota("配额已耗尽".to_string());
+
+    // Act + Assert
+    assert!(!is_transient(&err), "Quota 错误应为永久不重试");
+}
+
+/// A04：瞬时错误前 2 次失败，第 3 次成功——同源重试成功，provider_id 全程不变（无跨源切换），
+/// sleep_fn 被调用正确次数且传入指数退避值（验证退避真实生效）。
+#[test]
+fn retry_policy_same_source_retry_no_cross_failover_succeeds_on_third_attempt() {
+    // Arrange：可编程 fake op，前 2 次返回 Network 错误，第 3 次成功
+    let attempt_count = std::cell::Cell::new(0_u32);
+    let provider_ids_seen = std::cell::RefCell::new(Vec::<&str>::new());
+    let fixed_provider_id = "mymemory";
+
+    let sleep_calls = std::cell::RefCell::new(Vec::<u64>::new());
+
+    let op = || {
+        // 每次调用记录当前 provider_id——全程必须保持同一个（框架不切换）
+        provider_ids_seen.borrow_mut().push(fixed_provider_id);
+        let n = attempt_count.get();
+        attempt_count.set(n + 1);
+        if n < 2 {
+            Err(TranslateError::Network("抖动".to_string()))
+        } else {
+            Ok("translated".to_string())
+        }
+    };
+
+    // Act
+    let result = retry_with_backoff(3, op, |ms| sleep_calls.borrow_mut().push(ms));
+
+    // Assert：第 3 次成功
+    assert!(result.is_ok(), "前 2 次瞬时错误后第 3 次应成功");
+    assert_eq!(result.unwrap(), "translated");
+    assert_eq!(attempt_count.get(), 3, "应恰好调用 3 次");
+
+    // provider_id 全程不变——框架绝不自动切换 provider
+    let ids = provider_ids_seen.borrow();
+    assert_eq!(ids.len(), 3, "op 应被调用 3 次");
+    assert!(
+        ids.iter().all(|&id| id == fixed_provider_id),
+        "全部 3 次调用均应使用同一 provider_id，实际: {ids:?}"
+    );
+
+    // sleep_fn 被调用 2 次（前 2 次失败各触发一次退避），且退避值符合指数序列
+    let sleeps = sleep_calls.borrow();
+    assert_eq!(sleeps.len(), 2, "应退避 2 次（对应 2 次瞬时失败），实际: {sleeps:?}");
+    assert_eq!(sleeps[0], 500, "第 1 次退避应为 500ms，实际: {}", sleeps[0]);
+    assert_eq!(sleeps[1], 1000, "第 2 次退避应为 1000ms，实际: {}", sleeps[1]);
+}
+
+/// A04：永久错误（Auth）立即返回，不触发重试，sleep_fn 不被调用。
+#[test]
+fn retry_policy_permanent_error_returns_immediately_without_retry() {
+    // Arrange：每次都返回 Auth 错误
+    let attempt_count = std::cell::Cell::new(0_u32);
+    let sleep_calls = std::cell::Cell::new(0_u32);
+
+    let op = || {
+        attempt_count.set(attempt_count.get() + 1);
+        Err::<String, _>(TranslateError::Auth("无效 Key".to_string()))
+    };
+
+    // Act
+    let result = retry_with_backoff(3, op, |_| sleep_calls.set(sleep_calls.get() + 1));
+
+    // Assert：永久错误立即返回，不重试，sleep_fn 不被调用
+    assert!(result.is_err(), "永久错误应返回 Err");
+    assert!(matches!(result.unwrap_err(), TranslateError::Auth(_)));
+    assert_eq!(attempt_count.get(), 1, "永久错误应只调用 1 次，不重试");
+    assert_eq!(sleep_calls.get(), 0, "永久错误不应触发退避 sleep");
+}
+
+// V2-F1-A07 timeout_and_cancel_inflight
+
+/// A07：classify_timeout 返回 Network 变体（超时语义归入 network 错误枚举）。
+#[test]
+fn timeout_and_cancel_inflight_timeout_classified_as_network() {
+    // Arrange + Act
+    let err = classify_timeout();
+
+    // Assert：超时驱动 network 错误枚举
+    assert!(matches!(err, TranslateError::Network(_)), "超时应归一为 Network 错误");
+}
+
+/// A07：InflightTracker 连续两次 begin 后，旧 generation is_current=false，新 generation=true。
+#[test]
+fn timeout_and_cancel_inflight_old_gen_invalidated_by_new_begin() {
+    // Arrange
+    let tracker = InflightTracker::new();
+
+    // Act：第一次发请求
+    let old_gen = tracker.begin();
+
+    // Act：连续第二次发请求（模拟"选中即译"新触发）
+    let new_gen = tracker.begin();
+
+    // Assert：只认最新，旧请求应被取消
+    assert!(!tracker.is_current(old_gen), "旧 generation 应已失效");
+    assert!(tracker.is_current(new_gen), "新 generation 应为当前有效请求");
+}
+
+/// A07：单次 begin 后，该 generation 仍为 current（未被后续 begin 覆盖）。
+#[test]
+fn timeout_and_cancel_inflight_single_begin_remains_current() {
+    // Arrange
+    let tracker = InflightTracker::new();
+
+    // Act
+    let gen = tracker.begin();
+
+    // Assert
+    assert!(tracker.is_current(gen), "唯一的 generation 应为 current");
 }

@@ -2,9 +2,12 @@
 //!
 //! 本模块定义薄 provider 契约（三件职责）与静态注册表。
 //! 缓存、限流、凭据、重试、超时、取消等横切关注点不在 trait 上，
-//! 由核心框架层（后续小功能 s03–s05）实现。
+//! 由核心框架层（s03–s05）实现。
 
 pub mod lang;
+pub mod error;
+pub mod retry;
+pub mod cancel;
 mod providers;
 
 pub use providers::registry;
@@ -72,22 +75,44 @@ pub struct ProviderHttpRequest {
     pub body: Option<String>,
 }
 
-/// 翻译错误枚举。
+/// 统一翻译错误枚举（s03 归一映射）。
 ///
-/// 本次为占位变体（s03 细化归一映射：quota/auth/network/ratelimit/unsupported/tooLong/serverError）。
+/// 每个变体携带人类可读的上下文字符串。
+/// `ParseError` 保留 s01/s02 既有用法；其余变体为 s03 新增。
 #[derive(Debug, Error)]
 pub enum TranslateError {
-    /// 响应解析失败（JSON 格式错误或缺少字段）。
+    /// 响应解析失败（JSON 格式错误或缺少字段）。s01/s02 既有。
     #[error("解析错误: {0}")]
     ParseError(String),
 
-    /// 网络层错误（超时、连接拒绝等）；s03 细化。
+    /// 网络层错误（超时、连接拒绝、DNS 失败等）。
+    /// 超时也归入此变体——超时本质是网络层未在期限内响应。
     #[error("网络错误: {0}")]
-    NetworkError(String),
+    Network(String),
 
-    /// Provider 返回的通用业务错误；s03 细化为具体变体。
-    #[error("Provider 错误: {0}")]
-    ProviderError(String),
+    /// 认证失败（HTTP 401/403，或 API Key 无效）。
+    #[error("认证错误: {0}")]
+    Auth(String),
+
+    /// 请求频率超限（HTTP 429）。瞬时可重试。
+    #[error("频率超限: {0}")]
+    RateLimit(String),
+
+    /// 配额耗尽（免费额度用完等）。永久，需用户干预。
+    #[error("配额超限: {0}")]
+    Quota(String),
+
+    /// 不支持的语言对。永久错误。
+    #[error("不支持的语言: {0}")]
+    Unsupported(String),
+
+    /// 原文过长，超过 provider 单次限制。永久错误。
+    #[error("文本过长: {0}")]
+    TooLong(String),
+
+    /// Provider 服务端内部错误（HTTP 5xx）。瞬时可重试。
+    #[error("服务端错误: {0}")]
+    ServerError(String),
 }
 
 /// 薄 provider 契约——恰好三件职责：
