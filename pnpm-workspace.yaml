@@ -1,2 +1,4 @@
+# 允许 esbuild 运行安装期构建脚本（vite 依赖其原生二进制）。
+# pnpm 11 认 allowBuilds 这个键；缺它则全新 install 会 ERR_PNPM_IGNORED_BUILDS、CI 里 vite build 失败。
 allowBuilds:
   esbuild: true

@@ -2,6 +2,7 @@
 /node_modules
 /dist
 /src-tauri/target
+tsconfig.tsbuildinfo
 # 系统/编辑器
 .DS_Store
 *.log

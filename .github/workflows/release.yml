@@ -1,0 +1,90 @@
+name: release
+
+# 打 v* tag 触发：构建 macOS(Universal) + Windows 安装包，发到 GitHub Releases（草稿，过目再发布）。
+# 未签名分发——Release 正文带绕过系统拦截的安装说明。
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build:
+    permissions:
+      contents: write              # tauri-action 创建 Release 需要
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-latest
+            args: '--target universal-apple-darwin'
+            rust-targets: 'aarch64-apple-darwin,x86_64-apple-darwin'
+          - platform: windows-latest
+            args: ''
+            rust-targets: ''
+    runs-on: ${{ matrix.platform }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # 版本守卫：tag(去掉 v) 必须等于三处配置版本，不一致直接 fail，堵版本号手抖
+      - name: 校验 tag 与配置版本一致
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME#v}"
+          pkg="$(node -p "require('./package.json').version")"
+          conf="$(node -p "require('./src-tauri/tauri.conf.json').version")"
+          cargo="$(grep -m1 '^version = ' src-tauri/Cargo.toml | sed -E 's/.*"([^"]+)".*/\1/')"
+          echo "tag=$tag package.json=$pkg tauri.conf.json=$conf Cargo.toml=$cargo"
+          if [ "$tag" != "$pkg" ] || [ "$tag" != "$conf" ] || [ "$tag" != "$cargo" ]; then
+            echo "::error::版本不一致——先 make bump VERSION=$tag 同步三处再打 tag"
+            exit 1
+          fi
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11        # allowBuilds 键为 pnpm 11 专有；钉 11 与本地一致，否则 esbuild 不构建
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust-targets }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: 安装前端依赖
+        run: pnpm install --frozen-lockfile
+
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: 'QuickQuick ${{ github.ref_name }}'
+          releaseDraft: true
+          prerelease: false
+          args: ${{ matrix.args }}
+          releaseBody: |
+            ## Install / 安装
+
+            > Unsigned build — your OS will warn on first launch. Steps below clear it (one-time).
+            > 未签名构建——首次打开会被系统拦，按下面一次性放行即可。
+
+            **macOS** (`.dmg`)
+            1. Open the `.dmg` and drag QuickQuick to Applications. / 打开 `.dmg`，把 QuickQuick 拖进"应用程序"。
+            2. First launch: right-click the app → **Open** → **Open** (don't double-click). / 首次打开：右键应用 →"打开"→"打开"（别直接双击）。
+            3. If still blocked, run in Terminal: `xattr -cr /Applications/QuickQuick.app` / 仍被拦就在终端跑：`xattr -cr /Applications/QuickQuick.app`
+            4. macOS will ask for **Accessibility** permission for global paste — grant it in System Settings › Privacy & Security › Accessibility. / macOS 会为"自动粘贴"申请**辅助功能**权限，到 系统设置›隐私与安全性›辅助功能 里授权。
+
+            **Windows** (`.exe` / `.msi`)
+            1. Run the installer. SmartScreen may show "Windows protected your PC". / 运行安装包，可能弹 SmartScreen"已保护你的电脑"。
+            2. Click **More info** → **Run anyway**. / 点"更多信息"→"仍要运行"。
+
+            ---
+            **Default hotkeys / 默认热键**：History `Cmd/Ctrl+Shift+V` · Translate `Cmd/Ctrl+Shift+T`（可在设置里改键 / rebindable in Settings）
