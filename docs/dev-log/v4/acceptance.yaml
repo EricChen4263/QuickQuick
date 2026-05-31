@@ -29,7 +29,7 @@ acceptance:
     verify: { type: test_id, ref: ipc_clipboard, runner: "cargo test --manifest-path src-tauri/Cargo.toml ipc_clipboard", path: src-tauri/tests/ipc_clipboard.rs, expect: pass }
     evidence_ref: docs/dev-log/v4/f1-ipc/s01-clip-cmd/test.md
     level: 小功能
-    status: 待验
+    status: 已验通过
   - id: V4-F1-A02
     assertion: "翻译 IPC 命令往返：暴露 translate_text 命令，调既有 translate 逻辑返回 {译文, 方向}（智能双向：中→英 / 非中→中）"
     category: 功能正确性

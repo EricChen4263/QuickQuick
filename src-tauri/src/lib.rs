@@ -13,6 +13,7 @@ pub mod clipboard;
 pub mod db;
 pub mod hotkey;
 pub mod image;
+pub mod ipc;
 pub mod keyprovider;
 pub mod onboarding;
 pub mod paste;

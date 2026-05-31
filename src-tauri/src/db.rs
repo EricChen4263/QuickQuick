@@ -217,6 +217,58 @@ pub fn soft_delete(conn: &Connection, id: &str) -> Result<(), DbError> {
     Ok(())
 }
 
+/// 完整剪贴板条目行（list_items_full 返回元素）。
+///
+/// 包含前端展示所需的全量字段：内容、类型、收藏状态、时间。
+#[derive(Debug, PartialEq)]
+pub struct ClipItemRow {
+    /// 条目 UUID
+    pub id: String,
+    /// 条目内容（文本）
+    pub content: String,
+    /// 内容类型（如 "text"）
+    pub kind: String,
+    /// 收藏标记（true = 收藏）
+    pub is_favorite: bool,
+    /// 最后修改时间（UTC epoch ms）
+    pub last_modified_utc: i64,
+}
+
+/// 返回未软删条目的完整列表：收藏优先，组内按最近修改时间降序。
+///
+/// 与 `list_ordered` 排序规则相同，但返回前端展示所需的全量字段。
+///
+/// # Errors
+/// `DbError::Sqlite`：SQL 执行失败
+pub fn list_items_full(conn: &Connection) -> Result<Vec<ClipItemRow>, DbError> {
+    let mut stmt = conn.prepare(
+        "SELECT id, content, kind, is_favorite, last_modified_utc
+         FROM clip_items
+         WHERE is_deleted = 0
+         ORDER BY is_favorite DESC, last_modified_utc DESC",
+    )?;
+    let rows = stmt.query_map([], |row| {
+        let id: String = row.get(0)?;
+        let content: String = row.get::<_, Option<String>>(1)?.unwrap_or_default();
+        let kind: String = row.get(2)?;
+        let is_fav_int: i64 = row.get(3)?;
+        let last_modified: i64 = row.get(4)?;
+        Ok(ClipItemRow {
+            id,
+            content,
+            kind,
+            is_favorite: is_fav_int != 0,
+            last_modified_utc: last_modified,
+        })
+    })?;
+
+    let mut result = Vec::new();
+    for row in rows {
+        result.push(row?);
+    }
+    Ok(result)
+}
+
 /// 列表排序后的条目行（list_ordered 返回元素）。
 ///
 /// 含业务排序所需的最小字段集。
