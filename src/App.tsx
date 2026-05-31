@@ -1,26 +1,43 @@
 import { useEffect, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { resolveRoute, type HotkeyTrigger, type WindowView } from "./shell/windowRoute";
+import { topLevelEntries, type TopLevel } from "./main-window/nav";
+import { type HotkeyTrigger } from "./shell/windowRoute";
+import "./theme/theme.css";
 
-/** Tauri `route` 事件 payload 类型（与后端 emit 的字符串对应） */
+/** 热键路由 payload 类型（与后端 emit 的字符串对应） */
 type RoutePayload = HotkeyTrigger;
 
-/** QuickQuick 预热窗口根组件：历史/翻译共用单窗口按路由切换视图 */
-function App() {
-  const [currentView, setCurrentView] = useState<WindowView>("history");
+/** 一级页中文标签映射（具名常量，避免魔术字符串） */
+const TOP_LEVEL_LABELS: Record<TopLevel, string> = {
+  clipboard: "剪贴板",
+  translate: "翻译",
+  settings: "设置",
+};
 
-  // 监听后端 route 事件，切换当前视图
+/**
+ * 将热键触发类型映射到对应的一级页。
+ * history 热键对应剪贴板页；translate 热键对应翻译页。
+ */
+function routeToTopLevel(trigger: HotkeyTrigger): TopLevel {
+  if (trigger === "translate") return "translate";
+  return "clipboard";
+}
+
+/** QuickQuick 主窗口根组件：左侧边栏 + 一级页切换 */
+function App() {
+  const [activeTop, setActiveTop] = useState<TopLevel>("clipboard");
+
+  // 监听后端 route 事件，切换一级页
   // cancelled flag 防止组件卸载后 Promise resolve 造成监听器泄漏
   useEffect(() => {
     let cancelled = false;
     let unlisten: (() => void) | undefined;
 
     listen<RoutePayload>("route", (event) => {
-      setCurrentView(resolveRoute(event.payload));
+      setActiveTop((_prev) => routeToTopLevel(event.payload));
     }).then((fn) => {
       if (cancelled) {
-        // 组件已卸载，立即释放监听器
         fn();
       } else {
         unlisten = fn;
@@ -49,25 +66,42 @@ function App() {
     };
   }, []);
 
-  function handleTrigger(trigger: HotkeyTrigger) {
-    setCurrentView(resolveRoute(trigger));
-  }
+  const entries = topLevelEntries();
 
   return (
-    <div>
-      <div style={{ display: currentView === "history" ? "block" : "none" }}>
-        <h1>剪贴板历史</h1>
-      </div>
-      <div style={{ display: currentView === "translate" ? "block" : "none" }}>
-        <h1>翻译</h1>
-      </div>
-      {/* 开发调试用按钮，生产不可见 */}
-      {import.meta.env.DEV && (
-        <div>
-          <button onClick={() => handleTrigger("history")}>历史</button>
-          <button onClick={() => handleTrigger("translate")}>翻译</button>
-        </div>
-      )}
+    <div className="qq-main" style={{ display: "flex", height: "100vh" }}>
+      <nav aria-label="主导航" style={{ display: "flex", flexDirection: "column" }}>
+        {entries.map((entry) => (
+          <button
+            key={entry}
+            aria-current={activeTop === entry ? "page" : undefined}
+            onClick={() => setActiveTop((_prev) => entry)}
+          >
+            {TOP_LEVEL_LABELS[entry]}
+          </button>
+        ))}
+      </nav>
+
+      <main style={{ flex: 1 }}>
+        <section
+          data-testid="page-clipboard"
+          style={{ display: activeTop === "clipboard" ? "block" : "none" }}
+        >
+          剪贴板
+        </section>
+        <section
+          data-testid="page-translate"
+          style={{ display: activeTop === "translate" ? "block" : "none" }}
+        >
+          翻译
+        </section>
+        <section
+          data-testid="page-settings"
+          style={{ display: activeTop === "settings" ? "block" : "none" }}
+        >
+          设置
+        </section>
+      </main>
     </div>
   );
 }

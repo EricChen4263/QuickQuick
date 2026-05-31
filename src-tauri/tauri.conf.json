@@ -14,11 +14,11 @@
       {
         "label": "main",
         "title": "QuickQuick",
-        "width": 400,
-        "height": 600,
-        "resizable": false,
+        "width": 960,
+        "height": 640,
+        "resizable": true,
         "visible": false,
-        "decorations": false,
+        "decorations": true,
         "alwaysOnTop": false
       }
     ],

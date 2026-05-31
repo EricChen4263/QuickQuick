@@ -85,7 +85,7 @@ acceptance:
     verify: { type: test_id, ref: app-shell, runner: "pnpm test app-shell", path: src/app-shell.test.tsx, expect: pass }
     evidence_ref: docs/dev-log/v4/f2-ui/s06-app-shell/test.md
     level: 小功能
-    status: 待验
+    status: 已验通过
   - id: V4-F2-A07
     assertion: "剪贴板页渲染+交互：列表+右侧预览双栏渲染，接 IPC 数据显示条目；搜索框输入实时过滤、类型筛选下拉、↑↓键盘高亮接既有 search/filter/keyboard 逻辑生效（渲染测试断言 DOM 随交互变化）"
     category: 功能正确性
