@@ -9,6 +9,7 @@ pub mod error;
 pub mod retry;
 pub mod cancel;
 pub mod credential;
+pub mod cache;
 mod providers;
 
 pub use providers::registry;

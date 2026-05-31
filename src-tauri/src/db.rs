@@ -429,6 +429,20 @@ fn ensure_schema(conn: &Connection) -> Result<(), DbError> {
             value        TEXT NOT NULL,
             PRIMARY KEY (provider_id, field_key)
         );
+
+        -- 翻译缓存表（§4.1#5 预埋，LRU 淘汰；键=四元组哈希）
+        -- cache_key = hash(source_text + source_lang + target_lang + provider_id)
+        -- last_used_utc 用于 LRU 淘汰排序（命中时刷新）
+        CREATE TABLE IF NOT EXISTS translation_cache (
+            cache_key      TEXT PRIMARY KEY NOT NULL,
+            source_text    TEXT NOT NULL,
+            source_lang    TEXT NOT NULL,
+            target_lang    TEXT NOT NULL,
+            provider_id    TEXT NOT NULL,
+            translated     TEXT NOT NULL,
+            created_utc    INTEGER NOT NULL,
+            last_used_utc  INTEGER NOT NULL
+        );
         ",
     )?;
     Ok(())

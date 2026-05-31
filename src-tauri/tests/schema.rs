@@ -16,8 +16,8 @@ const TEST_KEY: [u8; 32] = [7u8; 32];
 /// 白名单校验表名，防止测试辅助函数被误用于不受信任的字符串（安全§10 输入校验）。
 fn table_columns(conn: &rusqlite::Connection, table: &str) -> Vec<String> {
     assert!(
-        matches!(table, "clip_items" | "clip_images" | "provider_config"),
-        "未知表名 '{table}'，仅允许 clip_items / clip_images / provider_config"
+        matches!(table, "clip_items" | "clip_images" | "provider_config" | "translation_cache"),
+        "未知表名 '{table}'，仅允许 clip_items / clip_images / provider_config / translation_cache"
     );
     let sql = format!("PRAGMA table_info({})", table);
     let mut stmt = conn.prepare(&sql).expect("PRAGMA table_info 应成功");
@@ -290,6 +290,67 @@ fn gc_cascade_deletes_clip_images_on_clip_item_removal() {
         img_count, 0,
         "clip_items 删除后，关联的 clip_images 应级联删除，实际仍有: {}",
         img_count
+    );
+}
+
+/// V2-F1-A06：translation_cache 表由 ensure_schema 预埋，含 cache_key / provider_id / translated / last_used_utc 等必要列
+#[test]
+fn schema_preembed_translation_cache_table_exists_with_required_columns() {
+    // Arrange
+    let dir = tempdir().expect("tempdir 创建失败");
+    let db_path = dir.path().join("quickquick.db");
+    let conn = db::open_or_create(&db_path, &TEST_KEY).expect("建库应成功");
+
+    // Act
+    let cols = table_columns(&conn, "translation_cache");
+
+    // Assert：主键缓存键
+    assert!(
+        cols.contains(&"cache_key".to_string()),
+        "translation_cache 应含 cache_key 列；实际列: {:?}",
+        cols
+    );
+    // Assert：provider 标识（换源 miss 的基础）
+    assert!(
+        cols.contains(&"provider_id".to_string()),
+        "translation_cache 应含 provider_id 列；实际列: {:?}",
+        cols
+    );
+    // Assert：翻译结果
+    assert!(
+        cols.contains(&"translated".to_string()),
+        "translation_cache 应含 translated 列；实际列: {:?}",
+        cols
+    );
+    // Assert：LRU 淘汰基础字段
+    assert!(
+        cols.contains(&"last_used_utc".to_string()),
+        "translation_cache 应含 last_used_utc 列；实际列: {:?}",
+        cols
+    );
+    // Assert：源文本
+    assert!(
+        cols.contains(&"source_text".to_string()),
+        "translation_cache 应含 source_text 列；实际列: {:?}",
+        cols
+    );
+    // Assert：源语言
+    assert!(
+        cols.contains(&"source_lang".to_string()),
+        "translation_cache 应含 source_lang 列；实际列: {:?}",
+        cols
+    );
+    // Assert：目标语言
+    assert!(
+        cols.contains(&"target_lang".to_string()),
+        "translation_cache 应含 target_lang 列；实际列: {:?}",
+        cols
+    );
+    // Assert：创建时间
+    assert!(
+        cols.contains(&"created_utc".to_string()),
+        "translation_cache 应含 created_utc 列；实际列: {:?}",
+        cols
     );
 }
 

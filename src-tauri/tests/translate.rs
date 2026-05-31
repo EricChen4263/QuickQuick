@@ -921,6 +921,234 @@ fn credential_schema_keychain_unknown_provider_returns_err() {
     );
 }
 
+// V2-F1-A06 cache_key_includes_provider_lru
+
+use quickquick_lib::translate::cache::{
+    cache_get, cache_get_at, cache_key, cache_put, cache_put_at, CacheEntry,
+};
+
+/// I-1：空段（source_lang=""）与非空段不发生前缀碰撞（非零分隔符生效）。
+#[test]
+fn cache_key_separator_empty_segment_differs_from_nonempty() {
+    // Arrange：仅 source_lang 不同（"" vs "x"），其余三段相同
+    // 若分隔符为 XOR 0（无效），哈希状态不变，两者可能碰撞
+    let key_empty = cache_key("a", "", "c", "d");
+    let key_nonempty = cache_key("a", "x", "c", "d");
+
+    // Act + Assert：非零分隔符使段边界真正改变哈希状态，两者必须不同
+    assert_ne!(
+        key_empty, key_nonempty,
+        "空段与非空段应产生不同 cache_key（非零分隔符防前缀碰撞）"
+    );
+}
+
+/// I-2：cache_get_at 命中时用注入的 now_ms 刷新 last_used_utc（LRU 刷新路径可测）。
+#[test]
+fn cache_get_at_hit_refreshes_last_used_utc_to_injected_timestamp() {
+    // Arrange
+    let dir = tempdir().expect("tempdir 创建失败");
+    let db_path = dir.path().join("cache_get_at.db");
+    let conn = db::open_or_create(&db_path, &TEST_DB_KEY).expect("建库应成功");
+
+    let provider = "mymemory";
+    let key = cache_key("hello", "en", "zh", provider);
+
+    // 写入时 last_used_utc=100
+    cache_put_at(
+        &conn,
+        &CacheEntry {
+            source_text: "hello",
+            source_lang: "en",
+            target_lang: "zh",
+            provider_id: provider,
+            translated: "你好",
+        },
+        100,
+        100,
+    )
+    .expect("put 应成功");
+
+    // Act：用 now_ms=500 调用 cache_get_at，命中后应将 last_used_utc 刷新为 500
+    let result = cache_get_at(&conn, &key, 500).expect("cache_get_at 不应返回 Err");
+
+    // Assert：命中且返回正确值
+    assert_eq!(
+        result,
+        Some("你好".to_string()),
+        "cache_get_at 应命中并返回正确 translated"
+    );
+
+    // Assert：直查 DB 确认 last_used_utc 已刷新为 500（证明 LRU 刷新路径确实执行）
+    let last_used: i64 = conn
+        .query_row(
+            "SELECT last_used_utc FROM translation_cache WHERE cache_key = ?1",
+            rusqlite::params![key],
+            |row| row.get(0),
+        )
+        .expect("直查 last_used_utc 应成功");
+    assert_eq!(
+        last_used, 500,
+        "cache_get_at 命中后 last_used_utc 应被刷新为注入的 now_ms=500，实际: {last_used}"
+    );
+}
+
+/// A06-a：同 source_text/源语/目标语，provider 不同 → cache_key 不同（换源必 miss）。
+#[test]
+fn cache_key_includes_provider_lru_different_providers_produce_different_keys() {
+    // Arrange
+    let text = "hello world";
+    let src = "en";
+    let tgt = "zh";
+
+    // Act
+    let key_mymemory = cache_key(text, src, tgt, "mymemory");
+    let key_deepl = cache_key(text, src, tgt, "deepl_free");
+
+    // Assert：换源必产生不同 key
+    assert_ne!(
+        key_mymemory, key_deepl,
+        "provider 不同时 cache_key 必须不同，否则换源不会 miss"
+    );
+}
+
+/// A06-b：put(mymemory) 后用 deepl_free 的 key cache_get → None（换源必 miss）。
+#[test]
+fn cache_key_includes_provider_lru_cross_provider_cache_get_is_miss() {
+    // Arrange
+    let dir = tempdir().expect("tempdir 创建失败");
+    let db_path = dir.path().join("cache_miss.db");
+    let conn = db::open_or_create(&db_path, &TEST_DB_KEY).expect("建库应成功");
+
+    let text = "hello";
+    let src = "en";
+    let tgt = "zh";
+
+    // Act：用 mymemory 写入
+    cache_put(&conn, text, src, tgt, "mymemory", "你好", 100)
+        .expect("cache_put 应成功");
+
+    // 用 deepl_free 的 key 查询
+    let deepl_key = cache_key(text, src, tgt, "deepl_free");
+    let result = cache_get(&conn, &deepl_key).expect("cache_get 不应返回 Err");
+
+    // Assert：换源必 miss
+    assert!(
+        result.is_none(),
+        "换 provider 后 cache_get 应返回 None（换源必 miss），实际: {:?}",
+        result
+    );
+}
+
+/// A06-c：put 后 cache_get 命中，返回正确 translated（持久验证）。
+#[test]
+fn cache_key_includes_provider_lru_put_then_get_hits_with_correct_value() {
+    // Arrange
+    let dir = tempdir().expect("tempdir 创建失败");
+    let db_path = dir.path().join("cache_hit.db");
+    let conn = db::open_or_create(&db_path, &TEST_DB_KEY).expect("建库应成功");
+
+    let text = "good morning";
+    let src = "en";
+    let tgt = "zh";
+    let provider = "mymemory";
+    let translated = "早上好";
+
+    // Act
+    cache_put(&conn, text, src, tgt, provider, translated, 100)
+        .expect("cache_put 应成功");
+
+    let key = cache_key(text, src, tgt, provider);
+    let result = cache_get(&conn, &key).expect("cache_get 不应返回 Err");
+
+    // Assert：命中且值正确
+    assert_eq!(
+        result,
+        Some(translated.to_string()),
+        "cache_get 应命中并返回正确 translated"
+    );
+}
+
+/// A06-d：LRU 淘汰——capacity=2，put 三条，访问顺序使 B 最久未用；
+///         第三次 put C 触发淘汰，B 被淘汰，A/C 仍在。
+///
+/// 时间线（注入可控时间戳，避免同毫秒内顺序不确定）：
+///   t=100  put A（last_used=100）
+///   t=200  put B（last_used=200）
+///   t=300  get A → A.last_used 刷新为 300，B 此时 last_used=200（最旧，成为 LRU）
+///   t=400  put C（capacity=2，触发淘汰：删 B）
+#[test]
+fn cache_key_includes_provider_lru_evicts_least_recently_used_on_overflow() {
+    // Arrange
+    let dir = tempdir().expect("tempdir 创建失败");
+    let db_path = dir.path().join("cache_lru.db");
+    let conn = db::open_or_create(&db_path, &TEST_DB_KEY).expect("建库应成功");
+
+    let provider = "mymemory";
+    let capacity = 2_usize;
+
+    // t=100：put A（初始 last_used=100）
+    cache_put_at(
+        &conn,
+        &CacheEntry { source_text: "apple", source_lang: "en", target_lang: "zh", provider_id: provider, translated: "苹果" },
+        capacity,
+        100,
+    ).expect("put A 应成功");
+
+    // t=200：put B（last_used=200）；此时表内 2 条，未超 capacity，不淘汰
+    cache_put_at(
+        &conn,
+        &CacheEntry { source_text: "banana", source_lang: "en", target_lang: "zh", provider_id: provider, translated: "香蕉" },
+        capacity,
+        200,
+    ).expect("put B 应成功");
+
+    // t=300：刷新 A 的 last_used（UPSERT 同值、时间戳=300）
+    // cache_get 内部用 current_utc_ms() 刷新，此处用 put_at 注入确定性时间戳
+    cache_put_at(
+        &conn,
+        &CacheEntry { source_text: "apple", source_lang: "en", target_lang: "zh", provider_id: provider, translated: "苹果" },
+        999,
+        300,
+    ).expect("刷新 A 的 last_used 应成功");
+
+    // 此时：A.last_used=300，B.last_used=200 → B 是 LRU
+
+    // t=400：put C，capacity=2，触发淘汰，应删 B（last_used 最旧=200）
+    cache_put_at(
+        &conn,
+        &CacheEntry { source_text: "cherry", source_lang: "en", target_lang: "zh", provider_id: provider, translated: "樱桃" },
+        capacity,
+        400,
+    ).expect("put C 应成功");
+
+    // Assert：B 已被淘汰（LRU，last_used=200 最旧）
+    let key_b = cache_key("banana", "en", "zh", provider);
+    let b_result = cache_get(&conn, &key_b).expect("get B 不应返回 Err");
+    assert!(
+        b_result.is_none(),
+        "B 应被 LRU 淘汰（last_used 最旧），实际: {:?}",
+        b_result
+    );
+
+    // Assert：A 仍在（last_used=300，晚于 B）
+    let key_a = cache_key("apple", "en", "zh", provider);
+    let a_result = cache_get(&conn, &key_a).expect("get A 不应返回 Err");
+    assert_eq!(
+        a_result,
+        Some("苹果".to_string()),
+        "A last_used 已刷新，不应被淘汰"
+    );
+
+    // Assert：C 仍在（last_used=400，最新）
+    let key_c = cache_key("cherry", "en", "zh", provider);
+    let c_result = cache_get(&conn, &key_c).expect("get C 不应返回 Err");
+    assert_eq!(
+        c_result,
+        Some("樱桃".to_string()),
+        "C 为最新写入，不应被淘汰"
+    );
+}
+
 /// A05-h：百度 provider 传未在 schema 中的 field_key 应返回 UnknownField 错误，
 ///         且该值未写入 DB（证明不静默降级）。
 #[test]
