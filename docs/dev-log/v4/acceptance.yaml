@@ -56,7 +56,7 @@ acceptance:
     verify: { type: test_id, ref: boot_pipeline, runner: "cargo test --manifest-path src-tauri/Cargo.toml boot_pipeline", path: src-tauri/tests/boot_pipeline.rs, expect: pass }
     evidence_ref: docs/dev-log/v4/f1-ipc/s04-boot-pipeline/test.md
     level: 小功能
-    status: 待验
+    status: 已验通过
   - id: V4-F1-A05
     assertion: "前端 IPC 封装层：src/ipc 提供类型化 invoke 封装（列表/删除/收藏/翻译/设置），错误优雅返回（不裸抛 unknown），命令名与后端一致"
     category: 功能正确性
@@ -74,7 +74,7 @@ acceptance:
     verify: { type: test_id, ref: ipc_input_validation, runner: "cargo test --manifest-path src-tauri/Cargo.toml ipc_input_validation", path: src-tauri/tests/ipc_validation.rs, expect: pass }
     evidence_ref: docs/dev-log/v4/f1-ipc/s01-clip-cmd/test.md
     level: 大功能
-    status: 待验
+    status: 已验通过  # 剪贴板命令参数校验(S01 ipc_input_validation)+设置 id/action 校验(S03)+开库错误不泄密钥(S04)
 
   # ===== V4-F2 主窗口三页 React UI =====
   - id: V4-F2-A06

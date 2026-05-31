@@ -15,7 +15,7 @@ use serde::Serialize;
 use tauri::State;
 
 use crate::db::DbError;
-use crate::ipc::AppDb;
+use crate::ipc::{with_db, AppDb};
 use crate::translate::history::{
     add_translate_history, list_translate_history as db_list_translate_history, TranslateHistoryRow,
 };
@@ -223,8 +223,9 @@ pub fn translate_text(
     text: String,
     target: Option<String>,
 ) -> Result<TranslateResultDto, String> {
-    let conn = state.0.lock().map_err(|e| format!("锁获取失败: {e}"))?;
-    translate_text_impl(&conn, &UreqExecutor, &text, target.as_deref())
+    with_db(&state, |conn| {
+        translate_text_impl(conn, &UreqExecutor, &text, target.as_deref())
+    })
 }
 
 /// Tauri 命令：按时间倒序列出翻译历史。
@@ -232,6 +233,7 @@ pub fn translate_text(
 pub fn list_translate_history(
     state: State<'_, AppDb>,
 ) -> Result<Vec<TranslateHistoryDto>, String> {
-    let conn = state.0.lock().map_err(|e| format!("锁获取失败: {e}"))?;
-    list_translate_history_impl(&conn).map_err(|e| e.to_string())
+    with_db(&state, |conn| {
+        list_translate_history_impl(conn).map_err(|e| e.to_string())
+    })
 }

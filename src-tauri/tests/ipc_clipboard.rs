@@ -11,7 +11,9 @@ use quickquick_lib::db;
 use quickquick_lib::ipc::clipboard::{
     delete_clip_item_impl, list_clip_items_impl, toggle_favorite_clip_impl,
 };
+use quickquick_lib::ipc::{with_db, AppDb};
 use rusqlite::Connection;
+use std::sync::Mutex;
 use tempfile::tempdir;
 
 const KEY: [u8; 32] = [42u8; 32];
@@ -146,4 +148,47 @@ fn ipc_clipboard_list_dto_fields_complete() {
     assert_eq!(item.kind, "text", "kind 应为 'text'");
     assert!(!item.is_favorite, "默认 is_favorite 应为 false");
     assert!(item.last_modified_utc > 0, "last_modified_utc 应为正整数");
+}
+
+/// I-1 修订：with_db helper — None 时返回 Err 且错误信息含"数据库不可用"
+///
+/// 验证当 AppDb 持有 None 时，with_db 返回 Err 而非 panic，
+/// 且错误信息含约定子串"数据库不可用"，供前端展示。
+#[test]
+fn ipc_clipboard_with_db_none_returns_db_unavailable_err() {
+    // Arrange：构造持有 None 的 AppDb（模拟开库失败场景）
+    let db_state = AppDb(Mutex::new(None));
+
+    // Act：调用 with_db，闭包永远不会被执行
+    let result = with_db(&db_state, |_conn| Ok(42u32));
+
+    // Assert：返回 Err 且错误信息含"数据库不可用"
+    assert!(result.is_err(), "AppDb(None) 时 with_db 应返回 Err");
+    let msg = result.unwrap_err();
+    assert!(
+        msg.contains("数据库不可用"),
+        "错误信息应含「数据库不可用」，实际: {msg}"
+    );
+}
+
+/// I-1 修订：with_db helper — Some(conn) 时正常执行闭包并返回 Ok
+///
+/// 验证当 AppDb 持有有效连接时，with_db 正确调用闭包并透传返回值。
+#[test]
+fn ipc_clipboard_with_db_some_executes_closure_ok() {
+    // Arrange：构造持有真实临时库连接的 AppDb
+    let (_dir, conn) = open_tmp_db();
+    let db_state = AppDb(Mutex::new(Some(conn)));
+
+    // Act：闭包读取空列表
+    let result = with_db(&db_state, |c| {
+        db::list_items_full(c).map_err(|e| e.to_string())
+    });
+
+    // Assert：返回 Ok，列表为空（新建库）
+    assert!(result.is_ok(), "AppDb(Some(conn)) 时 with_db 应返回 Ok");
+    assert!(
+        result.unwrap().is_empty(),
+        "新建库 with_db 查询应返回空列表"
+    );
 }

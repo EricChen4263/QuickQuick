@@ -104,7 +104,9 @@ pub fn set_hotkey_impl(
 /// 从 `settings_path` load_or_default，返回排除应用列表。
 ///
 /// # Errors
-/// 文件存在但内容损坏时返回 `SettingsError`（此处以 String 透传）。
+/// 此函数实际上永不返回 `Err`：`AppSettings::load_or_default` 在文件不存在或
+/// 内容损坏时均静默回退默认值，调用方可安全地 `unwrap_or_default`。
+/// 签名保留 `Result` 以与命令层 `?` 传播保持一致，便于未来升级为真正可失败路径。
 pub fn get_exclude_list_impl(settings_path: &Path) -> Result<Vec<String>, String> {
     let settings = AppSettings::load_or_default(settings_path);
     Ok(settings.excluded_apps)
@@ -141,7 +143,9 @@ pub fn get_translate_providers_impl() -> Vec<ProviderDto> {
 /// 从 settings 文件读取当前选中的 provider id；文件不存在时返回默认值 "mymemory"。
 ///
 /// # Errors
-/// 文件存在但内容损坏时返回错误字符串。
+/// 此函数实际上永不返回 `Err`：`AppSettings::load_or_default` 在文件不存在或
+/// 内容损坏时均静默回退默认值，调用方可安全地 `unwrap_or_default`。
+/// 签名保留 `Result` 以与命令层 `?` 传播保持一致，便于未来升级为真正可失败路径。
 pub fn get_selected_provider_impl(settings_path: &Path) -> Result<String, String> {
     let settings = AppSettings::load_or_default(settings_path);
     Ok(settings.selected_provider)

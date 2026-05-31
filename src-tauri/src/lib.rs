@@ -5,6 +5,9 @@
 //!
 //! 子模块：
 //! - `hotkey`：全局热键配置、改键持久化与冲突检测
+//! - `ipc`：所有 Tauri 命令（clipboard / translate / settings）
+//! - `pipeline`：启动数据管道（open_app_db / capture_and_ingest / ArboardBackend）
+//! - `settings`：应用配置（排除名单、provider 选择）
 //! - `tray`：系统托盘菜单构建（setup 阶段调用）
 //! - `window_pos`：预热窗口定位逻辑（光标所在显示器水平居中、靠上 15%）
 
@@ -17,12 +20,15 @@ pub mod ipc;
 pub mod keyprovider;
 pub mod onboarding;
 pub mod paste;
+pub mod pipeline;
 pub mod portable;
 pub mod privacy;
 pub mod settings;
 pub mod translate;
 mod tray;
 mod window_pos;
+
+use std::sync::Mutex;
 
 use tauri::{Emitter, Manager, Runtime, WindowEvent};
 use tauri_plugin_autostart::ManagerExt as AutostartManagerExt;
@@ -50,8 +56,10 @@ pub fn register_plugins<R: Runtime>(builder: tauri::Builder<R>) -> tauri::Builde
 /// 启动 Tauri 应用。
 ///
 /// 插件注册委托给 `register_plugins`；setup 阶段：
+/// - 打开加密数据库并通过 `app.manage(AppDb(...))` 注册为 Tauri 状态
+/// - 启动剪贴板轮询后台线程（500ms 间隔）
 /// - 读取并应用自启动偏好（`apply_autostart_preference`）
-/// - 注册全局热键（history / translate），失败时仅记录不 panic
+/// - 注册全局热键（history / translate），从持久化文件读取，失败时仅记录不 panic
 /// - 构建系统托盘菜单
 /// - 监听主窗口失焦事件 → 自动隐藏
 ///
@@ -59,7 +67,23 @@ pub fn register_plugins<R: Runtime>(builder: tauri::Builder<R>) -> tauri::Builde
 /// 若 Tauri builder 初始化失败则 panic（属于不可恢复的启动错误）。
 pub fn run() {
     register_plugins(tauri::Builder::default())
+        .invoke_handler(tauri::generate_handler![
+            ipc::clipboard::list_clip_items,
+            ipc::clipboard::delete_clip_item,
+            ipc::clipboard::toggle_favorite_clip,
+            ipc::translate::translate_text,
+            ipc::translate::list_translate_history,
+            ipc::settings::get_hotkeys,
+            ipc::settings::set_hotkey,
+            ipc::settings::get_exclude_list,
+            ipc::settings::set_exclude_list,
+            ipc::settings::get_translate_providers,
+            ipc::settings::get_selected_provider,
+            ipc::settings::set_selected_provider,
+        ])
         .setup(|app| {
+            setup_app_db(app);
+            start_clipboard_poll(app.handle().clone());
             apply_autostart_preference(app);
             register_hotkeys(app.handle());
             tray::setup_tray(app)?;
@@ -68,6 +92,87 @@ pub fn run() {
         })
         .run(tauri::generate_context!())
         .expect("Tauri 应用启动失败");
+}
+
+/// 打开加密数据库并注册为 Tauri 状态。
+///
+/// 使用 KeychainKeyProvider 取得 SQLCipher 密钥，数据库文件放在 app_config_dir()。
+/// 无论开库成功与否，都调用 `app.manage(AppDb(...))`：成功放 `Some(conn)`，失败放 `None`。
+/// 这保证 Tauri 状态始终已注册，避免前端 invoke 时因状态缺失在 dispatch 层 panic。
+/// 开库失败时仅 eprintln 记录原因，不 panic——IPC 命令将通过 `with_db` 返回 Err 而非崩溃。
+fn setup_app_db(app: &mut tauri::App) {
+    let conn_opt = match app.path().app_config_dir() {
+        Ok(dir) => {
+            if let Err(e) = std::fs::create_dir_all(&dir) {
+                eprintln!("[QuickQuick] 无法创建配置目录，数据库将不可用: {e}");
+                None
+            } else {
+                let db_path = dir.join("quickquick.db");
+                let provider = keyprovider::KeychainKeyProvider::new();
+                match pipeline::open_app_db(&provider, &db_path) {
+                    Ok(conn) => Some(conn),
+                    Err(e) => {
+                        eprintln!("[QuickQuick] 数据库打开失败，IPC 命令将返回错误而非崩溃: {e}");
+                        None
+                    }
+                }
+            }
+        }
+        Err(e) => {
+            eprintln!("[QuickQuick] 无法获取配置目录，数据库将不可用: {e}");
+            None
+        }
+    };
+
+    // 无论 conn_opt 是 Some 还是 None，都注册状态，防止 dispatch 层 panic
+    app.manage(ipc::AppDb(Mutex::new(conn_opt)));
+}
+
+/// 启动剪贴板轮询后台线程（500ms 间隔）。
+///
+/// 线程持有 AppHandle，每次迭代通过 state::<AppDb>() 取得数据库锁后写入。
+/// ArboardBackend 在 headless 环境下初始化可能失败，此时仅记录警告不启动线程。
+///
+/// # 为什么不在线程内 panic
+/// 后台线程崩溃不会影响主线程，但会导致轮询静默停止；
+/// 捕获错误并 eprintln 保证可见性。
+fn start_clipboard_poll(handle: tauri::AppHandle) {
+    let backend = match pipeline::ArboardBackend::new() {
+        Ok(b) => b,
+        Err(e) => {
+            eprintln!("[QuickQuick] 剪贴板后端初始化失败，轮询不启动: {e}");
+            return;
+        }
+    };
+
+    std::thread::spawn(move || {
+        let mut last_seen: u64 = 0;
+        let exclude = privacy::ExcludeList::default();
+
+        loop {
+            std::thread::sleep(std::time::Duration::from_millis(clipboard::POLL_INTERVAL_MS));
+
+            let Ok(state) = handle.try_state::<ipc::AppDb>().ok_or(()) else {
+                continue;
+            };
+            let Ok(guard) = state.0.lock() else {
+                continue;
+            };
+            // 数据库不可用时静默跳过本轮，不 panic
+            let Some(conn) = guard.as_ref() else {
+                continue;
+            };
+
+            let policy = privacy::CapturePolicy {
+                paused: false,
+                exclude: &exclude,
+            };
+
+            if let Err(e) = pipeline::capture_and_ingest(&backend, &mut last_seen, conn, &policy) {
+                eprintln!("[QuickQuick] 剪贴板写库失败（非致命）: {e}");
+            }
+        }
+    });
 }
 
 /// 读取自启动偏好配置并应用到 OS LaunchAgent。
@@ -105,10 +210,24 @@ fn apply_autostart_preference(app: &mut tauri::App) {
 
 /// 注册全局热键（history / translate）。
 ///
-/// 热键值取自 `HotkeyConfig::default()`。注册失败时仅记录警告，不阻断启动——
-/// 错误在函数内部消化，永不向上传播。
+/// 热键值优先从 `app_config_dir()/hotkey.json` 读取持久化配置，
+/// 文件不存在或读取失败时回退 `HotkeyConfig::default()`，
+/// 使用户通过 set_hotkey 改键后重启仍可生效。
+/// 注册失败时仅记录警告，不阻断启动——错误在函数内部消化，永不向上传播。
 fn register_hotkeys(handle: &tauri::AppHandle) {
-    let config = hotkey::HotkeyConfig::default();
+    let config = handle
+        .path()
+        .app_config_dir()
+        .ok()
+        .map(|dir| dir.join("hotkey.json"))
+        .and_then(|path| {
+            if path.exists() {
+                hotkey::HotkeyConfig::load(&path).ok()
+            } else {
+                None
+            }
+        })
+        .unwrap_or_default();
     let history_key = config
         .get_accelerator(hotkey::HotkeyAction::History)
         .to_string();

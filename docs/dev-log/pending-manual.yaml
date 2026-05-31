@@ -118,3 +118,12 @@ pending:
     added_at: 2026-05-31T23:50:00Z
     status: 待确认
     note: "翻译编排/方向/历史写入纯逻辑已 objective 测过（FakeExecutor）；真实网络往返 headless 无法自动测，需联网运行确认。reviewer 备忘：ureq Error::Status 的 Display 会含请求 URL（MyMemory 路径仅含用户查询文本、非密钥）；未来接需 key 的 provider 时须确保 key 不入错误串/日志。"
+
+  - acceptance_id: V4-F1-A04-H01
+    version: V4
+    assertion: "启动数据管道真实运行：真实 Keychain 开库（首次授权弹框）+ ArboardBackend 真实剪贴板捕获 + 500ms 轮询线程写库 + 12 个 IPC 命令前端 invoke 往返 + 改键持久化重启生效"
+    source_anchor: 设计文档§八（常驻预热+捕获入库）+ §六（KeyProvider 开库）+ §九.3（前端取数）
+    evidence_ref: docs/dev-log/v4/f1-ipc/s04-boot-pipeline/coding.md（装配纯函数 open_app_db/capture_and_ingest 已 objective 测；生产接线已编译通过）
+    added_at: 2026-06-01T00:30:00Z
+    status: 待确认
+    note: "open_app_db/capture_and_ingest 装配逻辑 + DB 不可用守卫（with_db→Err 不 panic）已 objective 测过（boot_pipeline 4 + ipc_clipboard 8 含 2 守卫，2 变异如期变红）。真实 keychain/arboard/轮询线程/命令 invoke 往返/热键持久化 headless 无法自动测，需真机运行确认。开库失败已优雅降级（manage None，命令返回'数据库不可用'而非崩）。"

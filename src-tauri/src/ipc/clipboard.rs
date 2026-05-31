@@ -13,7 +13,7 @@ use serde::Serialize;
 use tauri::State;
 
 use crate::db::{self, DbError};
-use crate::ipc::AppDb;
+use crate::ipc::{with_db, AppDb};
 
 /// 前端展示用 DTO：剪贴板条目
 ///
@@ -92,15 +92,17 @@ fn validate_id(id: &str) -> Result<(), DbError> {
 /// Tauri 命令：列出所有未软删的剪贴板条目（收藏优先）。
 #[tauri::command]
 pub fn list_clip_items(state: State<'_, AppDb>) -> Result<Vec<ClipItemDto>, String> {
-    let conn = state.0.lock().map_err(|e| format!("锁获取失败: {e}"))?;
-    list_clip_items_impl(&conn).map_err(|e| e.to_string())
+    with_db(&state, |conn| {
+        list_clip_items_impl(conn).map_err(|e| e.to_string())
+    })
 }
 
 /// Tauri 命令：软删指定剪贴板条目。
 #[tauri::command]
 pub fn delete_clip_item(state: State<'_, AppDb>, id: String) -> Result<(), String> {
-    let conn = state.0.lock().map_err(|e| format!("锁获取失败: {e}"))?;
-    delete_clip_item_impl(&conn, &id).map_err(|e| e.to_string())
+    with_db(&state, |conn| {
+        delete_clip_item_impl(conn, &id).map_err(|e| e.to_string())
+    })
 }
 
 /// Tauri 命令：设置或取消剪贴板条目的收藏状态。
@@ -110,6 +112,7 @@ pub fn toggle_favorite_clip(
     id: String,
     favorite: bool,
 ) -> Result<(), String> {
-    let conn = state.0.lock().map_err(|e| format!("锁获取失败: {e}"))?;
-    toggle_favorite_clip_impl(&conn, &id, favorite).map_err(|e| e.to_string())
+    with_db(&state, |conn| {
+        toggle_favorite_clip_impl(conn, &id, favorite).map_err(|e| e.to_string())
+    })
 }
