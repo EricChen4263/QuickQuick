@@ -2,7 +2,8 @@
 //!
 //! 策略：托盘由本模块 setup_tray() 唯一构建（带右键菜单+事件回调）；
 //! tauri.conf.json 不声明 app.trayIcon，避免"配置自动建 + 代码建"双图标。
-//! 图标使用 `app.default_window_icon()` 取自 bundle，无需手动读文件。
+//! 图标使用专用单色模板图 tray.png（非应用图标），以 icon_as_template(true)
+//! 告知 macOS 此为 template image，系统自动按菜单栏明/暗模式反色渲染。
 //!
 //! 菜单项：
 //! - "显示 QuickQuick" → show + set_focus
@@ -11,6 +12,7 @@
 //! 左键点击托盘图标 → show + set_focus（与"显示"菜单项等效）
 
 use tauri::{
+    image::Image,
     menu::{MenuBuilder, MenuItemBuilder},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     Manager,
@@ -41,9 +43,28 @@ pub fn setup_tray(app: &mut tauri::App) -> tauri::Result<()> {
             handle_tray_icon_event(tray.app_handle(), &event);
         });
 
-    // 用 app 的默认窗口图标作为托盘图标（避免直接读文件路径）
-    if let Some(icon) = app.default_window_icon() {
-        builder = builder.icon(icon.clone()).icon_as_template(true);
+    // 加载专用单色托盘模板图（tray.png），而非应用图标。
+    // icon_as_template(true) 告知 macOS 这是 template image，
+    // 系统会自动按当前菜单栏明/暗模式将黑色像素反色为白色（或保持黑色），
+    // 无需应用层手动处理深色模式切换。
+    let tray_icon = Image::from_path(
+        app.path()
+            .resource_dir()
+            .expect("resource_dir should exist")
+            .join("icons/tray.png"),
+    )
+    .or_else(|_| {
+        // 开发模式下 resource_dir 可能指向不同位置，回退到 default_window_icon
+        app.default_window_icon()
+            .cloned()
+            .ok_or_else(|| tauri::Error::AssetNotFound("tray.png".into()))
+    });
+
+    if let Ok(icon) = tray_icon {
+        builder = builder.icon(icon).icon_as_template(true);
+    } else if let Some(icon) = app.default_window_icon() {
+        // 兜底：若模板图加载失败，回退到应用图标（不设 template）
+        builder = builder.icon(icon.clone());
     }
 
     // 构建托盘；Tauri 将其生命周期与 app 绑定，build 后无需显式持有
