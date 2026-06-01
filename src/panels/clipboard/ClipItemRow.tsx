@@ -1,5 +1,6 @@
 /**
  * 剪贴板列表单行：内容摘要 + 收藏标记 + 收藏切换按钮 + 删除按钮。
+ * 图片项渲染缩略图（有 thumbnailDataUrl）或 "[图片]" 占位文字。
  * 选中态用 --qq-accent 背景色区分。
  */
 
@@ -23,6 +24,38 @@ interface ClipItemRowProps {
 function truncateSummary(text: string): string {
   if (text.length <= SUMMARY_MAX_LENGTH) return text;
   return text.slice(0, SUMMARY_MAX_LENGTH) + "…";
+}
+
+/** 图片内容区：有缩略图则显示 img，否则显示占位文字 */
+function ImageContent({ item }: { item: ClipItem }) {
+  if (item.thumbnailDataUrl) {
+    return (
+      <>
+        <img
+          src={item.thumbnailDataUrl}
+          alt="图片缩略图"
+          style={{
+            height: 40,
+            width: "auto",
+            objectFit: "cover",
+            flexShrink: 0,
+            borderRadius: 4,
+          }}
+        />
+        <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+          {truncateSummary(item.content)}
+        </span>
+      </>
+    );
+  }
+  return (
+    <>
+      <span>[图片]</span>
+      <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+        {truncateSummary(item.content)}
+      </span>
+    </>
+  );
 }
 
 /** 剪贴板列表单行子组件 */
@@ -50,9 +83,13 @@ export function ClipItemRow({
       }}
     >
       {item.isFavorite && <span aria-label="已收藏">★</span>}
-      <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-        {truncateSummary(item.content)}
-      </span>
+      {item.kind === "image" ? (
+        <ImageContent item={item} />
+      ) : (
+        <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+          {truncateSummary(item.content)}
+        </span>
+      )}
       <button
         aria-label={item.isFavorite ? FAVORITE_LABEL_ON : FAVORITE_LABEL_OFF}
         onClick={() => onToggleFavorite(item)}

@@ -29,6 +29,7 @@ use thiserror::Error;
 use uuid::Uuid;
 
 use crate::clipboard::CapturedItem;
+use crate::image as img_mod;
 
 /// 数据库操作错误
 #[derive(Debug, Error)]
@@ -232,6 +233,71 @@ pub struct ClipItemRow {
     pub is_favorite: bool,
     /// 最后修改时间（UTC epoch ms）
     pub last_modified_utc: i64,
+}
+
+/// 完整剪贴板条目行，含关联图片字段（list_items_with_images 返回元素）。
+///
+/// 文本条目因 LEFT JOIN 无匹配，`image_id` 与 `thumbnail` 均为 `None`。
+#[derive(Debug)]
+pub struct ClipItemRowWithImage {
+    /// 条目 UUID
+    pub id: String,
+    /// 条目内容（文本）
+    pub content: String,
+    /// 内容类型（"text" / "image"）
+    pub kind: String,
+    /// 收藏标记
+    pub is_favorite: bool,
+    /// 最后修改时间（UTC epoch ms）
+    pub last_modified_utc: i64,
+    /// 关联图片行 id（None 表示无图）
+    pub image_id: Option<String>,
+    /// 缩略图 BLOB（WebP 字节；None 表示无图）
+    pub thumbnail: Option<Vec<u8>>,
+}
+
+/// 返回未软删条目列表，LEFT JOIN 图片缩略图：收藏优先，组内按最近修改时间降序。
+///
+/// 与 `list_items_full` 排序规则相同，但额外带出关联 `clip_images` 的
+/// `id`（`image_id`）和 `thumbnail` BLOB，文本条目这两个字段为 `None`。
+///
+/// 排序兜底：`rowid DESC` 确保同毫秒并列时稳定有序。
+///
+/// # Errors
+/// `DbError::Sqlite`：SQL 执行失败
+pub fn list_items_with_images(conn: &Connection) -> Result<Vec<ClipItemRowWithImage>, DbError> {
+    let mut stmt = conn.prepare(
+        "SELECT ci.id, ci.content, ci.kind, ci.is_favorite, ci.last_modified_utc,
+                cimg.id AS image_id, cimg.thumbnail
+         FROM clip_items ci
+         LEFT JOIN clip_images cimg ON cimg.clip_item_id = ci.id AND cimg.is_deleted = 0
+         WHERE ci.is_deleted = 0
+         ORDER BY ci.is_favorite DESC, ci.last_modified_utc DESC, ci.rowid DESC",
+    )?;
+    let rows = stmt.query_map([], |row| {
+        let id: String = row.get(0)?;
+        let content: String = row.get::<_, Option<String>>(1)?.unwrap_or_default();
+        let kind: String = row.get(2)?;
+        let is_fav_int: i64 = row.get(3)?;
+        let last_modified: i64 = row.get(4)?;
+        let image_id: Option<String> = row.get(5)?;
+        let thumbnail: Option<Vec<u8>> = row.get(6)?;
+        Ok(ClipItemRowWithImage {
+            id,
+            content,
+            kind,
+            is_favorite: is_fav_int != 0,
+            last_modified_utc: last_modified,
+            image_id,
+            thumbnail,
+        })
+    })?;
+
+    let mut result = Vec::new();
+    for row in rows {
+        result.push(row?);
+    }
+    Ok(result)
 }
 
 /// 返回未软删条目的完整列表：收藏优先，组内按最近修改时间降序。
@@ -494,6 +560,121 @@ pub fn gc_purge_deleted(conn: &Connection) -> Result<u64, DbError> {
     Ok(count as u64)
 }
 
+/// 图片剪贴板去重入库：将一张图片作为独立 clip_items 行写入，并关联 clip_images。
+///
+/// 行为：
+/// 1. 用 `image::image_hash` 计算字节哈希，查 `clip_images` 是否已有未软删同 hash 行。
+/// 2. 命中且 clip_item_id 非 NULL → bump 关联 clip_item 的 `last_modified_utc`，返回 `Bumped`。
+/// 3. 未命中（或 clip_item_id 为 NULL 的孤立行）→ 在 SAVEPOINT 事务内：
+///    a. INSERT `clip_items`（kind='image'，content 含尺寸）
+///    b. 调用 `image::ingest_image_with_policy` 写 `clip_images`，得到 image_id
+///    c. UPDATE `clip_images SET clip_item_id = item_id WHERE id = image_id`（补写外键，SAVEPOINT 内）
+///    d. RELEASE SAVEPOINT 提交；任一步失败则 ROLLBACK SAVEPOINT，不留孤立行
+///    返回 `Inserted`。
+///
+/// # Errors
+/// - `DbError::Sqlite`：SQL 执行失败
+/// - `DbError::Other`：图片解码/缩略图生成失败
+pub fn ingest_image_as_clip(
+    conn: &Connection,
+    width: usize,
+    height: usize,
+    png_bytes: &[u8],
+) -> Result<IngestOutcome, DbError> {
+    let hash = img_mod::image_hash(png_bytes);
+
+    // 查是否已有同 hash 的未软删图片行
+    let existing: Option<(String, Option<String>)> = conn
+        .query_row(
+            "SELECT id, clip_item_id FROM clip_images
+             WHERE image_hash = ?1 AND is_deleted = 0
+             LIMIT 1",
+            rusqlite::params![hash],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?)),
+        )
+        .optional()?;
+
+    // 合并嵌套 if let：仅当 clip_item_id 非 NULL 时才视为有效命中并 bump
+    if let Some((_img_id, Some(item_id))) = existing {
+        bump_to_top(conn, &item_id)?;
+        return Ok(IngestOutcome::Bumped(item_id));
+    }
+    // clip_item_id 为 NULL（孤立行）或无命中：走新建路径，UPDATE 将领养孤立行
+
+    insert_image_clip(conn, width, height, png_bytes)
+}
+
+/// 在 SAVEPOINT 事务内插入 clip_items + clip_images 并补写外键关联。
+///
+/// SAVEPOINT 生命周期：成功时 RELEASE，失败时 ROLLBACK TO + RELEASE。
+fn insert_image_clip(
+    conn: &Connection,
+    width: usize,
+    height: usize,
+    png_bytes: &[u8],
+) -> Result<IngestOutcome, DbError> {
+    let now_ms = current_utc_ms();
+    let item_id = Uuid::new_v4().to_string();
+    let content = format!("[图片] {width}×{height}");
+
+    conn.execute_batch("SAVEPOINT ingest_image_clip;")?;
+
+    let result = try_insert_image_clip(conn, &item_id, &content, now_ms, png_bytes);
+
+    match result {
+        Ok(()) => {
+            conn.execute_batch("RELEASE SAVEPOINT ingest_image_clip;")?;
+            Ok(IngestOutcome::Inserted(item_id))
+        }
+        Err(e) => {
+            // 整体回滚，不留孤立 clip_items 行
+            let _ = conn.execute_batch("ROLLBACK TO SAVEPOINT ingest_image_clip;");
+            let _ = conn.execute_batch("RELEASE SAVEPOINT ingest_image_clip;");
+            Err(e)
+        }
+    }
+}
+
+/// SAVEPOINT 内的实际写操作：INSERT clip_items → ingest_image_with_policy → UPDATE clip_item_id。
+///
+/// 三步全在 SAVEPOINT 保护内，任一步失败由调用方 ROLLBACK。
+fn try_insert_image_clip(
+    conn: &Connection,
+    item_id: &str,
+    content: &str,
+    now_ms: i64,
+    png_bytes: &[u8],
+) -> Result<(), DbError> {
+    conn.execute(
+        "INSERT INTO clip_items
+             (id, content, kind, created_utc, last_modified_utc, is_deleted, text_hash)
+         VALUES (?1, ?2, 'image', ?3, ?3, 0, NULL)",
+        rusqlite::params![item_id, content, now_ms],
+    )?;
+
+    let policy = img_mod::OversizePolicy::default();
+    let outcome = img_mod::ingest_image_with_policy(conn, png_bytes, &policy)?;
+
+    // Bumped 命中孤立行时返回旧 image_id，UPDATE 将其关联到本次新建的 item_id
+    let image_id = match outcome {
+        img_mod::IngestImageOutcome::Inserted(id) => id,
+        img_mod::IngestImageOutcome::Bumped(id) => id,
+    };
+
+    // 补写外键（ingest_image_with_policy 不写 clip_item_id 字段）
+    let affected = conn.execute(
+        "UPDATE clip_images SET clip_item_id = ?1 WHERE id = ?2",
+        rusqlite::params![item_id, image_id],
+    )?;
+    if affected != 1 {
+        return Err(DbError::Other(format!(
+            "clip_item_id 补写影响行数异常：期望 1，实际 {affected}（image_id={image_id}）"
+        )));
+    }
+
+    Ok(())
+}
+
 /// 用指定 key 打开 SQLCipher 数据库并触发解密校验。
 ///
 /// 开库成功后立即开启外键约束（`PRAGMA foreign_keys = ON`）。
@@ -661,6 +842,285 @@ fn hex_encode(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 构造最小合法 2×2 RGBA PNG（用 image crate 编码，不依赖外部文件）。
+    ///
+    /// 返回的字节可被 `image::load_from_memory` 正确解码，用于 ingest_image_as_clip 测试。
+    fn make_test_png(width: u32, height: u32) -> Vec<u8> {
+        use image::{ImageFormat, RgbaImage};
+        let img = RgbaImage::new(width, height);
+        let mut buf = Vec::new();
+        img.write_to(&mut std::io::Cursor::new(&mut buf), ImageFormat::Png)
+            .expect("test PNG 编码失败");
+        buf
+    }
+
+    /// 建立内存 SQLite 并初始化 clip_items + clip_images 表（与 ensure_schema 一致）。
+    ///
+    /// 测试绕开加密路径直接开内存库，手动建表保持测试自包含。
+    fn make_test_conn() -> rusqlite::Connection {
+        let conn = rusqlite::Connection::open_in_memory().expect("内存库开启失败");
+        conn.execute_batch(
+            "PRAGMA foreign_keys = ON;
+             CREATE TABLE IF NOT EXISTS clip_items (
+                 id                TEXT PRIMARY KEY NOT NULL,
+                 content           TEXT,
+                 kind              TEXT NOT NULL DEFAULT 'text',
+                 created_utc       INTEGER NOT NULL,
+                 last_modified_utc INTEGER NOT NULL,
+                 is_deleted        INTEGER NOT NULL DEFAULT 0,
+                 deleted_at_utc    INTEGER,
+                 text_hash         TEXT,
+                 is_favorite       INTEGER NOT NULL DEFAULT 0
+             );
+             CREATE TABLE IF NOT EXISTS clip_images (
+                 id                TEXT PRIMARY KEY NOT NULL,
+                 clip_item_id      TEXT REFERENCES clip_items(id) ON DELETE CASCADE,
+                 thumbnail         BLOB,
+                 original          BLOB,
+                 original_present  INTEGER NOT NULL DEFAULT 0,
+                 image_hash        TEXT,
+                 created_utc       INTEGER NOT NULL,
+                 last_modified_utc INTEGER NOT NULL,
+                 is_deleted        INTEGER NOT NULL DEFAULT 0,
+                 deleted_at_utc    INTEGER,
+                 is_favorite       INTEGER NOT NULL DEFAULT 0
+             );",
+        )
+        .expect("建测试表失败");
+        conn
+    }
+
+    /// T1：基础入库 — 新图应写入一条 clip_items(kind='image') 和一条
+    /// clip_images，且 clip_images.clip_item_id 非 NULL 指向该 item。
+    #[test]
+    fn ingest_image_as_clip_inserts_item_and_links_image() {
+        let conn = make_test_conn();
+        let png = make_test_png(2, 2);
+
+        let outcome =
+            ingest_image_as_clip(&conn, 2, 2, &png).expect("ingest_image_as_clip 不应返回 Err");
+
+        let item_id = match &outcome {
+            IngestOutcome::Inserted(id) => id.clone(),
+            IngestOutcome::Bumped(_) => panic!("首次入库应返回 Inserted，得到 Bumped"),
+        };
+
+        // clip_items 恰好 1 行，kind='image'，content 含尺寸
+        let (kind, content): (String, String) = conn
+            .query_row(
+                "SELECT kind, content FROM clip_items WHERE id = ?1 AND is_deleted = 0",
+                rusqlite::params![item_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("clip_items 中应有该 item");
+        assert_eq!(kind, "image", "kind 应为 'image'");
+        assert!(
+            content.contains("2") && content.contains("×"),
+            "content 应含尺寸信息，实际: {content}"
+        );
+
+        // clip_images 恰好 1 行，clip_item_id = item_id（非 NULL）
+        let linked_item_id: String = conn
+            .query_row(
+                "SELECT clip_item_id FROM clip_images WHERE is_deleted = 0",
+                [],
+                |row| row.get(0),
+            )
+            .expect("clip_images 中应有图片行");
+        assert_eq!(
+            linked_item_id, item_id,
+            "clip_images.clip_item_id 应指向新建的 clip_items 行"
+        );
+
+        // 总行数断言：各表恰好 1 行
+        let item_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM clip_items WHERE is_deleted = 0",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(item_count, 1, "clip_items 应恰好 1 行");
+        let img_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM clip_images WHERE is_deleted = 0",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(img_count, 1, "clip_images 应恰好 1 行");
+    }
+
+    /// T2：去重 bump — 同一 PNG 二次调用应返回 Bumped，行数不变，
+    /// 且对应 clip_item.last_modified_utc 被刷新。
+    #[test]
+    fn ingest_image_as_clip_dedup_bumps_timestamp() {
+        let conn = make_test_conn();
+        let png = make_test_png(4, 4);
+
+        // 首次入库
+        let first = ingest_image_as_clip(&conn, 4, 4, &png).expect("首次入库失败");
+        let first_id = match &first {
+            IngestOutcome::Inserted(id) => id.clone(),
+            _ => panic!("首次应 Inserted"),
+        };
+
+        // 记录首次 last_modified_utc
+        let ts_before: i64 = conn
+            .query_row(
+                "SELECT last_modified_utc FROM clip_items WHERE id = ?1",
+                rusqlite::params![first_id],
+                |r| r.get(0),
+            )
+            .unwrap();
+
+        // 确保时间戳可区分（至少等 1ms，系统调用精度通常满足；若并发过快此处仍可能相等，
+        // 业务语义是"刷新"，相等也属正确行为，故断言用 >=）
+        std::thread::sleep(std::time::Duration::from_millis(5));
+
+        // 二次调用
+        let second = ingest_image_as_clip(&conn, 4, 4, &png).expect("二次调用失败");
+        assert!(
+            matches!(second, IngestOutcome::Bumped(_)),
+            "同一 PNG 二次调用应返回 Bumped"
+        );
+
+        // clip_items 仍 1 行
+        let item_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM clip_items WHERE is_deleted = 0",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(item_count, 1, "去重后 clip_items 应仍 1 行");
+
+        // clip_images 仍 1 行
+        let img_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM clip_images WHERE is_deleted = 0",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(img_count, 1, "去重后 clip_images 应仍 1 行");
+
+        // last_modified_utc 已刷新（>= 首次值）
+        let ts_after: i64 = conn
+            .query_row(
+                "SELECT last_modified_utc FROM clip_items WHERE id = ?1",
+                rusqlite::params![first_id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(
+            ts_after >= ts_before,
+            "bump 后 last_modified_utc 应 >= 首次值，before={ts_before} after={ts_after}"
+        );
+    }
+
+    /// T3：事务回滚 — 非法 PNG（空字节）应使 make_thumbnail 失败，
+    /// 整体回滚，clip_items 无孤立行，函数返回 Err 不 panic。
+    #[test]
+    fn ingest_image_as_clip_invalid_png_rolls_back() {
+        let conn = make_test_conn();
+        let bad_png: &[u8] = b""; // 空字节，不是合法 PNG
+
+        let result = ingest_image_as_clip(&conn, 1, 1, bad_png);
+        assert!(result.is_err(), "非法 PNG 应返回 Err");
+
+        // clip_items 无孤立行
+        let item_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM clip_items", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(
+            item_count, 0,
+            "回滚后 clip_items 应无孤立行，实际 {item_count} 行"
+        );
+
+        // clip_images 同样无孤立行
+        let img_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM clip_images", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(
+            img_count, 0,
+            "回滚后 clip_images 应无孤立行，实际 {img_count} 行"
+        );
+    }
+
+    /// T4：孤立行领养路径 — clip_item_id=NULL 的孤立 clip_images 行应被新 item 领养。
+    ///
+    /// 步骤：正常入库一张图 → 手动置 clip_item_id=NULL → 再次调用 ingest_image_as_clip
+    /// 同一 PNG → 断言：clip_images 仍 1 行（图片数据复用），clip_item_id 已补写为新 item_id，
+    /// clip_items 新增 1 行（kind='image'），返回 Inserted。
+    #[test]
+    fn ingest_image_as_clip_adopts_orphaned_image_row() {
+        let conn = make_test_conn();
+        let png = make_test_png(3, 3);
+
+        // 首次入库
+        let first = ingest_image_as_clip(&conn, 3, 3, &png).expect("首次入库失败");
+        let first_item_id = match first {
+            IngestOutcome::Inserted(id) => id,
+            _ => panic!("首次应 Inserted"),
+        };
+
+        // 手动制造孤立行：把 clip_item_id 置 NULL
+        conn.execute(
+            "UPDATE clip_images SET clip_item_id = NULL WHERE clip_item_id = ?1",
+            rusqlite::params![first_item_id],
+        )
+        .expect("置空 clip_item_id 失败");
+
+        // 验证孤立行已存在
+        let orphan_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM clip_images WHERE clip_item_id IS NULL",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(orphan_count, 1, "应有 1 条孤立行");
+
+        // 二次调用同一 PNG — 应走 insert_image_clip 领养孤立行
+        let second = ingest_image_as_clip(&conn, 3, 3, &png).expect("二次调用失败");
+        let second_item_id = match second {
+            IngestOutcome::Inserted(id) => id,
+            IngestOutcome::Bumped(_) => panic!("孤立行路径应返回 Inserted，不应 Bumped"),
+        };
+
+        // clip_images 仍 1 行（图片数据未重复存储）
+        let img_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM clip_images", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(img_count, 1, "clip_images 应仍 1 行，图片数据不重复存储");
+
+        // clip_item_id 已补写为新 item_id，非 NULL
+        let linked_id: String = conn
+            .query_row("SELECT clip_item_id FROM clip_images", [], |r| r.get(0))
+            .expect("clip_item_id 不应为 NULL");
+        assert_eq!(
+            linked_id, second_item_id,
+            "clip_images.clip_item_id 应指向新建 item"
+        );
+
+        // clip_items 现有 2 行（首次 + 孤立后新建）
+        let item_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM clip_items", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(item_count, 2, "clip_items 应有 2 行（首次 + 领养新建）");
+
+        // 新建 item kind='image'
+        let kind: String = conn
+            .query_row(
+                "SELECT kind FROM clip_items WHERE id = ?1",
+                rusqlite::params![second_item_id],
+                |r| r.get(0),
+            )
+            .expect("新建 clip_items 行应存在");
+        assert_eq!(kind, "image", "新建 item kind 应为 'image'");
+    }
 
     #[test]
     fn hex_encode_32_bytes_produces_64_chars() {

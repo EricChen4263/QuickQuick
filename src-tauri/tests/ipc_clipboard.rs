@@ -129,7 +129,10 @@ fn ipc_clipboard_toggle_favorite_unset_restores_order() {
         ids.contains(&id_a.as_str()) && ids.contains(&id_b.as_str()),
         "两个条目都应存在"
     );
-    assert!(!items[0].is_favorite, "取消收藏后排第一的条目 is_favorite 应为 false");
+    assert!(
+        !items[0].is_favorite,
+        "取消收藏后排第一的条目 is_favorite 应为 false"
+    );
 }
 
 /// V4-F1-A01：DTO 字段完整性——包含 id/content/kind/is_favorite/last_modified_utc

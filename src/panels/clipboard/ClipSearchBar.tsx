@@ -10,6 +10,7 @@ const FILTER_LABELS: Record<HistoryFilter, string> = {
   all: "全部",
   text: "纯文本",
   richtext: "富文本",
+  image: "图片",
 };
 
 interface ClipSearchBarProps {

@@ -2885,6 +2885,7 @@ dependencies = [
  "aes-gcm",
  "arboard",
  "argon2",
+ "base64 0.22.1",
  "image",
  "keyring",
  "md5",

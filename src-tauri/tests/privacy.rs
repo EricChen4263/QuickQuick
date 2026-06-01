@@ -16,6 +16,7 @@ fn concealed_skipped() {
     let snapshot = ClipboardSnapshot {
         text: Some("some normal looking text".to_owned()),
         html: None,
+        image: None,
         has_self_marker: false,
         is_concealed: true,
         source_app: None,
@@ -44,6 +45,7 @@ fn concealed_no_heuristic() {
     let snapshot = ClipboardSnapshot {
         text: Some("P@ssw0rd!Secret123".to_owned()),
         html: None,
+        image: None,
         has_self_marker: false,
         is_concealed: false,
         source_app: None,
@@ -71,6 +73,7 @@ fn app_exclude_list() {
     let snapshot = ClipboardSnapshot {
         text: Some("secret content".to_owned()),
         html: None,
+        image: None,
         has_self_marker: false,
         is_concealed: false,
         source_app: Some("com.foo.secret".to_owned()),
@@ -99,6 +102,7 @@ fn app_not_in_exclude_list() {
     let snapshot = ClipboardSnapshot {
         text: Some("normal content".to_owned()),
         html: None,
+        image: None,
         has_self_marker: false,
         is_concealed: false,
         source_app: Some("com.apple.textedit".to_owned()),
@@ -123,6 +127,7 @@ fn app_exclude_none_source() {
     let snapshot = ClipboardSnapshot {
         text: Some("content".to_owned()),
         html: None,
+        image: None,
         has_self_marker: false,
         is_concealed: false,
         source_app: None,

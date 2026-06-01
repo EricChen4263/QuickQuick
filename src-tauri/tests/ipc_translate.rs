@@ -29,7 +29,8 @@ fn open_tmp_db() -> (tempfile::TempDir, Connection) {
 #[test]
 fn ipc_translate_chinese_text_produces_zh_to_en_direction() {
     let (_dir, conn) = open_tmp_db();
-    let fake = FakeExecutor::new(r#"{"responseData":{"translatedText":"Hello"},"responseStatus":200}"#);
+    let fake =
+        FakeExecutor::new(r#"{"responseData":{"translatedText":"Hello"},"responseStatus":200}"#);
 
     let result = translate_text_impl(&conn, &fake, "你好", None).expect("翻译应成功");
 
@@ -42,9 +43,8 @@ fn ipc_translate_chinese_text_produces_zh_to_en_direction() {
 #[test]
 fn ipc_translate_english_text_produces_en_to_zh_direction() {
     let (_dir, conn) = open_tmp_db();
-    let fake = FakeExecutor::new(
-        r#"{"responseData":{"translatedText":"你好"},"responseStatus":200}"#,
-    );
+    let fake =
+        FakeExecutor::new(r#"{"responseData":{"translatedText":"你好"},"responseStatus":200}"#);
 
     let result = translate_text_impl(&conn, &fake, "Hello", None).expect("翻译应成功");
 
@@ -57,17 +57,16 @@ fn ipc_translate_english_text_produces_en_to_zh_direction() {
 #[test]
 fn ipc_translate_writes_to_history_after_success() {
     let (_dir, conn) = open_tmp_db();
-    let fake = FakeExecutor::new(
-        r#"{"responseData":{"translatedText":"World"},"responseStatus":200}"#,
-    );
+    let fake =
+        FakeExecutor::new(r#"{"responseData":{"translatedText":"World"},"responseStatus":200}"#);
 
-    let count_before = quickquick_lib::translate::history::translate_history_count(&conn)
-        .expect("count 应成功");
+    let count_before =
+        quickquick_lib::translate::history::translate_history_count(&conn).expect("count 应成功");
 
     translate_text_impl(&conn, &fake, "世界", None).expect("翻译应成功");
 
-    let count_after = quickquick_lib::translate::history::translate_history_count(&conn)
-        .expect("count 应成功");
+    let count_after =
+        quickquick_lib::translate::history::translate_history_count(&conn).expect("count 应成功");
 
     assert_eq!(count_after, count_before + 1, "翻译后历史条目数应 +1");
 }
@@ -100,12 +99,10 @@ fn ipc_translate_whitespace_text_returns_error_without_calling_executor() {
 #[test]
 fn ipc_translate_list_history_returns_entries_in_desc_order() {
     let (_dir, conn) = open_tmp_db();
-    let fake1 = FakeExecutor::new(
-        r#"{"responseData":{"translatedText":"Hello"},"responseStatus":200}"#,
-    );
-    let fake2 = FakeExecutor::new(
-        r#"{"responseData":{"translatedText":"World"},"responseStatus":200}"#,
-    );
+    let fake1 =
+        FakeExecutor::new(r#"{"responseData":{"translatedText":"Hello"},"responseStatus":200}"#);
+    let fake2 =
+        FakeExecutor::new(r#"{"responseData":{"translatedText":"World"},"responseStatus":200}"#);
 
     translate_text_impl(&conn, &fake1, "你好", None).expect("第一次翻译应成功");
     translate_text_impl(&conn, &fake2, "世界", None).expect("第二次翻译应成功");
@@ -113,12 +110,6 @@ fn ipc_translate_list_history_returns_entries_in_desc_order() {
     let history = list_translate_history_impl(&conn).expect("list 应成功");
 
     assert_eq!(history.len(), 2, "应返回 2 条历史");
-    assert_eq!(
-        history[0].source_text, "世界",
-        "倒序：最后翻译的应排第一"
-    );
-    assert_eq!(
-        history[1].source_text, "你好",
-        "倒序：最先翻译的应排第二"
-    );
+    assert_eq!(history[0].source_text, "世界", "倒序：最后翻译的应排第一");
+    assert_eq!(history[1].source_text, "你好", "倒序：最先翻译的应排第二");
 }

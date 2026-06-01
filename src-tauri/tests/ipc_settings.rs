@@ -42,17 +42,11 @@ impl HotkeyRegistrar for ConflictRegistrar {
 
 /// 生成唯一临时文件路径（不预创建文件，load_or_default 能处理不存在的情形）
 fn tmp_hotkey_path() -> PathBuf {
-    std::env::temp_dir().join(format!(
-        "quickquick_test_hotkey_{}.json",
-        uuid_suffix()
-    ))
+    std::env::temp_dir().join(format!("quickquick_test_hotkey_{}.json", uuid_suffix()))
 }
 
 fn tmp_settings_path() -> PathBuf {
-    std::env::temp_dir().join(format!(
-        "quickquick_test_settings_{}.json",
-        uuid_suffix()
-    ))
+    std::env::temp_dir().join(format!("quickquick_test_settings_{}.json", uuid_suffix()))
 }
 
 /// 利用时间戳 + thread id 构造测试用唯一后缀，避免并行测试文件冲突
@@ -86,10 +80,7 @@ fn ipc_settings_set_hotkey_then_get_returns_new_value() {
 
     // Assert：history 已更新，translate 仍是默认值
     assert_eq!(dto.history, "CmdOrCtrl+Shift+H", "history 键应已更新");
-    assert_eq!(
-        dto.translate, "CmdOrCtrl+Shift+T",
-        "translate 键应保持默认"
-    );
+    assert_eq!(dto.translate, "CmdOrCtrl+Shift+T", "translate 键应保持默认");
 }
 
 /// V4-F1-A03：set_hotkey 两动作设同一 accelerator → 冲突拒绝

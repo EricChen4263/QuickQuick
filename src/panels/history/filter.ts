@@ -7,11 +7,11 @@
 import type { HistoryItem } from "./search";
 
 /** 历史面板类型筛选选项 */
-export type HistoryFilter = "all" | "text" | "richtext";
+export type HistoryFilter = "all" | "text" | "richtext" | "image";
 
 /**
  * 按类型筛选历史条目列表。
- * "all" 返回全部；"text" 仅返回纯文本；"richtext" 仅返回富文本。
+ * "all" 返回全部；"text" 仅返回纯文本；"richtext" 仅返回富文本；"image" 仅返回图片项。
  *
  * @param items - 待筛选的原始列表（不会被修改）
  * @param filter - 筛选类型

@@ -8,7 +8,7 @@
 export interface HistoryItem {
   id: string;
   text: string;
-  kind: "text" | "richtext";
+  kind: "text" | "richtext" | "image";
 }
 
 /**

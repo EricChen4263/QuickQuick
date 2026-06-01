@@ -71,6 +71,7 @@ pub fn run() {
             ipc::clipboard::list_clip_items,
             ipc::clipboard::delete_clip_item,
             ipc::clipboard::toggle_favorite_clip,
+            ipc::clipboard::get_clip_image_original,
             ipc::translate::translate_text,
             ipc::translate::list_translate_history,
             ipc::settings::get_hotkeys,
@@ -150,7 +151,9 @@ fn start_clipboard_poll(handle: tauri::AppHandle) {
         let exclude = privacy::ExcludeList::default();
 
         loop {
-            std::thread::sleep(std::time::Duration::from_millis(clipboard::POLL_INTERVAL_MS));
+            std::thread::sleep(std::time::Duration::from_millis(
+                clipboard::POLL_INTERVAL_MS,
+            ));
 
             let Ok(state) = handle.try_state::<ipc::AppDb>().ok_or(()) else {
                 continue;
@@ -168,8 +171,15 @@ fn start_clipboard_poll(handle: tauri::AppHandle) {
                 exclude: &exclude,
             };
 
-            if let Err(e) = pipeline::capture_and_ingest(&backend, &mut last_seen, conn, &policy) {
-                eprintln!("[QuickQuick] 剪贴板写库失败（非致命）: {e}");
+            match pipeline::capture_and_ingest(&backend, &mut last_seen, conn, &policy) {
+                Ok(outcomes) => {
+                    // outcomes 为空时表示无新内容（正常情况），不需处理
+                    // outcomes 非空时每项已写库，此处仅用于调试可扩展
+                    let _ = outcomes;
+                }
+                Err(e) => {
+                    eprintln!("[QuickQuick] 剪贴板写库失败（非致命）: {e}");
+                }
             }
         }
     });

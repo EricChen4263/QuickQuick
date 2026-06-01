@@ -22,6 +22,9 @@ import { ClipSearchBar } from "./ClipSearchBar";
 
 /** 将 IPC ClipItem 适配为纯逻辑 HistoryItem */
 function toHistoryItem(clip: ClipItem): HistoryItem {
+  if (clip.kind === "image") {
+    return { id: clip.id, text: clip.content, kind: "image" };
+  }
   return {
     id: clip.id,
     text: clip.content,

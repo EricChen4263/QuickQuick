@@ -8,9 +8,7 @@
 //! 测试约定：函数名含子串 `ipc_input_validation` 确保 verify 命中。
 
 use quickquick_lib::db;
-use quickquick_lib::ipc::clipboard::{
-    delete_clip_item_impl, toggle_favorite_clip_impl,
-};
+use quickquick_lib::ipc::clipboard::{delete_clip_item_impl, toggle_favorite_clip_impl};
 use rusqlite::Connection;
 use tempfile::tempdir;
 

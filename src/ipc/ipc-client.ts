@@ -7,6 +7,10 @@ export interface ClipItem {
   kind: string;
   isFavorite: boolean;
   lastModifiedUtc: number;
+  /** 图片项的缩略图 data URL（data:image/webp;base64,...），文本项无此字段。 */
+  thumbnailDataUrl?: string;
+  /** 图片项的原图 ID，用于调 getClipImageOriginal；文本项无此字段。 */
+  imageId?: string;
 }
 
 /** 翻译结果，与 Rust TranslateResultDto（camelCase）对齐。 */
@@ -178,6 +182,21 @@ export async function getSelectedProvider(): Promise<string> {
 export async function setSelectedProvider(id: string): Promise<void> {
   try {
     await invoke<void>("set_selected_provider", { id });
+  } catch (err) {
+    throw toError(err);
+  }
+}
+
+/**
+ * 获取图片剪贴板条目的原图（PNG）data URL。
+ * 降级或无原图时返回 null。
+ *
+ * @param imageId - 图片条目 ID
+ * @returns 原图 data URL（data:image/png;base64,...）或 null
+ */
+export async function getClipImageOriginal(imageId: string): Promise<string | null> {
+  try {
+    return await invoke<string | null>("get_clip_image_original", { imageId });
   } catch (err) {
     throw toError(err);
   }

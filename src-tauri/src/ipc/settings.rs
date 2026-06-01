@@ -50,7 +50,9 @@ fn parse_action(action: &str) -> Result<HotkeyAction, String> {
     match action {
         "history" => Ok(HotkeyAction::History),
         "translate" => Ok(HotkeyAction::Translate),
-        other => Err(format!("未知 action：{other}，合法值为 history / translate")),
+        other => Err(format!(
+            "未知 action：{other}，合法值为 history / translate"
+        )),
     }
 }
 

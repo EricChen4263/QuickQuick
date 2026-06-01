@@ -8,7 +8,8 @@
 //! - V1-F1-A05 bump_no_new_record   — 置顶刷新不产生新记录
 
 use quickquick_lib::clipboard::{
-    poll_once, poll_once_with_policy, CapturedItem, ClipboardBackend, ClipboardSnapshot,
+    poll_once, poll_once_with_policy, CapturedClip, CapturedItem, ClipboardBackend,
+    ClipboardSnapshot,
 };
 use quickquick_lib::db;
 use quickquick_lib::privacy::{CapturePolicy, ExcludeList};
@@ -21,7 +22,7 @@ struct FakeBackend {
 }
 
 impl FakeBackend {
-    /// 构造假后端。`is_concealed` 与 `source_app` 填默认安全值（false/None），
+    /// 构造假后端。`is_concealed`、`source_app`、`image` 填默认安全值，
     /// 保持 S01/S02 测试行为不变。
     fn new(count: u64, text: Option<&str>, html: Option<&str>, has_self_marker: bool) -> Self {
         Self {
@@ -29,6 +30,7 @@ impl FakeBackend {
             snapshot: ClipboardSnapshot {
                 text: text.map(str::to_owned),
                 html: html.map(str::to_owned),
+                image: None,
                 has_self_marker,
                 is_concealed: false,
                 source_app: None,
@@ -47,6 +49,14 @@ impl ClipboardBackend for FakeBackend {
     }
 }
 
+/// 从 Vec<CapturedClip> 中提取第一个 Text 条目，供旧测试用。
+fn first_text(clips: Vec<CapturedClip>) -> Option<CapturedItem> {
+    clips.into_iter().find_map(|c| match c {
+        CapturedClip::Text(item) => Some(item),
+        CapturedClip::Image { .. } => None,
+    })
+}
+
 /// A01：快照含 text + html 时，poll_once 返回双字段都在的 CapturedItem；
 ///      纯文本键（text）作为显示/搜索/判重基础字段。
 #[test]
@@ -59,7 +69,7 @@ fn capture_dual_field() {
     let result = poll_once(&backend, &mut last_seen);
 
     // Assert
-    let item = result.expect("应返回 CapturedItem");
+    let item = first_text(result).expect("应返回含 Text 的 CapturedClip");
     assert_eq!(item.text, "hello world", "text 字段应保存纯文本键");
     assert_eq!(
         item.html,
@@ -69,17 +79,17 @@ fn capture_dual_field() {
     assert_eq!(last_seen, 2, "last_seen_count 应更新为新计数");
 }
 
-/// A02：changeCount 不变 → None；递增一次 → Some 并更新 last_seen_count；
-///      再次调用同值 → None（一递增只捕获一次）。
+/// A02：changeCount 不变 → 空 Vec；递增一次 → 非空 Vec 并更新 last_seen_count；
+///      再次调用同值 → 空 Vec（一递增只捕获一次）。
 #[test]
 fn poll_changecount_triggers_capture() {
     // Arrange：count 与 last_seen 相同，无变化
     let backend_same = FakeBackend::new(5, Some("text"), None, false);
     let mut last_seen = 5u64;
 
-    // Act + Assert：无变化时返回 None
+    // Act + Assert：无变化时返回空 Vec
     let no_change = poll_once(&backend_same, &mut last_seen);
-    assert!(no_change.is_none(), "changeCount 未变时应返回 None");
+    assert!(no_change.is_empty(), "changeCount 未变时应返回空 Vec");
     assert_eq!(last_seen, 5, "无变化时 last_seen_count 不应改变");
 
     // Arrange：count 递增
@@ -87,15 +97,15 @@ fn poll_changecount_triggers_capture() {
 
     // Act：递增时应捕获
     let captured = poll_once(&backend_changed, &mut last_seen);
-    assert!(captured.is_some(), "changeCount 递增时应返回 Some");
+    assert!(!captured.is_empty(), "changeCount 递增时应返回非空 Vec");
     assert_eq!(last_seen, 6, "捕获后 last_seen_count 应更新为 6");
 
     // Act：再次调用同 count（模拟下次轮询 count 仍为 6）
     let no_dup = poll_once(&backend_changed, &mut last_seen);
-    assert!(no_dup.is_none(), "相同 count 不应重复捕获");
+    assert!(no_dup.is_empty(), "相同 count 不应重复捕获");
 }
 
-/// A03：快照带本工具私有标记时，poll_once 跳过不记（返回 None），
+/// A03：快照带本工具私有标记时，poll_once 跳过不记（返回空 Vec），
 ///      但 last_seen_count 仍推进（避免反复触发）。
 #[test]
 fn self_write_marker_skipped() {
@@ -107,13 +117,13 @@ fn self_write_marker_skipped() {
     let result = poll_once(&backend, &mut last_seen);
 
     // Assert：跳过不记
-    assert!(result.is_none(), "带自写标记时应跳过，返回 None");
+    assert!(result.is_empty(), "带自写标记时应跳过，返回空 Vec");
     // last_seen_count 仍推进，防止下次轮询（count 不变）再次触发读取
     assert_eq!(last_seen, 10, "即使跳过，last_seen_count 也应更新为新计数");
 }
 
 /// I-01 防御测试：OS 计数从大降到小（如 Windows 进程重启致 GetClipboardSequenceNumber
-/// 归零），poll_once 应返回 None 且将基线下调为当前值；随后计数正向递增时正常捕获一次，
+/// 归零），poll_once 应返回空 Vec 且将基线下调为当前值；随后计数正向递增时正常捕获一次，
 /// 证明重置后既不重复捕获也不漏捕。
 #[test]
 fn poll_count_reset_defense() {
@@ -121,13 +131,13 @@ fn poll_count_reset_defense() {
     let backend_reset = FakeBackend::new(5, Some("after reset"), None, false);
     let mut last_seen = 6u64;
 
-    // Act：降序时应返回 None，且将基线下调为 5
+    // Act：降序时应返回空 Vec，且将基线下调为 5
     let result_on_reset = poll_once(&backend_reset, &mut last_seen);
 
     // Assert：降序不捕获
     assert!(
-        result_on_reset.is_none(),
-        "计数降序（OS 重置）时应返回 None，不误捕"
+        result_on_reset.is_empty(),
+        "计数降序（OS 重置）时应返回空 Vec，不误捕"
     );
     assert_eq!(last_seen, 5, "降序时 last_seen_count 应下调为当前值 5");
 
@@ -138,7 +148,7 @@ fn poll_count_reset_defense() {
     let result_after_reset = poll_once(&backend_recovered, &mut last_seen);
 
     // Assert：正常捕获，证明重置后不漏
-    let item = result_after_reset.expect("重置后计数递增应正常捕获");
+    let item = first_text(result_after_reset).expect("重置后计数递增应正常捕获");
     assert_eq!(
         item.text, "normal capture",
         "重置后恢复的第一次变化应被捕获"
@@ -147,7 +157,7 @@ fn poll_count_reset_defense() {
 
     // Act：再次调用同 count，证明不重复捕获
     let no_dup = poll_once(&backend_recovered, &mut last_seen);
-    assert!(no_dup.is_none(), "相同 count 不应重复捕获");
+    assert!(no_dup.is_empty(), "相同 count 不应重复捕获");
 }
 
 /// A04：ingest 相同文本第二次时，返回 Bumped（不新建行），
@@ -266,7 +276,7 @@ fn bump_no_new_record() {
     assert_eq!(top, id_x, "bump_to_top 后 X 应成为最前条目");
 }
 
-/// A08-1：paused=true 时，poll_once_with_policy 对正常可捕获快照返回 None，
+/// A08-1：paused=true 时，poll_once_with_policy 对正常可捕获快照返回空 Vec，
 ///        但 last_seen_count 仍推进（防止下次重复触发读取）。
 #[test]
 fn pause_stops_capture() {
@@ -283,7 +293,7 @@ fn pause_stops_capture() {
     let result = poll_once_with_policy(&backend, &mut last_seen, &policy);
 
     // Assert：暂停时应跳过
-    assert!(result.is_none(), "paused=true 时应返回 None，不捕获");
+    assert!(result.is_empty(), "paused=true 时应返回空 Vec，不捕获");
     assert_eq!(last_seen, 3, "即使跳过，last_seen_count 也应推进到 3");
 }
 
@@ -303,7 +313,7 @@ fn pause_false_captures_normally() {
     let result = poll_once_with_policy(&backend, &mut last_seen, &policy);
 
     // Assert：未暂停时应正常捕获
-    let item = result.expect("paused=false 时应返回 CapturedItem");
+    let item = first_text(result).expect("paused=false 时应返回含 Text 的结果");
     assert_eq!(item.text, "normal text", "捕获内容应与快照一致");
     assert_eq!(last_seen, 3, "last_seen_count 应更新为 3");
 }

@@ -21,7 +21,9 @@ use crate::translate::history::{
 };
 use crate::translate::lang::resolve_direction;
 use crate::translate::providers::MyMemoryProvider;
-use crate::translate::{Lang, ProviderHttpRequest, TranslateError, TranslateProvider, TranslateRequest};
+use crate::translate::{
+    Lang, ProviderHttpRequest, TranslateError, TranslateProvider, TranslateRequest,
+};
 
 /// 可注入 HTTP 执行器抽象。
 ///
@@ -230,9 +232,7 @@ pub fn translate_text(
 
 /// Tauri 命令：按时间倒序列出翻译历史。
 #[tauri::command]
-pub fn list_translate_history(
-    state: State<'_, AppDb>,
-) -> Result<Vec<TranslateHistoryDto>, String> {
+pub fn list_translate_history(state: State<'_, AppDb>) -> Result<Vec<TranslateHistoryDto>, String> {
     with_db(&state, |conn| {
         list_translate_history_impl(conn).map_err(|e| e.to_string())
     })
