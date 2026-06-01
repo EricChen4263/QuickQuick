@@ -12,13 +12,6 @@ import "./theme/theme.css";
 /** 热键路由 payload 类型（与后端 emit 的字符串对应） */
 type RoutePayload = HotkeyTrigger;
 
-/** 每个一级页对应的热键 hint 文案 */
-const PAGE_HINTS: Record<TopLevel, string> = {
-  clipboard: "⌘⇧V",
-  translate: "⌘⇧T",
-  settings: "设置",
-};
-
 /**
  * 将热键触发类型映射到对应的一级页。
  * history 热键对应剪贴板页；translate 热键对应翻译页。
@@ -76,7 +69,7 @@ function App() {
     <AppShell
       activeTop={activeTop}
       onNavigate={(top) => setActiveTop((_prev) => top)}
-      hint={PAGE_HINTS[activeTop]}
+
     >
       <section
         data-testid="page-clipboard"

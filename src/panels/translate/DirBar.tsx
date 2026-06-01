@@ -46,7 +46,8 @@ function DirBar({ sourceLang, targetLang, providers, selectedProviderId, onProvi
             onChange={(e) => onProviderChange(e.target.value)}
           >
             {providers.map((p) => (
-              <option key={p.id} value={p.id}>
+              // v1 未提供 key 配置入口，故 needsKey 源暂禁用；里程碑3 若加 key 配置再解禁
+              <option key={p.id} value={p.id} disabled={p.needsKey}>
                 {p.name}
               </option>
             ))}

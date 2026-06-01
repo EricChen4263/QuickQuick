@@ -4,7 +4,6 @@ import { ThemeSwitch } from "./ThemeSwitch";
 interface SideBarProps {
   activeTop: TopLevel;
   onNavigate: (top: TopLevel) => void;
-  hint?: string;
 }
 
 interface NavEntry {
@@ -41,16 +40,10 @@ const NAV_ENTRIES: NavEntry[] = [
   { key: "settings", label: "设置", icon: SettingsIcon },
 ];
 
-/** 主导航侧边栏：热键 hint、三个导航项、spacer、主题切换 */
-export function SideBar({ activeTop, onNavigate, hint }: SideBarProps) {
+/** 主导航侧边栏：三个导航项、spacer、主题切换 */
+export function SideBar({ activeTop, onNavigate }: SideBarProps) {
   return (
     <nav aria-label="主导航" className="qq-sidebar">
-      {hint && (
-        <div style={{ fontSize: 11, color: "var(--muted)", padding: "6px 8px 4px", userSelect: "none" }}>
-          <kbd style={{ fontFamily: "var(--mono, monospace)", fontSize: 11 }}>{hint}</kbd>
-        </div>
-      )}
-
       {NAV_ENTRIES.map((entry) => (
         <button
           key={entry.key}
