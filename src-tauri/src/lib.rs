@@ -108,6 +108,10 @@ pub fn run() {
             ipc::settings::set_theme,
             ipc::settings::get_launch_on_login,
             ipc::settings::set_launch_on_login,
+            ipc::system::get_storage_stats,
+            ipc::system::cleanup_history,
+            ipc::system::open_accessibility_settings,
+            ipc::system::paste_to_front,
         ])
         .setup(|app| {
             setup_app_db(app);
