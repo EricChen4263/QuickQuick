@@ -76,6 +76,7 @@ describe("ClipItemRow image rendering", () => {
         item={item}
         isHighlighted={false}
         onToggleFavorite={vi.fn()}
+        onSelect={vi.fn()}
       />
     );
 
@@ -90,6 +91,7 @@ describe("ClipItemRow image rendering", () => {
         item={baseItem}
         isHighlighted={false}
         onToggleFavorite={vi.fn()}
+        onSelect={vi.fn()}
       />
     );
 
@@ -103,6 +105,7 @@ describe("ClipItemRow image rendering", () => {
         item={baseItem}
         isHighlighted={false}
         onToggleFavorite={vi.fn()}
+        onSelect={vi.fn()}
       />
     );
 
@@ -123,6 +126,7 @@ describe("ClipItemRow image rendering", () => {
         item={textItem}
         isHighlighted={false}
         onToggleFavorite={vi.fn()}
+        onSelect={vi.fn()}
       />
     );
 

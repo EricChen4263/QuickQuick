@@ -184,4 +184,22 @@ describe("ClipPreview 操作按钮", () => {
     expect(screen.queryByRole("button", { name: "复制" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "删除" })).not.toBeInTheDocument();
   });
+
+  it("点击复制按钮真正调用 writeToClipboard 写入 item.content（Bug2 复制链路）", async () => {
+    const user = userEvent.setup();
+    render(
+      <ClipPreview
+        item={TEXT_ITEM}
+        onToggleFavorite={vi.fn()}
+        onDelete={vi.fn()}
+        onCopy={vi.fn()}
+        onPasteToFront={vi.fn()}
+        onTranslate={vi.fn()}
+      />
+    );
+
+    await user.click(screen.getByRole("button", { name: "复制" }));
+
+    expect(mockWriteToClipboard).toHaveBeenCalledWith("Hello World");
+  });
 });

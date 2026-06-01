@@ -245,4 +245,49 @@ describe("clipboard-page", () => {
     });
     expect(screen.getByRole("alert").textContent).toMatch(/操作失败|失败/);
   });
+
+  it("clipboard-page: 点击第二行后预览切换到第二条内容（Bug1 点击选中）", async () => {
+    // Arrange
+    mockListClipItems.mockResolvedValue(MOCK_ITEMS);
+    render(<ClipboardPage />);
+    await waitFor(() => {
+      expect(screen.getAllByText("Hello World").length).toBeGreaterThanOrEqual(1);
+    });
+
+    // 初始高亮 0，预览显示 item-1
+    const previewRegion = screen.getByRole("region", { name: "预览" });
+    expect(within(previewRegion).getByText("Hello World")).toBeInTheDocument();
+
+    // Act：通过文本内容找到 item-2 所在的 option 行并点击
+    // （比 index 定位更稳：不受 OnboardCard 等无关元素影响）
+    const listbox = screen.getByRole("listbox");
+    const item2Row = within(listbox).getByText("富文本内容示例").closest("[role='option']");
+    fireEvent.click(item2Row!);
+
+    // Assert：预览切换到 item-2 内容
+    await waitFor(() => {
+      expect(within(previewRegion).getByText("富文本内容示例")).toBeInTheDocument();
+    });
+  });
+
+  it("clipboard-page: 点击第三行后预览切换到第三条内容（Bug1 点击选中）", async () => {
+    // Arrange
+    mockListClipItems.mockResolvedValue(MOCK_ITEMS);
+    render(<ClipboardPage />);
+    await waitFor(() => {
+      expect(screen.getAllByText("Hello World").length).toBeGreaterThanOrEqual(1);
+    });
+
+    const previewRegion = screen.getByRole("region", { name: "预览" });
+
+    // Act：通过文本内容找到 item-3 所在的 option 行并点击
+    const listbox = screen.getByRole("listbox");
+    const item3Row = within(listbox).getByText("Another text item").closest("[role='option']");
+    fireEvent.click(item3Row!);
+
+    // Assert：预览切换到 item-3
+    await waitFor(() => {
+      expect(within(previewRegion).getByText("Another text item")).toBeInTheDocument();
+    });
+  });
 });

@@ -195,6 +195,7 @@ function ClipboardPage() {
                   item={clipItem}
                   isHighlighted={idx === safeHighlight}
                   onToggleFavorite={handleToggleFavorite}
+                  onSelect={() => { setHighlightIndex(idx); }}
                 />
               );
             })

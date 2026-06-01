@@ -18,6 +18,7 @@ interface ClipItemRowProps {
   item: ClipItem;
   isHighlighted: boolean;
   onToggleFavorite: (item: ClipItem) => Promise<void>;
+  onSelect: (item: ClipItem) => void;
 }
 
 /** 截断文本至指定长度，超出加省略号 */
@@ -94,6 +95,7 @@ export function ClipItemRow({
   item,
   isHighlighted,
   onToggleFavorite,
+  onSelect,
 }: ClipItemRowProps) {
   const isCode = item.kind === "richtext";
 
@@ -102,6 +104,7 @@ export function ClipItemRow({
       role="option"
       aria-selected={isHighlighted}
       className="clip-row"
+      onClick={() => { onSelect(item); }}
     >
       <div className="clip-kind">
         <KindIcon kind={item.kind} />
