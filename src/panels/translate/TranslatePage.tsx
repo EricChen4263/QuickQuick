@@ -1,16 +1,21 @@
 /**
- * 翻译页（V4-F2-S08）
+ * 翻译页（V4-F2-S08，里程碑2批次C）
  *
- * 三栏布局中的「工作区 + 历史」两栏（左侧导航由 App.tsx 提供）。
- * 职责：协调翻译 IPC 调用、历史取数、操作分发、错误处理。
+ * 职责：协调翻译 IPC 调用、历史取数、provider 选择、操作分发、错误处理。
+ * 根布局用 .view-translate grid（1fr 工作区 + 280px 历史栏），由 translate.css 定义。
  */
 
+import "./translate.css";
 import { useEffect, useState, useCallback } from "react";
 import {
   translateText,
   listTranslateHistory,
+  getTranslateProviders,
+  getSelectedProvider,
+  setSelectedProvider,
   type TranslateResult,
   type TranslateHistoryItem,
+  type Provider,
 } from "../../ipc/ipc-client";
 import { resolveTranslateAction } from "../../translate/translate-actions";
 import { writeToClipboard, speakText } from "./browser-api";
@@ -24,6 +29,8 @@ function TranslatePage() {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [history, setHistory] = useState<TranslateHistoryItem[]>([]);
+  const [providers, setProviders] = useState<Provider[]>([]);
+  const [selectedProviderId, setSelectedProviderId] = useState("");
 
   /**
    * 取翻译历史，带 cancelled flag 防卸载后写 state。
@@ -40,9 +47,26 @@ function TranslatePage() {
     }
   }, []);
 
+  /**
+   * 挂载时并发 fetch：历史列表 + provider 列表 + 当前选中 provider。
+   * 用同一 cancelled ref 统一防卸载后写 state。
+   */
   useEffect(() => {
     const cancelled = { current: false };
+
     fetchHistory(cancelled);
+
+    Promise.all([getTranslateProviders(), getSelectedProvider()])
+      .then(([providerList, currentId]) => {
+        if (cancelled.current) return;
+        setProviders(providerList);
+        setSelectedProviderId(currentId);
+      })
+      .catch((err) => {
+        // provider 取数失败降级为空列表，不阻断翻译工作流
+        console.error("[QuickQuick] provider 取数失败:", err);
+      });
+
     return () => {
       cancelled.current = true;
     };
@@ -102,6 +126,17 @@ function TranslatePage() {
     }
   }
 
+  /** 切换 provider：调 IPC 持久化，并同步本地 state */
+  async function handleProviderChange(id: string) {
+    try {
+      await setSelectedProvider(id);
+      setSelectedProviderId(id);
+    } catch (err) {
+      // provider 切换失败不崩溃，记录日志
+      console.error("[QuickQuick] 切换 provider 失败:", err);
+    }
+  }
+
   /** 点击历史条目 → 回填工作区（input + 结果区），不再发起新翻译 */
   function handleSelectHistoryItem(item: TranslateHistoryItem) {
     setInputText(item.sourceText);
@@ -114,25 +149,19 @@ function TranslatePage() {
   }
 
   return (
-    <div style={{ display: "flex", height: "100%", fontFamily: "var(--qq-font)" }}>
-      <div style={{ display: "flex", flexDirection: "column", flex: 1, minWidth: 0 }}>
-        {error !== null && (
-          <div
-            role="alert"
-            style={{ padding: "8px 12px", color: "var(--qq-danger, #c0392b)", background: "var(--qq-surface, #f5f5f5)" }}
-          >
-            {error}
-          </div>
-        )}
-        <TranslateWorkspace
-          inputText={inputText}
-          result={result}
-          isLoading={isLoading}
-          onInputChange={setInputText}
-          onTranslate={handleTranslate}
-          onAction={handleAction}
-        />
-      </div>
+    <div className="view-translate">
+      <TranslateWorkspace
+        inputText={inputText}
+        result={result}
+        isLoading={isLoading}
+        error={error}
+        providers={providers}
+        selectedProviderId={selectedProviderId}
+        onInputChange={setInputText}
+        onTranslate={handleTranslate}
+        onAction={handleAction}
+        onProviderChange={handleProviderChange}
+      />
       <TranslateHistoryPanel
         items={history}
         onSelectItem={handleSelectHistoryItem}

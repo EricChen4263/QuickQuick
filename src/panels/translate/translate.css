@@ -1,0 +1,263 @@
+/*
+ * 翻译页专属样式
+ * 复用 tokens.css 的短名 token，不引入新 token。
+ * 通用组件类（.btn/.pane-head 等）来自 components.css，此处只写翻译页独有结构。
+ */
+
+/* 翻译页根：工作区 1fr + 历史栏 280px */
+.view-translate {
+  display: grid;
+  grid-template-columns: 1fr 280px;
+  height: 100%;
+  min-height: 0;
+}
+
+/* 工作区主列：头部固定 + 内容可滚动 */
+.tx-work {
+  display: grid;
+  grid-template-rows: auto 1fr;
+  min-height: 0;
+  border-right: 1px solid var(--border);
+}
+
+/* 可滚动内容区，包裹 DirBar / 输入 / 译文 */
+.tx-scroll {
+  overflow-y: auto;
+  padding: 18px 22px 24px;
+}
+
+/* 语言方向栏：lang-pill 左对齐 + src-select 推到右侧 */
+.dir-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+}
+
+/* 语言方向药丸：等宽字体，带 swap 箭头图标 */
+.lang-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-family: var(--mono);
+  font-size: 12.5px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 5px 12px;
+}
+
+.lang-pill .swap {
+  color: var(--accent);
+}
+
+/* 翻译源选择器容器：margin-left auto 推到右端 */
+.src-select {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--muted);
+  font-size: 12.5px;
+}
+
+.src-select .wrap {
+  position: relative;
+}
+
+.src-select select {
+  appearance: none;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  border-radius: var(--r-sm);
+  padding: 5px 26px 5px 10px;
+  font-size: 12.5px;
+  outline: none;
+  color: var(--fg);
+}
+
+.src-select select:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+/* 下拉箭头图标定位在 select 右侧，pointer-events none 防止遮住选项 */
+.src-select .wrap svg {
+  position: absolute;
+  right: 7px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 13px;
+  height: 13px;
+  color: var(--muted);
+  pointer-events: none;
+}
+
+/* 字段标签：小号灰色，textarea / 译文区上方 */
+.field-label {
+  font-size: 12px;
+  color: var(--muted);
+  margin-bottom: 6px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+/* 输入框：全宽可拉伸，获焦高亮 */
+.tx-input {
+  width: 100%;
+  min-height: 96px;
+  resize: vertical;
+  padding: 13px 15px;
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  background: var(--surface);
+  outline: none;
+  font-size: 15px;
+  line-height: 1.55;
+  color: var(--fg);
+  font-family: var(--font);
+}
+
+.tx-input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+/* 翻译 CTA 行：按钮左对齐，字符数推到右侧 */
+.tx-cta {
+  margin-top: 12px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.tx-cta .meta {
+  color: var(--muted);
+  font-size: 12px;
+  font-family: var(--mono);
+  margin-left: auto;
+}
+
+/* 译文区：顶部分隔线，与输入区视觉分层 */
+.tx-result {
+  margin-top: 22px;
+  border-top: 1px solid var(--border);
+  padding-top: 20px;
+}
+
+/* 译文大字展示，字间距略收 */
+.tx-out {
+  font-size: 21px;
+  line-height: 1.4;
+  letter-spacing: -0.01em;
+}
+
+/* 译文操作按钮行 */
+.tx-actions {
+  margin-top: 14px;
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+/* 词典占位区：虚线边框，当前版本预留，fast-follow 实现 */
+.dict-slot {
+  margin-top: 22px;
+  padding: 14px 16px;
+  border: 1px dashed var(--border);
+  border-radius: var(--r);
+  color: var(--muted);
+  font-size: 12.5px;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.dict-slot svg {
+  width: 16px;
+  height: 16px;
+  flex: none;
+}
+
+/* 历史侧栏：头部固定 + 列表可滚动 */
+.tx-history {
+  display: grid;
+  grid-template-rows: auto 1fr;
+  min-height: 0;
+}
+
+/* 历史列表可滚区 */
+.tx-hist-list {
+  overflow-y: auto;
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+/* 历史条目按钮：全宽，左对齐，hover/selected 高亮 */
+.hist-row {
+  width: 100%;
+  text-align: left;
+  appearance: none;
+  border: 1px solid transparent;
+  background: transparent;
+  border-radius: var(--r);
+  padding: 9px 11px;
+  cursor: pointer;
+  transition: background-color 110ms ease, border-color 110ms ease;
+}
+
+.hist-row:hover {
+  background: var(--hover);
+}
+
+.hist-row[aria-selected="true"] {
+  background: var(--accent-soft);
+  border-color: var(--accent-line);
+}
+
+/* 历史条目原文：标准字号 */
+.hist-src {
+  font-size: 13px;
+  line-height: 1.35;
+  color: var(--fg);
+}
+
+/* 历史条目译文：小号灰色 */
+.hist-dst {
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.35;
+  margin-top: 2px;
+}
+
+/* 历史条目语言/provider 标签行：等宽字体，极小号 */
+.hist-tag {
+  margin-top: 5px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--muted);
+}
+
+/* 标签内的语言对小徽章 */
+.hist-tag .lp {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0 5px;
+}
+
+/* 错误提示条：顶部横幅，danger 色 */
+.tx-error {
+  padding: 8px 16px;
+  color: var(--danger);
+  background: color-mix(in oklch, var(--danger) 8%, var(--bg));
+  border-bottom: 1px solid color-mix(in oklch, var(--danger) 24%, var(--border));
+  font-size: 13px;
+}

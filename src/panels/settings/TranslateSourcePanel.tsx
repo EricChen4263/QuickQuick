@@ -5,6 +5,56 @@ import {
   setSelectedProvider,
   type Provider,
 } from "../../ipc/ipc-client";
+import PanelHeader from "./PanelHeader";
+import SettingGroup from "./SettingGroup";
+
+/** provider id 取首两字作 logo 缩写，便于用等宽字体展示 */
+function logoAbbr(name: string): string {
+  return name.slice(0, 2).toUpperCase();
+}
+
+interface ProviderCardProps {
+  provider: Provider;
+  isSelected: boolean;
+  onSelect: (id: string) => void;
+}
+
+/** 单个翻译源卡片行：logo 缩写 + 名称 + 状态标签 + 视觉隐藏 radio */
+function ProviderCard({ provider, isSelected, onSelect }: ProviderCardProps) {
+  const badgeClass = isSelected
+    ? "badge default"
+    : provider.needsKey
+      ? "badge need"
+      : "badge ok";
+
+  const badgeLabel = isSelected
+    ? "默认"
+    : provider.needsKey
+      ? "待配置"
+      : "无需 Key";
+
+  return (
+    <div
+      className="src-card"
+      onClick={() => onSelect(provider.id)}
+    >
+      <div className="src-logo">{logoAbbr(provider.name)}</div>
+      <div className="grow">
+        <div className="label">{provider.name}</div>
+      </div>
+      <span className={badgeClass}>{badgeLabel}</span>
+      {/* radio 视觉隐藏，保留可访问性——让 getByRole("radio", { name }) 能命中 */}
+      <input
+        type="radio"
+        name="provider"
+        className="sr-only"
+        checked={isSelected}
+        onChange={() => onSelect(provider.id)}
+        aria-label={provider.name}
+      />
+    </div>
+  );
+}
 
 /** 翻译源子项面板：列出 providers，单选切换 */
 function TranslateSourcePanel() {
@@ -49,34 +99,27 @@ function TranslateSourcePanel() {
 
   if (loadError !== null) {
     return (
-      <div style={{ padding: 24 }}>
-        <div role="alert" style={{ color: "var(--qq-danger, #c0392b)" }}>{loadError}</div>
+      <div>
+        <div role="alert" style={{ color: "var(--danger)" }}>{loadError}</div>
       </div>
     );
   }
 
   return (
-    <div style={{ padding: 24 }}>
-      <h2 style={{ fontFamily: "var(--qq-font)", marginTop: 0 }}>翻译源</h2>
-      <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+    <div>
+      <PanelHeader title="翻译源" subtitle="选择用于划词翻译的服务商" />
+      <SettingGroup>
         {providers.map((provider) => (
-          <label
+          <ProviderCard
             key={provider.id}
-            style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", fontFamily: "var(--qq-font)" }}
-          >
-            <input
-              type="radio"
-              name="translate-provider"
-              value={provider.id}
-              checked={selectedId === provider.id}
-              onChange={() => void handleSelect(provider.id)}
-            />
-            {provider.name}
-          </label>
+            provider={provider}
+            isSelected={selectedId === provider.id}
+            onSelect={(id) => void handleSelect(id)}
+          />
         ))}
-      </div>
+      </SettingGroup>
       {opError !== null && (
-        <div role="alert" style={{ color: "var(--qq-danger, #c0392b)", marginTop: 12 }}>{opError}</div>
+        <div role="alert" style={{ color: "var(--danger)" }}>{opError}</div>
       )}
     </div>
   );

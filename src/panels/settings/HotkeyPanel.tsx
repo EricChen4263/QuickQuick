@@ -1,22 +1,33 @@
 import { useEffect, useState, useCallback } from "react";
 import { getHotkeys, setHotkey, type Hotkeys, type HotkeyAction } from "../../ipc/ipc-client";
 import { validateRebind } from "../../main-window/settings/rebind";
+import PanelHeader from "./PanelHeader";
+import SettingGroup from "./SettingGroup";
+import SettingToggle from "./SettingToggle";
 
 interface HotkeyRowProps {
   action: HotkeyAction;
   label: string;
+  description: string;
   currentValue: string;
   occupiedValues: string[];
   onSaved: () => void;
 }
 
-/** 单行热键编辑组件：输入 + 实时冲突校验 + 保存 */
-function HotkeyRow({ action, label, currentValue, occupiedValues, onSaved }: HotkeyRowProps) {
+/** 单行热键编辑：kbd 展示当前键 + input 改键 + 保存按钮 + 冲突校验 */
+function HotkeyRow({
+  action,
+  label,
+  description,
+  currentValue,
+  occupiedValues,
+  onSaved,
+}: HotkeyRowProps) {
   const [inputValue, setInputValue] = useState(currentValue);
   const [conflictError, setConflictError] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
 
-  // 当父组件刷新 currentValue 时同步输入框
+  // 父组件刷新 currentValue 时（保存成功后重拉）同步输入框
   useEffect(() => {
     setInputValue(currentValue);
     setConflictError(null);
@@ -41,29 +52,35 @@ function HotkeyRow({ action, label, currentValue, occupiedValues, onSaved }: Hot
 
   const errorMessage = conflictError ?? saveError;
 
+  // kbd 展示：按 + 分段，每段一个 <kbd>
+  const kbdParts = currentValue.split("+");
+
   return (
-    <div style={{ marginBottom: 16 }}>
-      <label style={{ display: "block", marginBottom: 4, fontFamily: "var(--qq-font)" }}>
-        {label}
-      </label>
-      <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+    <div className="set-row column">
+      <div className="hotkey-row-inner">
+        <div className="grow">
+          <div className="label">{label}</div>
+          <div className="desc">{description}</div>
+        </div>
+        <span className="kbd-combo">
+          {kbdParts.map((part) => (
+            <kbd key={part}>{part}</kbd>
+          ))}
+        </span>
         <input
           type="text"
+          className="set-input"
           value={inputValue}
           onChange={(e) => {
             setInputValue(e.target.value);
             setConflictError(null);
             setSaveError(null);
           }}
-          style={{ fontFamily: "var(--qq-font)", padding: "4px 8px" }}
         />
-        <button onClick={() => void handleSave()}>保存</button>
+        <button className="btn" onClick={() => void handleSave()}>保存</button>
       </div>
       {errorMessage !== null && (
-        <div
-          role="alert"
-          style={{ color: "var(--qq-danger, #c0392b)", marginTop: 4, fontSize: 13 }}
-        >
+        <div role="alert" className="hotkey-error">
           {errorMessage}
         </div>
       )}
@@ -75,6 +92,8 @@ function HotkeyRow({ action, label, currentValue, occupiedValues, onSaved }: Hot
 function HotkeyPanel() {
   const [hotkeys, setHotkeys] = useState<Hotkeys | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
+  // 里程碑3接入 IPC 前的本地占位：回车粘贴开关
+  const [enterToPaste, setEnterToPaste] = useState(true);
 
   const fetchHotkeys = useCallback(async (cancelled: { current: boolean }) => {
     try {
@@ -110,22 +129,35 @@ function HotkeyPanel() {
   }
 
   return (
-    <div style={{ padding: 24 }}>
-      <h2 style={{ fontFamily: "var(--qq-font)", marginTop: 0 }}>热键</h2>
-      <HotkeyRow
-        action="history"
-        label="剪贴板历史"
-        currentValue={hotkeys.history}
-        occupiedValues={[hotkeys.translate]}
-        onSaved={handleSaved}
-      />
-      <HotkeyRow
-        action="translate"
-        label="翻译"
-        currentValue={hotkeys.translate}
-        occupiedValues={[hotkeys.history]}
-        onSaved={handleSaved}
-      />
+    <div>
+      <PanelHeader title="热键" subtitle="自定义全局快捷键，与其他应用冲突时可修改" />
+      <SettingGroup>
+        <HotkeyRow
+          action="history"
+          label="剪贴板历史"
+          description="唤出剪贴板历史面板"
+          currentValue={hotkeys.history}
+          occupiedValues={[hotkeys.translate]}
+          onSaved={handleSaved}
+        />
+        <HotkeyRow
+          action="translate"
+          label="翻译选中"
+          description="翻译当前选中文字"
+          currentValue={hotkeys.translate}
+          occupiedValues={[hotkeys.history]}
+          onSaved={handleSaved}
+        />
+      </SettingGroup>
+      {/* 里程碑3接入：回车粘贴开关，当前用本地 state 占位 */}
+      <SettingGroup>
+        <SettingToggle
+          label="回车粘贴"
+          description="在历史面板按回车时自动粘贴到前台应用"
+          checked={enterToPaste}
+          onChange={setEnterToPaste}
+        />
+      </SettingGroup>
     </div>
   );
 }

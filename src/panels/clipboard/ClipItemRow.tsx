@@ -1,7 +1,7 @@
 /**
- * 剪贴板列表单行：内容摘要 + 收藏标记 + 收藏切换按钮 + 删除按钮。
- * 图片项渲染缩略图（有 thumbnailDataUrl）或 "[图片]" 占位文字。
- * 选中态用 --qq-accent 背景色区分。
+ * 剪贴板列表单行：类型图标 + 内容摘要 + 元信息 + 收藏/删除操作。
+ * 外层用 div[role="option"] 而非 button，避免内部 button 产生非法嵌套。
+ * 高亮态由 CSS [aria-selected="true"] 驱动，不用 inline style。
  */
 
 import type { ClipItem } from "../../ipc/ipc-client";
@@ -26,35 +26,66 @@ function truncateSummary(text: string): string {
   return text.slice(0, SUMMARY_MAX_LENGTH) + "…";
 }
 
+/** 类型图标：根据 kind 返回对应 SVG（code/richtext 用代码图标，image 用图片图标，默认文本图标） */
+function KindIcon({ kind }: { kind: ClipItem["kind"] }) {
+  if (kind === "image") {
+    return (
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+        <rect x="3" y="3" width="18" height="18" rx="2" />
+        <circle cx="8.5" cy="8.5" r="1.5" />
+        <path d="m21 15-5-5L5 21" />
+      </svg>
+    );
+  }
+  if (kind === "richtext") {
+    return (
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+        <polyline points="4 7 4 4 20 4 20 7" />
+        <line x1="9" y1="20" x2="15" y2="20" />
+        <line x1="12" y1="4" x2="12" y2="20" />
+      </svg>
+    );
+  }
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <line x1="3" y1="6" x2="21" y2="6" />
+      <line x1="3" y1="12" x2="21" y2="12" />
+      <line x1="3" y1="18" x2="15" y2="18" />
+    </svg>
+  );
+}
+
 /** 图片内容区：有缩略图则显示 img，否则显示占位文字 */
 function ImageContent({ item }: { item: ClipItem }) {
   if (item.thumbnailDataUrl) {
     return (
-      <>
-        <img
-          src={item.thumbnailDataUrl}
-          alt="图片缩略图"
-          style={{
-            height: 40,
-            width: "auto",
-            objectFit: "cover",
-            flexShrink: 0,
-            borderRadius: 4,
-          }}
-        />
-        <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-          {truncateSummary(item.content)}
-        </span>
-      </>
+      <img
+        src={item.thumbnailDataUrl}
+        alt="图片缩略图"
+        className="clip-thumb"
+      />
     );
   }
+  return <span>[图片]</span>;
+}
+
+/** 收藏星标按钮（仅文本/富文本项显示） */
+function StarButton({ item, onToggleFavorite }: { item: ClipItem; onToggleFavorite: (item: ClipItem) => Promise<void> }) {
+  const label = item.isFavorite ? FAVORITE_LABEL_ON : FAVORITE_LABEL_OFF;
   return (
-    <>
-      <span>[图片]</span>
-      <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-        {truncateSummary(item.content)}
-      </span>
-    </>
+    <button
+      className={item.isFavorite ? "clip-star fav" : "clip-star"}
+      aria-label={label}
+      type="button"
+      onClick={(e) => {
+        e.stopPropagation();
+        onToggleFavorite(item);
+      }}
+    >
+      <svg viewBox="0 0 24 24" fill={item.isFavorite ? "currentColor" : "none"} stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+        <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
+      </svg>
+    </button>
   );
 }
 
@@ -65,45 +96,50 @@ export function ClipItemRow({
   onToggleFavorite,
   onDelete,
 }: ClipItemRowProps) {
-  const highlightStyle = isHighlighted
-    ? { backgroundColor: "var(--qq-accent)", color: "#fff" }
-    : { backgroundColor: "var(--qq-surface)" };
+  const isCode = item.kind === "richtext";
 
   return (
     <div
-      style={{
-        display: "flex",
-        alignItems: "center",
-        gap: "8px",
-        padding: "8px 12px",
-        borderBottom: "1px solid var(--qq-border)",
-        borderRadius: "var(--qq-radius-md)",
-        cursor: "default",
-        ...highlightStyle,
-      }}
+      role="option"
+      aria-selected={isHighlighted}
+      className="clip-row"
     >
-      {item.isFavorite && <span aria-label="已收藏">★</span>}
-      {item.kind === "image" ? (
-        <ImageContent item={item} />
-      ) : (
-        <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-          {truncateSummary(item.content)}
-        </span>
-      )}
-      <button
-        aria-label={item.isFavorite ? FAVORITE_LABEL_ON : FAVORITE_LABEL_OFF}
-        onClick={() => onToggleFavorite(item)}
-        style={{ flexShrink: 0 }}
-      >
-        {item.isFavorite ? FAVORITE_LABEL_ON : FAVORITE_LABEL_OFF}
-      </button>
-      <button
-        aria-label="删除"
-        onClick={() => onDelete(item)}
-        style={{ flexShrink: 0 }}
-      >
-        删除
-      </button>
+      <div className="clip-kind">
+        <KindIcon kind={item.kind} />
+      </div>
+      <div className="clip-main">
+        {item.kind === "image" ? (
+          <ImageContent item={item} />
+        ) : (
+          <div className={isCode ? "clip-text code" : "clip-text"}>
+            {truncateSummary(item.content)}
+          </div>
+        )}
+        <div className="clip-meta">
+          {item.isFavorite && <span aria-label="已收藏">★</span>}
+        </div>
+      </div>
+      <div className="clip-actions">
+        {item.kind !== "image" && (
+          <StarButton item={item} onToggleFavorite={onToggleFavorite} />
+        )}
+        <button
+          className="icon-btn danger"
+          aria-label="删除"
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            onDelete(item);
+          }}
+        >
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <polyline points="3 6 5 6 21 6" />
+            <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
+            <path d="M10 11v6M14 11v6" />
+            <path d="M9 6V4h6v2" />
+          </svg>
+        </button>
+      </div>
     </div>
   );
 }

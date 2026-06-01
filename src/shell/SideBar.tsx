@@ -46,7 +46,7 @@ export function SideBar({ activeTop, onNavigate, hint }: SideBarProps) {
   return (
     <nav aria-label="主导航" className="qq-sidebar">
       {hint && (
-        <div style={{ fontSize: 11, color: "var(--muted, var(--qq-text-muted))", padding: "6px 8px 4px", userSelect: "none" }}>
+        <div style={{ fontSize: 11, color: "var(--muted)", padding: "6px 8px 4px", userSelect: "none" }}>
           <kbd style={{ fontFamily: "var(--mono, monospace)", fontSize: 11 }}>{hint}</kbd>
         </div>
       )}

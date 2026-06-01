@@ -4,9 +4,14 @@ import userEvent from "@testing-library/user-event";
 import TranslatePage from "./TranslatePage";
 
 // Mock IPC：渲染测试环境无 Tauri 运行时
+// getTranslateProviders / getSelectedProvider / setSelectedProvider 需补齐，
+// 否则 TranslatePage 挂载时的 provider fetch 会 reject，干扰翻译/历史断言。
 vi.mock("../../ipc/ipc-client", () => ({
   translateText: vi.fn(),
   listTranslateHistory: vi.fn(),
+  getTranslateProviders: vi.fn(),
+  getSelectedProvider: vi.fn(),
+  setSelectedProvider: vi.fn(),
 }));
 
 // Mock browser-api：隔离 navigator.clipboard / speechSynthesis（jsdom secure-context 限制）
@@ -15,11 +20,20 @@ vi.mock("./browser-api", () => ({
   speakText: vi.fn(),
 }));
 
-import { translateText, listTranslateHistory } from "../../ipc/ipc-client";
+import {
+  translateText,
+  listTranslateHistory,
+  getTranslateProviders,
+  getSelectedProvider,
+  setSelectedProvider,
+} from "../../ipc/ipc-client";
 import { writeToClipboard, speakText } from "./browser-api";
 
 const mockTranslateText = vi.mocked(translateText);
 const mockListTranslateHistory = vi.mocked(listTranslateHistory);
+const mockGetTranslateProviders = vi.mocked(getTranslateProviders);
+const mockGetSelectedProvider = vi.mocked(getSelectedProvider);
+const mockSetSelectedProvider = vi.mocked(setSelectedProvider);
 const mockWriteToClipboard = vi.mocked(writeToClipboard);
 const mockSpeakText = vi.mocked(speakText);
 
@@ -56,6 +70,12 @@ describe("translate-page", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockListTranslateHistory.mockResolvedValue(MOCK_HISTORY);
+    // provider fetch 必须返回有效值，否则 TranslatePage 挂载时 reject 会写 console.error 干扰断言
+    mockGetTranslateProviders.mockResolvedValue([
+      { id: "mymemory", name: "MyMemory · 默认", needsKey: false },
+    ]);
+    mockGetSelectedProvider.mockResolvedValue("mymemory");
+    mockSetSelectedProvider.mockResolvedValue(undefined);
     // browser-api mock 的默认实现已在 vi.mock factory 中设置，clearAllMocks 后恢复默认即可
     mockWriteToClipboard.mockResolvedValue(undefined);
   });
@@ -78,8 +98,9 @@ describe("translate-page", () => {
     });
     // Assert：translateText 被以输入文本调用（第二参为 undefined，由实现自动检测语言）
     expect(mockTranslateText).toHaveBeenCalledWith("Hello World", undefined);
-    // Assert：方向标识（sourceLang → targetLang）
-    expect(screen.getByText(/en.*zh|en\s*→\s*zh/)).toBeInTheDocument();
+    // Assert：方向标识（sourceLang → targetLang）——DirBar lang-pill 和译文 field-label 均含此方向，
+    // 用 getAllByText 避免多元素报错，断言至少一处存在即满足语义
+    expect(screen.getAllByText(/en.*zh|en\s*→\s*zh/).length).toBeGreaterThanOrEqual(1);
   });
 
   it("translate-page: 翻译历史列表渲染——显示各历史条目的 sourceText 和 translatedText", async () => {
@@ -203,6 +224,40 @@ describe("translate-page", () => {
 
     // Assert：translateText 未被调用
     expect(mockTranslateText).not.toHaveBeenCalled();
+  });
+
+  it("translate-page: 历史列表容器有 role=listbox，点击历史项后 aria-selected 动态更新", async () => {
+    // Arrange
+    mockTranslateText.mockResolvedValue(MOCK_RESULT);
+    const user = userEvent.setup();
+    render(<TranslatePage />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Hello")).toBeInTheDocument();
+    });
+
+    // Assert：列表容器有 role=listbox
+    expect(screen.getByRole("listbox", { name: "翻译历史列表" })).toBeInTheDocument();
+
+    // 初始无选中态
+    const item1 = screen.getByTestId("history-item-h-1");
+    const item2 = screen.getByTestId("history-item-h-2");
+    expect(item1).toHaveAttribute("aria-selected", "false");
+    expect(item2).toHaveAttribute("aria-selected", "false");
+
+    // Act：点击第一条历史项
+    await user.click(item1);
+
+    // Assert：item1 选中，item2 未选中
+    expect(item1).toHaveAttribute("aria-selected", "true");
+    expect(item2).toHaveAttribute("aria-selected", "false");
+
+    // Act：点击第二条历史项
+    await user.click(item2);
+
+    // Assert：item2 选中，item1 不再选中
+    expect(item2).toHaveAttribute("aria-selected", "true");
+    expect(item1).toHaveAttribute("aria-selected", "false");
   });
 
   it("translate-page: listTranslateHistory 返回空数组时显示空历史占位文案", async () => {

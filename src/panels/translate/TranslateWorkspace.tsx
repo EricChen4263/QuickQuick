@@ -1,5 +1,6 @@
-import type { TranslateResult } from "../../ipc/ipc-client";
+import type { TranslateResult, Provider } from "../../ipc/ipc-client";
 import { availableActions, resolveTranslateAction } from "../../translate/translate-actions";
+import DirBar from "./DirBar";
 
 /** 译文操作按钮的中文标签（具名常量，避免魔术字符串） */
 const ACTION_LABELS: Record<string, string> = {
@@ -15,71 +16,119 @@ interface TranslateWorkspaceProps {
   inputText: string;
   result: TranslateResult | null;
   isLoading: boolean;
+  error: string | null;
+  providers: Provider[];
+  selectedProviderId: string;
   onInputChange: (text: string) => void;
   onTranslate: () => void;
   onAction: (action: string) => void;
+  onProviderChange: (id: string) => void;
 }
 
 /**
- * 翻译工作区：输入框 + 翻译按钮 + 原文/译文上下对照 + 操作按钮条。
- * 函数组件，无副作用，纯展示+事件上抛。
+ * 翻译工作区：语言方向栏 + 输入框 + 翻译按钮 + 译文展示 + 操作按钮条。
+ * 纯展示组件，无副作用，所有状态由父组件 TranslatePage 持有。
  */
 function TranslateWorkspace({
   inputText,
   result,
   isLoading,
+  error,
+  providers,
+  selectedProviderId,
   onInputChange,
   onTranslate,
   onAction,
+  onProviderChange,
 }: TranslateWorkspaceProps) {
   const actions = availableActions();
   const isTranslateDisabled = inputText.trim().length === 0 || isLoading;
+  const charCount = inputText.length;
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", flex: 1, padding: "16px", gap: "12px" }}>
-      <textarea
-        value={inputText}
-        onChange={(e) => onInputChange(e.target.value)}
-        placeholder="请输入要翻译的文本…"
-        rows={4}
-        style={{ resize: "vertical", fontFamily: "var(--qq-font)", fontSize: "14px", padding: "8px" }}
-      />
-
-      <button
-        onClick={onTranslate}
-        disabled={isTranslateDisabled}
-        style={{ alignSelf: "flex-start" }}
-      >
-        {isLoading ? "翻译中…" : "翻译"}
-      </button>
-
-      {result !== null && (
-        <div>
-          <p style={{ color: "var(--qq-text-muted)", fontSize: "12px", margin: "0 0 4px" }}>
-            {result.sourceLang} → {result.targetLang}
-          </p>
-          <p style={{ margin: "0 0 8px", fontFamily: "var(--qq-font)" }}>
-            {result.translated}
-          </p>
-          <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
-            {actions
-              .filter((action) => action !== "save_history")
-              .map((action) => {
-                const resolved = resolveTranslateAction(action);
-                if (resolved === null) return null;
-                return (
-                  <button
-                    key={action}
-                    onClick={() => onAction(action)}
-                    aria-label={ACTION_LABELS[action] ?? action}
-                  >
-                    {ACTION_LABELS[action] ?? action}
-                  </button>
-                );
-              })}
-          </div>
+    <div className="tx-work">
+      {error !== null && (
+        <div role="alert" className="tx-error">
+          {error}
         </div>
       )}
+      <div className="pane-head">
+        <span className="pane-title">翻译</span>
+      </div>
+
+      <div className="tx-scroll">
+        <DirBar
+          sourceLang={result?.sourceLang ?? "auto"}
+          targetLang={result?.targetLang ?? "zh"}
+          providers={providers}
+          selectedProviderId={selectedProviderId}
+          onProviderChange={onProviderChange}
+        />
+
+        <div className="field-label">原文</div>
+        <textarea
+          className="tx-input"
+          value={inputText}
+          onChange={(e) => onInputChange(e.target.value)}
+          placeholder="请输入要翻译的文本…"
+          spellCheck={false}
+        />
+
+        <div className="tx-cta">
+          <button
+            className="btn btn-primary"
+            onClick={onTranslate}
+            disabled={isTranslateDisabled}
+          >
+            {isLoading ? "翻译中…" : "翻译"}
+          </button>
+          <span className="meta">{charCount} 字符</span>
+        </div>
+
+        {result !== null && (
+          <div className="tx-result">
+            <div className="field-label">
+              译文 · {result.sourceLang} → {result.targetLang}
+            </div>
+            <div className="tx-out">{result.translated}</div>
+
+            <div className="tx-actions">
+              {actions
+                .filter((action) => action !== "save_history")
+                .map((action) => {
+                  const resolved = resolveTranslateAction(action);
+                  if (resolved === null) return null;
+                  return (
+                    <button
+                      key={action}
+                      className="btn"
+                      onClick={() => onAction(action)}
+                      aria-label={ACTION_LABELS[action] ?? action}
+                    >
+                      {ACTION_LABELS[action] ?? action}
+                    </button>
+                  );
+                })}
+            </div>
+
+            <div className="dict-slot" aria-label="词典区">
+              <svg
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.7"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden="true"
+              >
+                <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" />
+                <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" />
+              </svg>
+              词典区位置预留 —— 单词查询时显示音标 / 词性 / 例句（fast-follow）
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   );
 }

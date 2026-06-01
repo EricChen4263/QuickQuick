@@ -1,13 +1,28 @@
 import { useEffect, useState, useCallback } from "react";
 import { getExcludeList, setExcludeList } from "../../ipc/ipc-client";
 import { addExcludedApp, removeExcludedApp } from "../../main-window/settings/sections";
+import PanelHeader from "./PanelHeader";
+import SettingGroup from "./SettingGroup";
+import SettingToggle from "./SettingToggle";
 
-/** 隐私子项面板：管理 App 排除名单 */
+/** SVG × 图标，用于 chip 删除按钮 */
+function CloseIcon() {
+  return (
+    <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">
+      <path d="M2 2l8 8M10 2l-8 8" />
+    </svg>
+  );
+}
+
+/** 隐私子项面板：管理 App 排除名单 + 暂停/跳过敏感开关 */
 function PrivacyPanel() {
   const [excludeList, setExcludeListState] = useState<string[]>([]);
   const [inputValue, setInputValue] = useState("");
   const [loadError, setLoadError] = useState<string | null>(null);
   const [opError, setOpError] = useState<string | null>(null);
+  // 里程碑3接入 IPC 前的本地占位开关
+  const [pauseCapture, setPauseCapture] = useState(false);
+  const [skipSensitive, setSkipSensitive] = useState(true);
 
   const fetchExcludeList = useCallback(async (cancelled: { current: boolean }) => {
     try {
@@ -57,59 +72,71 @@ function PrivacyPanel() {
 
   if (loadError !== null) {
     return (
-      <div style={{ padding: 24 }}>
-        <div role="alert" style={{ color: "var(--qq-danger, #c0392b)" }}>{loadError}</div>
+      <div>
+        <div role="alert" style={{ color: "var(--danger)" }}>{loadError}</div>
       </div>
     );
   }
 
   return (
-    <div style={{ padding: 24 }}>
-      <h2 style={{ fontFamily: "var(--qq-font)", marginTop: 0 }}>隐私</h2>
-      <p style={{ fontFamily: "var(--qq-font)", color: "var(--qq-text-muted)" }}>
-        以下应用处于前台时，剪贴板内容不会被记录。
-      </p>
+    <div>
+      <PanelHeader title="隐私" subtitle="以下应用处于前台时，剪贴板内容不会被记录" />
+
+      {/* 里程碑3接入：暂停监听和跳过敏感内容，当前用本地 state 占位 */}
+      <SettingGroup>
+        <SettingToggle
+          label="暂停剪贴板监听"
+          description="临时停止记录所有剪贴板内容"
+          checked={pauseCapture}
+          onChange={setPauseCapture}
+        />
+        <SettingToggle
+          label="跳过敏感内容"
+          description="自动过滤密码管理器等敏感数据"
+          checked={skipSensitive}
+          onChange={setSkipSensitive}
+        />
+      </SettingGroup>
+
+      <SettingGroup>
+        <div className="set-row">
+          <div className="grow">
+            <div className="label">App 排除名单</div>
+            <div className="desc">处于前台时不记录剪贴板的应用</div>
+          </div>
+          <input
+            type="text"
+            className="set-input"
+            value={inputValue}
+            placeholder="应用名称（如 1Password）"
+            onChange={(e) => setInputValue(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter") void handleAdd(); }}
+          />
+          <button className="btn" onClick={() => void handleAdd()}>添加</button>
+        </div>
+        <div className="chip-row">
+          {excludeList.map((app) => (
+            <span key={app} className="chip">
+              {app}
+              <button
+                type="button"
+                aria-label={`删除 ${app}`}
+                onClick={() => void handleRemove(app)}
+              >
+                <CloseIcon />
+              </button>
+            </span>
+          ))}
+          {excludeList.length === 0 && (
+            <span style={{ fontSize: 12, color: "var(--muted)" }}>暂无排除应用</span>
+          )}
+        </div>
+      </SettingGroup>
 
       {opError !== null && (
-        <div role="alert" style={{ color: "var(--qq-danger, #c0392b)", marginBottom: 12 }}>
+        <div role="alert" style={{ color: "var(--danger)", marginTop: 8, fontSize: 12 }}>
           {opError}
         </div>
-      )}
-
-      <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
-        <input
-          type="text"
-          value={inputValue}
-          placeholder="应用名称"
-          onChange={(e) => setInputValue(e.target.value)}
-          onKeyDown={(e) => { if (e.key === "Enter") void handleAdd(); }}
-          style={{ fontFamily: "var(--qq-font)", padding: "4px 8px", flex: 1 }}
-        />
-        <button onClick={() => void handleAdd()}>添加</button>
-      </div>
-
-      <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
-        {excludeList.map((app) => (
-          <li
-            key={app}
-            style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "6px 0", fontFamily: "var(--qq-font)" }}
-          >
-            <span>{app}</span>
-            <button
-              aria-label={`删除 ${app}`}
-              onClick={() => void handleRemove(app)}
-              style={{ background: "none", border: "none", cursor: "pointer", color: "var(--qq-danger, #c0392b)" }}
-            >
-              删除
-            </button>
-          </li>
-        ))}
-      </ul>
-
-      {excludeList.length === 0 && (
-        <p style={{ fontFamily: "var(--qq-font)", color: "var(--qq-text-muted)" }}>
-          暂无排除应用
-        </p>
       )}
     </div>
   );

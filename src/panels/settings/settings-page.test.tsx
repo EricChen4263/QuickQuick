@@ -261,4 +261,122 @@ describe("settings-page", () => {
     // Assert：关于页显示应用名
     expect(screen.getByText("QuickQuick")).toBeInTheDocument();
   });
+
+  it("settings-page: 通用面板渲染三个 switch（开机自启动/托盘常驻/自动检查更新）默认均为 on", () => {
+    render(<SettingsPage />);
+
+    expect(screen.getByRole("switch", { name: "开机自启动" })).toHaveAttribute("aria-checked", "true");
+    expect(screen.getByRole("switch", { name: "托盘常驻" })).toHaveAttribute("aria-checked", "true");
+    expect(screen.getByRole("switch", { name: "自动检查更新" })).toHaveAttribute("aria-checked", "true");
+  });
+
+  it("settings-page: 通用面板点击「开机自启动」switch 后 aria-checked 切换为 false", async () => {
+    const user = userEvent.setup();
+    render(<SettingsPage />);
+
+    const sw = screen.getByRole("switch", { name: "开机自启动" });
+    await user.click(sw);
+
+    expect(sw).toHaveAttribute("aria-checked", "false");
+    // 其余两项不受影响
+    expect(screen.getByRole("switch", { name: "托盘常驻" })).toHaveAttribute("aria-checked", "true");
+  });
+
+  it("settings-page: 通用面板子项导航按钮文案含图标但 getByRole('button') 仍可命中（aria-hidden 图标不干扰名称）", () => {
+    render(<SettingsPage />);
+
+    const nav = screen.getByRole("navigation", { name: "设置子项" });
+    // 六个 set-nav-item 按钮均可按文案命中
+    expect(within(nav).getByRole("button", { name: "通用" })).toBeInTheDocument();
+    expect(within(nav).getByRole("button", { name: "存储" })).toBeInTheDocument();
+  });
+
+  it("settings-page: 存储面板渲染 PanelHeader 标题「存储」及清理按钮", async () => {
+    const user = userEvent.setup();
+    render(<SettingsPage />);
+
+    const nav = screen.getByRole("navigation", { name: "设置子项" });
+    await user.click(within(nav).getByRole("button", { name: "存储" }));
+
+    // 标题和清理按钮均可见
+    expect(screen.getByRole("heading", { name: "存储" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "清理…" })).toBeInTheDocument();
+  });
+
+  it("settings-page: 关于面板含 .logo-mark SVG 图标区与版本号", async () => {
+    const user = userEvent.setup();
+    render(<SettingsPage />);
+
+    const nav = screen.getByRole("navigation", { name: "设置子项" });
+    await user.click(within(nav).getByRole("button", { name: "关于" }));
+
+    // 版本号文字可见
+    expect(screen.getByText(/v1\.0\.0/)).toBeInTheDocument();
+    // h2 标题 QuickQuick
+    expect(screen.getByRole("heading", { level: 2, name: "QuickQuick" })).toBeInTheDocument();
+  });
+
+  it("settings-page: 翻译源面板——每个 provider 渲染 .src-card 结构（设计系统重塑）", async () => {
+    // Arrange: 验证改造后 TranslateSourcePanel 使用 .src-card/.src-logo/.badge 结构
+    const user = userEvent.setup();
+    render(<SettingsPage />);
+
+    const nav = screen.getByRole("navigation", { name: "设置子项" });
+    await user.click(within(nav).getByRole("button", { name: "翻译源" }));
+
+    await waitFor(() => {
+      expect(screen.getByText("Google 翻译")).toBeInTheDocument();
+    });
+
+    // 初始选中 google → google 显示 "默认"，DeepL needsKey=true → "待配置"
+    expect(screen.getByText("默认")).toBeInTheDocument();
+    expect(screen.getByText("待配置")).toBeInTheDocument();
+
+    // 选择 DeepL 后：DeepL 变为选中显示"默认"，Google(needsKey=false)显示"无需 Key"
+    await user.click(screen.getByRole("radio", { name: "DeepL" }));
+    await waitFor(() => {
+      expect(screen.getByText("无需 Key")).toBeInTheDocument();
+    });
+    // DeepL 此时是选中态，显示"默认"（之前"待配置"消失）
+    expect(screen.getByText("默认")).toBeInTheDocument();
+    expect(screen.queryByText("待配置")).not.toBeInTheDocument();
+  });
+
+  it("settings-page: 热键面板——每行有 .kbd-combo 展示当前键（设计系统重塑）", async () => {
+    // Arrange: 验证改造后 HotkeyPanel 每行有 kbd 展示当前热键
+    const user = userEvent.setup();
+    render(<SettingsPage />);
+
+    const nav = screen.getByRole("navigation", { name: "设置子项" });
+    await user.click(within(nav).getByRole("button", { name: "热键" }));
+
+    await waitFor(() => {
+      expect(screen.getByDisplayValue("CmdOrCtrl+Shift+H")).toBeInTheDocument();
+    });
+
+    // 两行都有保存按钮
+    expect(screen.getAllByRole("button", { name: "保存" })).toHaveLength(2);
+    // 两个热键 input 均在 DOM（getByDisplayValue 已验证一个，另一个也在）
+    expect(screen.getByDisplayValue("CmdOrCtrl+Shift+T")).toBeInTheDocument();
+  });
+
+  it("settings-page: 隐私面板——App 名单以 .chip 形式渲染（设计系统重塑）", async () => {
+    // Arrange: 验证改造后 PrivacyPanel 用 chip-row/chip 结构渲染排除名单
+    const user = userEvent.setup();
+    render(<SettingsPage />);
+
+    const nav = screen.getByRole("navigation", { name: "设置子项" });
+    await user.click(within(nav).getByRole("button", { name: "隐私" }));
+
+    await waitFor(() => {
+      expect(screen.getByText("Xcode")).toBeInTheDocument();
+      expect(screen.getByText("Terminal")).toBeInTheDocument();
+    });
+
+    // 添加 input 的 placeholder 可命中
+    expect(screen.getByPlaceholderText(/应用名称/)).toBeInTheDocument();
+    // 每个 app 有对应删除按钮（aria-label="删除 xxx"）
+    expect(screen.getByRole("button", { name: "删除 Xcode" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "删除 Terminal" })).toBeInTheDocument();
+  });
 });

@@ -1,5 +1,5 @@
 /**
- * 剪贴板历史页（双栏布局：左侧列表 + 右侧预览）。
+ * 剪贴板历史页（双栏布局：左侧 340px 列表栏 + 右侧预览区）。
  * 挂载时通过 IPC 取数，支持搜索过滤、类型筛选、键盘流、收藏/删除管理。
  * 对应验收项 V1-F2-A07。
  */
@@ -19,6 +19,12 @@ import { moveHighlight, quickSelectIndex, resolveEnter } from "../history/keyboa
 import { ClipItemRow } from "./ClipItemRow";
 import { ClipPreview } from "./ClipPreview";
 import { ClipSearchBar } from "./ClipSearchBar";
+import { OnboardCard } from "./OnboardCard";
+import EmptyState from "../../components/EmptyState";
+import "./clipboard.css";
+
+/** localStorage key：用户已关闭引导卡片 */
+const ONBOARD_DISMISSED_KEY = "qq-onboard-dismissed";
 
 /** 将 IPC ClipItem 适配为纯逻辑 HistoryItem */
 function toHistoryItem(clip: ClipItem): HistoryItem {
@@ -32,6 +38,14 @@ function toHistoryItem(clip: ClipItem): HistoryItem {
   };
 }
 
+/** 空列表图标 SVG */
+const EmptyListIcon = (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <rect x="8" y="2" width="8" height="4" rx="1" />
+    <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2" />
+  </svg>
+);
+
 /** 剪贴板历史页根组件 */
 function ClipboardPage() {
   const [items, setItems] = useState<ClipItem[]>([]);
@@ -40,6 +54,9 @@ function ClipboardPage() {
   const [searchQuery, setSearchQuery] = useState("");
   const [typeFilter, setTypeFilter] = useState<HistoryFilter>("all");
   const [highlightIndex, setHighlightIndex] = useState(0);
+  const [onboardDismissed, setOnboardDismissed] = useState(
+    () => localStorage.getItem(ONBOARD_DISMISSED_KEY) === "true",
+  );
 
   /**
    * loadItems 接受 cancelled ref，避免卸载后写入已卸载组件的 state。
@@ -87,7 +104,9 @@ function ClipboardPage() {
   function handleKeyDown(event: React.KeyboardEvent) {
     if (event.key === "ArrowDown" || event.key === "ArrowUp") {
       event.preventDefault();
-      setHighlightIndex((prev) => moveHighlight(prev, event.key as "ArrowUp" | "ArrowDown", filteredItems.length));
+      setHighlightIndex((prev) =>
+        moveHighlight(prev, event.key as "ArrowUp" | "ArrowDown", filteredItems.length),
+      );
       return;
     }
     if (event.key === "Enter") {
@@ -122,55 +141,70 @@ function ClipboardPage() {
     }
   }
 
+  function handleDismissOnboard() {
+    localStorage.setItem(ONBOARD_DISMISSED_KEY, "true");
+    setOnboardDismissed(true);
+  }
+
   if (loadError !== null) {
     return <div role="alert">{loadError}</div>;
   }
 
   return (
-    <div style={{ display: "flex", height: "100%", fontFamily: "var(--qq-font)", flexDirection: "column" }}>
+    <div style={{ display: "grid", gridTemplateColumns: "340px 1fr", height: "100%", fontFamily: "var(--font)" }}>
       {opError !== null && (
-        <div role="alert" style={{ padding: "8px 12px", color: "var(--qq-danger, #c0392b)", background: "var(--qq-surface)" }}>
+        <div
+          role="alert"
+          style={{ gridColumn: "1 / -1", padding: "8px 12px", color: "var(--danger)", background: "var(--surface)" }}
+        >
           {opError}
         </div>
       )}
-      <div style={{ display: "flex", flex: 1, minHeight: 0 }}>
-        <div style={{ display: "flex", flexDirection: "column", flex: "0 0 320px" }}>
-          <ClipSearchBar
-            searchQuery={searchQuery}
-            typeFilter={typeFilter}
-            onSearchChange={(q) => { setSearchQuery(q); setHighlightIndex(0); }}
-            onTypeFilterChange={(f) => { setTypeFilter(f); setHighlightIndex(0); }}
-            onKeyDown={handleKeyDown}
+      <div className="clip-list-col">
+        <ClipSearchBar
+          searchQuery={searchQuery}
+          typeFilter={typeFilter}
+          onSearchChange={(q) => { setSearchQuery(q); setHighlightIndex(0); }}
+          onTypeFilterChange={(f) => { setTypeFilter(f); setHighlightIndex(0); }}
+          onKeyDown={handleKeyDown}
+        />
+        {!onboardDismissed && (
+          <OnboardCard
+            onDismiss={handleDismissOnboard}
+            onOpenSystemSettings={() => { /* 里程碑3 接 IPC */ }}
           />
-          <div style={{ flex: 1, overflowY: "auto" }}>
-            {filteredItems.length === 0 ? (
-              <p style={{ padding: "16px", color: "var(--qq-text-muted)" }}>
-                {EMPTY_LIST_PLACEHOLDER}
-              </p>
-            ) : (
-              filteredItems.map((histItem, idx) => {
-                const clipItem = items.find((c) => c.id === histItem.id);
-                if (!clipItem) return null;
-                return (
-                  <ClipItemRow
-                    key={histItem.id}
-                    item={clipItem}
-                    isHighlighted={idx === safeHighlight}
-                    onToggleFavorite={handleToggleFavorite}
-                    onDelete={handleDelete}
-                  />
-                );
-              })
-            )}
-          </div>
+        )}
+        <div
+          className="clip-list"
+          role="listbox"
+          aria-label="剪贴板历史"
+        >
+          {filteredItems.length === 0 ? (
+            <EmptyState
+              icon={EmptyListIcon}
+              title="暂无记录"
+              description="复制任意内容后将显示在这里"
+            />
+          ) : (
+            filteredItems.map((histItem, idx) => {
+              const clipItem = items.find((c) => c.id === histItem.id);
+              if (!clipItem) return null;
+              return (
+                <ClipItemRow
+                  key={histItem.id}
+                  item={clipItem}
+                  isHighlighted={idx === safeHighlight}
+                  onToggleFavorite={handleToggleFavorite}
+                  onDelete={handleDelete}
+                />
+              );
+            })
+          )}
         </div>
-        <ClipPreview item={highlightedClipItem} />
       </div>
+      <ClipPreview item={highlightedClipItem} />
     </div>
   );
 }
-
-/** 列表为空时的占位文案 */
-const EMPTY_LIST_PLACEHOLDER = "暂无剪贴板记录";
 
 export default ClipboardPage;

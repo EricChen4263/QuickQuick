@@ -17,12 +17,17 @@ vi.mock("@tauri-apps/api/window", () => ({
 // Mock IPC client：listClipItems / listTranslateHistory 返回永远 pending 的 Promise，
 // 避免子页面挂载后异步 state 更新在 act() 边界外触发警告。
 // app-shell 测试只验证导航结构，不关心各页数据。
+// getTranslateProviders / getSelectedProvider / setSelectedProvider 需补齐，
+// 否则 TranslatePage 挂载时 provider fetch reject 会产生未捕获错误。
 vi.mock("./ipc/ipc-client", () => ({
   listClipItems: vi.fn().mockReturnValue(new Promise(() => {})),
   deleteClipItem: vi.fn().mockResolvedValue(undefined),
   toggleFavoriteClip: vi.fn().mockResolvedValue(undefined),
   translateText: vi.fn().mockReturnValue(new Promise(() => {})),
   listTranslateHistory: vi.fn().mockReturnValue(new Promise(() => {})),
+  getTranslateProviders: vi.fn().mockReturnValue(new Promise(() => {})),
+  getSelectedProvider: vi.fn().mockReturnValue(new Promise(() => {})),
+  setSelectedProvider: vi.fn().mockResolvedValue(undefined),
 }));
 
 // Mock browser-api：隔离 clipboard / speechSynthesis，防止 jsdom 环境报错

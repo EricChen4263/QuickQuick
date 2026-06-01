@@ -30,28 +30,55 @@ export function ClipSearchBar({
   onKeyDown,
 }: ClipSearchBarProps) {
   return (
-    <div style={{ display: "flex", gap: "8px", padding: "8px" }}>
-      <input
-        type="search"
-        role="searchbox"
-        placeholder="搜索剪贴板内容…"
-        autoFocus
-        value={searchQuery}
-        onChange={(e) => onSearchChange(e.target.value)}
-        onKeyDown={onKeyDown}
-        style={{ flex: 1 }}
-      />
-      <select
-        value={typeFilter}
-        onChange={(e) => onTypeFilterChange(e.target.value as HistoryFilter)}
-        aria-label="类型筛选"
-      >
-        {(Object.keys(FILTER_LABELS) as HistoryFilter[]).map((key) => (
-          <option key={key} value={key}>
-            {FILTER_LABELS[key]}
-          </option>
-        ))}
-      </select>
+    <div className="searchbar">
+      <div className="search-field">
+        <svg
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.8"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          aria-hidden="true"
+        >
+          <circle cx="11" cy="11" r="7" />
+          <path d="m21 21-4.3-4.3" />
+        </svg>
+        <input
+          type="search"
+          role="searchbox"
+          placeholder="搜索剪贴板内容…"
+          aria-label="搜索剪贴板内容"
+          autoFocus
+          value={searchQuery}
+          onChange={(e) => onSearchChange(e.target.value)}
+          onKeyDown={onKeyDown}
+        />
+      </div>
+      <div className="filter-select">
+        <select
+          value={typeFilter}
+          onChange={(e) => onTypeFilterChange(e.target.value as HistoryFilter)}
+          aria-label="类型筛选"
+        >
+          {(Object.keys(FILTER_LABELS) as HistoryFilter[]).map((key) => (
+            <option key={key} value={key}>
+              {FILTER_LABELS[key]}
+            </option>
+          ))}
+        </select>
+        <svg
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.8"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          aria-hidden="true"
+        >
+          <path d="m6 9 6 6 6-6" />
+        </svg>
+      </div>
     </div>
   );
 }
