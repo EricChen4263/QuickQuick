@@ -1,0 +1,49 @@
+/*
+ * CSS reset 和基础排版
+ * body 背景用 var(--bg)——Tauri 主窗是应用本身，不需要设计稿里的衬托桌面色。
+ */
+
+*, *::before, *::after {
+  box-sizing: border-box;
+}
+
+html, body {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--font);
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* 表单元素继承字体和颜色，消除浏览器默认样式差异 */
+button {
+  font: inherit;
+  cursor: pointer;
+  color: inherit;
+}
+
+input, textarea, select {
+  font: inherit;
+  color: inherit;
+}
+
+/* 选中态用 accent 淡色，与品牌色保持一致 */
+::selection {
+  background: var(--accent-soft);
+}
+
+svg {
+  display: block;
+}
+
+/* 等宽数字辅助类，供价格/计数等需要等宽数字的场景使用 */
+.num, .mono {
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+}

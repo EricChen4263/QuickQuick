@@ -5,6 +5,27 @@
     <link rel="icon" type="image/svg+xml" href="/vite.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>QuickQuick</title>
+    <!--
+      防首屏闪烁（FOUC）：在 CSS 应用前立即把 resolved theme 写到 data-theme。
+      逻辑与 themeStore.resolveTheme 保持一致：
+        auto  → 读 matchMedia prefers-color-scheme；
+        light/dark → 直接使用。
+      使用普通 script（非 module），确保在任何延迟脚本之前同步执行。
+    -->
+    <script>
+      (function () {
+        var pref = localStorage.getItem("qq-theme-pref") || "auto";
+        var resolved;
+        if (pref === "light" || pref === "dark") {
+          resolved = pref;
+        } else {
+          resolved = window.matchMedia("(prefers-color-scheme: dark)").matches
+            ? "dark"
+            : "light";
+        }
+        document.documentElement.dataset.theme = resolved;
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

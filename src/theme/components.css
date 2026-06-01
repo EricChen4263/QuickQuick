@@ -1,0 +1,279 @@
+/*
+ * 组件样式
+ * 外壳类（qq- 前缀）保留：测试文件依赖这些类名做断言。
+ * 通用组件类供里程碑2+复用，不包含三页专属类（.clip-*/.tx-*/.set-*）。
+ */
+
+/* 应用主容器：grid 布局（92px 侧边栏 + 内容区），实色背景，Tauri 主窗不用毛玻璃 */
+.qq-main {
+  display: grid;
+  grid-template-columns: 92px 1fr;
+  height: 100vh;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--font);
+}
+
+/* 一级导航侧边栏 */
+.qq-sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px 8px;
+  border-right: 1px solid var(--border);
+  background: var(--bg);
+}
+
+/* 导航项：图标+文字纵向排列，激活态用 accent-soft 背景 */
+.qq-nav-item {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
+  padding: 9px 4px;
+  border-radius: var(--r);
+  color: var(--muted);
+  font-size: 11.5px;
+  font-weight: 500;
+  transition: background-color 120ms ease, color 120ms ease;
+}
+
+.qq-nav-item svg {
+  width: 19px;
+  height: 19px;
+}
+
+.qq-nav-item:hover {
+  background: var(--hover);
+  color: var(--fg);
+}
+
+.qq-nav-item[aria-current="page"] {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+/* spacer：推后续内容到底部 */
+.spacer {
+  flex: 1;
+}
+
+/* 主题切换三档按钮组 */
+.theme-seg {
+  display: flex;
+  gap: 2px;
+  padding: 3px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+}
+
+.theme-seg button {
+  flex: 1;
+  border: 0;
+  background: transparent;
+  border-radius: var(--r-sm);
+  display: grid;
+  place-items: center;
+  padding: 5px 0;
+  color: var(--muted);
+  transition: background-color 120ms ease, color 120ms ease;
+}
+
+.theme-seg button svg {
+  width: 14px;
+  height: 14px;
+}
+
+.theme-seg button:hover {
+  color: var(--fg);
+}
+
+.theme-seg button[aria-pressed="true"] {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+/* 图标按钮：小方块，带边框，用于工具栏操作 */
+.icon-btn {
+  appearance: none;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  width: 30px;
+  height: 30px;
+  border-radius: var(--r-sm);
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+  transition: background-color 120ms ease, color 120ms ease, border-color 120ms ease;
+}
+
+.icon-btn svg {
+  width: 16px;
+  height: 16px;
+}
+
+.icon-btn:hover {
+  color: var(--fg);
+  border-color: color-mix(in oklch, var(--fg) 30%, var(--border));
+}
+
+/* on 态：accent 高亮，表示功能已开启 */
+.icon-btn.on {
+  color: var(--accent);
+  border-color: var(--accent-line);
+}
+
+/* danger 态：hover 时变红，用于破坏性操作确认 */
+.icon-btn.danger:hover {
+  color: var(--danger);
+  border-color: color-mix(in oklch, var(--danger) 50%, var(--border));
+}
+
+/* 通用按钮 */
+.btn {
+  appearance: none;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  border-radius: var(--r-sm);
+  padding: 7px 13px;
+  font-size: 13px;
+  font-weight: 500;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--fg);
+  transition: background-color 120ms ease, border-color 120ms ease, transform 60ms ease;
+}
+
+.btn svg {
+  width: 15px;
+  height: 15px;
+}
+
+.btn:hover {
+  background: var(--hover);
+}
+
+.btn:active {
+  transform: translateY(1px);
+}
+
+/* 主操作按钮：accent 填充色，白色文字 */
+.btn-primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: white;
+}
+
+.btn-primary:hover {
+  background: color-mix(in oklch, var(--accent) 88%, black);
+}
+
+/* 幽灵按钮：无背景无边框，用于次要操作 */
+.btn-ghost {
+  border-color: transparent;
+  background: transparent;
+}
+
+.btn-ghost:hover {
+  background: var(--hover);
+}
+
+/* toggle 开关（布尔值切换） */
+.switch {
+  position: relative;
+  width: 36px;
+  height: 20px;
+  display: inline-block;
+}
+
+.switch input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.switch-track {
+  position: absolute;
+  inset: 0;
+  background: var(--border);
+  border-radius: 10px;
+  transition: background-color 120ms ease;
+}
+
+.switch input:checked + .switch-track {
+  background: var(--accent);
+}
+
+.switch-thumb {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  background: white;
+  border-radius: 50%;
+  transition: transform 120ms ease;
+}
+
+.switch input:checked ~ .switch-thumb {
+  transform: translateX(16px);
+}
+
+/* 状态徽章（角标） */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 1px 7px;
+  font-size: 11px;
+  font-weight: 500;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  color: var(--muted);
+}
+
+/* ok 态：绿色，表示正常/完成 */
+.badge.ok {
+  background: color-mix(in oklch, var(--ok) 12%, transparent);
+  border-color: color-mix(in oklch, var(--ok) 36%, transparent);
+  color: var(--ok);
+}
+
+/* need 态：警告黄，表示需要操作 */
+.badge.need {
+  background: color-mix(in oklch, var(--warn) 12%, transparent);
+  border-color: color-mix(in oklch, var(--warn) 36%, transparent);
+  color: var(--warn);
+}
+
+/* 计数药丸：等宽数字，用于列表头部显示条目数 */
+.count-pill {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--muted);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 1px 8px;
+}
+
+/* 面板头部：标题行，带底边框分隔 */
+.pane-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 13px 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+/* 面板标题文字：稍大稍粗，字间距收紧 */
+.pane-title {
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}

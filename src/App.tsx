@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { topLevelEntries, type TopLevel } from "./main-window/nav";
+import { type TopLevel } from "./main-window/nav";
 import { type HotkeyTrigger } from "./shell/windowRoute";
+import { AppShell } from "./shell/AppShell";
 import ClipboardPage from "./panels/clipboard/ClipboardPage";
 import TranslatePage from "./panels/translate/TranslatePage";
 import SettingsPage from "./panels/settings/SettingsPage";
@@ -11,10 +12,10 @@ import "./theme/theme.css";
 /** 热键路由 payload 类型（与后端 emit 的字符串对应） */
 type RoutePayload = HotkeyTrigger;
 
-/** 一级页中文标签映射（具名常量，避免魔术字符串） */
-const TOP_LEVEL_LABELS: Record<TopLevel, string> = {
-  clipboard: "剪贴板",
-  translate: "翻译",
+/** 每个一级页对应的热键 hint 文案 */
+const PAGE_HINTS: Record<TopLevel, string> = {
+  clipboard: "⌘⇧V",
+  translate: "⌘⇧T",
   settings: "设置",
 };
 
@@ -27,7 +28,7 @@ function routeToTopLevel(trigger: HotkeyTrigger): TopLevel {
   return "clipboard";
 }
 
-/** QuickQuick 主窗口根组件：左侧边栏 + 一级页切换 */
+/** QuickQuick 主窗口根组件：AppShell 包裹三页，路由层保持不变 */
 function App() {
   const [activeTop, setActiveTop] = useState<TopLevel>("clipboard");
 
@@ -71,44 +72,31 @@ function App() {
     };
   }, []);
 
-  const entries = topLevelEntries();
-
   return (
-    <div className="qq-main" style={{ display: "flex", height: "100vh" }}>
-      <nav aria-label="主导航" className="qq-sidebar">
-        {entries.map((entry) => (
-          <button
-            key={entry}
-            className="qq-nav-item"
-            aria-current={activeTop === entry ? "page" : undefined}
-            onClick={() => setActiveTop((_prev) => entry)}
-          >
-            {TOP_LEVEL_LABELS[entry]}
-          </button>
-        ))}
-      </nav>
-
-      <main style={{ flex: 1 }}>
-        <section
-          data-testid="page-clipboard"
-          style={{ display: activeTop === "clipboard" ? "block" : "none" }}
-        >
-          <ClipboardPage />
-        </section>
-        <section
-          data-testid="page-translate"
-          style={{ display: activeTop === "translate" ? "block" : "none" }}
-        >
-          <TranslatePage />
-        </section>
-        <section
-          data-testid="page-settings"
-          style={{ display: activeTop === "settings" ? "block" : "none" }}
-        >
-          <SettingsPage />
-        </section>
-      </main>
-    </div>
+    <AppShell
+      activeTop={activeTop}
+      onNavigate={(top) => setActiveTop((_prev) => top)}
+      hint={PAGE_HINTS[activeTop]}
+    >
+      <section
+        data-testid="page-clipboard"
+        style={{ display: activeTop === "clipboard" ? "block" : "none" }}
+      >
+        <ClipboardPage />
+      </section>
+      <section
+        data-testid="page-translate"
+        style={{ display: activeTop === "translate" ? "block" : "none" }}
+      >
+        <TranslatePage />
+      </section>
+      <section
+        data-testid="page-settings"
+        style={{ display: activeTop === "settings" ? "block" : "none" }}
+      >
+        <SettingsPage />
+      </section>
+    </AppShell>
   );
 }
 

@@ -1,0 +1,71 @@
+/*
+ * 设计语言 token（OKLch，短名）
+ * 浅色在 :root，深色在 [data-theme="dark"]。
+ * auto 模式由 themeStore.ts 写 data-theme，不用 @media prefers-color-scheme 驱动主题切换。
+ */
+:root {
+  --bg:      oklch(97% 0.004 250);
+  --surface: oklch(100% 0 0);
+  --fg:      oklch(24% 0.015 250);
+  --muted:   oklch(50% 0.012 250);
+  --border:  oklch(91% 0.005 250);
+  --accent:  oklch(54% 0.092 242);
+
+  --accent-soft: color-mix(in oklch, var(--accent) 12%, transparent);
+  --accent-line: color-mix(in oklch, var(--accent) 36%, transparent);
+  --surface-2:   color-mix(in oklch, var(--fg) 4%, var(--surface));
+  --hover:       color-mix(in oklch, var(--fg) 5%, transparent);
+  --fg-soft:     color-mix(in oklch, var(--fg) 6%, transparent);
+  --ok:    oklch(58% 0.12 150);
+  --warn:  oklch(70% 0.13 75);
+  --danger: oklch(58% 0.16 25);
+
+  --font: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'PingFang SC', 'Segoe UI', '微软雅黑', system-ui, sans-serif;
+  --mono: ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, monospace;
+
+  --r:    10px;
+  --r-sm: 7px;
+  --r-lg: 14px;
+  --shadow-pop: 0 12px 40px -8px color-mix(in oklch, black 30%, transparent);
+
+  /* 毛玻璃 token（弹窗/popover 用，主窗不用） */
+  --glass:        rgba(255, 255, 255, 0.72);
+  --glass-border: color-mix(in oklch, white 16%, oklch(91% 0.005 250));
+}
+
+[data-theme="dark"] {
+  --bg:      oklch(20% 0.012 250);
+  --surface: oklch(23.5% 0.013 250);
+  --fg:      oklch(95% 0.004 250);
+  --muted:   oklch(66% 0.012 250);
+  --border:  oklch(30% 0.012 250);
+  --accent:  oklch(67% 0.10 242);
+
+  --accent-soft: color-mix(in oklch, var(--accent) 16%, transparent);
+  --accent-line: color-mix(in oklch, var(--accent) 42%, transparent);
+  --surface-2:   color-mix(in oklch, white 4%, var(--surface));
+  --hover:       color-mix(in oklch, white 6%, transparent);
+  --fg-soft:     color-mix(in oklch, white 6%, transparent);
+  --shadow-pop:  0 16px 48px -8px color-mix(in oklch, black 60%, transparent);
+
+  --glass:        rgba(30, 32, 35, 0.78);
+  --glass-border: color-mix(in oklch, white 16%, oklch(30% 0.012 250));
+}
+
+/*
+ * compat：把旧 --qq-* 别名到新短名 token，
+ * 保证现有三页 inline style 不因 token 更名而崩溃。
+ */
+:root {
+  --qq-bg:         var(--bg);
+  --qq-surface:    var(--surface);
+  --qq-text:       var(--fg);
+  --qq-text-muted: var(--muted);
+  --qq-border:     var(--border);
+  --qq-accent:     var(--accent);
+  --qq-accent-bg:  var(--accent-soft);
+  --qq-hover-bg:   var(--hover);
+  --qq-radius-md:  var(--r);
+  --qq-font:       var(--font);
+  --qq-danger:     var(--danger);
+}

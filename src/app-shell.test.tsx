@@ -114,14 +114,25 @@ describe("app-shell", () => {
     expect(nav).toHaveClass("qq-sidebar");
   });
 
-  it("app-shell: 所有导航按钮均使用 qq-nav-item 类", () => {
+  it("app-shell: 三个导航入口按钮均使用 qq-nav-item 类", () => {
     render(<App />);
 
-    // qq-nav-item 类负责去除原生外观、统一交互态，所有入口按钮必须携带
+    // 用可访问名精确匹配三个导航入口，排除 nav 内的主题切换按钮（theme-seg 有自己的类）
     const nav = screen.getByRole("navigation", { name: "主导航" });
-    const buttons = within(nav).getAllByRole("button");
-    for (const btn of buttons) {
-      expect(btn).toHaveClass("qq-nav-item");
+    const navEntries = ["剪贴板", "翻译", "设置"];
+    for (const name of navEntries) {
+      expect(within(nav).getByRole("button", { name })).toHaveClass("qq-nav-item");
     }
+  });
+
+  it("app-shell: 主题切换区渲染三个 aria-pressed 按钮", () => {
+    render(<App />);
+
+    // 校验 ThemeSwitch 三按钮存在且有 aria-pressed 属性（auto/light/dark）
+    const nav = screen.getByRole("navigation", { name: "主导航" });
+    const themeBtns = within(nav).getAllByRole("button").filter(
+      (btn) => btn.hasAttribute("aria-pressed")
+    );
+    expect(themeBtns).toHaveLength(3);
   });
 });
