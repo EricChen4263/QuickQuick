@@ -295,6 +295,61 @@ describe("translate-page", () => {
     });
   });
 
+  it("translate-page: swap 按钮点击后把译文填入输入框并以 sourceLang 为目标语重新翻译", async () => {
+    const swapResult = { translated: "生活", sourceLang: "en", targetLang: "zh" };
+    mockTranslateText
+      .mockResolvedValueOnce(MOCK_RESULT)
+      .mockResolvedValueOnce(swapResult);
+    const user = userEvent.setup();
+    render(<TranslatePage />);
+
+    const textarea = screen.getByRole("textbox");
+    await user.type(textarea, "Life");
+    await user.click(screen.getByRole("button", { name: /^翻译$/ }));
+    await waitFor(() => {
+      expect(screen.getByText("你好世界")).toBeInTheDocument();
+    });
+
+    const swapBtn = screen.getByRole("button", { name: "交换语言方向" });
+    await user.click(swapBtn);
+
+    await waitFor(() => {
+      expect(mockTranslateText).toHaveBeenCalledWith(MOCK_RESULT.translated, MOCK_RESULT.sourceLang);
+    });
+    await waitFor(() => {
+      expect((screen.getByRole("textbox") as HTMLTextAreaElement).value).toBe(MOCK_RESULT.translated);
+    });
+  });
+
+  it("translate-page: 无翻译结果时 swap 按钮禁用", async () => {
+    mockTranslateText.mockResolvedValue(MOCK_RESULT);
+    render(<TranslatePage />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Hello")).toBeInTheDocument();
+    });
+
+    const swapBtn = screen.getByRole("button", { name: "交换语言方向" });
+    expect(swapBtn).toBeDisabled();
+  });
+
+  it("translate-page: sourceLang 为 auto 时 swap 按钮禁用", async () => {
+    const autoResult = { translated: "Life", sourceLang: "auto", targetLang: "en" };
+    mockTranslateText.mockResolvedValue(autoResult);
+    const user = userEvent.setup();
+    render(<TranslatePage />);
+
+    const textarea = screen.getByRole("textbox");
+    await user.type(textarea, "生活");
+    await user.click(screen.getByRole("button", { name: /^翻译$/ }));
+    await waitFor(() => {
+      expect(screen.getByText("Life")).toBeInTheDocument();
+    });
+
+    const swapBtn = screen.getByRole("button", { name: "交换语言方向" });
+    expect(swapBtn).toBeDisabled();
+  });
+
   it("translate-page: copy 操作 reject 时显示错误提示（role=alert）", async () => {
     // Arrange：writeToClipboard 模拟失败
     mockTranslateText.mockResolvedValue(MOCK_RESULT);

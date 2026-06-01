@@ -126,6 +126,30 @@ function TranslatePage() {
     }
   }
 
+  /**
+   * Swap：把当前译文填回输入框，以原 sourceLang 为目标语重新翻译。
+   * 仅在存在明确翻译结果（非 auto sourceLang）时生效，否则无操作。
+   */
+  async function handleSwap() {
+    if (result === null || result.sourceLang === "" || result.sourceLang === "auto") return;
+    const textToTranslate = result.translated;
+    const targetLang = result.sourceLang;
+    setInputText(textToTranslate);
+    setIsLoading(true);
+    setError(null);
+    try {
+      const res = await translateText(textToTranslate, targetLang);
+      setResult(res);
+      const cancelled = { current: false };
+      await fetchHistory(cancelled);
+    } catch {
+      setError("翻译失败，请稍后重试");
+      setResult(null);
+    } finally {
+      setIsLoading(false);
+    }
+  }
+
   /** 切换 provider：调 IPC 持久化，并同步本地 state */
   async function handleProviderChange(id: string) {
     try {
@@ -159,6 +183,7 @@ function TranslatePage() {
         selectedProviderId={selectedProviderId}
         onInputChange={setInputText}
         onTranslate={handleTranslate}
+        onSwap={handleSwap}
         onAction={handleAction}
         onProviderChange={handleProviderChange}
       />

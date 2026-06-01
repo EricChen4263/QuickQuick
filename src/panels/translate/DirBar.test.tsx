@@ -139,4 +139,96 @@ describe("DirBar", () => {
     const select = screen.getByRole("combobox", { name: /翻译源/ }) as HTMLSelectElement;
     expect(select.value).toBe("baidu");
   });
+
+  it("swap 按钮存在且有 aria-label 交换语言方向", () => {
+    const onProviderChange = vi.fn();
+    const onSwap = vi.fn();
+    render(
+      <DirBar
+        sourceLang="en"
+        targetLang="zh"
+        providers={MOCK_PROVIDERS}
+        selectedProviderId="mymemory"
+        onProviderChange={onProviderChange}
+        onSwap={onSwap}
+      />
+    );
+
+    const swapBtn = screen.getByRole("button", { name: "交换语言方向" });
+    expect(swapBtn).toBeInTheDocument();
+    expect(swapBtn).not.toBeDisabled();
+  });
+
+  it("swap 按钮点击时触发 onSwap 回调", async () => {
+    const onProviderChange = vi.fn();
+    const onSwap = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <DirBar
+        sourceLang="en"
+        targetLang="zh"
+        providers={MOCK_PROVIDERS}
+        selectedProviderId="mymemory"
+        onProviderChange={onProviderChange}
+        onSwap={onSwap}
+      />
+    );
+
+    const swapBtn = screen.getByRole("button", { name: "交换语言方向" });
+    await user.click(swapBtn);
+
+    expect(onSwap).toHaveBeenCalledTimes(1);
+  });
+
+  it("sourceLang 为 auto 时 swap 按钮禁用", () => {
+    const onProviderChange = vi.fn();
+    const onSwap = vi.fn();
+    render(
+      <DirBar
+        sourceLang="auto"
+        targetLang="zh"
+        providers={MOCK_PROVIDERS}
+        selectedProviderId="mymemory"
+        onProviderChange={onProviderChange}
+        onSwap={onSwap}
+      />
+    );
+
+    const swapBtn = screen.getByRole("button", { name: "交换语言方向" });
+    expect(swapBtn).toBeDisabled();
+  });
+
+  it("sourceLang 为空字符串时 swap 按钮禁用", () => {
+    const onProviderChange = vi.fn();
+    const onSwap = vi.fn();
+    render(
+      <DirBar
+        sourceLang=""
+        targetLang="zh"
+        providers={MOCK_PROVIDERS}
+        selectedProviderId="mymemory"
+        onProviderChange={onProviderChange}
+        onSwap={onSwap}
+      />
+    );
+
+    const swapBtn = screen.getByRole("button", { name: "交换语言方向" });
+    expect(swapBtn).toBeDisabled();
+  });
+
+  it("未传 onSwap 时 swap 按钮禁用", () => {
+    const onProviderChange = vi.fn();
+    render(
+      <DirBar
+        sourceLang="en"
+        targetLang="zh"
+        providers={MOCK_PROVIDERS}
+        selectedProviderId="mymemory"
+        onProviderChange={onProviderChange}
+      />
+    );
+
+    const swapBtn = screen.getByRole("button", { name: "交换语言方向" });
+    expect(swapBtn).toBeDisabled();
+  });
 });

@@ -21,6 +21,7 @@ interface TranslateWorkspaceProps {
   selectedProviderId: string;
   onInputChange: (text: string) => void;
   onTranslate: () => void;
+  onSwap: () => void;
   onAction: (action: string) => void;
   onProviderChange: (id: string) => void;
 }
@@ -38,6 +39,7 @@ function TranslateWorkspace({
   selectedProviderId,
   onInputChange,
   onTranslate,
+  onSwap,
   onAction,
   onProviderChange,
 }: TranslateWorkspaceProps) {
@@ -63,6 +65,7 @@ function TranslateWorkspace({
           providers={providers}
           selectedProviderId={selectedProviderId}
           onProviderChange={onProviderChange}
+          onSwap={result !== null && result.sourceLang !== "" && result.sourceLang !== "auto" ? onSwap : undefined}
         />
 
         <div className="field-label">原文</div>
