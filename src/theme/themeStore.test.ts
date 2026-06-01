@@ -1,11 +1,28 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 
+// mock ipc-client，必须在 import themeStore 之前声明
+vi.mock("../ipc/ipc-client", () => ({
+  getTheme: vi.fn(),
+  setTheme: vi.fn(),
+}));
+
+import * as ipcClient from "../ipc/ipc-client";
+
 // themeStore 是模块单例，每个测试前必须 _reset() 清理状态防止泄漏
 let themeStore: typeof import("./themeStore");
 
 beforeEach(async () => {
-  // 重置模块以清除单例状态
+  vi.clearAllMocks();
+  // getTheme 默认返回 "auto"，避免 hydrate 干扰无关测试
+  vi.mocked(ipcClient.getTheme).mockResolvedValue("auto");
+  vi.mocked(ipcClient.setTheme).mockResolvedValue(undefined);
+
   vi.resetModules();
+  // 重置后重新 mock，resetModules 会清除 mock 注册
+  vi.mock("../ipc/ipc-client", () => ({
+    getTheme: vi.fn().mockResolvedValue("auto"),
+    setTheme: vi.fn().mockResolvedValue(undefined),
+  }));
   themeStore = await import("./themeStore");
   themeStore._reset();
 });
@@ -69,8 +86,14 @@ describe("themeStore — 主题偏好单例", () => {
     });
 
     it("_reset 后重新 import 从 localStorage 恢复 pref", async () => {
+      // 先写 localStorage 再重新 import，确保 init() 读到正确值
       localStorage.setItem("qq-theme-pref", "dark");
       vi.resetModules();
+      // getTheme 返回与 localStorage 一致的值，避免 hydrate 覆盖
+      vi.doMock("../ipc/ipc-client", () => ({
+        getTheme: vi.fn().mockResolvedValue("dark"),
+        setTheme: vi.fn().mockResolvedValue(undefined),
+      }));
       const fresh = await import("./themeStore");
       expect(fresh.getPref()).toBe("dark");
       fresh._reset();
@@ -104,6 +127,71 @@ describe("themeStore — 主题偏好单例", () => {
       expect(b).toHaveBeenCalledTimes(1);
       unsubA();
       unsubB();
+    });
+  });
+
+  describe("IPC 双轨 — writePref 调用 setTheme", () => {
+    it("setPref('dark') 时调用 setTheme('dark')", async () => {
+      const { setTheme } = await import("../ipc/ipc-client");
+      themeStore.setPref("dark");
+      // fire-and-forget，需等 microtask 完成
+      await Promise.resolve();
+      expect(setTheme).toHaveBeenCalledWith("dark");
+    });
+
+    it("setTheme 失败不阻断本地状态更新", async () => {
+      const { setTheme } = await import("../ipc/ipc-client");
+      vi.mocked(setTheme).mockRejectedValue(new Error("IPC error"));
+      themeStore.setPref("light");
+      await Promise.resolve();
+      // pref 仍已更新
+      expect(themeStore.getPref()).toBe("light");
+    });
+  });
+
+  describe("IPC 双轨 — hydrateFromIpc 竞争防御", () => {
+    it("hydrate 完成时 pref 未被手动改则采用 IPC 值", async () => {
+      // 在 resetModules 外层先建好 Promise，这样工厂捕获的 resolve 引用可被外层持有
+      let resolveGetTheme: ((v: string) => void) | null = null;
+      const pendingTheme = new Promise<string>((res) => {
+        resolveGetTheme = res;
+      });
+
+      vi.resetModules();
+      vi.doMock("../ipc/ipc-client", () => ({
+        getTheme: vi.fn().mockReturnValue(pendingTheme),
+        setTheme: vi.fn().mockResolvedValue(undefined),
+      }));
+      const fresh = await import("./themeStore");
+      fresh._reset();
+      // pref 仍是默认 auto，hydrate 尚未返回
+      resolveGetTheme!("dark");
+      await new Promise((res) => setTimeout(res, 0));
+      expect(fresh.getPref()).toBe("dark");
+      fresh._reset();
+    });
+
+    it("hydrate 期间用户手动改 pref，hydrate 结果被丢弃", async () => {
+      let resolveGetTheme: ((v: string) => void) | null = null;
+      const pendingTheme = new Promise<string>((res) => {
+        resolveGetTheme = res;
+      });
+
+      vi.resetModules();
+      vi.doMock("../ipc/ipc-client", () => ({
+        getTheme: vi.fn().mockReturnValue(pendingTheme),
+        setTheme: vi.fn().mockResolvedValue(undefined),
+      }));
+      const fresh = await import("./themeStore");
+      fresh._reset();
+      // 用户在 hydrate 返回前手动改 pref
+      fresh.setPref("light");
+      // hydrate 完成，返回 "dark"
+      resolveGetTheme!("dark");
+      await new Promise((res) => setTimeout(res, 0));
+      // 竞争防御：手动改过了，hydrate 结果应被丢弃
+      expect(fresh.getPref()).toBe("light");
+      fresh._reset();
     });
   });
 });

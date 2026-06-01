@@ -28,6 +28,12 @@ vi.mock("./ipc/ipc-client", () => ({
   getTranslateProviders: vi.fn().mockReturnValue(new Promise(() => {})),
   getSelectedProvider: vi.fn().mockReturnValue(new Promise(() => {})),
   setSelectedProvider: vi.fn().mockResolvedValue(undefined),
+  getLaunchOnLogin: vi.fn().mockReturnValue(new Promise(() => {})),
+  setLaunchOnLogin: vi.fn().mockResolvedValue(undefined),
+  getStayInTray: vi.fn().mockReturnValue(new Promise(() => {})),
+  setStayInTray: vi.fn().mockResolvedValue(undefined),
+  getAutoUpdate: vi.fn().mockReturnValue(new Promise(() => {})),
+  setAutoUpdate: vi.fn().mockResolvedValue(undefined),
 }));
 
 // Mock browser-api：隔离 clipboard / speechSynthesis，防止 jsdom 环境报错

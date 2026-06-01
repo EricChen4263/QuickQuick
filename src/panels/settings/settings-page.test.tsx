@@ -12,6 +12,12 @@ vi.mock("../../ipc/ipc-client", () => ({
   getTranslateProviders: vi.fn(),
   getSelectedProvider: vi.fn(),
   setSelectedProvider: vi.fn(),
+  getLaunchOnLogin: vi.fn(),
+  setLaunchOnLogin: vi.fn(),
+  getStayInTray: vi.fn(),
+  setStayInTray: vi.fn(),
+  getAutoUpdate: vi.fn(),
+  setAutoUpdate: vi.fn(),
 }));
 
 import {
@@ -22,6 +28,12 @@ import {
   getTranslateProviders,
   getSelectedProvider,
   setSelectedProvider,
+  getLaunchOnLogin,
+  setLaunchOnLogin,
+  getStayInTray,
+  setStayInTray,
+  getAutoUpdate,
+  setAutoUpdate,
 } from "../../ipc/ipc-client";
 
 const mockGetHotkeys = vi.mocked(getHotkeys);
@@ -31,6 +43,12 @@ const mockSetExcludeList = vi.mocked(setExcludeList);
 const mockGetTranslateProviders = vi.mocked(getTranslateProviders);
 const mockGetSelectedProvider = vi.mocked(getSelectedProvider);
 const mockSetSelectedProvider = vi.mocked(setSelectedProvider);
+const mockGetLaunchOnLogin = vi.mocked(getLaunchOnLogin);
+const mockGetStayInTray = vi.mocked(getStayInTray);
+const mockGetAutoUpdate = vi.mocked(getAutoUpdate);
+const mockSetLaunchOnLogin = vi.mocked(setLaunchOnLogin);
+const mockSetStayInTray = vi.mocked(setStayInTray);
+const mockSetAutoUpdate = vi.mocked(setAutoUpdate);
 
 const MOCK_HOTKEYS = { history: "CmdOrCtrl+Shift+H", translate: "CmdOrCtrl+Shift+T" };
 const MOCK_PROVIDERS = [
@@ -49,6 +67,12 @@ describe("settings-page", () => {
     mockGetTranslateProviders.mockResolvedValue(MOCK_PROVIDERS);
     mockGetSelectedProvider.mockResolvedValue("google");
     mockSetSelectedProvider.mockResolvedValue(undefined);
+    mockGetLaunchOnLogin.mockResolvedValue(true);
+    mockGetStayInTray.mockResolvedValue(true);
+    mockGetAutoUpdate.mockResolvedValue(true);
+    mockSetLaunchOnLogin.mockResolvedValue(undefined);
+    mockSetStayInTray.mockResolvedValue(undefined);
+    mockSetAutoUpdate.mockResolvedValue(undefined);
   });
 
   it("settings-page: 左侧纵向子项栏渲染六个子项（通用/热键/翻译源/隐私/存储/关于）", async () => {
