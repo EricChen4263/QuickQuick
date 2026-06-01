@@ -201,3 +201,172 @@ export async function getClipImageOriginal(imageId: string): Promise<string | nu
     throw toError(err);
   }
 }
+
+/** 读取暂停捕获状态。 */
+export async function getPauseCapture(): Promise<boolean> {
+  try {
+    return await invoke<boolean>("get_pause_capture");
+  } catch (err) {
+    throw toError(err);
+  }
+}
+
+/** 设置暂停捕获状态（运行时生效 + 持久化）。 */
+export async function setPauseCapture(paused: boolean): Promise<void> {
+  try {
+    await invoke<void>("set_pause_capture", { value: paused });
+  } catch (err) {
+    throw toError(err);
+  }
+}
+
+/** 读取敏感内容跳过状态。 */
+export async function getSkipSensitive(): Promise<boolean> {
+  try {
+    return await invoke<boolean>("get_skip_sensitive");
+  } catch (err) {
+    throw toError(err);
+  }
+}
+
+/** 设置敏感内容跳过状态（运行时生效 + 持久化）。 */
+export async function setSkipSensitive(skip: boolean): Promise<void> {
+  try {
+    await invoke<void>("set_skip_sensitive", { value: skip });
+  } catch (err) {
+    throw toError(err);
+  }
+}
+
+/** 读取托盘驻留状态。 */
+export async function getStayInTray(): Promise<boolean> {
+  try {
+    return await invoke<boolean>("get_stay_in_tray");
+  } catch (err) {
+    throw toError(err);
+  }
+}
+
+/** 设置托盘驻留状态（运行时生效 + 持久化）。 */
+export async function setStayInTray(enabled: boolean): Promise<void> {
+  try {
+    await invoke<void>("set_stay_in_tray", { value: enabled });
+  } catch (err) {
+    throw toError(err);
+  }
+}
+
+/** 读取自动更新开关。 */
+export async function getAutoUpdate(): Promise<boolean> {
+  try {
+    return await invoke<boolean>("get_auto_update");
+  } catch (err) {
+    throw toError(err);
+  }
+}
+
+/** 设置自动更新开关。 */
+export async function setAutoUpdate(enabled: boolean): Promise<void> {
+  try {
+    await invoke<void>("set_auto_update", { value: enabled });
+  } catch (err) {
+    throw toError(err);
+  }
+}
+
+/** 读取当前 UI 主题（"auto" | "light" | "dark"）。 */
+export async function getTheme(): Promise<string> {
+  try {
+    return await invoke<string>("get_theme");
+  } catch (err) {
+    throw toError(err);
+  }
+}
+
+/** 设置 UI 主题（合法值："auto" | "light" | "dark"）。 */
+export async function setTheme(theme: string): Promise<void> {
+  try {
+    await invoke<void>("set_theme", { theme });
+  } catch (err) {
+    throw toError(err);
+  }
+}
+
+/** 读取开机自启状态。 */
+export async function getLaunchOnLogin(): Promise<boolean> {
+  try {
+    return await invoke<boolean>("get_launch_on_login");
+  } catch (err) {
+    throw toError(err);
+  }
+}
+
+/** 设置开机自启（持久化 autostart.json + 应用到 OS）。 */
+export async function setLaunchOnLogin(enabled: boolean): Promise<void> {
+  try {
+    await invoke<void>("set_launch_on_login", { value: enabled });
+  } catch (err) {
+    throw toError(err);
+  }
+}
+
+/** 存储统计，与 Rust StorageStatsDto（camelCase）对齐。 */
+export interface StorageStats {
+  liveCount: number;
+  fileSizeBytes: number;
+}
+
+/** 历史清理结果，与 Rust CleanupResultDto（camelCase）对齐。 */
+export interface CleanupResult {
+  softDeleted: number;
+  purged: number;
+}
+
+/** 粘贴路径类型。 */
+export type PasteOutcome = "full_paste" | "write_back_only";
+
+/** 粘贴结果，与 Rust PasteResultDto（camelCase）对齐。 */
+export interface PasteResult {
+  outcome: PasteOutcome;
+}
+
+/** 读取存储统计（活跃条目数 + 库文件大小）。 */
+export async function getStorageStats(): Promise<StorageStats> {
+  try {
+    return await invoke<StorageStats>("get_storage_stats");
+  } catch (err) {
+    throw toError(err);
+  }
+}
+
+/** 清理历史（容量裁剪 + GC 物理删除）。 */
+export async function cleanupHistory(): Promise<CleanupResult> {
+  try {
+    return await invoke<CleanupResult>("cleanup_history");
+  } catch (err) {
+    throw toError(err);
+  }
+}
+
+/** 打开 macOS 辅助功能系统设置深链。 */
+export async function openAccessibilitySettings(): Promise<void> {
+  try {
+    await invoke<void>("open_accessibility_settings");
+  } catch (err) {
+    throw toError(err);
+  }
+}
+
+/**
+ * 将指定条目写回系统剪贴板（降级实现）。
+ *
+ * @param id - 剪贴板条目 ID
+ * @returns 粘贴结果，outcome 为 "write_back_only"（当前实现不模拟 ⌘V 注入）
+ */
+export async function pasteToFront(id: string): Promise<PasteResult> {
+  try {
+    return await invoke<PasteResult>("paste_to_front", { id });
+  } catch (err) {
+    throw toError(err);
+  }
+}
