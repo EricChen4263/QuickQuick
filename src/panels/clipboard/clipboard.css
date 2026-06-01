@@ -4,12 +4,15 @@
  * 类名与设计稿 index.html 保持对应，方便逐项比对。
  */
 
-/* 列表栏：左侧 340px 固定宽，内部 grid rows：搜索栏(auto) + 列表(1fr) */
+/* 列表栏：左侧 340px 固定宽，内部 grid rows：搜索栏(auto) + 列表(1fr)
+   min-width:0 防 grid 列方向横向溢出；overflow:hidden 隔离内容撑高 */
 .clip-list-col {
   border-right: 1px solid var(--border);
   display: grid;
   grid-template-rows: auto auto 1fr;
   min-height: 0;
+  min-width: 0;
+  overflow: hidden;
 }
 
 /* 搜索栏容器：搜索框 + 筛选器横排 */
@@ -82,9 +85,11 @@
   pointer-events: none;
 }
 
-/* 条目列表滚动区 */
+/* 条目列表滚动区
+   min-height:0 配合父 grid 1fr 行，确保内容超出时在此滚动不冒泡外层 */
 .clip-list {
   overflow-y: auto;
+  min-height: 0;
   padding: 8px;
   display: flex;
   flex-direction: column;
@@ -216,9 +221,11 @@
   overflow: hidden;
 }
 
-/* 预览正文滚动区 */
+/* 预览正文滚动区
+   min-height:0 配合父 grid 1fr 行，防止内容撑大后滚动冒泡外层 */
 .preview-body {
   overflow-y: auto;
+  min-height: 0;
   padding: 22px 24px;
 }
 

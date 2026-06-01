@@ -174,8 +174,8 @@ describe("clipboard-page", () => {
     expect(mockToggleFavoriteClip).toHaveBeenCalledWith("item-1", true);
   });
 
-  it("clipboard-page: 点击删除按钮调用 deleteClipItem 并传正确 id", async () => {
-    // Arrange
+  it("clipboard-page: 预览区点击删除按钮调用 deleteClipItem 并传正确 id", async () => {
+    // Arrange：删除操作由预览区（ClipPreview）统一提供，列表行不再有删除按钮
     mockListClipItems.mockResolvedValue(MOCK_ITEMS);
     const user = userEvent.setup();
     render(<ClipboardPage />);
@@ -183,9 +183,10 @@ describe("clipboard-page", () => {
       expect(screen.getAllByText("Hello World").length).toBeGreaterThanOrEqual(1);
     });
 
-    // Act：点击第一个删除按钮（对应 item-1）
-    const deleteButtons = screen.getAllByRole("button", { name: /删除/ });
-    await user.click(deleteButtons[0]);
+    // Act：预览区的删除按钮（初始高亮 item-1）
+    const previewRegion = screen.getByRole("region", { name: "预览" });
+    const deleteButton = within(previewRegion).getByRole("button", { name: /删除/ });
+    await user.click(deleteButton);
 
     // Assert：调用 deleteClipItem("item-1")
     expect(mockDeleteClipItem).toHaveBeenCalledWith("item-1");
@@ -224,7 +225,7 @@ describe("clipboard-page", () => {
   });
 
   it("clipboard-page: deleteClipItem IPC reject 时显示操作错误提示", async () => {
-    // Arrange：listClipItems 成功，deleteClipItem 失败
+    // Arrange：listClipItems 成功，deleteClipItem 失败；删除操作由预览区触发
     mockListClipItems.mockResolvedValue(MOCK_ITEMS);
     mockDeleteClipItem.mockRejectedValue(new Error("删除 IPC 失败"));
     const user = userEvent.setup();
@@ -233,9 +234,10 @@ describe("clipboard-page", () => {
       expect(screen.getAllByText("Hello World").length).toBeGreaterThanOrEqual(1);
     });
 
-    // Act：点击第一个删除按钮
-    const deleteButtons = screen.getAllByRole("button", { name: /删除/ });
-    await user.click(deleteButtons[0]);
+    // Act：点击预览区的删除按钮
+    const previewRegion = screen.getByRole("region", { name: "预览" });
+    const deleteButton = within(previewRegion).getByRole("button", { name: /删除/ });
+    await user.click(deleteButton);
 
     // Assert：操作错误提示出现在 DOM
     await waitFor(() => {

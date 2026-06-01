@@ -76,7 +76,6 @@ describe("ClipItemRow image rendering", () => {
         item={item}
         isHighlighted={false}
         onToggleFavorite={vi.fn()}
-        onDelete={vi.fn()}
       />
     );
 
@@ -91,12 +90,23 @@ describe("ClipItemRow image rendering", () => {
         item={baseItem}
         isHighlighted={false}
         onToggleFavorite={vi.fn()}
-        onDelete={vi.fn()}
       />
     );
 
     expect(screen.getByText("[图片]")).toBeInTheDocument();
     expect(screen.queryByRole("img")).not.toBeInTheDocument();
+  });
+
+  it("图片项渲染收藏按钮（StarButton）", () => {
+    render(
+      <ClipItemRow
+        item={baseItem}
+        isHighlighted={false}
+        onToggleFavorite={vi.fn()}
+      />
+    );
+
+    expect(screen.getByRole("button", { name: /收藏/ })).toBeInTheDocument();
   });
 
   it("文本项不渲染 img 标签", () => {
@@ -113,7 +123,6 @@ describe("ClipItemRow image rendering", () => {
         item={textItem}
         isHighlighted={false}
         onToggleFavorite={vi.fn()}
-        onDelete={vi.fn()}
       />
     );
 
@@ -137,7 +146,7 @@ describe("ClipPreview image item (ImagePreview)", () => {
     const originalDataUrl = "data:image/png;base64,ORIGINAL456";
     mockGetClipImageOriginal.mockResolvedValue(originalDataUrl);
 
-    render(<ClipPreview item={imageItem} />);
+    render(<ClipPreview item={imageItem} onToggleFavorite={vi.fn()} onDelete={vi.fn()} onCopy={vi.fn()} onPasteToFront={vi.fn()} onTranslate={vi.fn()} />);
 
     // 原图尚未加载完成时，应先以缩略图作为回退显示
     expect(screen.getByRole("img")).toHaveAttribute("src", imageItem.thumbnailDataUrl);
@@ -155,7 +164,7 @@ describe("ClipPreview image item (ImagePreview)", () => {
   it("getClipImageOriginal 返回 null 时显示缩略图回退", async () => {
     mockGetClipImageOriginal.mockResolvedValue(null);
 
-    render(<ClipPreview item={imageItem} />);
+    render(<ClipPreview item={imageItem} onToggleFavorite={vi.fn()} onDelete={vi.fn()} onCopy={vi.fn()} onPasteToFront={vi.fn()} onTranslate={vi.fn()} />);
 
     await waitFor(() => {
       const img = screen.getByRole("img");
@@ -172,7 +181,7 @@ describe("ClipPreview image item (ImagePreview)", () => {
       lastModifiedUtc: 1000,
     };
 
-    render(<ClipPreview item={textItem} />);
+    render(<ClipPreview item={textItem} onToggleFavorite={vi.fn()} onDelete={vi.fn()} onCopy={vi.fn()} onPasteToFront={vi.fn()} onTranslate={vi.fn()} />);
 
     expect(screen.getByText("Hello text content")).toBeInTheDocument();
     expect(screen.queryByRole("img")).not.toBeInTheDocument();
@@ -212,10 +221,11 @@ describe("ClipPreview image item (ImagePreview)", () => {
       .mockReturnValueOnce(deferredItem1)
       .mockReturnValueOnce(deferredItem2);
 
-    const { rerender } = render(<ClipPreview item={imageItem1} />);
+    const noopProps = { onToggleFavorite: vi.fn(), onDelete: vi.fn(), onCopy: vi.fn(), onPasteToFront: vi.fn(), onTranslate: vi.fn() };
+    const { rerender } = render(<ClipPreview item={imageItem1} {...noopProps} />);
 
     // 切换到 item2，触发第二次 effect（第一次 effect cleanup 将 cancelled=true）
-    rerender(<ClipPreview item={imageItem2} />);
+    rerender(<ClipPreview item={imageItem2} {...noopProps} />);
 
     // 先 resolve item2（新请求），再 resolve item1（旧请求，应被忽略）
     await act(async () => {

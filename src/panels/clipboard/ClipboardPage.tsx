@@ -151,7 +151,7 @@ function ClipboardPage() {
   }
 
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "340px 1fr", height: "100%", fontFamily: "var(--font)" }}>
+    <div style={{ display: "grid", gridTemplateColumns: "340px 1fr", height: "100%", minHeight: 0, overflow: "hidden", fontFamily: "var(--font)" }}>
       {opError !== null && (
         <div
           role="alert"
@@ -195,14 +195,20 @@ function ClipboardPage() {
                   item={clipItem}
                   isHighlighted={idx === safeHighlight}
                   onToggleFavorite={handleToggleFavorite}
-                  onDelete={handleDelete}
                 />
               );
             })
           )}
         </div>
       </div>
-      <ClipPreview item={highlightedClipItem} />
+      <ClipPreview
+        item={highlightedClipItem}
+        onToggleFavorite={handleToggleFavorite}
+        onDelete={handleDelete}
+        onCopy={(_item) => { /* 复制逻辑在 ClipPreview 内部调用 writeToClipboard 完成 */ }}
+        onPasteToFront={(_item) => { /* 里程碑3接入：paste IPC */ }}
+        onTranslate={(_item) => { /* 里程碑3接入：跳转翻译页 */ }}
+      />
     </div>
   );
 }

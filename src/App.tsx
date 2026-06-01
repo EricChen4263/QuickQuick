@@ -80,19 +80,19 @@ function App() {
     >
       <section
         data-testid="page-clipboard"
-        style={{ display: activeTop === "clipboard" ? "block" : "none" }}
+        style={{ display: activeTop === "clipboard" ? "block" : "none", height: "100%" }}
       >
         <ClipboardPage />
       </section>
       <section
         data-testid="page-translate"
-        style={{ display: activeTop === "translate" ? "block" : "none" }}
+        style={{ display: activeTop === "translate" ? "block" : "none", height: "100%" }}
       >
         <TranslatePage />
       </section>
       <section
         data-testid="page-settings"
-        style={{ display: activeTop === "settings" ? "block" : "none" }}
+        style={{ display: activeTop === "settings" ? "block" : "none", height: "100%" }}
       >
         <SettingsPage />
       </section>

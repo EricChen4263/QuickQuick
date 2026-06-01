@@ -1,7 +1,8 @@
 /**
- * 剪贴板列表单行：类型图标 + 内容摘要 + 元信息 + 收藏/删除操作。
+ * 剪贴板列表单行：类型图标 + 内容摘要 + 收藏操作。
  * 外层用 div[role="option"] 而非 button，避免内部 button 产生非法嵌套。
  * 高亮态由 CSS [aria-selected="true"] 驱动，不用 inline style。
+ * 删除操作统一在右侧预览区执行，列表行不重复提供。
  */
 
 import type { ClipItem } from "../../ipc/ipc-client";
@@ -17,7 +18,6 @@ interface ClipItemRowProps {
   item: ClipItem;
   isHighlighted: boolean;
   onToggleFavorite: (item: ClipItem) => Promise<void>;
-  onDelete: (item: ClipItem) => Promise<void>;
 }
 
 /** 截断文本至指定长度，超出加省略号 */
@@ -26,7 +26,7 @@ function truncateSummary(text: string): string {
   return text.slice(0, SUMMARY_MAX_LENGTH) + "…";
 }
 
-/** 类型图标：根据 kind 返回对应 SVG（code/richtext 用代码图标，image 用图片图标，默认文本图标） */
+/** 类型图标：根据 kind 返回对应 SVG（richtext 用文本图标，image 用图片图标，默认文本图标） */
 function KindIcon({ kind }: { kind: ClipItem["kind"] }) {
   if (kind === "image") {
     return (
@@ -69,7 +69,7 @@ function ImageContent({ item }: { item: ClipItem }) {
   return <span>[图片]</span>;
 }
 
-/** 收藏星标按钮（仅文本/富文本项显示） */
+/** 收藏星标按钮：所有类型（含图片）均显示 */
 function StarButton({ item, onToggleFavorite }: { item: ClipItem; onToggleFavorite: (item: ClipItem) => Promise<void> }) {
   const label = item.isFavorite ? FAVORITE_LABEL_ON : FAVORITE_LABEL_OFF;
   return (
@@ -94,7 +94,6 @@ export function ClipItemRow({
   item,
   isHighlighted,
   onToggleFavorite,
-  onDelete,
 }: ClipItemRowProps) {
   const isCode = item.kind === "richtext";
 
@@ -115,30 +114,9 @@ export function ClipItemRow({
             {truncateSummary(item.content)}
           </div>
         )}
-        <div className="clip-meta">
-          {item.isFavorite && <span aria-label="已收藏">★</span>}
-        </div>
       </div>
       <div className="clip-actions">
-        {item.kind !== "image" && (
-          <StarButton item={item} onToggleFavorite={onToggleFavorite} />
-        )}
-        <button
-          className="icon-btn danger"
-          aria-label="删除"
-          type="button"
-          onClick={(e) => {
-            e.stopPropagation();
-            onDelete(item);
-          }}
-        >
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-            <polyline points="3 6 5 6 21 6" />
-            <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
-            <path d="M10 11v6M14 11v6" />
-            <path d="M9 6V4h6v2" />
-          </svg>
-        </button>
+        <StarButton item={item} onToggleFavorite={onToggleFavorite} />
       </div>
     </div>
   );

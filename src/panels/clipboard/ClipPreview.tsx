@@ -7,9 +7,17 @@
 import { useEffect, useState } from "react";
 import { getClipImageOriginal, type ClipItem } from "../../ipc/ipc-client";
 import EmptyState from "../../components/EmptyState";
+import { writeToClipboard } from "../translate/browser-api";
 
 interface ClipPreviewProps {
   item: ClipItem | null;
+  onToggleFavorite: (item: ClipItem) => void;
+  onDelete: (item: ClipItem) => void;
+  onCopy: (item: ClipItem) => void;
+  /** 里程碑3接入：粘贴到前台窗口（IPC paste）*/
+  onPasteToFront: (item: ClipItem) => void;
+  /** 里程碑3接入：跳转翻译页并填入内容 */
+  onTranslate: (item: ClipItem) => void;
 }
 
 interface ImagePreviewProps {
@@ -85,8 +93,129 @@ const EmptyIcon = (
   </svg>
 );
 
+/** 粘贴箭头图标 */
+const PasteIcon = (
+  <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <path d="M4 12h12M12 6l6 6-6 6" />
+  </svg>
+);
+
+/** 复制图标 */
+const CopyIcon = (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <rect x="9" y="9" width="13" height="13" rx="2" />
+    <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+  </svg>
+);
+
+/** 翻译图标 */
+const TranslateIcon = (
+  <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <path d="m5 8 6 6" />
+    <path d="m4 14 6-6 2-3" />
+    <path d="M2 5h12" />
+    <path d="m22 22-5-10-5 10" />
+    <path d="M14 18h6" />
+  </svg>
+);
+
+/** 收藏星（已收藏，实心） */
+const StarFilledIcon = (
+  <svg viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
+  </svg>
+);
+
+/** 收藏星（未收藏，描边） */
+const StarOutlineIcon = (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
+  </svg>
+);
+
+/** 垃圾桶图标 */
+const TrashIcon = (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6" />
+  </svg>
+);
+
+/** 预览操作栏：五个操作按钮（图片项不显示一键翻译） */
+function PreviewActions({ item, onToggleFavorite, onDelete, onCopy, onPasteToFront, onTranslate }: {
+  item: ClipItem;
+  onToggleFavorite: (item: ClipItem) => void;
+  onDelete: (item: ClipItem) => void;
+  onCopy: (item: ClipItem) => void;
+  onPasteToFront: (item: ClipItem) => void;
+  onTranslate: (item: ClipItem) => void;
+}) {
+  function handleCopy() {
+    writeToClipboard(item.content).catch(() => {
+      // 复制失败静默处理，不影响主流程
+    });
+    onCopy(item);
+  }
+
+  return (
+    <div className="preview-actions">
+      <button
+        className="btn btn-primary"
+        type="button"
+        aria-label="粘贴到前台"
+        onClick={() => { onPasteToFront(item); }}
+      >
+        {PasteIcon}
+        粘贴到前台
+      </button>
+      <button
+        className="btn"
+        type="button"
+        aria-label="复制"
+        onClick={handleCopy}
+      >
+        {CopyIcon}
+        复制
+      </button>
+      {item.kind !== "image" && (
+        <button
+          className="btn"
+          type="button"
+          aria-label="一键翻译"
+          onClick={() => { onTranslate(item); }}
+        >
+          {TranslateIcon}
+          一键翻译
+        </button>
+      )}
+      <button
+        className={item.isFavorite ? "icon-btn on" : "icon-btn"}
+        type="button"
+        aria-label="收藏"
+        onClick={() => { onToggleFavorite(item); }}
+      >
+        {item.isFavorite ? StarFilledIcon : StarOutlineIcon}
+      </button>
+      <button
+        className="icon-btn danger"
+        type="button"
+        aria-label="删除"
+        onClick={() => { onDelete(item); }}
+      >
+        {TrashIcon}
+      </button>
+    </div>
+  );
+}
+
 /** 右侧预览子组件 */
-export function ClipPreview({ item }: ClipPreviewProps) {
+export function ClipPreview({
+  item,
+  onToggleFavorite,
+  onDelete,
+  onCopy,
+  onPasteToFront,
+  onTranslate,
+}: ClipPreviewProps) {
   return (
     <div
       role="region"
@@ -123,15 +252,14 @@ export function ClipPreview({ item }: ClipPreviewProps) {
               <dd>{formatTimestamp(item.lastModifiedUtc)}</dd>
             </dl>
           </div>
-          <div className="preview-actions">
-            <button className="btn" type="button">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                <rect x="9" y="9" width="13" height="13" rx="2" />
-                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
-              </svg>
-              复制
-            </button>
-          </div>
+          <PreviewActions
+            item={item}
+            onToggleFavorite={onToggleFavorite}
+            onDelete={onDelete}
+            onCopy={onCopy}
+            onPasteToFront={onPasteToFront}
+            onTranslate={onTranslate}
+          />
         </>
       )}
     </div>

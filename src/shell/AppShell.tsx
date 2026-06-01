@@ -16,7 +16,7 @@ export function AppShell({ activeTop, onNavigate, hint, children }: AppShellProp
   return (
     <div className="qq-main">
       <SideBar activeTop={activeTop} onNavigate={onNavigate} hint={hint} />
-      <main style={{ minWidth: 0, minHeight: 0 }}>
+      <main style={{ minWidth: 0, minHeight: 0, height: "100%", overflow: "hidden" }}>
         {children}
       </main>
     </div>

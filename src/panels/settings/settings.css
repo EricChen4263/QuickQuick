@@ -13,13 +13,16 @@
   min-height: 0;
 }
 
-/* 左侧子项导航列：纵向排列，右边框分隔 */
+/* 左侧子项导航列：纵向排列，右边框分隔
+   min-height:0 + overflow:hidden 防止导航内容撑大 grid 行高 */
 .set-nav {
   border-right: 1px solid var(--border);
   padding: 12px 10px;
   display: flex;
   flex-direction: column;
   gap: 2px;
+  min-height: 0;
+  overflow: hidden;
 }
 
 /* 子项导航按钮：图标 + 文字横排，hover/active 背景 */
@@ -59,9 +62,11 @@
   color: var(--accent);
 }
 
-/* 右侧内容滚动区：内边距给面板内容留白 */
+/* 右侧内容滚动区：内边距给面板内容留白
+   min-height:0 配合父 grid 1fr 列，确保内容超出时在此滚动 */
 .set-body {
   overflow-y: auto;
+  min-height: 0;
   padding: 24px 28px;
 }
 
