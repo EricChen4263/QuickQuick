@@ -98,6 +98,7 @@ fn boot_pipeline_ingest_visible() {
     let exclude = ExcludeList::default();
     let policy = CapturePolicy {
         paused: false,
+        skip_sensitive: true,
         exclude: &exclude,
     };
 
@@ -133,6 +134,7 @@ fn boot_pipeline_dedup_bumped() {
     let exclude = ExcludeList::default();
     let policy = CapturePolicy {
         paused: false,
+        skip_sensitive: true,
         exclude: &exclude,
     };
 
@@ -175,6 +177,7 @@ fn boot_pipeline_no_change_none() {
     let exclude = ExcludeList::default();
     let policy = CapturePolicy {
         paused: false,
+        skip_sensitive: true,
         exclude: &exclude,
     };
 

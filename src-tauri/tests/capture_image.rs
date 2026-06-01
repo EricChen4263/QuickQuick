@@ -137,6 +137,7 @@ fn poll_text_only() {
     let exclude = ExcludeList::default();
     let policy = CapturePolicy {
         paused: false,
+        skip_sensitive: true,
         exclude: &exclude,
     };
 
@@ -159,6 +160,7 @@ fn poll_image_only() {
     let exclude = ExcludeList::default();
     let policy = CapturePolicy {
         paused: false,
+        skip_sensitive: true,
         exclude: &exclude,
     };
 
@@ -181,6 +183,7 @@ fn poll_text_and_image() {
     let exclude = ExcludeList::default();
     let policy = CapturePolicy {
         paused: false,
+        skip_sensitive: true,
         exclude: &exclude,
     };
 
@@ -206,6 +209,7 @@ fn poll_self_marker_returns_empty() {
     let exclude = ExcludeList::default();
     let policy = CapturePolicy {
         paused: false,
+        skip_sensitive: true,
         exclude: &exclude,
     };
 
@@ -223,6 +227,7 @@ fn poll_privacy_skip_returns_empty() {
     let exclude = ExcludeList::default();
     let policy = CapturePolicy {
         paused: true,
+        skip_sensitive: true,
         exclude: &exclude,
     };
 
@@ -240,6 +245,7 @@ fn poll_no_change_returns_empty() {
     let exclude = ExcludeList::default();
     let policy = CapturePolicy {
         paused: false,
+        skip_sensitive: true,
         exclude: &exclude,
     };
 
@@ -295,6 +301,7 @@ fn capture_and_ingest_text_and_image() {
     let exclude = ExcludeList::default();
     let policy = CapturePolicy {
         paused: false,
+        skip_sensitive: true,
         exclude: &exclude,
     };
 
@@ -362,6 +369,7 @@ fn capture_and_ingest_rolls_back_on_partial_failure() {
     let exclude = ExcludeList::default();
     let policy = CapturePolicy {
         paused: false,
+        skip_sensitive: true,
         exclude: &exclude,
     };
 
@@ -392,6 +400,7 @@ fn capture_and_ingest_image_only() {
     let exclude = ExcludeList::default();
     let policy = CapturePolicy {
         paused: false,
+        skip_sensitive: true,
         exclude: &exclude,
     };
 

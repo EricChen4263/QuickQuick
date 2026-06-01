@@ -24,6 +24,7 @@ fn concealed_skipped() {
     let exclude = ExcludeList::new_with_apps([]);
     let policy = CapturePolicy {
         paused: false,
+        skip_sensitive: true,
         exclude: &exclude,
     };
 
@@ -53,6 +54,7 @@ fn concealed_no_heuristic() {
     let exclude = ExcludeList::new_with_apps([]);
     let policy = CapturePolicy {
         paused: false,
+        skip_sensitive: true,
         exclude: &exclude,
     };
 
@@ -81,6 +83,7 @@ fn app_exclude_list() {
     let exclude = ExcludeList::new_with_apps(["com.foo.secret"]);
     let policy = CapturePolicy {
         paused: false,
+        skip_sensitive: true,
         exclude: &exclude,
     };
 
@@ -110,6 +113,7 @@ fn app_not_in_exclude_list() {
     let exclude = ExcludeList::new_with_apps(["com.foo.secret"]);
     let policy = CapturePolicy {
         paused: false,
+        skip_sensitive: true,
         exclude: &exclude,
     };
 
@@ -135,6 +139,7 @@ fn app_exclude_none_source() {
     let exclude = ExcludeList::new_with_apps(["com.foo.secret"]);
     let policy = CapturePolicy {
         paused: false,
+        skip_sensitive: true,
         exclude: &exclude,
     };
 

@@ -5,19 +5,34 @@
 //!
 //! 命令清单（前端通过 invoke 对应命令名调用，命名与 A09/S05 前端对齐）：
 //! - `get_hotkeys`              — 读 HotkeyConfig，返回 { history, translate }
-//! - `set_hotkey`              — load → rebind（冲突返回 Err）→ save
-//! - `get_exclude_list`        — 读 AppSettings.excluded_apps
-//! - `set_exclude_list`        — 写 AppSettings.excluded_apps 并 save
-//! - `get_translate_providers` — 返回 registry() 映射的 ProviderDto 列表
-//! - `get_selected_provider`   — 读 AppSettings.selected_provider
-//! - `set_selected_provider`   — 校验 id 在 registry 内，合法才写入
+//! - `set_hotkey`               — load → rebind（冲突返回 Err）→ save
+//! - `get_exclude_list`         — 读 AppSettings.excluded_apps
+//! - `set_exclude_list`         — 写 AppSettings.excluded_apps 并 save
+//! - `get_translate_providers`  — 返回 registry() 映射的 ProviderDto 列表
+//! - `get_selected_provider`    — 读 AppSettings.selected_provider
+//! - `set_selected_provider`    — 校验 id 在 registry 内，合法才写入
+//! - `get_pause_capture`        — 读 CaptureState.paused AtomicBool
+//! - `set_pause_capture`        — 写 AtomicBool + 持久化 pause_capture
+//! - `get_skip_sensitive`       — 读 CaptureState.skip_sensitive AtomicBool
+//! - `set_skip_sensitive`       — 写 AtomicBool + 持久化 skip_sensitive
+//! - `get_stay_in_tray`         — 读 CaptureState.stay_in_tray AtomicBool
+//! - `set_stay_in_tray`         — 写 AtomicBool + 持久化 stay_in_tray
+//! - `get_auto_update`          — 读 AppSettings.auto_update（纯配置）
+//! - `set_auto_update`          — 写 AppSettings.auto_update 并 save
+//! - `get_theme`                — 读 AppSettings.theme
+//! - `set_theme`                — 校验值∈{auto,light,dark}，合法才写入
+//! - `get_launch_on_login`      — 读 autostart.json enabled
+//! - `set_launch_on_login`      — 写 autostart.json + 调用 OS autolaunch
 
 use std::path::Path;
+use std::sync::atomic::Ordering;
 
 use serde::Serialize;
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Manager, State};
 
+use crate::autostart::AutostartConfig;
 use crate::hotkey::{HotkeyAction, HotkeyConfig, HotkeyError, HotkeyRegistrar};
+use crate::CaptureState;
 use crate::settings::AppSettings;
 use crate::translate::providers::registry;
 
@@ -256,4 +271,365 @@ pub fn get_selected_provider(app: AppHandle) -> Result<String, String> {
 pub fn set_selected_provider(app: AppHandle, id: String) -> Result<(), String> {
     let path = resolve_config_path(&app, "settings.json")?;
     set_selected_provider_impl(&id, &path)
+}
+
+/// `get_pause_capture` 的纯函数实现：从 AtomicBool 读取当前暂停状态。
+pub fn get_pause_capture_impl(state: &CaptureState) -> bool {
+    state.paused.load(Ordering::Relaxed)
+}
+
+/// `set_pause_capture` 的纯函数实现：写 AtomicBool 并持久化到 settings.json。
+///
+/// # Errors
+/// 文件写入失败时返回错误字符串。
+pub fn set_pause_capture_impl(
+    value: bool,
+    state: &CaptureState,
+    settings_path: &Path,
+) -> Result<(), String> {
+    state.paused.store(value, Ordering::Relaxed);
+    let mut settings = AppSettings::load_or_default(settings_path);
+    settings.pause_capture = value;
+    settings.save(settings_path).map_err(|e| e.to_string())
+}
+
+/// `get_skip_sensitive` 的纯函数实现：从 AtomicBool 读取当前敏感跳过状态。
+pub fn get_skip_sensitive_impl(state: &CaptureState) -> bool {
+    state.skip_sensitive.load(Ordering::Relaxed)
+}
+
+/// `set_skip_sensitive` 的纯函数实现：写 AtomicBool 并持久化到 settings.json。
+///
+/// # Errors
+/// 文件写入失败时返回错误字符串。
+pub fn set_skip_sensitive_impl(
+    value: bool,
+    state: &CaptureState,
+    settings_path: &Path,
+) -> Result<(), String> {
+    state.skip_sensitive.store(value, Ordering::Relaxed);
+    let mut settings = AppSettings::load_or_default(settings_path);
+    settings.skip_sensitive = value;
+    settings.save(settings_path).map_err(|e| e.to_string())
+}
+
+/// `get_stay_in_tray` 的纯函数实现：从 AtomicBool 读取当前托盘驻留状态。
+pub fn get_stay_in_tray_impl(state: &CaptureState) -> bool {
+    state.stay_in_tray.load(Ordering::Relaxed)
+}
+
+/// `set_stay_in_tray` 的纯函数实现：写 AtomicBool 并持久化到 settings.json。
+///
+/// # Errors
+/// 文件写入失败时返回错误字符串。
+pub fn set_stay_in_tray_impl(
+    value: bool,
+    state: &CaptureState,
+    settings_path: &Path,
+) -> Result<(), String> {
+    state.stay_in_tray.store(value, Ordering::Relaxed);
+    let mut settings = AppSettings::load_or_default(settings_path);
+    settings.stay_in_tray = value;
+    settings.save(settings_path).map_err(|e| e.to_string())
+}
+
+/// `get_auto_update` 的纯函数实现：从 settings.json 读取 auto_update 值。
+///
+/// # Errors
+/// 此函数实际上永不返回 Err（load_or_default 回退默认值）。
+/// 签名保留 Result 与命令层保持一致。
+pub fn get_auto_update_impl(settings_path: &Path) -> Result<bool, String> {
+    let settings = AppSettings::load_or_default(settings_path);
+    Ok(settings.auto_update)
+}
+
+/// `set_auto_update` 的纯函数实现：写 settings.json auto_update 字段。
+///
+/// # Errors
+/// 文件写入失败时返回错误字符串。
+pub fn set_auto_update_impl(value: bool, settings_path: &Path) -> Result<(), String> {
+    let mut settings = AppSettings::load_or_default(settings_path);
+    settings.auto_update = value;
+    settings.save(settings_path).map_err(|e| e.to_string())
+}
+
+/// `get_theme` 的纯函数实现：从 settings.json 读取 theme 值。
+///
+/// # Errors
+/// 此函数实际上永不返回 Err（load_or_default 回退默认值）。
+pub fn get_theme_impl(settings_path: &Path) -> Result<String, String> {
+    let settings = AppSettings::load_or_default(settings_path);
+    Ok(settings.theme)
+}
+
+/// `set_theme` 的纯函数实现：校验值合法后写入 settings.json。
+///
+/// 合法值：`auto` / `light` / `dark`；其余返回 Err，不触发文件写。
+///
+/// # Errors
+/// - 非法 theme 值：返回包含合法值说明的错误字符串
+/// - 文件写入失败：返回错误字符串
+pub fn set_theme_impl(theme: &str, settings_path: &Path) -> Result<(), String> {
+    if !matches!(theme, "auto" | "light" | "dark") {
+        return Err(format!(
+            "非法 theme 值：{theme}，合法值为 auto / light / dark"
+        ));
+    }
+    let mut settings = AppSettings::load_or_default(settings_path);
+    settings.theme = theme.to_string();
+    settings.save(settings_path).map_err(|e| e.to_string())
+}
+
+/// `get_launch_on_login` 的纯函数实现：从 autostart.json 读取 enabled 值。
+///
+/// # Errors
+/// 此函数实际上永不返回 Err（load_or_default 回退默认值）。
+pub fn get_launch_on_login_impl(autostart_path: &Path) -> Result<bool, String> {
+    let config = AutostartConfig::load_or_default(autostart_path);
+    Ok(config.enabled)
+}
+
+/// `set_launch_on_login` 的纯函数实现（持久化部分）：写 autostart.json。
+///
+/// OS autolaunch 的 enable/disable 由命令层在写入后调用 `autostart::apply_to_os`
+/// 完成，纯函数只负责持久化，保持可单测。
+///
+/// # Errors
+/// 文件写入失败时返回错误字符串。
+pub fn set_launch_on_login_impl(value: bool, autostart_path: &Path) -> Result<(), String> {
+    let mut config = AutostartConfig::load_or_default(autostart_path);
+    config.enabled = value;
+    config.save(autostart_path).map_err(|e| e.to_string())
+}
+
+/// Tauri 命令：读取当前暂停捕获状态。
+#[tauri::command]
+pub fn get_pause_capture(state: State<'_, CaptureState>) -> bool {
+    get_pause_capture_impl(&state)
+}
+
+/// Tauri 命令：设置暂停捕获状态（运行时生效 + 持久化）。
+#[tauri::command]
+pub fn set_pause_capture(
+    app: AppHandle,
+    state: State<'_, CaptureState>,
+    value: bool,
+) -> Result<(), String> {
+    let path = resolve_config_path(&app, "settings.json")?;
+    set_pause_capture_impl(value, &state, &path)
+}
+
+/// Tauri 命令：读取当前敏感内容跳过状态。
+#[tauri::command]
+pub fn get_skip_sensitive(state: State<'_, CaptureState>) -> bool {
+    get_skip_sensitive_impl(&state)
+}
+
+/// Tauri 命令：设置敏感内容跳过状态（运行时生效 + 持久化）。
+#[tauri::command]
+pub fn set_skip_sensitive(
+    app: AppHandle,
+    state: State<'_, CaptureState>,
+    value: bool,
+) -> Result<(), String> {
+    let path = resolve_config_path(&app, "settings.json")?;
+    set_skip_sensitive_impl(value, &state, &path)
+}
+
+/// Tauri 命令：读取当前托盘驻留状态。
+#[tauri::command]
+pub fn get_stay_in_tray(state: State<'_, CaptureState>) -> bool {
+    get_stay_in_tray_impl(&state)
+}
+
+/// Tauri 命令：设置托盘驻留状态（运行时生效 + 持久化）。
+#[tauri::command]
+pub fn set_stay_in_tray(
+    app: AppHandle,
+    state: State<'_, CaptureState>,
+    value: bool,
+) -> Result<(), String> {
+    let path = resolve_config_path(&app, "settings.json")?;
+    set_stay_in_tray_impl(value, &state, &path)
+}
+
+/// Tauri 命令：读取自动更新开关。
+#[tauri::command]
+pub fn get_auto_update(app: AppHandle) -> Result<bool, String> {
+    let path = resolve_config_path(&app, "settings.json")?;
+    get_auto_update_impl(&path)
+}
+
+/// Tauri 命令：设置自动更新开关。
+#[tauri::command]
+pub fn set_auto_update(app: AppHandle, value: bool) -> Result<(), String> {
+    let path = resolve_config_path(&app, "settings.json")?;
+    set_auto_update_impl(value, &path)
+}
+
+/// Tauri 命令：读取当前 UI 主题。
+#[tauri::command]
+pub fn get_theme(app: AppHandle) -> Result<String, String> {
+    let path = resolve_config_path(&app, "settings.json")?;
+    get_theme_impl(&path)
+}
+
+/// Tauri 命令：设置 UI 主题（校验值合法性：auto / light / dark）。
+#[tauri::command]
+pub fn set_theme(app: AppHandle, theme: String) -> Result<(), String> {
+    let path = resolve_config_path(&app, "settings.json")?;
+    set_theme_impl(&theme, &path)
+}
+
+/// Tauri 命令：读取开机自启状态。
+#[tauri::command]
+pub fn get_launch_on_login(app: AppHandle) -> Result<bool, String> {
+    let path = resolve_config_path(&app, "autostart.json")?;
+    get_launch_on_login_impl(&path)
+}
+
+/// Tauri 命令：设置开机自启（持久化 autostart.json + 应用到 OS）。
+#[tauri::command]
+pub fn set_launch_on_login(app: AppHandle, value: bool) -> Result<(), String> {
+    let path = resolve_config_path(&app, "autostart.json")?;
+    set_launch_on_login_impl(value, &path)?;
+    crate::autostart::apply_to_os(&app, value);
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::{atomic::AtomicBool, Arc};
+    use tempfile::NamedTempFile;
+
+    fn make_state(paused: bool, skip_sensitive: bool, stay_in_tray: bool) -> CaptureState {
+        CaptureState {
+            paused: Arc::new(AtomicBool::new(paused)),
+            skip_sensitive: Arc::new(AtomicBool::new(skip_sensitive)),
+            stay_in_tray: Arc::new(AtomicBool::new(stay_in_tray)),
+        }
+    }
+
+    #[test]
+    fn get_pause_capture_reads_atomic() {
+        let state = make_state(true, true, true);
+        assert!(get_pause_capture_impl(&state));
+        state.paused.store(false, Ordering::Relaxed);
+        assert!(!get_pause_capture_impl(&state));
+    }
+
+    #[test]
+    fn set_pause_capture_writes_atomic_and_persists() {
+        let state = make_state(false, true, true);
+        let file = NamedTempFile::new().unwrap();
+        set_pause_capture_impl(true, &state, file.path()).unwrap();
+        assert!(state.paused.load(Ordering::Relaxed));
+        let settings = AppSettings::load_or_default(file.path());
+        assert!(settings.pause_capture);
+    }
+
+    #[test]
+    fn get_skip_sensitive_reads_atomic() {
+        let state = make_state(false, false, true);
+        assert!(!get_skip_sensitive_impl(&state));
+    }
+
+    #[test]
+    fn set_skip_sensitive_writes_atomic_and_persists() {
+        let state = make_state(false, true, true);
+        let file = NamedTempFile::new().unwrap();
+        set_skip_sensitive_impl(false, &state, file.path()).unwrap();
+        assert!(!state.skip_sensitive.load(Ordering::Relaxed));
+        let settings = AppSettings::load_or_default(file.path());
+        assert!(!settings.skip_sensitive);
+    }
+
+    #[test]
+    fn get_stay_in_tray_reads_atomic() {
+        let state = make_state(false, true, false);
+        assert!(!get_stay_in_tray_impl(&state));
+    }
+
+    #[test]
+    fn set_stay_in_tray_writes_atomic_and_persists() {
+        let state = make_state(false, true, true);
+        let file = NamedTempFile::new().unwrap();
+        set_stay_in_tray_impl(false, &state, file.path()).unwrap();
+        assert!(!state.stay_in_tray.load(Ordering::Relaxed));
+        let settings = AppSettings::load_or_default(file.path());
+        assert!(!settings.stay_in_tray);
+    }
+
+    #[test]
+    fn get_auto_update_returns_default_when_no_file() {
+        let file = NamedTempFile::new().unwrap();
+        let nonexistent = file.path().with_extension("nonexistent_settings.json");
+        let result = get_auto_update_impl(&nonexistent).unwrap();
+        assert!(result, "auto_update 默认应为 true");
+    }
+
+    #[test]
+    fn set_auto_update_persists_value() {
+        let file = NamedTempFile::new().unwrap();
+        set_auto_update_impl(false, file.path()).unwrap();
+        assert!(!get_auto_update_impl(file.path()).unwrap());
+    }
+
+    #[test]
+    fn get_theme_returns_default_when_no_file() {
+        let file = NamedTempFile::new().unwrap();
+        let nonexistent = file.path().with_extension("nonexistent_settings.json");
+        assert_eq!(get_theme_impl(&nonexistent).unwrap(), "auto");
+    }
+
+    #[test]
+    fn set_theme_rejects_invalid_value() {
+        let file = NamedTempFile::new().unwrap();
+        let err = set_theme_impl("purple", file.path()).unwrap_err();
+        assert!(err.contains("非法 theme 值"), "错误信息应说明非法值：{err}");
+    }
+
+    #[test]
+    fn set_theme_accepts_valid_values() {
+        let file = NamedTempFile::new().unwrap();
+        for theme in ["auto", "light", "dark"] {
+            set_theme_impl(theme, file.path()).unwrap();
+            assert_eq!(get_theme_impl(file.path()).unwrap(), theme);
+        }
+    }
+
+    #[test]
+    fn get_launch_on_login_returns_default_when_no_file() {
+        let file = NamedTempFile::new().unwrap();
+        let nonexistent = file.path().with_extension("nonexistent_autostart.json");
+        let result = get_launch_on_login_impl(&nonexistent).unwrap();
+        assert!(result, "launch_on_login 默认应为 true（设计§二）");
+    }
+
+    #[test]
+    fn set_launch_on_login_persists_value() {
+        let file = NamedTempFile::new().unwrap();
+        set_launch_on_login_impl(false, file.path()).unwrap();
+        assert!(!get_launch_on_login_impl(file.path()).unwrap());
+        set_launch_on_login_impl(true, file.path()).unwrap();
+        assert!(get_launch_on_login_impl(file.path()).unwrap());
+    }
+
+    #[test]
+    fn set_pause_capture_preserves_existing_fields() {
+        let state = make_state(false, true, true);
+        let file = NamedTempFile::new().unwrap();
+        let initial = AppSettings {
+            excluded_apps: vec!["com.test.app".to_string()],
+            selected_provider: "deepl".to_string(),
+            ..AppSettings::default()
+        };
+        initial.save(file.path()).unwrap();
+        set_pause_capture_impl(true, &state, file.path()).unwrap();
+        let restored = AppSettings::load_or_default(file.path());
+        assert_eq!(restored.excluded_apps, vec!["com.test.app"]);
+        assert_eq!(restored.selected_provider, "deepl");
+        assert!(restored.pause_capture);
+    }
 }

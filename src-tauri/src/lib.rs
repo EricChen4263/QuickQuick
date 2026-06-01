@@ -28,11 +28,26 @@ pub mod translate;
 mod tray;
 mod window_pos;
 
-use std::sync::Mutex;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc, Mutex,
+};
 
 use tauri::{Emitter, Manager, Runtime, WindowEvent};
-use tauri_plugin_autostart::ManagerExt as AutostartManagerExt;
 use tauri_plugin_global_shortcut::GlobalShortcutExt;
+
+/// 运行时捕获状态：通过原子布尔在主线程与轮询线程间共享，无锁读写。
+///
+/// 由 setup 阶段从 `AppSettings` 初始化，IPC 命令层通过 `app.state::<CaptureState>()`
+/// 读写，轮询线程通过克隆的 `Arc` 读取。
+pub struct CaptureState {
+    /// 是否暂停剪贴板捕获
+    pub paused: Arc<AtomicBool>,
+    /// 是否跳过 concealed/transient 敏感内容
+    pub skip_sensitive: Arc<AtomicBool>,
+    /// 失焦时是否隐藏到托盘（false = 退出应用）
+    pub stay_in_tray: Arc<AtomicBool>,
+}
 
 /// 将所有插件注册到给定的 builder 并返回。
 ///
@@ -81,14 +96,32 @@ pub fn run() {
             ipc::settings::get_translate_providers,
             ipc::settings::get_selected_provider,
             ipc::settings::set_selected_provider,
+            ipc::settings::get_pause_capture,
+            ipc::settings::set_pause_capture,
+            ipc::settings::get_skip_sensitive,
+            ipc::settings::set_skip_sensitive,
+            ipc::settings::get_stay_in_tray,
+            ipc::settings::set_stay_in_tray,
+            ipc::settings::get_auto_update,
+            ipc::settings::set_auto_update,
+            ipc::settings::get_theme,
+            ipc::settings::set_theme,
+            ipc::settings::get_launch_on_login,
+            ipc::settings::set_launch_on_login,
         ])
         .setup(|app| {
             setup_app_db(app);
-            start_clipboard_poll(app.handle().clone());
+            let capture_state = init_capture_state(app);
+            // 提前克隆 Arc，让 capture_state 的所有权移交 manage 之前完成
+            let paused = Arc::clone(&capture_state.paused);
+            let skip_sensitive = Arc::clone(&capture_state.skip_sensitive);
+            let stay_in_tray = Arc::clone(&capture_state.stay_in_tray);
+            app.manage(capture_state);
+            start_clipboard_poll(app.handle().clone(), paused, skip_sensitive);
             apply_autostart_preference(app);
             register_hotkeys(app.handle());
             tray::setup_tray(app)?;
-            setup_window_focus_hide(app)?;
+            setup_window_focus_hide(app, stay_in_tray)?;
             Ok(())
         })
         .run(tauri::generate_context!())
@@ -133,11 +166,16 @@ fn setup_app_db(app: &mut tauri::App) {
 ///
 /// 线程持有 AppHandle，每次迭代通过 state::<AppDb>() 取得数据库锁后写入。
 /// ArboardBackend 在 headless 环境下初始化可能失败，此时仅记录警告不启动线程。
+/// `paused` 和 `skip_sensitive` 在每次迭代通过 `Relaxed` load 读取，运行时生效。
 ///
 /// # 为什么不在线程内 panic
 /// 后台线程崩溃不会影响主线程，但会导致轮询静默停止；
 /// 捕获错误并 eprintln 保证可见性。
-fn start_clipboard_poll(handle: tauri::AppHandle) {
+fn start_clipboard_poll(
+    handle: tauri::AppHandle,
+    paused: Arc<AtomicBool>,
+    skip_sensitive: Arc<AtomicBool>,
+) {
     let backend = match pipeline::ArboardBackend::new() {
         Ok(b) => b,
         Err(e) => {
@@ -167,14 +205,13 @@ fn start_clipboard_poll(handle: tauri::AppHandle) {
             };
 
             let policy = privacy::CapturePolicy {
-                paused: false,
+                paused: paused.load(Ordering::Relaxed),
+                skip_sensitive: skip_sensitive.load(Ordering::Relaxed),
                 exclude: &exclude,
             };
 
             match pipeline::capture_and_ingest(&backend, &mut last_seen, conn, &policy) {
                 Ok(outcomes) => {
-                    // outcomes 为空时表示无新内容（正常情况），不需处理
-                    // outcomes 非空时每项已写库，此处仅用于调试可扩展
                     let _ = outcomes;
                 }
                 Err(e) => {
@@ -188,12 +225,10 @@ fn start_clipboard_poll(handle: tauri::AppHandle) {
 /// 读取自启动偏好配置并应用到 OS LaunchAgent。
 ///
 /// 配置路径优先用 `app_config_dir()`；若拿不到则跳过（仅 eprintln 不 panic）。
-/// 调用 enable/disable 失败时同样仅 eprintln，不阻断启动。
+/// 实际 enable/disable 逻辑委托给 `autostart::apply_to_os`，与 IPC 命令层共享。
 fn apply_autostart_preference(app: &mut tauri::App) {
-    // 计算配置文件路径；拿不到目录时优雅降级
     let config_path = match app.path().app_config_dir() {
         Ok(dir) => {
-            // 目录可能尚未创建（首次启动），尝试创建；失败则跳过
             if let Err(e) = std::fs::create_dir_all(&dir) {
                 eprintln!("[QuickQuick] 无法创建配置目录，跳过自启动偏好应用: {e}");
                 return;
@@ -207,15 +242,7 @@ fn apply_autostart_preference(app: &mut tauri::App) {
     };
 
     let pref = autostart::AutostartConfig::load_or_default(&config_path);
-    let mgr = app.autolaunch();
-
-    if pref.enabled {
-        if let Err(e) = mgr.enable() {
-            eprintln!("[QuickQuick] 自启动 enable 失败（不影响启动）: {e}");
-        }
-    } else if let Err(e) = mgr.disable() {
-        eprintln!("[QuickQuick] 自启动 disable 失败（不影响启动）: {e}");
-    }
+    autostart::apply_to_os(&app.handle().clone(), pref.enabled);
 }
 
 /// 注册全局热键（history / translate）。
@@ -294,18 +321,49 @@ fn trigger_window(handle: &tauri::AppHandle, route: &'static str) {
     }
 }
 
-/// 监听主窗口失焦事件，失焦后自动隐藏。
-fn setup_window_focus_hide(app: &mut tauri::App) -> Result<(), tauri::Error> {
+/// 从 `AppSettings` 初始化运行时 `CaptureState`。
+///
+/// 读取持久化的 settings.json（不存在则用默认值），将三个布尔字段
+/// 转换为 `Arc<AtomicBool>`，供轮询线程与 IPC 命令层共享。
+fn init_capture_state(app: &tauri::App) -> CaptureState {
+    let settings = app
+        .path()
+        .app_config_dir()
+        .ok()
+        .map(|dir| {
+            let _ = std::fs::create_dir_all(&dir);
+            dir.join("settings.json")
+        })
+        .map(|path| settings::AppSettings::load_or_default(&path))
+        .unwrap_or_default();
+
+    CaptureState {
+        paused: Arc::new(AtomicBool::new(settings.pause_capture)),
+        skip_sensitive: Arc::new(AtomicBool::new(settings.skip_sensitive)),
+        stay_in_tray: Arc::new(AtomicBool::new(settings.stay_in_tray)),
+    }
+}
+
+/// 监听主窗口失焦事件：`stay_in_tray == true` 时隐藏窗口（默认行为），
+/// `stay_in_tray == false` 时退出应用。
+///
+/// `stay_in_tray` 通过 `Arc<AtomicBool>` 传入，运行时 IPC 改值即刻生效。
+fn setup_window_focus_hide(
+    app: &mut tauri::App,
+    stay_in_tray: Arc<AtomicBool>,
+) -> Result<(), tauri::Error> {
     let Some(window) = app.get_webview_window("main") else {
         return Ok(());
     };
 
-    // 克隆一份供闭包持有，避免与外层借用冲突
     let win = window.clone();
     window.on_window_event(move |event| {
         if let WindowEvent::Focused(false) = event {
-            // 失去焦点时隐藏窗口
-            let _ = win.hide();
+            if stay_in_tray.load(Ordering::Relaxed) {
+                let _ = win.hide();
+            } else {
+                win.app_handle().exit(0);
+            }
         }
     });
 

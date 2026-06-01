@@ -68,3 +68,21 @@ impl AutostartConfig {
         Self::load(path).unwrap_or_default()
     }
 }
+
+/// 将 `enabled` 偏好应用到 OS LaunchAgent（enable/disable autolaunch）。
+///
+/// 封装为独立函数供 `lib.rs` setup 阶段与 `ipc/settings.rs` 的 `set_launch_on_login`
+/// 命令共享，避免重复维护相同的 enable/disable 分支逻辑。
+///
+/// 失败时仅 eprintln，不向上传播——OS autolaunch 注册失败不应中断应用功能。
+pub fn apply_to_os(handle: &tauri::AppHandle, enabled: bool) {
+    use tauri_plugin_autostart::ManagerExt as AutostartManagerExt;
+    let mgr = handle.autolaunch();
+    if enabled {
+        if let Err(e) = mgr.enable() {
+            eprintln!("[QuickQuick] 自启动 enable 失败（不影响启动）: {e}");
+        }
+    } else if let Err(e) = mgr.disable() {
+        eprintln!("[QuickQuick] 自启动 disable 失败（不影响启动）: {e}");
+    }
+}

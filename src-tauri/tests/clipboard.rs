@@ -286,6 +286,7 @@ fn pause_stops_capture() {
     let exclude = ExcludeList::default();
     let policy = CapturePolicy {
         paused: true,
+        skip_sensitive: true,
         exclude: &exclude,
     };
 
@@ -306,6 +307,7 @@ fn pause_false_captures_normally() {
     let exclude = ExcludeList::default();
     let policy = CapturePolicy {
         paused: false,
+        skip_sensitive: true,
         exclude: &exclude,
     };
 
