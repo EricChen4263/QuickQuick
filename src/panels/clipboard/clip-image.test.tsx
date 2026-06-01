@@ -11,12 +11,14 @@ import type { HistoryItem } from "../history/search";
 import { ClipItemRow } from "./ClipItemRow";
 import { ClipPreview } from "./ClipPreview";
 
-// Mock ipc-client，需要 getClipImageOriginal
+// Mock ipc-client，需要 getClipImageOriginal + 里程碑3新增函数
 vi.mock("../../ipc/ipc-client", () => ({
   listClipItems: vi.fn(),
   deleteClipItem: vi.fn(),
   toggleFavoriteClip: vi.fn(),
   getClipImageOriginal: vi.fn(),
+  pasteToFront: vi.fn(),
+  openAccessibilitySettings: vi.fn(),
 }));
 
 import { getClipImageOriginal } from "../../ipc/ipc-client";

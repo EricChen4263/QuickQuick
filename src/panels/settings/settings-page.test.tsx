@@ -18,6 +18,12 @@ vi.mock("../../ipc/ipc-client", () => ({
   setStayInTray: vi.fn(),
   getAutoUpdate: vi.fn(),
   setAutoUpdate: vi.fn(),
+  getPauseCapture: vi.fn(),
+  setPauseCapture: vi.fn(),
+  getSkipSensitive: vi.fn(),
+  setSkipSensitive: vi.fn(),
+  getStorageStats: vi.fn(),
+  cleanupHistory: vi.fn(),
 }));
 
 import {
@@ -34,6 +40,12 @@ import {
   setStayInTray,
   getAutoUpdate,
   setAutoUpdate,
+  getPauseCapture,
+  setPauseCapture,
+  getSkipSensitive,
+  setSkipSensitive,
+  getStorageStats,
+  cleanupHistory,
 } from "../../ipc/ipc-client";
 
 const mockGetHotkeys = vi.mocked(getHotkeys);
@@ -49,6 +61,12 @@ const mockGetAutoUpdate = vi.mocked(getAutoUpdate);
 const mockSetLaunchOnLogin = vi.mocked(setLaunchOnLogin);
 const mockSetStayInTray = vi.mocked(setStayInTray);
 const mockSetAutoUpdate = vi.mocked(setAutoUpdate);
+const mockGetPauseCapture = vi.mocked(getPauseCapture);
+const mockSetPauseCapture = vi.mocked(setPauseCapture);
+const mockGetSkipSensitive = vi.mocked(getSkipSensitive);
+const mockSetSkipSensitive = vi.mocked(setSkipSensitive);
+const mockGetStorageStats = vi.mocked(getStorageStats);
+const mockCleanupHistory = vi.mocked(cleanupHistory);
 
 const MOCK_HOTKEYS = { history: "CmdOrCtrl+Shift+H", translate: "CmdOrCtrl+Shift+T" };
 const MOCK_PROVIDERS = [
@@ -73,6 +91,12 @@ describe("settings-page", () => {
     mockSetLaunchOnLogin.mockResolvedValue(undefined);
     mockSetStayInTray.mockResolvedValue(undefined);
     mockSetAutoUpdate.mockResolvedValue(undefined);
+    mockGetPauseCapture.mockResolvedValue(false);
+    mockSetPauseCapture.mockResolvedValue(undefined);
+    mockGetSkipSensitive.mockResolvedValue(true);
+    mockSetSkipSensitive.mockResolvedValue(undefined);
+    mockGetStorageStats.mockResolvedValue({ liveCount: 42, fileSizeBytes: 50 * 1024 * 1024 });
+    mockCleanupHistory.mockResolvedValue({ softDeleted: 5, purged: 3 });
   });
 
   it("settings-page: 左侧纵向子项栏渲染六个子项（通用/热键/翻译源/隐私/存储/关于）", async () => {
@@ -402,5 +426,107 @@ describe("settings-page", () => {
     // 每个 app 有对应删除按钮（aria-label="删除 xxx"）
     expect(screen.getByRole("button", { name: "删除 Xcode" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "删除 Terminal" })).toBeInTheDocument();
+  });
+
+  it("settings-page: 隐私面板——mount 时调用 getPauseCapture 和 getSkipSensitive", async () => {
+    const user = userEvent.setup();
+    render(<SettingsPage />);
+
+    const nav = screen.getByRole("navigation", { name: "设置子项" });
+    await user.click(within(nav).getByRole("button", { name: "隐私" }));
+
+    await waitFor(() => {
+      expect(mockGetPauseCapture).toHaveBeenCalledTimes(1);
+      expect(mockGetSkipSensitive).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("settings-page: 隐私面板——toggle「暂停剪贴板监听」调用 setPauseCapture", async () => {
+    const user = userEvent.setup();
+    render(<SettingsPage />);
+
+    const nav = screen.getByRole("navigation", { name: "设置子项" });
+    await user.click(within(nav).getByRole("button", { name: "隐私" }));
+
+    await waitFor(() => {
+      expect(mockGetPauseCapture).toHaveBeenCalled();
+    });
+
+    const pauseSwitch = screen.getByRole("switch", { name: "暂停剪贴板监听" });
+    await user.click(pauseSwitch);
+
+    await waitFor(() => {
+      expect(mockSetPauseCapture).toHaveBeenCalledWith(true);
+    });
+  });
+
+  it("settings-page: 隐私面板——toggle「跳过敏感内容」调用 setSkipSensitive", async () => {
+    const user = userEvent.setup();
+    render(<SettingsPage />);
+
+    const nav = screen.getByRole("navigation", { name: "设置子项" });
+    await user.click(within(nav).getByRole("button", { name: "隐私" }));
+
+    await waitFor(() => {
+      expect(mockGetSkipSensitive).toHaveBeenCalled();
+    });
+
+    const skipSwitch = screen.getByRole("switch", { name: "跳过敏感内容" });
+    await user.click(skipSwitch);
+
+    await waitFor(() => {
+      expect(mockSetSkipSensitive).toHaveBeenCalledWith(false);
+    });
+  });
+
+  it("settings-page: 存储面板——mount 时调用 getStorageStats 并显示条目数", async () => {
+    const user = userEvent.setup();
+    render(<SettingsPage />);
+
+    const nav = screen.getByRole("navigation", { name: "设置子项" });
+    await user.click(within(nav).getByRole("button", { name: "存储" }));
+
+    await waitFor(() => {
+      expect(mockGetStorageStats).toHaveBeenCalledTimes(1);
+      expect(screen.getByText(/42 条/)).toBeInTheDocument();
+    });
+  });
+
+  it("settings-page: 存储面板——条目显示已用 MB 和上限 500 MB", async () => {
+    const user = userEvent.setup();
+    render(<SettingsPage />);
+
+    const nav = screen.getByRole("navigation", { name: "设置子项" });
+    await user.click(within(nav).getByRole("button", { name: "存储" }));
+
+    await waitFor(() => {
+      expect(screen.getByText(/50\.0 MB 已用/)).toBeInTheDocument();
+      expect(screen.getByText(/上限 500 MB/)).toBeInTheDocument();
+    });
+  });
+
+  it("settings-page: 存储面板——点击清理按钮调用 cleanupHistory 并刷新统计", async () => {
+    mockCleanupHistory.mockResolvedValue({ softDeleted: 5, purged: 3 });
+    mockGetStorageStats
+      .mockResolvedValueOnce({ liveCount: 42, fileSizeBytes: 50 * 1024 * 1024 })
+      .mockResolvedValueOnce({ liveCount: 37, fileSizeBytes: 45 * 1024 * 1024 });
+
+    const user = userEvent.setup();
+    render(<SettingsPage />);
+
+    const nav = screen.getByRole("navigation", { name: "设置子项" });
+    await user.click(within(nav).getByRole("button", { name: "存储" }));
+
+    await waitFor(() => {
+      expect(screen.getByText(/42 条/)).toBeInTheDocument();
+    });
+
+    await user.click(screen.getByRole("button", { name: "清理…" }));
+
+    await waitFor(() => {
+      expect(mockCleanupHistory).toHaveBeenCalledTimes(1);
+      expect(mockGetStorageStats).toHaveBeenCalledTimes(2);
+      expect(screen.getByText(/37 条/)).toBeInTheDocument();
+    });
   });
 });

@@ -1,5 +1,12 @@
 import { useEffect, useState, useCallback } from "react";
-import { getExcludeList, setExcludeList } from "../../ipc/ipc-client";
+import {
+  getExcludeList,
+  setExcludeList,
+  getPauseCapture,
+  setPauseCapture,
+  getSkipSensitive,
+  setSkipSensitive,
+} from "../../ipc/ipc-client";
 import { addExcludedApp, removeExcludedApp } from "../../main-window/settings/sections";
 import PanelHeader from "./PanelHeader";
 import SettingGroup from "./SettingGroup";
@@ -20,9 +27,8 @@ function PrivacyPanel() {
   const [inputValue, setInputValue] = useState("");
   const [loadError, setLoadError] = useState<string | null>(null);
   const [opError, setOpError] = useState<string | null>(null);
-  // 里程碑3接入 IPC 前的本地占位开关
-  const [pauseCapture, setPauseCapture] = useState(false);
-  const [skipSensitive, setSkipSensitive] = useState(true);
+  const [pauseCaptureState, setPauseCaptureState] = useState(false);
+  const [skipSensitiveState, setSkipSensitiveState] = useState(true);
 
   const fetchExcludeList = useCallback(async (cancelled: { current: boolean }) => {
     try {
@@ -39,6 +45,18 @@ function PrivacyPanel() {
   useEffect(() => {
     const cancelled = { current: false };
     fetchExcludeList(cancelled);
+
+    Promise.all([getPauseCapture(), getSkipSensitive()])
+      .then(([paused, skip]) => {
+        if (cancelled.current) return;
+        setPauseCaptureState(paused);
+        setSkipSensitiveState(skip);
+      })
+      .catch(() => {
+        if (cancelled.current) return;
+        console.warn("隐私开关初始化失败，保留默认值");
+      });
+
     return () => {
       cancelled.current = true;
     };
@@ -70,6 +88,26 @@ function PrivacyPanel() {
     }
   }
 
+  async function handlePauseCaptureChange(v: boolean) {
+    try {
+      await setPauseCapture(v);
+      setPauseCaptureState(v);
+      setOpError(null);
+    } catch {
+      setOpError("暂停监听设置失败，请稍后重试");
+    }
+  }
+
+  async function handleSkipSensitiveChange(v: boolean) {
+    try {
+      await setSkipSensitive(v);
+      setSkipSensitiveState(v);
+      setOpError(null);
+    } catch {
+      setOpError("跳过敏感内容设置失败，请稍后重试");
+    }
+  }
+
   if (loadError !== null) {
     return (
       <div>
@@ -82,19 +120,18 @@ function PrivacyPanel() {
     <div>
       <PanelHeader title="隐私" subtitle="以下应用处于前台时，剪贴板内容不会被记录" />
 
-      {/* 里程碑3接入：暂停监听和跳过敏感内容，当前用本地 state 占位 */}
       <SettingGroup>
         <SettingToggle
           label="暂停剪贴板监听"
           description="临时停止记录所有剪贴板内容"
-          checked={pauseCapture}
-          onChange={setPauseCapture}
+          checked={pauseCaptureState}
+          onChange={(v) => { void handlePauseCaptureChange(v); }}
         />
         <SettingToggle
           label="跳过敏感内容"
           description="自动过滤密码管理器等敏感数据"
-          checked={skipSensitive}
-          onChange={setSkipSensitive}
+          checked={skipSensitiveState}
+          onChange={(v) => { void handleSkipSensitiveChange(v); }}
         />
       </SettingGroup>
 

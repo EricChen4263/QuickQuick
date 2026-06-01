@@ -8,17 +8,23 @@ vi.mock("../../ipc/ipc-client", () => ({
   listClipItems: vi.fn(),
   deleteClipItem: vi.fn(),
   toggleFavoriteClip: vi.fn(),
+  pasteToFront: vi.fn(),
+  openAccessibilitySettings: vi.fn(),
 }));
 
 import {
   listClipItems,
   deleteClipItem,
   toggleFavoriteClip,
+  pasteToFront,
+  openAccessibilitySettings,
 } from "../../ipc/ipc-client";
 
 const mockListClipItems = vi.mocked(listClipItems);
 const mockDeleteClipItem = vi.mocked(deleteClipItem);
 const mockToggleFavoriteClip = vi.mocked(toggleFavoriteClip);
+const mockPasteToFront = vi.mocked(pasteToFront);
+const mockOpenAccessibilitySettings = vi.mocked(openAccessibilitySettings);
 
 /** 测试用剪贴板条目数据 */
 const MOCK_ITEMS = [
@@ -50,6 +56,8 @@ describe("clipboard-page", () => {
     vi.clearAllMocks();
     mockDeleteClipItem.mockResolvedValue(undefined);
     mockToggleFavoriteClip.mockResolvedValue(undefined);
+    mockPasteToFront.mockResolvedValue({ outcome: "full_paste" });
+    mockOpenAccessibilitySettings.mockResolvedValue(undefined);
   });
 
   it("clipboard-page: 挂载后调用 listClipItems 并渲染所有条目内容", async () => {
@@ -288,6 +296,82 @@ describe("clipboard-page", () => {
     // Assert：预览切换到 item-3
     await waitFor(() => {
       expect(within(previewRegion).getByText("Another text item")).toBeInTheDocument();
+    });
+  });
+
+  it("clipboard-page: 点击「粘贴到前台」调用 pasteToFront(item.id)，full_paste 不显示提示", async () => {
+    mockListClipItems.mockResolvedValue(MOCK_ITEMS);
+    mockPasteToFront.mockResolvedValue({ outcome: "full_paste" });
+    const user = userEvent.setup();
+    render(<ClipboardPage />);
+
+    await waitFor(() => {
+      expect(screen.getAllByText("Hello World").length).toBeGreaterThanOrEqual(1);
+    });
+
+    const previewRegion = screen.getByRole("region", { name: "预览" });
+    const pasteBtn = within(previewRegion).getByRole("button", { name: "粘贴到前台" });
+    await user.click(pasteBtn);
+
+    await waitFor(() => {
+      expect(mockPasteToFront).toHaveBeenCalledWith("item-1");
+    });
+    expect(screen.queryByText(/已复制到剪贴板/)).not.toBeInTheDocument();
+  });
+
+  it("clipboard-page: pasteToFront 返回 write_back_only 时显示降级提示", async () => {
+    mockListClipItems.mockResolvedValue(MOCK_ITEMS);
+    mockPasteToFront.mockResolvedValue({ outcome: "write_back_only" });
+    const user = userEvent.setup();
+    render(<ClipboardPage />);
+
+    await waitFor(() => {
+      expect(screen.getAllByText("Hello World").length).toBeGreaterThanOrEqual(1);
+    });
+
+    const previewRegion = screen.getByRole("region", { name: "预览" });
+    const pasteBtn = within(previewRegion).getByRole("button", { name: "粘贴到前台" });
+    await user.click(pasteBtn);
+
+    await waitFor(() => {
+      expect(screen.getByText(/已复制到剪贴板/)).toBeInTheDocument();
+    });
+  });
+
+  it("clipboard-page: pasteToFront IPC reject 时显示操作错误提示", async () => {
+    mockListClipItems.mockResolvedValue(MOCK_ITEMS);
+    mockPasteToFront.mockRejectedValue(new Error("paste IPC 失败"));
+    const user = userEvent.setup();
+    render(<ClipboardPage />);
+
+    await waitFor(() => {
+      expect(screen.getAllByText("Hello World").length).toBeGreaterThanOrEqual(1);
+    });
+
+    const previewRegion = screen.getByRole("region", { name: "预览" });
+    const pasteBtn = within(previewRegion).getByRole("button", { name: "粘贴到前台" });
+    await user.click(pasteBtn);
+
+    await waitFor(() => {
+      expect(screen.getByRole("alert")).toBeInTheDocument();
+    });
+  });
+
+  it("clipboard-page: OnboardCard「前往系统设置」调用 openAccessibilitySettings", async () => {
+    mockListClipItems.mockResolvedValue(MOCK_ITEMS);
+    localStorage.removeItem("qq-onboard-dismissed");
+    const user = userEvent.setup();
+    render(<ClipboardPage />);
+
+    await waitFor(() => {
+      expect(screen.getAllByText("Hello World").length).toBeGreaterThanOrEqual(1);
+    });
+
+    const settingsBtn = screen.getByRole("button", { name: "前往系统设置" });
+    await user.click(settingsBtn);
+
+    await waitFor(() => {
+      expect(mockOpenAccessibilitySettings).toHaveBeenCalledTimes(1);
     });
   });
 });

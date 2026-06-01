@@ -9,6 +9,8 @@ import {
   listClipItems,
   deleteClipItem,
   toggleFavoriteClip,
+  pasteToFront,
+  openAccessibilitySettings,
   type ClipItem,
 } from "../../ipc/ipc-client";
 import type { HistoryItem } from "../history/search";
@@ -57,6 +59,7 @@ function ClipboardPage() {
   const [onboardDismissed, setOnboardDismissed] = useState(
     () => localStorage.getItem(ONBOARD_DISMISSED_KEY) === "true",
   );
+  const [pasteMsg, setPasteMsg] = useState<string | null>(null);
 
   /**
    * loadItems 接受 cancelled ref，避免卸载后写入已卸载组件的 state。
@@ -146,6 +149,26 @@ function ClipboardPage() {
     setOnboardDismissed(true);
   }
 
+  async function handlePasteToFront(item: ClipItem): Promise<void> {
+    setPasteMsg(null);
+    try {
+      const result = await pasteToFront(item.id);
+      if (result.outcome === "write_back_only") {
+        setPasteMsg("已复制到剪贴板，请手动粘贴（未授权辅助功能）");
+      }
+    } catch {
+      setOpError("粘贴失败，请稍后重试");
+    }
+  }
+
+  async function handleOpenSystemSettings(): Promise<void> {
+    try {
+      await openAccessibilitySettings();
+    } catch {
+      setOpError("打开系统设置失败，请稍后重试");
+    }
+  }
+
   if (loadError !== null) {
     return <div role="alert">{loadError}</div>;
   }
@@ -171,7 +194,7 @@ function ClipboardPage() {
         {!onboardDismissed && (
           <OnboardCard
             onDismiss={handleDismissOnboard}
-            onOpenSystemSettings={() => { /* 里程碑3 接 IPC */ }}
+            onOpenSystemSettings={() => { void handleOpenSystemSettings(); }}
           />
         )}
         <div
@@ -202,12 +225,19 @@ function ClipboardPage() {
           )}
         </div>
       </div>
+      {pasteMsg !== null && (
+        <div
+          style={{ gridColumn: "1 / -1", padding: "8px 12px", fontSize: 12, color: "var(--muted)", background: "var(--surface)" }}
+        >
+          {pasteMsg}
+        </div>
+      )}
       <ClipPreview
         item={highlightedClipItem}
         onToggleFavorite={handleToggleFavorite}
         onDelete={handleDelete}
         onCopy={(_item) => { /* 复制逻辑在 ClipPreview 内部调用 writeToClipboard 完成 */ }}
-        onPasteToFront={(_item) => { /* 里程碑3接入：paste IPC */ }}
+        onPasteToFront={(item) => { void handlePasteToFront(item); }}
         onTranslate={(_item) => { /* 里程碑3接入：跳转翻译页 */ }}
       />
     </div>

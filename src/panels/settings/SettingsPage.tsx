@@ -8,6 +8,7 @@ import SettingToggle from "./SettingToggle";
 import HotkeyPanel from "./HotkeyPanel";
 import TranslateSourcePanel from "./TranslateSourcePanel";
 import PrivacyPanel from "./PrivacyPanel";
+import StoragePanel from "./StoragePanel";
 import { useGeneralSettings } from "./useGeneralSettings";
 
 /** 通用子项面板：开机自启动 / 托盘常驻 / 自动检查更新 */
@@ -40,58 +41,6 @@ function GeneralPanel() {
           checked={autoUpdate}
           onChange={setAutoUpdate}
         />
-      </SettingGroup>
-    </div>
-  );
-}
-
-/** 存储子项面板：库体积进度条 + 上限/阈值展示 + 立即清理按钮（里程碑3 接 IPC） */
-function StoragePanel() {
-  return (
-    <div>
-      <PanelHeader title="存储" subtitle="加密库 quickquick.db · 分级清理，收藏永远豁免。" />
-      <SettingGroup>
-        <div className="set-row">
-          <div className="grow">
-            <div className="label">库体积</div>
-            {/* 静态占位，里程碑3 替换为 IPC 读取实际值 */}
-            <div className="meter" aria-hidden="true">
-              <i style={{ width: "47%" }} />
-            </div>
-            <div className="meter-legend">
-              <span>234 MB 已用</span>
-              <span>上限 500 MB</span>
-            </div>
-          </div>
-        </div>
-        <div className="set-row">
-          <div className="grow">
-            <div className="label">总量上限</div>
-            <div className="desc">超出按分级清理：先删大图原图保缩略图，再整条清最旧非收藏</div>
-          </div>
-          <span className="kbd-combo num">
-            <kbd>500 MB</kbd>
-          </span>
-        </div>
-        <div className="set-row">
-          <div className="grow">
-            <div className="label">单张图片阈值</div>
-            <div className="desc">超过阈值默认只留缩略图并标「原图过大未存」</div>
-          </div>
-          <span className="kbd-combo num">
-            <kbd>20 MB</kbd>
-          </span>
-        </div>
-        <div className="set-row">
-          <div className="grow">
-            <div className="label">立即清理非收藏历史</div>
-            <div className="desc">物理清除已软删条目（墓碑 GC）</div>
-          </div>
-          {/* 里程碑3 接 IPC clear_non_favorite 命令，点击 noop */}
-          <button className="btn" type="button" onClick={() => undefined}>
-            清理…
-          </button>
-        </div>
       </SettingGroup>
     </div>
   );
