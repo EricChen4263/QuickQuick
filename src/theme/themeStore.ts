@@ -88,7 +88,7 @@ function init(): void {
 
   pref = readPref();
 
-  if (typeof window !== "undefined" && window.matchMedia) {
+  if (window.matchMedia) {
     mediaQuery = window.matchMedia("(prefers-color-scheme: dark)");
     mediaQuery.addEventListener("change", handleMediaChange);
   }

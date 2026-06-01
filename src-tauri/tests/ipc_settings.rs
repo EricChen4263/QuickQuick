@@ -128,7 +128,7 @@ fn ipc_settings_exclude_list_roundtrip() {
     ];
 
     // Act：写入
-    set_exclude_list_impl(apps.clone(), &settings_path).expect("set_exclude_list 应成功");
+    set_exclude_list_impl(apps.clone(), &settings_path, None).expect("set_exclude_list 应成功");
 
     // Act：读回
     let loaded = get_exclude_list_impl(&settings_path).expect("get_exclude_list 应成功");
@@ -146,7 +146,7 @@ fn ipc_settings_exclude_list_roundtrip() {
 fn ipc_settings_exclude_list_empty_roundtrip() {
     let settings_path = tmp_settings_path();
 
-    set_exclude_list_impl(vec![], &settings_path).expect("空列表 set 应成功");
+    set_exclude_list_impl(vec![], &settings_path, None).expect("空列表 set 应成功");
 
     let loaded = get_exclude_list_impl(&settings_path).expect("get 应成功");
 

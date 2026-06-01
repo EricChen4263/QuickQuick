@@ -30,7 +30,7 @@ mod window_pos;
 
 use std::sync::{
     atomic::{AtomicBool, Ordering},
-    Arc, Mutex,
+    Arc, Mutex, RwLock,
 };
 
 use tauri::{Emitter, Manager, Runtime, WindowEvent};
@@ -47,6 +47,11 @@ pub struct CaptureState {
     pub skip_sensitive: Arc<AtomicBool>,
     /// 失焦时是否隐藏到托盘（false = 退出应用）
     pub stay_in_tray: Arc<AtomicBool>,
+    /// App 排除名单：IPC set_exclude_list 写入后即时生效，无需重启。
+    ///
+    /// 用 RwLock 而非原子布尔：名单是 HashSet<String>，不可原子操作。
+    /// 读多写少（500ms 读一次，用户主动设置时才写），RwLock 读锁无竞争开销可忽略。
+    pub exclude_list: Arc<RwLock<privacy::ExcludeList>>,
 }
 
 /// 将所有插件注册到给定的 builder 并返回。
@@ -120,8 +125,9 @@ pub fn run() {
             let paused = Arc::clone(&capture_state.paused);
             let skip_sensitive = Arc::clone(&capture_state.skip_sensitive);
             let stay_in_tray = Arc::clone(&capture_state.stay_in_tray);
+            let exclude_list = Arc::clone(&capture_state.exclude_list);
             app.manage(capture_state);
-            start_clipboard_poll(app.handle().clone(), paused, skip_sensitive);
+            start_clipboard_poll(app.handle().clone(), paused, skip_sensitive, exclude_list);
             apply_autostart_preference(app);
             register_hotkeys(app.handle());
             tray::setup_tray(app)?;
@@ -179,6 +185,7 @@ fn start_clipboard_poll(
     handle: tauri::AppHandle,
     paused: Arc<AtomicBool>,
     skip_sensitive: Arc<AtomicBool>,
+    exclude_list: Arc<RwLock<privacy::ExcludeList>>,
 ) {
     let backend = match pipeline::ArboardBackend::new() {
         Ok(b) => b,
@@ -190,7 +197,6 @@ fn start_clipboard_poll(
 
     std::thread::spawn(move || {
         let mut last_seen: u64 = 0;
-        let exclude = privacy::ExcludeList::default();
 
         loop {
             std::thread::sleep(std::time::Duration::from_millis(
@@ -208,10 +214,15 @@ fn start_clipboard_poll(
                 continue;
             };
 
+            // 每轮取读锁获取当前排除名单；lock poison 时跳过本轮不 panic
+            let Ok(exclude_guard) = exclude_list.read() else {
+                continue;
+            };
+
             let policy = privacy::CapturePolicy {
                 paused: paused.load(Ordering::Relaxed),
                 skip_sensitive: skip_sensitive.load(Ordering::Relaxed),
-                exclude: &exclude,
+                exclude: &*exclude_guard,
             };
 
             match pipeline::capture_and_ingest(&backend, &mut last_seen, conn, &policy) {
@@ -341,10 +352,15 @@ fn init_capture_state(app: &tauri::App) -> CaptureState {
         .map(|path| settings::AppSettings::load_or_default(&path))
         .unwrap_or_default();
 
+    let exclude_list = privacy::ExcludeList::new_with_apps(
+        settings.excluded_apps.iter().map(String::as_str),
+    );
+
     CaptureState {
         paused: Arc::new(AtomicBool::new(settings.pause_capture)),
         skip_sensitive: Arc::new(AtomicBool::new(settings.skip_sensitive)),
         stay_in_tray: Arc::new(AtomicBool::new(settings.stay_in_tray)),
+        exclude_list: Arc::new(RwLock::new(exclude_list)),
     }
 }
 

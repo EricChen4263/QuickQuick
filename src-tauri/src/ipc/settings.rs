@@ -26,6 +26,7 @@
 
 use std::path::Path;
 use std::sync::atomic::Ordering;
+use std::sync::RwLock;
 
 use serde::Serialize;
 use tauri::{AppHandle, Manager, State};
@@ -131,14 +132,32 @@ pub fn get_exclude_list_impl(settings_path: &Path) -> Result<Vec<String>, String
 
 /// `set_exclude_list` 的纯函数实现，可在测试中直接调用。
 ///
-/// 读取现有设置（保留 selected_provider），仅替换 excluded_apps 后 save。
+/// 读取现有设置（保留其他字段），仅替换 excluded_apps 后 save。
+/// 写文件成功后，若传入 `runtime_list`，同步替换运行时 Arc 中的名单，
+/// 使轮询线程在下一次迭代即刻生效，无需重启。
 ///
 /// # Errors
-/// 文件写入失败时返回错误字符串。
-pub fn set_exclude_list_impl(list: Vec<String>, settings_path: &Path) -> Result<(), String> {
+/// 文件写入失败时返回错误字符串（写入失败则不更新运行时，保持一致性）。
+pub fn set_exclude_list_impl(
+    list: Vec<String>,
+    settings_path: &Path,
+    runtime_list: Option<&RwLock<crate::privacy::ExcludeList>>,
+) -> Result<(), String> {
     let mut settings = AppSettings::load_or_default(settings_path);
-    settings.excluded_apps = list;
-    settings.save(settings_path).map_err(|e| e.to_string())
+    settings.excluded_apps = list.clone();
+    settings.save(settings_path).map_err(|e| e.to_string())?;
+
+    if let Some(lock) = runtime_list {
+        let new_exclude = crate::privacy::ExcludeList::new_with_apps(
+            list.iter().map(String::as_str),
+        );
+        match lock.write() {
+            Ok(mut guard) => *guard = new_exclude,
+            Err(e) => eprintln!("[QuickQuick] 排除名单写锁中毒，跳过运行时更新: {e}"),
+        }
+    }
+
+    Ok(())
 }
 
 /// `get_translate_providers` 的纯函数实现，可在测试中直接调用。
@@ -246,11 +265,15 @@ pub fn get_exclude_list(app: AppHandle) -> Result<Vec<String>, String> {
     get_exclude_list_impl(&path)
 }
 
-/// Tauri 命令：写入排除名单。
+/// Tauri 命令：写入排除名单（持久化 + 运行时即时生效）。
 #[tauri::command]
-pub fn set_exclude_list(app: AppHandle, list: Vec<String>) -> Result<(), String> {
+pub fn set_exclude_list(
+    app: AppHandle,
+    state: State<'_, CaptureState>,
+    list: Vec<String>,
+) -> Result<(), String> {
     let path = resolve_config_path(&app, "settings.json")?;
-    set_exclude_list_impl(list, &path)
+    set_exclude_list_impl(list, &path, Some(&state.exclude_list))
 }
 
 /// Tauri 命令：返回所有可用翻译 provider 列表。
@@ -504,10 +527,13 @@ mod tests {
     use tempfile::NamedTempFile;
 
     fn make_state(paused: bool, skip_sensitive: bool, stay_in_tray: bool) -> CaptureState {
+        use std::sync::RwLock;
+        use crate::privacy::ExcludeList;
         CaptureState {
             paused: Arc::new(AtomicBool::new(paused)),
             skip_sensitive: Arc::new(AtomicBool::new(skip_sensitive)),
             stay_in_tray: Arc::new(AtomicBool::new(stay_in_tray)),
+            exclude_list: Arc::new(RwLock::new(ExcludeList::default())),
         }
     }
 
@@ -631,5 +657,35 @@ mod tests {
         assert_eq!(restored.excluded_apps, vec!["com.test.app"]);
         assert_eq!(restored.selected_provider, "deepl");
         assert!(restored.pause_capture);
+    }
+
+    #[test]
+    fn set_exclude_list_persists_to_file() {
+        let file = NamedTempFile::new().unwrap();
+        let apps = vec!["com.1password.1password".to_string(), "com.foo.bar".to_string()];
+        set_exclude_list_impl(apps.clone(), file.path(), None).unwrap();
+        let settings = AppSettings::load_or_default(file.path());
+        assert_eq!(settings.excluded_apps, apps);
+    }
+
+    #[test]
+    fn set_exclude_list_updates_runtime_immediately() {
+        use std::sync::RwLock;
+        use crate::privacy::ExcludeList;
+
+        let lock = RwLock::new(ExcludeList::default());
+        let apps = vec!["com.1password.1password".to_string()];
+        let file = NamedTempFile::new().unwrap();
+
+        // 写入前名单为空
+        assert!(!lock.read().unwrap().contains("com.1password.1password"));
+
+        set_exclude_list_impl(apps, file.path(), Some(&lock)).unwrap();
+
+        // 写入后运行时名单立即包含新 app，无需重启
+        assert!(
+            lock.read().unwrap().contains("com.1password.1password"),
+            "运行时排除名单应在 set_exclude_list 后立即生效"
+        );
     }
 }
