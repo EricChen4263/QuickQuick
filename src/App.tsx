@@ -75,10 +75,11 @@ function App() {
 
   return (
     <div className="qq-main" style={{ display: "flex", height: "100vh" }}>
-      <nav aria-label="主导航" style={{ display: "flex", flexDirection: "column" }}>
+      <nav aria-label="主导航" className="qq-sidebar">
         {entries.map((entry) => (
           <button
             key={entry}
+            className="qq-nav-item"
             aria-current={activeTop === entry ? "page" : undefined}
             onClick={() => setActiveTop((_prev) => entry)}
           >

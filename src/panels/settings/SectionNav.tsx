@@ -31,10 +31,13 @@ function SectionNav({ sections, activeSection, onSelect }: SectionNavProps) {
           style={{
             padding: "10px 16px",
             textAlign: "left",
-            background: activeSection === section ? "var(--qq-accent-bg, #e8f4fd)" : "transparent",
+            // fallback 值与 theme.css 浅色 token 同值，防 CSS 未加载时选中态无背景
+            background: activeSection === section ? "var(--qq-accent-bg, rgba(58, 124, 165, 0.12))" : "transparent",
             border: "none",
             cursor: "pointer",
             fontFamily: "var(--qq-font)",
+            // 显式 token 避免依赖 DOM 继承，保证非选中态颜色可预测
+            color: activeSection === section ? "var(--qq-accent)" : "var(--qq-text)",
           }}
         >
           {SECTION_LABELS[section]}

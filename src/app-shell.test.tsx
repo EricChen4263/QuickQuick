@@ -105,4 +105,23 @@ describe("app-shell", () => {
     expect(within(nav).getByRole("button", { name: "翻译" })).toHaveAttribute("aria-current", "page");
     expect(within(nav).getByRole("button", { name: "剪贴板" })).not.toHaveAttribute("aria-current");
   });
+
+  it("app-shell: 主导航 nav 使用 qq-sidebar 类", () => {
+    render(<App />);
+
+    // qq-sidebar 类赋予侧边栏版式与背景，验证样式类已挂载
+    const nav = screen.getByRole("navigation", { name: "主导航" });
+    expect(nav).toHaveClass("qq-sidebar");
+  });
+
+  it("app-shell: 所有导航按钮均使用 qq-nav-item 类", () => {
+    render(<App />);
+
+    // qq-nav-item 类负责去除原生外观、统一交互态，所有入口按钮必须携带
+    const nav = screen.getByRole("navigation", { name: "主导航" });
+    const buttons = within(nav).getAllByRole("button");
+    for (const btn of buttons) {
+      expect(btn).toHaveClass("qq-nav-item");
+    }
+  });
 });
