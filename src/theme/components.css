@@ -4,14 +4,43 @@
  * 通用组件类供里程碑2+复用，不包含三页专属类（clip/tx/set 系列）。
  */
 
-/* 应用主容器：grid 布局（92px 侧边栏 + 内容区），实色背景，Tauri 主窗不用毛玻璃 */
+/* 应用主容器：纵向两行 grid（auto 标题栏 + 1fr 主体），实色背景，Tauri 主窗不用毛玻璃 */
 .qq-main {
   display: grid;
-  grid-template-columns: 92px 1fr;
+  grid-template-rows: auto 1fr;
   height: 100vh;
   background: var(--bg);
   color: var(--fg);
   font-family: var(--font);
+}
+
+/* 主体区：横向两列 grid（92px 侧栏 + 1fr 内容），min-height:0 防撑破外层 */
+.qq-shell-body {
+  display: grid;
+  grid-template-columns: 92px 1fr;
+  min-height: 0;
+}
+
+/* 自绘标题栏：macOS Overlay 模式下替代系统标题栏
+   左侧 padding-left 76px 为系统红绿灯留出空间，整条可拖拽移窗 */
+.qq-titlebar {
+  height: 38px;
+  display: flex;
+  align-items: center;
+  padding: 0 16px 0 76px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--fg);
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+/* 品牌标题首个 Quick 用 accent 色区分 */
+.brand-accent {
+  color: var(--accent);
 }
 
 /* 一级导航侧边栏 */

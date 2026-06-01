@@ -19,6 +19,8 @@
         "resizable": true,
         "visible": false,
         "decorations": true,
+        "titleBarStyle": "Overlay",
+        "hiddenTitle": true,
         "alwaysOnTop": false
       }
     ],
