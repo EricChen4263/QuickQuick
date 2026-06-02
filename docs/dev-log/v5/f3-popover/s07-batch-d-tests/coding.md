@@ -2,7 +2,7 @@
 id: f3-popover-s07-batch-d
 title: 里程碑4 popover · Batch D：测试补齐与全量验证
 status: 实现完成
-commit: PENDING
+commit: ce98b31
 date: 2026-06-02
 ---
 
