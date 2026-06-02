@@ -2,7 +2,7 @@
 id: V5-F5-S01-test
 title: 翻译语言下拉框功能 — 测试证伪报告
 status: PASS
-commit: PENDING
+commit: 5adfa41
 date: 2026-06-02
 ---
 

@@ -2,7 +2,7 @@
 id: V5-F5-S01
 title: 翻译源语下拉框——后端显式源语支持
 status: 完成（测试 PASS + 审查通过）
-commit: PENDING
+commit: 5adfa41
 date: 2026-06-02
 ---
 
