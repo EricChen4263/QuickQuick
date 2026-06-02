@@ -2,7 +2,7 @@
 id: f4-gui-fixes-s04-9b
 title: 真实自动粘贴 9b 接入与焦点编排
 status: 实现完成
-commit: PENDING
+commit: 143ff71
 date: 2026-06-02
 ---
 
