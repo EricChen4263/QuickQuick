@@ -2,7 +2,7 @@
 id: s10-event-const
 title: "重构：clipboard-changed 事件名常量化（消除跨文件字面量重复）"
 status: done
-commit: PENDING
+commit: ee38d39
 date: 2026-06-02
 ---
 

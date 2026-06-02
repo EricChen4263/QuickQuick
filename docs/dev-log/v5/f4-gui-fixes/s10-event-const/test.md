@@ -2,7 +2,7 @@
 id: s10-event-const
 title: "动态证伪报告：抽取事件名常量（I-01，纯重构）"
 status: passed
-commit: PENDING
+commit: ee38d39
 date: 2026-06-02
 ---
 
