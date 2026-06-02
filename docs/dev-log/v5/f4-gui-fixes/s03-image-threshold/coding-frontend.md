@@ -2,7 +2,7 @@
 id: f4-gui-fixes-s03-frontend
 title: 单张图片阈值 前端接真 + L1 类型修正
 status: 实现完成
-commit: PENDING
+commit: 6f7ab78
 date: 2026-06-02
 ---
 
