@@ -2,7 +2,7 @@
 id: f4-gui-fixes-s01-tray-icon
 title: 修复托盘图标白圆（改 include_bytes 嵌入 + 回退不套 template）
 status: 实现完成
-commit: PENDING
+commit: 4bd6ea1
 date: 2026-06-02
 ---
 
