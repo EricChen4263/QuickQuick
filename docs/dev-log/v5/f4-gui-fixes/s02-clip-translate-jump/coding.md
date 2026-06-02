@@ -2,7 +2,7 @@
 id: f4-gui-fixes-s02
 title: 一键翻译跳转接真
 status: 实现完成
-commit: PENDING
+commit: 0d5ab46
 date: 2026-06-02
 ---
 
