@@ -97,6 +97,8 @@ export default function ClipPopoverApp() {
     if (e.key === "Enter" && e.altKey) {
       e.preventDefault();
       if (selectedItem === null) return;
+      // 图片条目 content 为空字符串，写入会静默破坏剪贴板，做 no-op
+      if (selectedItem.kind === "image") return;
       writeToClipboard(selectedItem.content)
         .then(() => getCurrentWindow().hide())
         .catch((err: unknown) => {

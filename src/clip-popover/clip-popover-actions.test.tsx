@@ -27,6 +27,14 @@ const ITEMS = [
   { id: "id1", content: "first item", kind: "text", isFavorite: false, lastModifiedUtc: Date.now() },
   { id: "id2", content: "second item", kind: "text", isFavorite: false, lastModifiedUtc: Date.now() },
   { id: "id3", content: "third item", kind: "text", isFavorite: false, lastModifiedUtc: Date.now() },
+  {
+    id: "id-img",
+    content: "",
+    kind: "image",
+    isFavorite: false,
+    lastModifiedUtc: Date.now(),
+    thumbnailDataUrl: "data:image/png;base64,abc",
+  },
 ];
 
 beforeEach(() => {
@@ -102,6 +110,32 @@ describe("ClipPopoverApp 键盘动作", () => {
       expect(mockPasteToFront).toHaveBeenCalledWith("id2");
       expect(mockHide).toHaveBeenCalled();
     });
+  });
+
+  it("图片条目按 Alt+Enter：writeToClipboard 和 hide 均不被调用", async () => {
+    render(<ClipPopoverApp />);
+
+    await waitFor(() => {
+      expect(screen.getAllByRole("option").length).toBeGreaterThan(0);
+    });
+
+    // 初始选中 id1，连按 3 次 ArrowDown 选中 id-img（第 4 项）
+    const input = screen.getByRole("searchbox");
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+
+    await waitFor(() => {
+      const rows = screen.getAllByRole("option");
+      // 第 4 项（index 3）是图片条目
+      expect(rows[3]).toHaveAttribute("aria-selected", "true");
+    });
+
+    fireEvent.keyDown(input, { key: "Enter", altKey: true });
+
+    await new Promise((r) => setTimeout(r, 50));
+    expect(mockWriteToClipboard).not.toHaveBeenCalled();
+    expect(mockHide).not.toHaveBeenCalled();
   });
 
   it("pasteToFront 失败时不调 hide，控制台有 error", async () => {

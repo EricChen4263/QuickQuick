@@ -104,14 +104,14 @@ export function PopoverList({ groups, selectedId, onSelect }: PopoverListProps) 
 
   if (isEmpty) {
     return (
-      <div role="listbox" className="popover-list popover-list-empty">
+      <div role="listbox" aria-label="剪贴板历史" className="popover-list popover-list-empty">
         <span>剪贴板暂无内容</span>
       </div>
     );
   }
 
   return (
-    <div role="listbox" className="popover-list">
+    <div role="listbox" aria-label="剪贴板历史" className="popover-list">
       <PopoverGroup label="收藏" items={favorites} selectedId={selectedId} onSelect={onSelect} />
       <PopoverGroup label="今天" items={today} selectedId={selectedId} onSelect={onSelect} />
       <PopoverGroup label="更早" items={earlier} selectedId={selectedId} onSelect={onSelect} />

@@ -33,3 +33,13 @@ pnpm test:   PASS (300) FAIL (0)
 pnpm tsc:    TypeScript: No errors found  EXIT:0
 pnpm build:  ✓ built in 362ms  EXIT:0
 ```
+
+## Batch B review 收口
+
+**M-1 图片 Alt+Enter no-op**：`ClipPopoverApp.tsx` Alt+Enter 分支在 `writeToClipboard` 调用前加守卫 `if (selectedItem.kind === "image") return`，防止把空字符串写入系统剪贴板破坏用户内容。`clip-popover-actions.test.tsx` 新增测试用例「图片条目按 Alt+Enter：writeToClipboard 和 hide 均不被调用」锁定该守卫（TDD 红-绿验证）。
+
+**M-2 aria-label**：`PopoverList.tsx` 两处 `div[role="listbox"]`（空列表与有内容两个分支）均补 `aria-label="剪贴板历史"`，满足 a11y listbox 可访问名称要求。
+
+**已知 v1 限制（不在本批处理）**：Enter 对图片条目走 `pasteToFront(id)`，后端图片粘贴不支持时会 reject，现有 `.catch(console.error)` 不 hide 属可接受的 v1 降级，完整图片粘贴能力留后续专项。
+
+**收口验证**：`pnpm test` 301 passed / `pnpm exec tsc --noEmit` exit 0 / `pnpm build` exit 0。
