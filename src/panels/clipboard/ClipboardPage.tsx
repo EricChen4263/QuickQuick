@@ -6,6 +6,7 @@
 
 import { useEffect, useRef, useState, useCallback } from "react";
 import { listen } from "@tauri-apps/api/event";
+import { CLIPBOARD_CHANGED_EVENT } from "../../ipc/events";
 import {
   listClipItems,
   deleteClipItem,
@@ -109,7 +110,7 @@ function ClipboardPage({ onTranslateItem }: ClipboardPageProps) {
   useEffect(() => {
     const cancelled = { current: false };
     let unlisten: (() => void) | undefined;
-    listen("clipboard-changed", () => {
+    listen(CLIPBOARD_CHANGED_EVENT, () => {
       loadItems(cancelled);
     })
       .then((fn) => {

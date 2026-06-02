@@ -39,6 +39,10 @@ use std::sync::{
 use tauri::{Emitter, Manager, Runtime, WindowEvent};
 use tauri_plugin_global_shortcut::GlobalShortcutExt;
 
+/// 剪贴板变化事件名。与前端 src/ipc/events.ts 的 CLIPBOARD_CHANGED_EVENT 必须一致。
+/// Tauri 事件名跨语言无法编译期共享，改动需两端同步。
+const CLIPBOARD_CHANGED_EVENT: &str = "clipboard-changed";
+
 /// 判定本轮入库结果是否需要通知前端刷新列表。
 ///
 /// Inserted（新条目）与 Bumped（已存在条目被提到最前）都改变了列表的内容或顺序，
@@ -257,8 +261,8 @@ fn start_clipboard_poll(
                 Ok(outcomes) => {
                     // 有新条目或条目被置顶时通知前端刷新列表
                     if should_notify_clip_change(&outcomes) {
-                        if let Err(e) = handle.emit("clipboard-changed", ()) {
-                            eprintln!("[QuickQuick] 发送 clipboard-changed 事件失败: {e}");
+                        if let Err(e) = handle.emit(CLIPBOARD_CHANGED_EVENT, ()) {
+                            eprintln!("[QuickQuick] 发送 {CLIPBOARD_CHANGED_EVENT} 事件失败: {e}");
                         }
                     }
                 }

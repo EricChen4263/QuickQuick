@@ -18,6 +18,7 @@ vi.mock("../../ipc/ipc-client", () => ({
 }));
 
 import { listen } from "@tauri-apps/api/event";
+import { CLIPBOARD_CHANGED_EVENT } from "../../ipc/events";
 import {
   listClipItems,
   deleteClipItem,
@@ -472,7 +473,7 @@ describe("clipboard-page", () => {
       expect(mockListClipItems).toHaveBeenCalledTimes(1);
     });
     // 确认已订阅正确的事件名
-    expect(mockListen).toHaveBeenCalledWith("clipboard-changed", expect.any(Function));
+    expect(mockListen).toHaveBeenCalledWith(CLIPBOARD_CHANGED_EVENT, expect.any(Function));
 
     // Act：模拟后端触发 clipboard-changed 事件
     capturedCallback!();
