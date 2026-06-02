@@ -5,7 +5,7 @@ level: 小功能
 parent: v5-f4-gui-fixes
 created: 2026-06-02T00:00:00Z
 status: 通过
-commit: PENDING
+commit: c208198
 acceptance_ids: [I-02]
 author: code-reviewer
 ---

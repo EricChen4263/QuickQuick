@@ -2,7 +2,7 @@
 id: s09-unmount-race
 title: "测试报告：ClipboardPage 卸载竞态修复（I-02）"
 status: PASS
-commit: PENDING
+commit: c208198
 date: 2026-06-02
 ---
 

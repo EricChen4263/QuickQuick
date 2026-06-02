@@ -2,7 +2,7 @@
 id: s09-unmount-race
 title: "I-02 竞态 guard 修复：handleToggleFavorite / handleDelete 局部 cancelled 失效"
 status: done
-commit: PENDING
+commit: c208198
 date: 2026-06-02
 ---
 
