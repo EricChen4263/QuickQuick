@@ -2,7 +2,7 @@
 id: f3-popover-s06-batch-c2
 title: 里程碑4 popover · Batch C2：trans-popover 展开与获焦重读
 status: 实现完成
-commit: PENDING
+commit: 53e064b
 date: 2026-06-02
 ---
 
