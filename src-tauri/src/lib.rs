@@ -19,6 +19,7 @@ pub mod hotkey;
 pub mod image;
 pub mod ipc;
 pub mod keyprovider;
+pub mod macos_paste;
 pub mod onboarding;
 pub mod paste;
 pub mod pipeline;
