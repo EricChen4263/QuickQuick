@@ -36,8 +36,16 @@ use std::sync::{
     Arc, Mutex, RwLock,
 };
 
-use tauri::{Manager, Runtime, WindowEvent};
+use tauri::{Emitter, Manager, Runtime, WindowEvent};
 use tauri_plugin_global_shortcut::GlobalShortcutExt;
+
+/// 判定本轮入库结果是否需要通知前端刷新列表。
+///
+/// Inserted（新条目）与 Bumped（已存在条目被提到最前）都改变了列表的内容或顺序，
+/// 故二者均需通知；空结果（无剪贴板变化）不通知，避免无谓 IPC。
+fn should_notify_clip_change(outcomes: &[db::IngestOutcome]) -> bool {
+    !outcomes.is_empty()
+}
 
 /// 运行时捕获状态：通过原子布尔在主线程与轮询线程间共享，无锁读写。
 ///
@@ -247,7 +255,12 @@ fn start_clipboard_poll(
 
             match pipeline::capture_and_ingest(&backend, &mut last_seen, conn, &policy, max_image_bytes) {
                 Ok(outcomes) => {
-                    let _ = outcomes;
+                    // 有新条目或条目被置顶时通知前端刷新列表
+                    if should_notify_clip_change(&outcomes) {
+                        if let Err(e) = handle.emit("clipboard-changed", ()) {
+                            eprintln!("[QuickQuick] 发送 clipboard-changed 事件失败: {e}");
+                        }
+                    }
                 }
                 Err(e) => {
                     eprintln!("[QuickQuick] 剪贴板写库失败（非致命）: {e}");
@@ -440,5 +453,60 @@ mod tests {
             "CmdOrCtrl+Shift+T",
             "translate 热键默认值应为 CmdOrCtrl+Shift+T"
         );
+    }
+
+    /// 空切片（无剪贴板变化）不应触发前端刷新
+    #[test]
+    fn should_notify_clip_change_empty_returns_false() {
+        // Arrange
+        let outcomes: &[db::IngestOutcome] = &[];
+
+        // Act
+        let result = should_notify_clip_change(outcomes);
+
+        // Assert
+        assert!(!result, "空切片不应触发通知");
+    }
+
+    /// 含有 Inserted 结果时应触发前端刷新
+    #[test]
+    fn should_notify_clip_change_with_inserted_returns_true() {
+        // Arrange
+        let outcomes = &[db::IngestOutcome::Inserted("abc".to_string())];
+
+        // Act
+        let result = should_notify_clip_change(outcomes);
+
+        // Assert
+        assert!(result, "含 Inserted 时应触发通知");
+    }
+
+    /// 含有 Bumped 结果时应触发前端刷新（已有条目被提到最前也改变了顺序）
+    #[test]
+    fn should_notify_clip_change_with_bumped_returns_true() {
+        // Arrange
+        let outcomes = &[db::IngestOutcome::Bumped("xyz".to_string())];
+
+        // Act
+        let result = should_notify_clip_change(outcomes);
+
+        // Assert
+        assert!(result, "含 Bumped 时应触发通知");
+    }
+
+    /// 混合多个结果时只要有任意一个非空就应触发前端刷新
+    #[test]
+    fn should_notify_clip_change_mixed_outcomes_returns_true() {
+        // Arrange
+        let outcomes = &[
+            db::IngestOutcome::Inserted("id-1".to_string()),
+            db::IngestOutcome::Bumped("id-2".to_string()),
+        ];
+
+        // Act
+        let result = should_notify_clip_change(outcomes);
+
+        // Assert
+        assert!(result, "混合 Inserted+Bumped 时应触发通知");
     }
 }

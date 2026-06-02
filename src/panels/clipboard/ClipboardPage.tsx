@@ -5,6 +5,7 @@
  */
 
 import { useEffect, useState, useCallback } from "react";
+import { listen } from "@tauri-apps/api/event";
 import {
   listClipItems,
   deleteClipItem,
@@ -89,6 +90,30 @@ function ClipboardPage({ onTranslateItem }: ClipboardPageProps) {
     loadItems(cancelled);
     return () => {
       cancelled.current = true;
+    };
+  }, [loadItems]);
+
+  // 订阅后端 clipboard-changed 事件，有新条目或条目置顶时重新拉取列表。
+  // 采用与 App.tsx route 监听相同的 cancelled+unlisten 范式，防止卸载后泄漏。
+  useEffect(() => {
+    const cancelled = { current: false };
+    let unlisten: (() => void) | undefined;
+    listen("clipboard-changed", () => {
+      loadItems(cancelled);
+    })
+      .then((fn) => {
+        if (cancelled.current) {
+          fn();
+        } else {
+          unlisten = fn;
+        }
+      })
+      .catch((err: unknown) => {
+        console.error("[QuickQuick] clipboard-changed 监听注册失败:", err);
+      });
+    return () => {
+      cancelled.current = true;
+      unlisten?.();
     };
   }, [loadItems]);
 

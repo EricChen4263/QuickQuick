@@ -3,6 +3,11 @@ import { render, screen, fireEvent, waitFor, within } from "@testing-library/rea
 import userEvent from "@testing-library/user-event";
 import ClipboardPage from "./ClipboardPage";
 
+// Mock Tauri event API：渲染测试环境无 Tauri 运行时
+vi.mock("@tauri-apps/api/event", () => ({
+  listen: vi.fn().mockResolvedValue(() => {}),
+}));
+
 // Mock IPC：渲染测试环境无 Tauri 运行时
 vi.mock("../../ipc/ipc-client", () => ({
   listClipItems: vi.fn(),
@@ -12,6 +17,7 @@ vi.mock("../../ipc/ipc-client", () => ({
   openAccessibilitySettings: vi.fn(),
 }));
 
+import { listen } from "@tauri-apps/api/event";
 import {
   listClipItems,
   deleteClipItem,
@@ -19,6 +25,8 @@ import {
   pasteToFront,
   openAccessibilitySettings,
 } from "../../ipc/ipc-client";
+
+const mockListen = vi.mocked(listen);
 
 const mockListClipItems = vi.mocked(listClipItems);
 const mockDeleteClipItem = vi.mocked(deleteClipItem);
@@ -395,5 +403,32 @@ describe("clipboard-page", () => {
 
     // Assert：onTranslateItem 被以 item-1.content 调用
     expect(mockOnTranslateItem).toHaveBeenCalledWith("Hello World");
+  });
+
+  it("clipboard-page: 收到 clipboard-changed 事件后触发 listClipItems 重新加载", async () => {
+    // Arrange：捕获 listen 注册的回调，以便后续手动触发
+    let capturedCallback: (() => void) | undefined;
+    mockListen.mockImplementation((_eventName, handler) => {
+      capturedCallback = handler as () => void;
+      return Promise.resolve(() => {});
+    });
+    mockListClipItems.mockResolvedValue(MOCK_ITEMS);
+
+    render(<ClipboardPage />);
+
+    // 等待挂载时的初始加载完成（listClipItems 第 1 次调用）
+    await waitFor(() => {
+      expect(mockListClipItems).toHaveBeenCalledTimes(1);
+    });
+    // 确认已订阅正确的事件名
+    expect(mockListen).toHaveBeenCalledWith("clipboard-changed", expect.any(Function));
+
+    // Act：模拟后端触发 clipboard-changed 事件
+    capturedCallback!();
+
+    // Assert：listClipItems 被再次调用（第 2 次）以刷新列表
+    await waitFor(() => {
+      expect(mockListClipItems).toHaveBeenCalledTimes(2);
+    });
   });
 });
