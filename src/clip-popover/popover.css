@@ -4,6 +4,7 @@ html,
 body {
   margin: 0;
   background: transparent;
+  font-family: var(--font);
 }
 
 #root {
@@ -15,4 +16,264 @@ body {
   border: 1px solid var(--glass-border);
   border-radius: 14px;
   box-sizing: border-box;
+}
+
+/* 顶层 flex 容器：搜索行(顶) / 主体(中,flex:1) / footer(底) */
+.popover-shell {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+  border-radius: 14px;
+}
+
+/* 搜索行：透明融入毛玻璃，底部分割线 */
+.popover-search-row {
+  flex: none;
+  padding: 12px 14px 10px;
+  border-bottom: 1px solid var(--glass-border);
+}
+
+.popover-search-input {
+  width: 100%;
+  box-sizing: border-box;
+  background: transparent;
+  border: none;
+  outline: none;
+  font-size: 15px;
+  font-family: var(--font);
+  color: var(--fg);
+  caret-color: var(--accent);
+}
+
+.popover-search-input::placeholder {
+  color: var(--muted);
+}
+
+/* 主体：横向排列，左列表 + 右预览 */
+.popover-body {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* 左列表区：约 40% 宽，可纵向滚动 */
+.popover-list {
+  flex: 0 0 42%;
+  overflow-y: auto;
+  border-right: 1px solid var(--glass-border);
+  padding: 6px 0;
+  min-width: 0;
+}
+
+.popover-list-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+/* 分组标题 */
+.popover-group-header {
+  padding: 6px 12px 3px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+/* 单行条目：图标 | 摘要/缩略图 | 收藏星 */
+.popover-row {
+  display: grid;
+  grid-template-columns: 20px 1fr auto;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 12px;
+  cursor: default;
+  border-radius: 6px;
+  margin: 0 4px;
+  transition: background-color 90ms ease;
+}
+
+.popover-row:hover {
+  background: var(--hover);
+}
+
+.popover-row[aria-selected="true"] {
+  background: var(--accent-soft);
+  outline: 1px solid var(--accent-line);
+  outline-offset: -1px;
+}
+
+.popover-row-icon {
+  width: 20px;
+  height: 20px;
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+  flex: none;
+}
+
+.popover-row-icon svg {
+  width: 13px;
+  height: 13px;
+}
+
+.popover-row-main {
+  min-width: 0;
+}
+
+.popover-row-text {
+  font-size: 12.5px;
+  line-height: 1.4;
+  color: var(--fg);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.popover-row-text.code {
+  font-family: var(--mono);
+  font-size: 11.5px;
+}
+
+.popover-row-thumb {
+  width: 36px;
+  height: 24px;
+  border-radius: 4px;
+  object-fit: cover;
+  border: 1px solid var(--border);
+  display: block;
+}
+
+.popover-row-fav {
+  width: 14px;
+  height: 14px;
+  color: var(--accent);
+  display: grid;
+  place-items: center;
+}
+
+.popover-row-fav svg {
+  width: 11px;
+  height: 11px;
+}
+
+/* 右预览区：约 60% 宽，可纵向滚动 */
+.popover-preview {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px 18px;
+  min-width: 0;
+}
+
+.popover-preview-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+/* kicker：类型 · 时间 元信息行 */
+.popover-preview-kicker {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 11.5px;
+  margin-bottom: 12px;
+}
+
+.popover-preview-dot {
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: var(--muted);
+  flex: none;
+}
+
+.popover-preview-fav-badge {
+  margin-left: 4px;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 10.5px;
+}
+
+/* 预览内容：文本/富文本 */
+.popover-preview-content {
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--fg);
+  word-break: break-word;
+  white-space: pre-wrap;
+}
+
+.popover-preview-content.code {
+  font-family: var(--mono);
+  font-size: 12px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  padding: 10px 12px;
+  line-height: 1.55;
+  overflow-x: auto;
+}
+
+/* 预览内容：图片 */
+.popover-preview-img {
+  max-width: 100%;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--border);
+  display: block;
+  object-fit: contain;
+}
+
+.popover-preview-img-placeholder {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+/* 错误态 */
+.popover-error {
+  padding: 24px;
+  color: var(--danger);
+  font-size: 13px;
+}
+
+/* Footer：快捷键提示细条 */
+.popover-footer {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  padding: 7px 14px;
+  border-top: 1px solid var(--glass-border);
+}
+
+.popover-footer-hint {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.popover-footer-hint kbd {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1px 5px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  font-family: var(--font);
+  font-size: 10.5px;
+  color: var(--muted);
+  line-height: 1.4;
 }
