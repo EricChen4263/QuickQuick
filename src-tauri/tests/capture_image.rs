@@ -305,7 +305,7 @@ fn capture_and_ingest_text_and_image() {
         exclude: &exclude,
     };
 
-    let outcomes = pipeline::capture_and_ingest(&backend, &mut last_seen, &conn, &policy)
+    let outcomes = pipeline::capture_and_ingest(&backend, &mut last_seen, &conn, &policy, 20 * 1024 * 1024)
         .expect("capture_and_ingest 应成功");
 
     assert_eq!(outcomes.len(), 2, "图文快照应产生 2 个 IngestOutcome");
@@ -373,7 +373,7 @@ fn capture_and_ingest_rolls_back_on_partial_failure() {
         exclude: &exclude,
     };
 
-    let result = pipeline::capture_and_ingest(&backend, &mut last_seen, &conn, &policy);
+    let result = pipeline::capture_and_ingest(&backend, &mut last_seen, &conn, &policy, 20 * 1024 * 1024);
 
     assert!(result.is_err(), "图片失败时整体应返回 Err");
 
@@ -404,7 +404,7 @@ fn capture_and_ingest_image_only() {
         exclude: &exclude,
     };
 
-    let outcomes = pipeline::capture_and_ingest(&backend, &mut last_seen, &conn, &policy)
+    let outcomes = pipeline::capture_and_ingest(&backend, &mut last_seen, &conn, &policy, 20 * 1024 * 1024)
         .expect("capture_and_ingest 应成功");
 
     assert_eq!(outcomes.len(), 1, "纯图快照应产生 1 个 IngestOutcome");

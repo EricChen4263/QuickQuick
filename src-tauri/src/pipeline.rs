@@ -203,6 +203,7 @@ pub fn capture_and_ingest(
     last_seen: &mut u64,
     conn: &Connection,
     policy: &CapturePolicy<'_>,
+    max_image_bytes: u64,
 ) -> Result<Vec<IngestOutcome>, String> {
     let clips = crate::clipboard::poll_once_with_policy(backend, last_seen, policy);
     if clips.is_empty() {
@@ -212,7 +213,7 @@ pub fn capture_and_ingest(
     conn.execute_batch("SAVEPOINT capture_ingest;")
         .map_err(|e| format!("开启事务失败：{e}"))?;
 
-    match ingest_clips(conn, clips) {
+    match ingest_clips(conn, clips, max_image_bytes) {
         Ok(outcomes) => {
             conn.execute_batch("RELEASE SAVEPOINT capture_ingest;")
                 .map_err(|e| format!("提交事务失败：{e}"))?;
@@ -230,7 +231,12 @@ pub fn capture_and_ingest(
 /// 逐条写库（拆出以保持主函数 ≤50 行、事务边界清晰）。
 ///
 /// 在调用方的 SAVEPOINT 保护下运行，任一条失败则由调用方回滚整批。
-fn ingest_clips(conn: &Connection, clips: Vec<CapturedClip>) -> Result<Vec<IngestOutcome>, String> {
+/// `max_image_bytes`：图片原图大小上限，由调用方从 AppSettings 读取后传入。
+fn ingest_clips(
+    conn: &Connection,
+    clips: Vec<CapturedClip>,
+    max_image_bytes: u64,
+) -> Result<Vec<IngestOutcome>, String> {
     let mut outcomes = Vec::with_capacity(clips.len());
     for clip in clips {
         let outcome = match clip {
@@ -241,7 +247,7 @@ fn ingest_clips(conn: &Connection, clips: Vec<CapturedClip>) -> Result<Vec<Inges
                 width,
                 height,
                 png_bytes,
-            } => db::ingest_image_as_clip(conn, width, height, &png_bytes)
+            } => db::ingest_image_as_clip(conn, width, height, &png_bytes, max_image_bytes)
                 .map_err(|e| format!("写库失败（图片）：{e}"))?,
         };
         outcomes.push(outcome);

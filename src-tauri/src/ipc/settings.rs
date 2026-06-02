@@ -403,6 +403,38 @@ pub fn set_theme_impl(theme: &str, settings_path: &Path) -> Result<(), String> {
     settings.save(settings_path).map_err(|e| e.to_string())
 }
 
+/// 单张图片原图阈值合法区间下限（1 MiB）。
+const MIN_IMAGE_THRESHOLD: u64 = 1 * 1024 * 1024;
+/// 单张图片原图阈值合法区间上限（500 MiB）。
+const MAX_IMAGE_THRESHOLD: u64 = 500 * 1024 * 1024;
+
+/// `get_image_threshold` 的纯函数实现：从 settings.json 读取 max_image_bytes。
+///
+/// # Errors
+/// 此函数实际上永不返回 Err（load_or_default 回退默认值）。
+pub fn get_image_threshold_impl(settings_path: &Path) -> Result<u64, String> {
+    let settings = AppSettings::load_or_default(settings_path);
+    Ok(settings.max_image_bytes)
+}
+
+/// `set_image_threshold` 的纯函数实现：校验范围后写入 settings.json。
+///
+/// 合法区间：`1MiB ..= 500MiB`；越界返回中文 Err，不触发文件写。
+///
+/// # Errors
+/// - 越界值：返回说明合法范围的错误字符串
+/// - 文件写入失败：返回错误字符串
+pub fn set_image_threshold_impl(bytes: u64, settings_path: &Path) -> Result<(), String> {
+    if bytes < MIN_IMAGE_THRESHOLD || bytes > MAX_IMAGE_THRESHOLD {
+        return Err(format!(
+            "图片阈值超出范围：{bytes} 字节，合法范围为 {MIN_IMAGE_THRESHOLD}（1MiB）到 {MAX_IMAGE_THRESHOLD}（500MiB）字节"
+        ));
+    }
+    let mut settings = AppSettings::load_or_default(settings_path);
+    settings.max_image_bytes = bytes;
+    settings.save(settings_path).map_err(|e| e.to_string())
+}
+
 /// `get_launch_on_login` 的纯函数实现：从 autostart.json 读取 enabled 值。
 ///
 /// # Errors
@@ -502,6 +534,20 @@ pub fn get_theme(app: AppHandle) -> Result<String, String> {
 pub fn set_theme(app: AppHandle, theme: String) -> Result<(), String> {
     let path = resolve_config_path(&app, "settings.json")?;
     set_theme_impl(&theme, &path)
+}
+
+/// Tauri 命令：读取单张图片原图阈值（字节）。
+#[tauri::command]
+pub fn get_image_threshold(app: AppHandle) -> Result<u64, String> {
+    let path = resolve_config_path(&app, "settings.json")?;
+    get_image_threshold_impl(&path)
+}
+
+/// Tauri 命令：设置单张图片原图阈值（字节，合法范围 1MiB–500MiB）。
+#[tauri::command]
+pub fn set_image_threshold(app: AppHandle, bytes: u64) -> Result<(), String> {
+    let path = resolve_config_path(&app, "settings.json")?;
+    set_image_threshold_impl(bytes, &path)
 }
 
 /// Tauri 命令：读取开机自启状态。
@@ -666,6 +712,47 @@ mod tests {
         set_exclude_list_impl(apps.clone(), file.path(), None).unwrap();
         let settings = AppSettings::load_or_default(file.path());
         assert_eq!(settings.excluded_apps, apps);
+    }
+
+    #[test]
+    fn get_image_threshold_returns_default_when_no_file() {
+        let file = NamedTempFile::new().unwrap();
+        let nonexistent = file.path().with_extension("nonexistent_settings.json");
+        let result = get_image_threshold_impl(&nonexistent).unwrap();
+        assert_eq!(result, 20 * 1024 * 1024, "默认阈值应为 20MiB");
+    }
+
+    #[test]
+    fn set_image_threshold_persists_and_get_reads_back() {
+        let file = NamedTempFile::new().unwrap();
+        let threshold = 50 * 1024 * 1024u64;
+        set_image_threshold_impl(threshold, file.path()).unwrap();
+        let got = get_image_threshold_impl(file.path()).unwrap();
+        assert_eq!(got, threshold, "set 后 get 应返回相同值");
+    }
+
+    #[test]
+    fn set_image_threshold_rejects_too_small() {
+        let file = NamedTempFile::new().unwrap();
+        let err = set_image_threshold_impl(512 * 1024, file.path()).unwrap_err();
+        assert!(err.contains("范围"), "错误信息应说明范围限制：{err}");
+    }
+
+    #[test]
+    fn set_image_threshold_rejects_too_large() {
+        let file = NamedTempFile::new().unwrap();
+        let too_large = 600 * 1024 * 1024u64;
+        let err = set_image_threshold_impl(too_large, file.path()).unwrap_err();
+        assert!(err.contains("范围"), "错误信息应说明范围限制：{err}");
+    }
+
+    #[test]
+    fn set_image_threshold_out_of_range_does_not_modify_file() {
+        let file = NamedTempFile::new().unwrap();
+        set_image_threshold_impl(30 * 1024 * 1024, file.path()).unwrap();
+        let _ = set_image_threshold_impl(0, file.path()).unwrap_err();
+        let got = get_image_threshold_impl(file.path()).unwrap();
+        assert_eq!(got, 30 * 1024 * 1024, "越界 set 后文件不应被改动");
     }
 
     #[test]

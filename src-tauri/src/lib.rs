@@ -113,6 +113,8 @@ pub fn run() {
             ipc::settings::set_auto_update,
             ipc::settings::get_theme,
             ipc::settings::set_theme,
+            ipc::settings::get_image_threshold,
+            ipc::settings::set_image_threshold,
             ipc::settings::get_launch_on_login,
             ipc::settings::set_launch_on_login,
             ipc::system::get_storage_stats,
@@ -227,7 +229,19 @@ fn start_clipboard_poll(
                 exclude: &*exclude_guard,
             };
 
-            match pipeline::capture_and_ingest(&backend, &mut last_seen, conn, &policy) {
+            // 每轮从 settings.json 读取当前图片阈值；ingest 只在真正捕获到新图时发生，
+            // 读文件开销可接受；失败时回退到默认值（20MiB），不中断轮询。
+            let max_image_bytes = handle
+                .path()
+                .app_config_dir()
+                .ok()
+                .map(|dir| {
+                    settings::AppSettings::load_or_default(&dir.join("settings.json"))
+                        .max_image_bytes
+                })
+                .unwrap_or_else(|| settings::AppSettings::default().max_image_bytes);
+
+            match pipeline::capture_and_ingest(&backend, &mut last_seen, conn, &policy, max_image_bytes) {
                 Ok(outcomes) => {
                     let _ = outcomes;
                 }

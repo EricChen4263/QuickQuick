@@ -235,7 +235,7 @@ mod tests {
         ingest(&conn, &clip_item).expect("文本条目入库失败");
 
         // 写入图片条目
-        ingest_image_as_clip(&conn, 2, 2, &png).expect("图片条目入库失败");
+        ingest_image_as_clip(&conn, 2, 2, &png, 20 * 1024 * 1024).expect("图片条目入库失败");
 
         let dtos = list_clip_items_impl(&conn).expect("list_clip_items_impl 不应失败");
         assert!(!dtos.is_empty(), "应有条目返回");
@@ -274,7 +274,7 @@ mod tests {
         let conn = make_test_conn();
         let png = make_test_png(2, 2);
 
-        ingest_image_as_clip(&conn, 2, 2, &png).expect("图片入库失败");
+        ingest_image_as_clip(&conn, 2, 2, &png, 20 * 1024 * 1024).expect("图片入库失败");
 
         // 从 clip_images 查 image_id
         let image_id: String = conn

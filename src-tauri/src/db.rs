@@ -572,6 +572,9 @@ pub fn gc_purge_deleted(conn: &Connection) -> Result<u64, DbError> {
 ///    d. RELEASE SAVEPOINT 提交；任一步失败则 ROLLBACK SAVEPOINT，不留孤立行
 ///    返回 `Inserted`。
 ///
+/// `max_image_bytes`：原图大小上限（字节），超出则只存缩略图（original_present=0）。
+/// 调用方从 AppSettings.max_image_bytes 读取并传入，使阈值可由用户配置。
+///
 /// # Errors
 /// - `DbError::Sqlite`：SQL 执行失败
 /// - `DbError::Other`：图片解码/缩略图生成失败
@@ -580,6 +583,7 @@ pub fn ingest_image_as_clip(
     width: usize,
     height: usize,
     png_bytes: &[u8],
+    max_image_bytes: u64,
 ) -> Result<IngestOutcome, DbError> {
     let hash = img_mod::image_hash(png_bytes);
 
@@ -601,7 +605,7 @@ pub fn ingest_image_as_clip(
     }
     // clip_item_id 为 NULL（孤立行）或无命中：走新建路径，UPDATE 将领养孤立行
 
-    insert_image_clip(conn, width, height, png_bytes)
+    insert_image_clip(conn, width, height, png_bytes, max_image_bytes)
 }
 
 /// 在 SAVEPOINT 事务内插入 clip_items + clip_images 并补写外键关联。
@@ -612,6 +616,7 @@ fn insert_image_clip(
     width: usize,
     height: usize,
     png_bytes: &[u8],
+    max_image_bytes: u64,
 ) -> Result<IngestOutcome, DbError> {
     let now_ms = current_utc_ms();
     let item_id = Uuid::new_v4().to_string();
@@ -619,7 +624,7 @@ fn insert_image_clip(
 
     conn.execute_batch("SAVEPOINT ingest_image_clip;")?;
 
-    let result = try_insert_image_clip(conn, &item_id, &content, now_ms, png_bytes);
+    let result = try_insert_image_clip(conn, &item_id, &content, now_ms, png_bytes, max_image_bytes);
 
     match result {
         Ok(()) => {
@@ -644,6 +649,7 @@ fn try_insert_image_clip(
     content: &str,
     now_ms: i64,
     png_bytes: &[u8],
+    max_image_bytes: u64,
 ) -> Result<(), DbError> {
     conn.execute(
         "INSERT INTO clip_items
@@ -652,7 +658,9 @@ fn try_insert_image_clip(
         rusqlite::params![item_id, content, now_ms],
     )?;
 
-    let policy = img_mod::OversizePolicy::default();
+    let policy = img_mod::OversizePolicy {
+        max_original_bytes: max_image_bytes as usize,
+    };
     let outcome = img_mod::ingest_image_with_policy(conn, png_bytes, &policy)?;
 
     // Bumped 命中孤立行时返回旧 image_id，UPDATE 将其关联到本次新建的 item_id
@@ -898,8 +906,8 @@ mod tests {
         let conn = make_test_conn();
         let png = make_test_png(2, 2);
 
-        let outcome =
-            ingest_image_as_clip(&conn, 2, 2, &png).expect("ingest_image_as_clip 不应返回 Err");
+        let outcome = ingest_image_as_clip(&conn, 2, 2, &png, 20 * 1024 * 1024)
+            .expect("ingest_image_as_clip 不应返回 Err");
 
         let item_id = match &outcome {
             IngestOutcome::Inserted(id) => id.clone(),
@@ -960,7 +968,7 @@ mod tests {
         let png = make_test_png(4, 4);
 
         // 首次入库
-        let first = ingest_image_as_clip(&conn, 4, 4, &png).expect("首次入库失败");
+        let first = ingest_image_as_clip(&conn, 4, 4, &png, 20 * 1024 * 1024).expect("首次入库失败");
         let first_id = match &first {
             IngestOutcome::Inserted(id) => id.clone(),
             _ => panic!("首次应 Inserted"),
@@ -980,7 +988,7 @@ mod tests {
         std::thread::sleep(std::time::Duration::from_millis(5));
 
         // 二次调用
-        let second = ingest_image_as_clip(&conn, 4, 4, &png).expect("二次调用失败");
+        let second = ingest_image_as_clip(&conn, 4, 4, &png, 20 * 1024 * 1024).expect("二次调用失败");
         assert!(
             matches!(second, IngestOutcome::Bumped(_)),
             "同一 PNG 二次调用应返回 Bumped"
@@ -1027,7 +1035,7 @@ mod tests {
         let conn = make_test_conn();
         let bad_png: &[u8] = b""; // 空字节，不是合法 PNG
 
-        let result = ingest_image_as_clip(&conn, 1, 1, bad_png);
+        let result = ingest_image_as_clip(&conn, 1, 1, bad_png, 20 * 1024 * 1024);
         assert!(result.is_err(), "非法 PNG 应返回 Err");
 
         // clip_items 无孤立行
@@ -1060,7 +1068,7 @@ mod tests {
         let png = make_test_png(3, 3);
 
         // 首次入库
-        let first = ingest_image_as_clip(&conn, 3, 3, &png).expect("首次入库失败");
+        let first = ingest_image_as_clip(&conn, 3, 3, &png, 20 * 1024 * 1024).expect("首次入库失败");
         let first_item_id = match first {
             IngestOutcome::Inserted(id) => id,
             _ => panic!("首次应 Inserted"),
@@ -1084,7 +1092,7 @@ mod tests {
         assert_eq!(orphan_count, 1, "应有 1 条孤立行");
 
         // 二次调用同一 PNG — 应走 insert_image_clip 领养孤立行
-        let second = ingest_image_as_clip(&conn, 3, 3, &png).expect("二次调用失败");
+        let second = ingest_image_as_clip(&conn, 3, 3, &png, 20 * 1024 * 1024).expect("二次调用失败");
         let second_item_id = match second {
             IngestOutcome::Inserted(id) => id,
             IngestOutcome::Bumped(_) => panic!("孤立行路径应返回 Inserted，不应 Bumped"),
@@ -1138,5 +1146,55 @@ mod tests {
         let key = [0x07u8; 32];
         let hex = hex_encode(&key);
         assert_eq!(&hex[..2], "07", "0x07 应编码为 '07'");
+    }
+
+    /// 小阈值下入库超阈值图片，original_present 应为 0、BLOB 应为空。
+    #[test]
+    fn ingest_image_as_clip_respects_small_threshold() {
+        let conn = make_test_conn();
+        let png = make_test_png(2, 2);
+        // 阈值设为 1 字节，任何图片都会超阈值
+        let outcome = ingest_image_as_clip(&conn, 2, 2, &png, 1)
+            .expect("小阈值入库不应 Err");
+        let item_id = match outcome {
+            IngestOutcome::Inserted(id) => id,
+            IngestOutcome::Bumped(_) => panic!("首次入库应返回 Inserted"),
+        };
+
+        let (original_present, original_blob): (i32, Vec<u8>) = conn
+            .query_row(
+                "SELECT original_present, original FROM clip_images WHERE clip_item_id = ?1",
+                rusqlite::params![item_id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .expect("clip_images 行应存在");
+
+        assert_eq!(original_present, 0, "超阈值图片 original_present 应为 0");
+        assert!(original_blob.is_empty(), "超阈值图片原图 BLOB 应为空");
+    }
+
+    /// 大阈值下入库同一图片，original_present 应为 1、BLOB 非空。
+    #[test]
+    fn ingest_image_as_clip_respects_large_threshold() {
+        let conn = make_test_conn();
+        let png = make_test_png(2, 2);
+        // 阈值设为 100MiB，任何测试图片都不超阈值
+        let outcome = ingest_image_as_clip(&conn, 2, 2, &png, 100 * 1024 * 1024)
+            .expect("大阈值入库不应 Err");
+        let item_id = match outcome {
+            IngestOutcome::Inserted(id) => id,
+            IngestOutcome::Bumped(_) => panic!("首次入库应返回 Inserted"),
+        };
+
+        let (original_present, original_blob): (i32, Vec<u8>) = conn
+            .query_row(
+                "SELECT original_present, original FROM clip_images WHERE clip_item_id = ?1",
+                rusqlite::params![item_id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .expect("clip_images 行应存在");
+
+        assert_eq!(original_present, 1, "未超阈值图片 original_present 应为 1");
+        assert!(!original_blob.is_empty(), "未超阈值图片原图 BLOB 应非空");
     }
 }

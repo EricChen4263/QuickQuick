@@ -42,6 +42,10 @@ fn default_theme() -> String {
     "auto".to_string()
 }
 
+fn default_max_image_bytes() -> u64 {
+    20 * 1024 * 1024
+}
+
 /// 应用全局设置：捕获行为、隐私开关、UI 偏好与翻译配置
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppSettings {
@@ -66,6 +70,9 @@ pub struct AppSettings {
     /// UI 主题：auto / light / dark（默认 "auto"）
     #[serde(default = "default_theme")]
     pub theme: String,
+    /// 单张图片原图大小上限（字节）；超出则只存缩略图（original_present=0）。默认 20MiB。
+    #[serde(default = "default_max_image_bytes")]
+    pub max_image_bytes: u64,
 }
 
 impl Default for AppSettings {
@@ -78,6 +85,7 @@ impl Default for AppSettings {
             stay_in_tray: default_stay_in_tray(),
             auto_update: default_auto_update(),
             theme: default_theme(),
+            max_image_bytes: default_max_image_bytes(),
         }
     }
 }
@@ -174,6 +182,7 @@ mod tests {
             stay_in_tray: false,
             auto_update: false,
             theme: "dark".to_string(),
+            max_image_bytes: 5 * 1024 * 1024,
         };
         let json = serde_json::to_string(&original).expect("序列化应成功");
         let restored: AppSettings = serde_json::from_str(&json).expect("反序列化应成功");
@@ -185,5 +194,25 @@ mod tests {
         assert_eq!(restored.stay_in_tray, original.stay_in_tray);
         assert_eq!(restored.auto_update, original.auto_update);
         assert_eq!(restored.theme, original.theme);
+        assert_eq!(restored.max_image_bytes, 5 * 1024 * 1024);
+    }
+
+    /// 旧 JSON（无 max_image_bytes 字段）反序列化后该字段取默认值 20MiB。
+    #[test]
+    fn legacy_json_missing_max_image_bytes_uses_default() {
+        let json = r#"{"excluded_apps":[],"selected_provider":"mymemory"}"#;
+        let settings: AppSettings = serde_json::from_str(json).expect("旧 JSON 反序列化应成功");
+        assert_eq!(
+            settings.max_image_bytes,
+            20 * 1024 * 1024,
+            "max_image_bytes 默认应为 20MiB"
+        );
+    }
+
+    /// Default impl 的 max_image_bytes 与 serde default fn 一致（20MiB）。
+    #[test]
+    fn default_max_image_bytes_is_20mib() {
+        let d = AppSettings::default();
+        assert_eq!(d.max_image_bytes, 20 * 1024 * 1024);
     }
 }
