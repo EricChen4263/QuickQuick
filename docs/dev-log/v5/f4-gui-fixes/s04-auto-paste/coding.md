@@ -2,7 +2,7 @@
 id: f4-gui-fixes-s04-9a
 title: 真实自动粘贴 9a macOS 后端 FFI
 status: 实现完成
-commit: PENDING
+commit: de538d9
 date: 2026-06-02
 ---
 
