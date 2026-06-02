@@ -2,7 +2,7 @@
 id: f4-gui-fixes-s03-backend
 title: 单张图片阈值 后端接真
 status: 实现完成
-commit: PENDING
+commit: d60fd93
 date: 2026-06-02
 ---
 
