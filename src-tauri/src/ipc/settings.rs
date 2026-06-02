@@ -411,7 +411,9 @@ const MAX_IMAGE_THRESHOLD: u64 = 500 * 1024 * 1024;
 /// `get_image_threshold` 的纯函数实现：从 settings.json 读取 max_image_bytes。
 ///
 /// # Errors
-/// 此函数实际上永不返回 Err（load_or_default 回退默认值）。
+/// 此函数实际上永不返回 `Err`：`AppSettings::load_or_default` 在文件不存在或
+/// 内容损坏时均静默回退默认值，调用方可安全地 `unwrap_or_default`。
+/// 签名保留 `Result` 以与命令层 `?` 传播保持一致，便于未来升级为真正可失败路径。
 pub fn get_image_threshold_impl(settings_path: &Path) -> Result<u64, String> {
     let settings = AppSettings::load_or_default(settings_path);
     Ok(settings.max_image_bytes)

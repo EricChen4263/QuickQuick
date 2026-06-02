@@ -229,8 +229,10 @@ fn start_clipboard_poll(
                 exclude: &*exclude_guard,
             };
 
-            // 每轮从 settings.json 读取当前图片阈值；ingest 只在真正捕获到新图时发生，
-            // 读文件开销可接受；失败时回退到默认值（20MiB），不中断轮询。
+            // 每轮（约 500ms）读一次 settings.json 取 max_image_bytes。
+            // settings.json < 1 KB，桌面端有 OS 页缓存，开销可接受；
+            // 好处是用户在 UI 调整阈值后下一轮即生效，无需重启。
+            // 读取或路径解析失败时回退默认值（20 MiB），不中断轮询。
             let max_image_bytes = handle
                 .path()
                 .app_config_dir()
