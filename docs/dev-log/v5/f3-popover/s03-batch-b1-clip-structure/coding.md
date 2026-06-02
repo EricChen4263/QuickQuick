@@ -2,7 +2,7 @@
 id: f3-popover-s03-batch-b1
 title: "里程碑4 popover · Batch B1：clip-popover 结构与数据"
 status: 实现完成
-commit: PENDING
+commit: 856f9a4
 date: 2026-06-02
 ---
 
