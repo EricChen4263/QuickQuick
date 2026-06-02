@@ -20,7 +20,7 @@ interface TranslateWorkspaceProps {
   providers: Provider[];
   selectedProviderId: string;
   onInputChange: (text: string) => void;
-  onTranslate: () => void;
+  onTranslate: (textOverride?: string) => void;
   onSwap: () => void;
   onAction: (action: string) => void;
   onProviderChange: (id: string) => void;
@@ -80,7 +80,7 @@ function TranslateWorkspace({
         <div className="tx-cta">
           <button
             className="btn btn-primary"
-            onClick={onTranslate}
+            onClick={() => onTranslate()}
             disabled={isTranslateDisabled}
           >
             {isLoading ? "翻译中…" : "翻译"}

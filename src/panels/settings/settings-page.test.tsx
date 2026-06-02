@@ -24,6 +24,8 @@ vi.mock("../../ipc/ipc-client", () => ({
   setSkipSensitive: vi.fn(),
   getStorageStats: vi.fn(),
   cleanupHistory: vi.fn(),
+  getImageThreshold: vi.fn(),
+  setImageThreshold: vi.fn(),
 }));
 
 import {
@@ -46,6 +48,8 @@ import {
   setSkipSensitive,
   getStorageStats,
   cleanupHistory,
+  getImageThreshold,
+  setImageThreshold,
 } from "../../ipc/ipc-client";
 
 const mockGetHotkeys = vi.mocked(getHotkeys);
@@ -67,6 +71,8 @@ const mockGetSkipSensitive = vi.mocked(getSkipSensitive);
 const mockSetSkipSensitive = vi.mocked(setSkipSensitive);
 const mockGetStorageStats = vi.mocked(getStorageStats);
 const mockCleanupHistory = vi.mocked(cleanupHistory);
+const mockGetImageThreshold = vi.mocked(getImageThreshold);
+const mockSetImageThreshold = vi.mocked(setImageThreshold);
 
 const MOCK_HOTKEYS = { history: "CmdOrCtrl+Shift+H", translate: "CmdOrCtrl+Shift+T" };
 const MOCK_PROVIDERS = [
@@ -97,6 +103,8 @@ describe("settings-page", () => {
     mockSetSkipSensitive.mockResolvedValue(undefined);
     mockGetStorageStats.mockResolvedValue({ liveCount: 42, fileSizeBytes: 50 * 1024 * 1024 });
     mockCleanupHistory.mockResolvedValue({ softDeleted: 5, purged: 3 });
+    mockGetImageThreshold.mockResolvedValue(20 * 1024 * 1024);
+    mockSetImageThreshold.mockResolvedValue(undefined);
   });
 
   it("settings-page: 左侧纵向子项栏渲染六个子项（通用/热键/翻译源/隐私/存储/关于）", async () => {

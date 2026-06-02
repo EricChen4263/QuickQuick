@@ -274,6 +274,30 @@ export async function setAutoUpdate(enabled: boolean): Promise<void> {
   }
 }
 
+/** 读取单张图片阈值（字节）。默认 20971520（20 MiB）。 */
+export async function getImageThreshold(): Promise<number> {
+  try {
+    return await invoke<number>("get_image_threshold");
+  } catch (err) {
+    throw toError(err);
+  }
+}
+
+/**
+ * 设置单张图片阈值（字节）。
+ *
+ * 合法范围 1048576..=524288000（1 MiB..=500 MiB），越界 Rust 侧返回中文 Err。
+ *
+ * @param bytes - 阈值字节数
+ */
+export async function setImageThreshold(bytes: number): Promise<void> {
+  try {
+    await invoke<void>("set_image_threshold", { bytes });
+  } catch (err) {
+    throw toError(err);
+  }
+}
+
 /** 读取当前 UI 主题（"auto" | "light" | "dark"）。 */
 export async function getTheme(): Promise<string> {
   try {

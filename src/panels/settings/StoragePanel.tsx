@@ -1,10 +1,16 @@
 import { useEffect, useState, useCallback } from "react";
-import { getStorageStats, cleanupHistory } from "../../ipc/ipc-client";
+import { getStorageStats, cleanupHistory, getImageThreshold, setImageThreshold } from "../../ipc/ipc-client";
 import PanelHeader from "./PanelHeader";
 import SettingGroup from "./SettingGroup";
 
 /** 存储上限：500 MB（字节） */
 const MAX_BYTES = 500 * 1024 * 1024;
+
+/** 默认单张图片阈值（MB） */
+const DEFAULT_IMAGE_THRESHOLD_MB = 20;
+
+/** 图片阈值预设档位（MB），全在后端合法区间 1..500 MiB 内 */
+const IMAGE_THRESHOLD_OPTIONS = [5, 10, 20, 50, 100] as const;
 
 /** 将字节数转为 MB 字符串，保留一位小数 */
 function toMB(bytes: number): string {
@@ -17,6 +23,7 @@ function StoragePanel() {
   const [fileSizeBytes, setFileSizeBytes] = useState(0);
   const [cleanupMsg, setCleanupMsg] = useState<string | null>(null);
   const [opError, setOpError] = useState<string | null>(null);
+  const [imageThresholdMB, setImageThresholdMB] = useState(DEFAULT_IMAGE_THRESHOLD_MB);
 
   const fetchStats = useCallback(async (cancelled: { current: boolean }) => {
     try {
@@ -33,10 +40,32 @@ function StoragePanel() {
   useEffect(() => {
     const cancelled = { current: false };
     fetchStats(cancelled);
+
+    const loadThreshold = async () => {
+      try {
+        const bytes = await getImageThreshold();
+        if (cancelled.current) return;
+        setImageThresholdMB(Math.round(bytes / (1024 * 1024)));
+      } catch {
+        if (cancelled.current) return;
+        console.error("图片阈值加载失败，使用默认值 20 MB");
+      }
+    };
+    void loadThreshold();
+
     return () => {
       cancelled.current = true;
     };
   }, [fetchStats]);
+
+  async function handleThresholdChange(mb: number) {
+    try {
+      await setImageThreshold(mb * 1024 * 1024);
+      setImageThresholdMB(mb);
+    } catch (err) {
+      console.error("设置图片阈值失败:", err);
+    }
+  }
 
   async function handleCleanup() {
     setCleanupMsg(null);
@@ -86,12 +115,22 @@ function StoragePanel() {
         </div>
         <div className="set-row">
           <div className="grow">
-            <div className="label">单张图片阈值</div>
-            <div className="desc">超过阈值默认只留缩略图并标「原图过大未存」（静态展示，无对应 IPC）</div>
+            <label htmlFor="image-threshold-select" className="label">单张图片阈值</label>
+            <div className="desc">超过此大小的图片只保留缩略图，原图标记为过大未存</div>
           </div>
-          <span className="kbd-combo num">
-            <kbd>20 MB</kbd>
-          </span>
+          <select
+            id="image-threshold-select"
+            aria-label="单张图片阈值"
+            className="sel"
+            value={String(imageThresholdMB)}
+            onChange={(e) => { void handleThresholdChange(Number(e.target.value)); }}
+          >
+            {IMAGE_THRESHOLD_OPTIONS.map((mb) => (
+              <option key={mb} value={String(mb)}>
+                {mb} MB
+              </option>
+            ))}
+          </select>
         </div>
         <div className="set-row">
           <div className="grow">
