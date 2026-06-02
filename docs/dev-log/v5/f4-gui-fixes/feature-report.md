@@ -3,7 +3,7 @@ id: V5-F4-report
 type: feature_report
 level: 大功能
 parent: V5
-children: [f4-s01-tray-icon, f4-s02-clip-translate-jump, f4-s03-image-threshold, f4-s04-auto-paste, f4-s05-auto-update, f4-s07-close-to-tray, f4-s08-clip-autorefresh, f4-s09-unmount-race]
+children: [f4-s01-tray-icon, f4-s02-clip-translate-jump, f4-s03-image-threshold, f4-s04-auto-paste, f4-s05-auto-update, f4-s07-close-to-tray, f4-s08-clip-autorefresh, f4-s09-unmount-race, f4-s10-event-const]
 created: 2026-06-02T00:00:00Z
 status: 已闭合（含 1 项外部阻塞）
 author: orchestrator
@@ -26,6 +26,7 @@ author: orchestrator
 | s07 关闭按钮隐藏到后台 | 主窗只处理失焦无 CloseRequested→点关闭走默认销毁退出。新增 `CloseRequested{api,..}` 分支：stay_in_tray 时 prevent_close+hide；函数更名 setup_main_window_behavior | cargo test 168+ 全绿；启动冒烟无 panic；GUI 待用户实测 | 9d49cc6 |
 | s08 剪贴板自动刷新 | 列表仅挂载时读一次、复制新内容不刷新（页面 display 切换不卸载）。后端写库非空 emit `clipboard-changed`（抽纯函数 should_notify_clip_change 作可测接缝），前端 listen→loadItems 重读 | tester 后端4+前端 命中+变异全红；reviewer 通过；cargo 301 + 前端 356 全绿 | fcfd997 |
 | s09 删除/收藏卸载竞态 | handler 用局部 {current:false}（永不置 true）→卸载后 setState。改共享组件生命周期 cancelledRef（卸载 cleanup 置 true） | tester：正向流有判别力；**实证 React18 下该竞态不可黑盒证伪**；reviewer 通过；前端 358 全绿 | c208198 |
+| s10 事件名常量 | 纯重构：clipboard-changed 字面量抽为前端 src/ipc/events.ts + 后端 lib.rs 各一处常量 CLIPBOARD_CHANGED_EVENT（消除同语言内重复，I-01），两端注释互指 | tester：前端偏离常量后测试变红、跨语言值一致；reviewer 通过；cargo 301 + 前端 358 全绿 | ee38d39 |
 
 ## 关键决策与亮点
 - **托盘 bug 根因定位**：template image 只取 alpha 轮廓——彩色应用图标套 template 必成实心色块，故必须用真正的单色模板图（tray.png 本身正确，问题在加载路径）。`include_bytes!` 摆脱 resource_dir 依赖，dev/prod 一致。
