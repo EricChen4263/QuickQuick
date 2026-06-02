@@ -47,3 +47,13 @@ date: 2026-06-02
 ## 重申
 
 键盘事件注入（CGEvent Cmd+V）+ 焦点编排需 GUI + Accessibility 权限实测方可验证真实效果，headless 测试仅覆盖逻辑映射分支。
+
+## review 高危收口（2026-06-02）
+
+- **I-01**：`ipc/system.rs` trusted 分支改用 `paste::write_and_confirm`，Ok→hide→send_paste→"full_paste"，Err→"write_back_only"，changeCount 冻结不再绕过。
+- **I-02**：删除 `paste_to_front_impl`（旧固定返回 write_back_only 实现），无残留 unused import。
+- **I-03**：`MacOsPasteBackend::new()` 与 `FallbackPasteBackend::new()` 均改为 `-> Result<Self, String>`；`run_paste_with_backend` 构造失败时 `eprintln` 降级返回 "write_back_only"，不 panic。
+- **L-01**：`Cargo.toml` 中直接依赖 `objc2-foundation` 已删除；`cargo check` 确认无 unused dep warning；lock 文件中残留行为 `objc2-app-kit` 传递依赖，属正常。
+- **cargo build**：EXIT 0，无 error，无 warning，耗时 7.07s。
+- **cargo test**：全 24 测试套件 ok，81 passed（含 ipc::system T6–T10）；0 failed。
+- **cargo check**：EXIT 0，无 error，无 warning。

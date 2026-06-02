@@ -2,12 +2,15 @@
 //!
 //! 验收项：
 //! - V1-F3-A15 paste_waits_changecount — 回写时序：changeCount 反映写入后再发粘贴
+//! - V1-F3-A15b write_and_confirm_ok   — write_and_confirm 正常递增→Ok，未调 send_paste
+//! - V1-F3-A15c write_and_confirm_timeout — write_and_confirm 冻结→Err(Timeout)
 //! - V1-F3-A17 focus_restore_path     — 焦点恢复路径顺序契约
 //! - V1-F3-A18 paste_leaves_selected  — 粘贴后剪贴板留下被选条目 X
 
 use quickquick_lib::clipboard::CapturedItem;
 use quickquick_lib::paste::{
-    focus_restore_sequence, write_then_paste, FocusStep, PasteBackend, PasteError,
+    focus_restore_sequence, write_and_confirm, write_then_paste, FocusStep, PasteBackend,
+    PasteError,
 };
 
 /// 可控的假粘贴后端，记录 send_paste 发送时机。
@@ -186,5 +189,53 @@ fn paste_leaves_selected_item_on_clipboard() {
         backend.current_text(),
         Some("selected-item-X".to_owned()),
         "粘贴后剪贴板应留下被选条目 X 的文本"
+    );
+}
+
+/// A15b（write_and_confirm_ok）：
+/// 正常路径——write_and_confirm 写入并等到 changeCount 递增后返回 Ok，
+/// 且不调用 send_paste（职责边界：只确认写入，不发粘贴）。
+#[test]
+fn write_and_confirm_normal_returns_ok_without_send_paste() {
+    let mut backend = FakePasteBackend::new(0);
+    let item = CapturedItem {
+        text: "confirm-test".to_owned(),
+        html: None,
+    };
+
+    let result = write_and_confirm(&mut backend, &item);
+
+    assert!(result.is_ok(), "正常递增时 write_and_confirm 应返回 Ok，实际: {result:?}");
+    assert!(
+        backend.paste_sent_at_count.is_none(),
+        "write_and_confirm 不应调用 send_paste（只负责写入确认）"
+    );
+    assert_eq!(
+        backend.current_text(),
+        Some("confirm-test".to_owned()),
+        "write_and_confirm 后剪贴板文本应为写入内容"
+    );
+}
+
+/// A15c（write_and_confirm_timeout）：
+/// 冻结计数路径——changeCount 永不递增时 write_and_confirm 应返回 Err(Timeout)，
+/// 且不调用 send_paste。
+#[test]
+fn write_and_confirm_frozen_count_returns_timeout() {
+    let mut backend = FakePasteBackend::with_frozen_count(7);
+    let item = CapturedItem {
+        text: "should-timeout".to_owned(),
+        html: None,
+    };
+
+    let result = write_and_confirm(&mut backend, &item);
+
+    assert!(
+        matches!(result, Err(PasteError::Timeout)),
+        "计数冻结时 write_and_confirm 应返回 Timeout，实际: {result:?}"
+    );
+    assert!(
+        backend.paste_sent_at_count.is_none(),
+        "超时时不应调用 send_paste"
     );
 }

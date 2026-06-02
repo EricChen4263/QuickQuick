@@ -6,7 +6,8 @@
 //! - `PasteBackend` trait       — 抽象写剪贴板 + 模拟粘贴 + 前台 app，使逻辑层 headless 可测
 //! - `FocusStep`                — 焦点恢复步骤枚举，冻结设计§八#2 规定的操作顺序契约
 //! - `focus_restore_sequence`   — 返回规定顺序的 Vec<FocusStep>，纯函数可测
-//! - `write_then_paste`         — 回写时序核心：写入 → 轮询 changeCount 确认 → 模拟粘贴
+//! - `write_and_confirm`        — 只做写入 + 轮询 changeCount 确认，不调 send_paste
+//! - `write_then_paste`         — 回写时序核心：write_and_confirm + send_paste
 //! - `PasteError`               — 回写失败类型（当前：Timeout）
 //!
 //! 回写时序保证（A15）：
@@ -88,15 +89,30 @@ pub fn focus_restore_sequence() -> Vec<FocusStep> {
     ]
 }
 
+/// 写入条目并等待 changeCount 反映写入（A15）。
+///
+/// # 职责边界
+/// 只负责写入 + 轮询确认，**不调用 `send_paste`**。
+/// 集成方（如 `run_paste_with_backend`）在调用此函数成功后自行决定是否 send_paste。
+///
+/// 若轮询 `MAX_POLL_ATTEMPTS` 次后 change_count 仍未递增，
+/// 返回 `PasteError::Timeout`，调用方不应盲发粘贴。
+pub fn write_and_confirm(
+    backend: &mut dyn PasteBackend,
+    item: &CapturedItem,
+) -> Result<(), PasteError> {
+    let count_before = backend.change_count();
+    backend.write_with_marker(item);
+    wait_for_count_increase(backend, count_before)
+}
+
 /// 回写时序核心：写入条目 → 等待 changeCount 反映写入 → 发模拟粘贴（A15）。
 ///
 /// # 时序保证
-/// 1. 记录写前 `change_count`
-/// 2. 调用 `write_with_marker`（OS 层写入剪贴板）
-/// 3. 轮询 `change_count` 直到 > 写前值（OS 已接受写入）
-/// 4. 确认后调用 `send_paste`
+/// 1. 调用 `write_and_confirm`（写入 + 轮询确认）
+/// 2. 确认后调用 `send_paste`
 ///
-/// 若轮询 `MAX_POLL_ATTEMPTS` 次后 change_count 仍未递增，
+/// 若 changeCount 未在 `MAX_POLL_ATTEMPTS` 次内递增，
 /// 返回 `PasteError::Timeout`，不调用 `send_paste`（不盲发粘贴）。
 ///
 /// 粘贴后剪贴板内容为条目 `item` 本身（设计§三#4，A18）。
@@ -104,12 +120,7 @@ pub fn write_then_paste(
     backend: &mut dyn PasteBackend,
     item: &CapturedItem,
 ) -> Result<(), PasteError> {
-    let count_before = backend.change_count();
-
-    backend.write_with_marker(item);
-
-    wait_for_count_increase(backend, count_before)?;
-
+    write_and_confirm(backend, item)?;
     backend.send_paste();
     Ok(())
 }

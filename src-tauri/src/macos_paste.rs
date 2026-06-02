@@ -71,13 +71,14 @@ mod macos_impl {
     }
 
     impl MacOsPasteBackend {
-        /// 创建实例；arboard 初始化失败时 panic（运行时无剪贴板属不可恢复错误）。
+        /// 创建实例；arboard 初始化失败时返回 `Err(String)`。
         ///
-        /// 调用方（lib.rs setup）应在 GUI 环境下调用；headless 测试用 FakePasteBackend。
-        pub fn new() -> Self {
-            let clipboard =
-                arboard::Clipboard::new().expect("MacOsPasteBackend: 剪贴板初始化失败");
-            Self { clipboard }
+        /// # Errors
+        /// arboard::Clipboard::new() 失败时返回包含原因的错误字符串。
+        pub fn new() -> Result<Self, String> {
+            let clipboard = arboard::Clipboard::new()
+                .map_err(|e| format!("MacOsPasteBackend: 剪贴板初始化失败: {e}"))?;
+            Ok(Self { clipboard })
         }
     }
 
@@ -179,14 +180,18 @@ mod fallback_impl {
     }
 
     impl FallbackPasteBackend {
-        pub fn new() -> Self {
-            let clipboard =
-                arboard::Clipboard::new().expect("FallbackPasteBackend: 剪贴板初始化失败");
-            Self {
+        /// 创建实例；arboard 初始化失败时返回 `Err(String)`。
+        ///
+        /// # Errors
+        /// arboard::Clipboard::new() 失败时返回包含原因的错误字符串。
+        pub fn new() -> Result<Self, String> {
+            let clipboard = arboard::Clipboard::new()
+                .map_err(|e| format!("FallbackPasteBackend: 剪贴板初始化失败: {e}"))?;
+            Ok(Self {
                 clipboard,
                 count: 0,
                 text: None,
-            }
+            })
         }
     }
 

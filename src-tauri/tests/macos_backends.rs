@@ -45,7 +45,8 @@ fn paste_backend_impl_exists_and_constructable() {
     {
         use quickquick_lib::clipboard::CapturedItem;
         use quickquick_lib::macos_paste::MacOsPasteBackend;
-        let mut backend = MacOsPasteBackend::new();
+        assert!(MacOsPasteBackend::new().is_ok(), "MacOsPasteBackend::new() 应成功");
+        let mut backend = MacOsPasteBackend::new().expect("MacOsPasteBackend 初始化失败");
 
         // change_count 调用 NSPasteboard.changeCount()，应返回非负整数
         let count = backend.change_count();
@@ -72,7 +73,8 @@ fn paste_backend_impl_exists_and_constructable() {
     {
         use quickquick_lib::clipboard::CapturedItem;
         use quickquick_lib::macos_paste::FallbackPasteBackend;
-        let mut backend = FallbackPasteBackend::new();
+        assert!(FallbackPasteBackend::new().is_ok(), "FallbackPasteBackend::new() 应成功");
+        let mut backend = FallbackPasteBackend::new().expect("FallbackPasteBackend 初始化失败");
 
         let _count = backend.change_count();
         let _text = backend.current_text();

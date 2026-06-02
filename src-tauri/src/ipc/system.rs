@@ -23,7 +23,7 @@ use crate::clipboard::CapturedItem;
 use crate::db::{self, DbError};
 use crate::ipc::{with_db, AppDb};
 use crate::onboarding::{perform_paste_or_degrade, AccessibilityProbe, PasteOutcome, ACCESSIBILITY_DEEPLINK};
-use crate::paste::PasteBackend;
+use crate::paste::{self, PasteBackend};
 
 /// 存储统计 DTO。
 #[derive(Debug, Serialize)]
@@ -157,26 +157,6 @@ pub fn paste_orchestrate(
     }
 }
 
-/// paste_to_front_impl：DB 查询 + 编排，供测试复用（传入 fake probe/backend）。
-///
-/// 返回 PasteResultDto 而非执行窗口 hide，窗口 hide 属 OS 边界留 tauri 命令层。
-///
-/// # Errors
-/// - id 为空、不存在、图片类型
-pub fn paste_to_front_impl(conn: &Connection, id: &str) -> Result<PasteResultDto, DbError> {
-    let item = fetch_paste_item(conn, id)?;
-
-    let mut clipboard = arboard::Clipboard::new()
-        .map_err(|e| DbError::Other(format!("剪贴板初始化失败：{e}")))?;
-    clipboard
-        .set_text(&item.text)
-        .map_err(|e| DbError::Other(format!("写回剪贴板失败：{e}")))?;
-
-    Ok(PasteResultDto {
-        outcome: "write_back_only".to_string(),
-    })
-}
-
 /// Tauri 命令：取存储统计（活跃条目数 + 库文件大小）。
 #[tauri::command]
 pub fn get_storage_stats(
@@ -266,18 +246,31 @@ pub fn paste_to_front(
 /// 构造平台后端/probe，执行粘贴编排（含 trusted 分支的窗口 hide）。
 ///
 /// 拆出独立函数以降低 paste_to_front 函数体长度，cfg 分流在此隔离。
+///
+/// trusted 分支：write_and_confirm 确认写入 → hide 窗口 → send_paste → "full_paste"。
+/// write_and_confirm 失败（Timeout）或未授权：write_with_marker → "write_back_only"。
 #[cfg(target_os = "macos")]
 fn run_paste_with_backend(app: &tauri::AppHandle, item: &CapturedItem) -> String {
     use crate::macos_paste::{MacOsAccessibilityProbe, MacOsPasteBackend};
 
     let probe = MacOsAccessibilityProbe;
-    let mut backend = MacOsPasteBackend::new();
+    let mut backend = match MacOsPasteBackend::new() {
+        Ok(b) => b,
+        Err(e) => {
+            eprintln!("[run_paste_with_backend] 后端初始化失败: {e}");
+            return "write_back_only".to_string();
+        }
+    };
 
     if probe.is_trusted() {
-        backend.write_with_marker(item);
-        hide_panel_and_wait(app);
-        backend.send_paste();
-        "full_paste".to_string()
+        match paste::write_and_confirm(&mut backend, item) {
+            Ok(()) => {
+                hide_panel_and_wait(app);
+                backend.send_paste();
+                "full_paste".to_string()
+            }
+            Err(_) => "write_back_only".to_string(),
+        }
     } else {
         backend.write_with_marker(item);
         "write_back_only".to_string()
@@ -290,7 +283,13 @@ fn run_paste_with_backend(app: &tauri::AppHandle, item: &CapturedItem) -> String
     use crate::macos_paste::FallbackPasteBackend;
 
     let probe = FallbackAccessibilityProbe;
-    let mut backend = FallbackPasteBackend::new();
+    let mut backend = match FallbackPasteBackend::new() {
+        Ok(b) => b,
+        Err(e) => {
+            eprintln!("[run_paste_with_backend] 后端初始化失败: {e}");
+            return "write_back_only".to_string();
+        }
+    };
     let _ = app;
 
     paste_orchestrate(&probe, &mut backend, item)
