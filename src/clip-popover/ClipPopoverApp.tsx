@@ -1,7 +1,10 @@
 import { useState, useEffect, useMemo } from "react";
 import type { ClipItem } from "../ipc/ipc-client";
-import { listClipItems } from "../ipc/ipc-client";
+import { listClipItems, pasteToFront } from "../ipc/ipc-client";
+import { writeToClipboard } from "../panels/translate/browser-api";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { filterClipBySearch, groupClipItems } from "./grouping";
+import { advanceSelection } from "./keyboard-nav";
 import { PopoverList } from "./PopoverList";
 import { PopoverPreview } from "./PopoverPreview";
 import { PopoverFooter } from "./PopoverFooter";
@@ -15,18 +18,18 @@ function buildFlatList(groups: ReturnType<typeof groupClipItems>): ClipItem[] {
 }
 
 /**
- * Popover 根组件（Batch B1）
+ * Popover 根组件。
  *
- * 状态持有：
- *   - items: 从 IPC 加载的全量条目
+ * 状态：
+ *   - items: IPC 加载的全量条目
  *   - query: 搜索框值（受控）
  *   - selectedId: 当前选中条目 ID
  *
- * B2 衔接：
- *   - visibleFlatList（由 buildFlatList 得到）是键盘 ↑↓ 的遍历序列
- *   - selectedId / setSelectedId 直接传入 PopoverList；B2 键盘 handler 调同一 setter
- *   - 粘贴动作：import { pasteToFront } from "../ipc/ipc-client"，调 pasteToFront(selectedId)
- *   - 复制动作：import { writeToClipboard } from "../ipc/ipc-client"（若已有）或走 Tauri clipboard API
+ * 键盘交互（由 search input 的 onKeyDown 处理）：
+ *   - ↑ / ↓：在 visibleFlatList 中移动选中项（advanceSelection）
+ *   - Enter：pasteToFront(selectedId) 成功后 hide 窗口
+ *   - Alt+Enter：writeToClipboard(selectedItem.content) 成功后 hide 窗口
+ *   - Esc：由 main.tsx 的全局快捷键处理，不在此组件内
  */
 export default function ClipPopoverApp() {
   const [items, setItems] = useState<ClipItem[]>([]);
@@ -71,6 +74,37 @@ export default function ClipPopoverApp() {
     [visibleFlatList, selectedId]
   );
 
+  function handleKeyDown(e: React.KeyboardEvent<HTMLInputElement>): void {
+    const flatIds = visibleFlatList.map((i) => i.id);
+
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      setSelectedId(advanceSelection(selectedId, e.key, flatIds));
+      return;
+    }
+
+    if (e.key === "Enter" && !e.altKey) {
+      e.preventDefault();
+      if (selectedId === null || selectedItem === null) return;
+      pasteToFront(selectedId)
+        .then(() => getCurrentWindow().hide())
+        .catch((err: unknown) => {
+          console.error("[clip-popover] paste failed:", err);
+        });
+      return;
+    }
+
+    if (e.key === "Enter" && e.altKey) {
+      e.preventDefault();
+      if (selectedItem === null) return;
+      writeToClipboard(selectedItem.content)
+        .then(() => getCurrentWindow().hide())
+        .catch((err: unknown) => {
+          console.error("[clip-popover] copy failed:", err);
+        });
+    }
+  }
+
   if (loadError) {
     return (
       <div className="popover-error">
@@ -89,6 +123,7 @@ export default function ClipPopoverApp() {
           placeholder="搜索剪贴板…"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
+          onKeyDown={handleKeyDown}
           autoFocus
           aria-label="搜索剪贴板"
         />
