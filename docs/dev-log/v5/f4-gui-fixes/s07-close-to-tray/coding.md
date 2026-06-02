@@ -2,7 +2,7 @@
 id: f4-gui-fixes-s07
 title: 修复关闭按钮直接退出（改为隐藏到后台）
 status: 实现完成
-commit: PENDING
+commit: 92248e0
 date: 2026-06-02
 ---
 
