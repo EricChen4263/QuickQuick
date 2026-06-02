@@ -137,7 +137,7 @@ pub fn run() {
             apply_autostart_preference(app);
             register_hotkeys(app.handle());
             tray::setup_tray(app)?;
-            setup_window_focus_hide(app, stay_in_tray)?;
+            setup_main_window_behavior(app, stay_in_tray)?;
             Ok(())
         })
         .run(tauri::generate_context!())
@@ -360,11 +360,15 @@ fn init_capture_state(app: &tauri::App) -> CaptureState {
     }
 }
 
-/// 监听主窗口失焦事件：`stay_in_tray == true` 时隐藏窗口（默认行为），
-/// `stay_in_tray == false` 时退出应用。
+/// 监听主窗口失焦与关闭请求事件：
+/// - 失焦（`Focused(false)`）：`stay_in_tray == true` 时隐藏窗口，否则退出应用。
+/// - 关闭按钮（`CloseRequested`）：`stay_in_tray == true` 时拦截并隐藏到后台，
+///   否则放行默认行为（退出），保持与失焦分支一致的语义。
+///
+/// 托盘「退出」菜单直接调用 `app_handle().exit(0)`，不经过此事件，两者解耦。
 ///
 /// `stay_in_tray` 通过 `Arc<AtomicBool>` 传入，运行时 IPC 改值即刻生效。
-fn setup_window_focus_hide(
+fn setup_main_window_behavior(
     app: &mut tauri::App,
     stay_in_tray: Arc<AtomicBool>,
 ) -> Result<(), tauri::Error> {
@@ -374,12 +378,21 @@ fn setup_window_focus_hide(
 
     let win = window.clone();
     window.on_window_event(move |event| {
-        if let WindowEvent::Focused(false) = event {
-            if stay_in_tray.load(Ordering::Relaxed) {
-                let _ = win.hide();
-            } else {
-                win.app_handle().exit(0);
+        match event {
+            WindowEvent::Focused(false) => {
+                if stay_in_tray.load(Ordering::Relaxed) {
+                    let _ = win.hide();
+                } else {
+                    win.app_handle().exit(0);
+                }
             }
+            WindowEvent::CloseRequested { api, .. } => {
+                if stay_in_tray.load(Ordering::Relaxed) {
+                    api.prevent_close();
+                    let _ = win.hide();
+                }
+            }
+            _ => {}
         }
     });
 
