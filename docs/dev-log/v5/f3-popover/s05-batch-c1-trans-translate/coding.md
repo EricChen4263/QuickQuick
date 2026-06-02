@@ -2,7 +2,7 @@
 id: f3-popover-s05-batch-c1
 title: "里程碑4 popover · Batch C1：trans-popover 自动翻译"
 status: 实现完成
-commit: PENDING
+commit: d5b4c78
 date: 2026-06-02
 ---
 
