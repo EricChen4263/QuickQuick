@@ -77,12 +77,16 @@
 
 ---
 
-## 三、里程碑3 遗留技术债（小项，可在里程碑4 后或单独处理）
+## 三、里程碑3 遗留技术债 —— 【2026-06-02 已收口，见 f4-gui-fixes/】
 
-1. **「一键翻译」按钮跳转**：`ClipPreview` 的 onTranslate 当前是占位（注释「里程碑3接入：跳转翻译页」）。需实现：点一键翻译 → 切 App `activeTop=translate` + 把该条目内容填入翻译输入并翻译。涉及 ClipboardPage → App 层跨页通信（提升 state 或事件）。
-2. **`paste_to_front` 真实自动粘贴**：当前降级为 `write_back_only`（仅写回剪贴板）。完整需 macOS Accessibility 授权检测（AXIsProcessTrusted）+ CGEvent 注入 ⌘V + 隐藏自身窗口激活前台 App。后端 `paste.rs`/`onboarding.rs` 已有 trait 与降级分支，接 OS 实现即可。
-3. **自动检查更新真实 endpoint**：`auto_update` 开关只存配置，`tauri-plugin-updater` endpoint 仍是 `placeholder.example.com`。需真实更新服务端才能接 `app.updater().check()`。
-4. **存储「单张图片阈值」**：StoragePanel 中此项为静态展示，无对应 IPC（如需可配置需后端加阈值字段 + 命令）。
+详见 `docs/dev-log/v5/f4-gui-fixes/feature-report.md`。逐项状态：
+
+1. ~~**「一键翻译」按钮跳转**~~ ✅ **已完成**（s02，commit 0d5ab46）：App translateSeed{text,nonce} props 提升，点一键翻译→切翻译页+填入内容自动翻译。tester 4 变异全红、reviewer 通过。
+2. ~~**`paste_to_front` 真实自动粘贴**~~ ✅ **代码完成**（s04，commit 001ccd8）：macOS AXIsProcessTrusted + NSPasteboard.changeCount + CGEvent ⌘V，write_and_confirm 保 A15、trusted→full_paste/未授权超时→write_back_only 降级不 panic。cargo build 链接+测试全绿。**唯键盘注入运行时需用户授 Accessibility 后 GUI 实测**（务实焦点方案未做 RecordFrontmost/ActivateOriginalApp）。
+3. ⛔ **自动检查更新真实 endpoint** —— **外部阻塞**（s05）：需真实更新服务器 + minisign 私钥 + 发布 CI，仓库内无法完成，不伪造。客户端 check() 接线（纯代码）待基础设施就绪后做。详见 s05-auto-update/assessment.md。
+4. ~~**存储「单张图片阈值」**~~ ✅ **已完成**（s03，commit d60fd93/6f7ab78）：OversizePolicy 接配置 + IPC get/set(校验 1MiB..=500MiB) + StoragePanel 预设档位 select 接真。tester 5 变异全红、reviewer 通过。
+
+另：**托盘图标白圆 bug** ✅ 已修（s01，commit 4bd6ea1，include_bytes 嵌入 tray.png）。
 
 ---
 
