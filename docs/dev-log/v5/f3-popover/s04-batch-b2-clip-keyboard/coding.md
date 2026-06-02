@@ -2,7 +2,7 @@
 id: f3-popover-s04-batch-b2
 title: 里程碑4 popover · Batch B2：clip-popover 键盘流
 status: 实现完成
-commit: PENDING
+commit: 3174754
 date: 2026-06-02
 ---
 
