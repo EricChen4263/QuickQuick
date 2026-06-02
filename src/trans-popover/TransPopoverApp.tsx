@@ -23,8 +23,12 @@ function TransPopoverApp(): React.ReactElement {
   const [result, setResult] = useState<TranslateResult | null>(null);
   const [errorMsg, setErrorMsg] = useState<string>("");
   const lastTextRef = useRef<string | null>(null);
+  const translatingRef = useRef(false);
 
   async function runTranslateFromClipboard(cancelledRef: { value: boolean }): Promise<void> {
+    if (translatingRef.current) return;
+    translatingRef.current = true;
+
     try {
       const items = await listClipItems();
       const text = pickLatestText(items);
@@ -38,17 +42,24 @@ function TransPopoverApp(): React.ReactElement {
         return;
       }
 
-      lastTextRef.current = text;
+      if (text === null) {
+        setStatus("empty");
+        return;
+      }
+
       setStatus("translating");
-      const translated = await translateText(text!);
+      const translated = await translateText(text);
 
       if (cancelledRef.value) return;
+      lastTextRef.current = text;
       setResult(translated);
       setStatus("done");
     } catch {
       if (cancelledRef.value) return;
       setErrorMsg("翻译失败，请稍后重试");
       setStatus("error");
+    } finally {
+      translatingRef.current = false;
     }
   }
 

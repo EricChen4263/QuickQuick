@@ -146,4 +146,30 @@ describe("TransPopoverApp", () => {
     expect(mocks.mainSetFocus).toHaveBeenCalled();
     expect(mocks.hide).toHaveBeenCalled();
   });
+
+  it("M-1 回归：translateText 失败后 focus 同文本 → translateText 被再次调用（不被去重跳过）", async () => {
+    let focusFire: (() => void) | undefined;
+    mocks.listen.mockImplementation((_event: string, cb: () => void) => {
+      focusFire = cb;
+      return Promise.resolve(() => undefined);
+    });
+
+    let callCount = 0;
+    mocks.listClipItems.mockResolvedValue([MOCK_TEXT_ITEM]);
+    mocks.translateText.mockImplementation(() => {
+      callCount += 1;
+      if (callCount === 1) return Promise.reject(new Error("network error"));
+      return Promise.resolve(MOCK_RESULT);
+    });
+
+    render(<TransPopoverApp />);
+    await screen.findByText(/翻译失败/);
+
+    expect(mocks.translateText).toHaveBeenCalledTimes(1);
+
+    focusFire!();
+    await screen.findByText("你好，世界");
+
+    expect(mocks.translateText).toHaveBeenCalledTimes(2);
+  });
 });

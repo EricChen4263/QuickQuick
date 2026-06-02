@@ -25,3 +25,16 @@ date: 2026-06-02
 - `pnpm test`：316 passed (316)，EXIT 0
 - `pnpm exec tsc --noEmit`：PENDING
 - `pnpm build`：PENDING
+
+## Batch C review 收口
+
+- **M-1**：`lastTextRef.current = text` 移至翻译成功后（`setStatus("done")` 同处），失败路径不更新 ref，使同文本再获焦可重试；补回归测试：模拟首次 reject 进错误态，focus 触发同文本 → translateText 被再次调用（从 1 次增到 2 次）。
+- **M-2**：加 `translatingRef`（`useRef(false)`），函数入口若已在翻译中则直接 return，done/error 两条结束路径均由 `finally` 块置回 false，防 focus 与挂载并发竞争 setState。
+- **L-1**：text 为 null 时显式 `if (text === null) { setStatus("empty"); return; }`，收窄后 `text` 自然为 string，去掉 `translateText(text!)` 非空断言。
+- **L-3**：`pickLatestText` 在取 content 前显式判断 `kind !== "text" && kind !== "richtext"` 时返回 null，image 项无论 content 是否为空均不可译；补两条单测：图片 content 非空返回 null、富文本 content 返回正文。
+
+## 最终验证结果（Batch C 收口）
+
+- `pnpm test`：319 passed (319)，37 文件，EXIT 0
+- `pnpm exec tsc --noEmit`：TypeScript: No errors found，EXIT 0
+- `pnpm build`：三入口产出，EXIT 0，built in 353ms
