@@ -3,6 +3,8 @@
 > 记录时间：2026-06-02。本会话按 `~/Downloads/index.html`、`popover.html`、`quickquick-icon-final-2.html` 三份设计稿，走 feature-dev 流程推进 UI 改造。
 > 当前 git HEAD：`60a9645`（工作树干净）。下个会话从这里接续。
 
+> **【2026-06-02 更新】里程碑4 popover 已全部完成并闭合。** 见 `docs/dev-log/v5/f3-popover/`（7 小功能三联留痕齐 + feature-report.md，HEAD 已推进到 `2b243ca`）。Batch A/B/C/D 全程 feature-dev：coder TDD → tester 动态证伪(17+ 变异如期变红) → reviewer(中级发现全收口)。最终门禁：前端 335 测试 + cargo test 全绿 + tsc 0 + build 三入口。**唯一剩余：GUI 视觉/交互需用户 `pnpm tauri dev` 肉眼确认（自动截图受权限限制）。** 下方「二、里程碑4」整节已落地，保留作实现记录；真正剩余项见「三、技术债」。
+
 ---
 
 ## 一、本会话已完成（已提交）
