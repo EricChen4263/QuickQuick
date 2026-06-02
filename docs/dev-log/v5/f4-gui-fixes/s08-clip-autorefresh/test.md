@@ -2,7 +2,7 @@
 id: s08-clip-autorefresh
 title: 剪贴板界面自动刷新（事件驱动）测试留痕
 status: passed
-commit: PENDING
+commit: fcfd997
 date: 2026-06-02
 ---
 

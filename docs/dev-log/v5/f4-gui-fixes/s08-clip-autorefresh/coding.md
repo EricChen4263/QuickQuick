@@ -2,7 +2,7 @@
 id: s08-clip-autorefresh
 title: 剪贴板列表自动刷新（事件驱动）
 status: done
-commit: PENDING
+commit: fcfd997
 date: 2026-06-02
 ---
 
