@@ -2,7 +2,7 @@
 id: f4-gui-fixes-s06-smoke
 title: GUI 启动冒烟验证（自动化可达上限）
 status: 冒烟通过（像素/交互验证仍需用户）
-commit: PENDING
+commit: 38d24fb
 date: 2026-06-02
 ---
 
