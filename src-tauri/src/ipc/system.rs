@@ -4,19 +4,26 @@
 //! - `get_storage_stats`           — 存储统计（活跃条目数 + 库文件大小）
 //! - `cleanup_history`             — 清理历史（容量裁剪 + GC 物理删除）
 //! - `open_accessibility_settings` — 打开 macOS 辅助功能系统设置深链
-//! - `paste_to_front`              — 将指定条目写回系统剪贴板（降级实现）
+//! - `paste_to_front`              — 将指定条目写回系统剪贴板，trusted 时走完整粘贴路径
 //!
-//! 降级说明（paste_to_front）：
-//! 当前实现仅写回剪贴板，不模拟 ⌘V 按键注入。真实自动粘贴需要
-//! Accessibility 授权 + CGEvent，留后续版本实现（见 paste_to_front_impl 注释）。
+//! paste_to_front 行为（V5-F4-S04-9b）：
+//! - trusted=true：写回剪贴板 → 隐藏 clip-popover/main 窗口 → 等待 100ms → Cmd+V 注入
+//!   → 返回 "full_paste"
+//! - trusted=false 或超时：仅写回剪贴板 → 返回 "write_back_only"
+//! - 图片条目：拒绝，返回错误
+//!
+//! 已知限制：务实焦点方案依赖 macOS 在窗口 hide 后自动把焦点还给上一个 App，
+//! 未实现显式 RecordFrontmost/ActivateOriginalApp（完整 FocusStep 序列）。
 
 use rusqlite::{Connection, OptionalExtension};
 use serde::Serialize;
 use tauri::{Manager, State};
 
+use crate::clipboard::CapturedItem;
 use crate::db::{self, DbError};
 use crate::ipc::{with_db, AppDb};
-use crate::onboarding::ACCESSIBILITY_DEEPLINK;
+use crate::onboarding::{perform_paste_or_degrade, AccessibilityProbe, PasteOutcome, ACCESSIBILITY_DEEPLINK};
+use crate::paste::PasteBackend;
 
 /// 存储统计 DTO。
 #[derive(Debug, Serialize)]
@@ -85,20 +92,16 @@ pub fn cleanup_history_impl(conn: &Connection) -> Result<CleanupResultDto, DbErr
     })
 }
 
-/// paste_to_front 的纯函数实现，可在测试中直接调用。
+/// 从 DB 按 id 取条目内容，校验类型，构造 CapturedItem。
 ///
-/// 降级实现：从 DB 按 id 查文本内容 → 写回系统剪贴板 → 返回 "write_back_only"。
-///
-/// 图片条目（kind="image"）当前返回错误，不支持写回（arboard 图片格式转换留后续）。
-///
-/// 注意：真实自动粘贴需要 Accessibility 授权 + CGEvent ⌘V 注入，
-/// 当前故意跳过，待后续版本在 onboarding 授权流程完整后补充。
+/// 图片条目（kind="image"）返回错误（arboard 图片格式转换留后续）。
+/// id 为空或条目不存在时返回错误。
 ///
 /// # Errors
-/// - id 不存在时返回错误
-/// - 条目为图片类型时返回错误
-/// - 剪贴板写入失败时返回 `DbError::Other`
-pub fn paste_to_front_impl(conn: &Connection, id: &str) -> Result<PasteResultDto, DbError> {
+/// - id 为空
+/// - 条目不存在或已软删
+/// - 条目类型为 "image"
+pub fn fetch_paste_item(conn: &Connection, id: &str) -> Result<CapturedItem, DbError> {
     if id.trim().is_empty() {
         return Err(DbError::Other("id 不能为空".to_string()));
     }
@@ -120,10 +123,53 @@ pub fn paste_to_front_impl(conn: &Connection, id: &str) -> Result<PasteResultDto
         ));
     }
 
+    Ok(CapturedItem {
+        text: content,
+        html: None,
+    })
+}
+
+/// 将 PasteOutcome 映射为前端 outcome 字符串（纯函数，可测）。
+///
+/// - `FullPasteDone`      → "full_paste"
+/// - `WriteBackOnlyDone`  → "write_back_only"
+pub fn map_outcome(outcome: &PasteOutcome) -> &'static str {
+    match outcome {
+        PasteOutcome::FullPasteDone => "full_paste",
+        PasteOutcome::WriteBackOnlyDone => "write_back_only",
+    }
+}
+
+/// 编排粘贴逻辑：调用 perform_paste_or_degrade，将结果映射为 outcome 字符串。
+///
+/// 此函数不含窗口 hide 或 sleep（OS 边界操作），仅封装可测的"探针决策 → 执行 → 映射"。
+/// 窗口 hide 与延时由调用方（paste_to_front 命令）在 trusted 分支的 send_paste 前执行。
+///
+/// 超时（PasteError::Timeout）时：剪贴板已写入，映射为 "write_back_only"，不向上传播错误。
+pub fn paste_orchestrate(
+    probe: &impl AccessibilityProbe,
+    backend: &mut dyn PasteBackend,
+    item: &CapturedItem,
+) -> String {
+    match perform_paste_or_degrade(probe, backend, item) {
+        Ok(outcome) => map_outcome(&outcome).to_string(),
+        Err(_timeout) => "write_back_only".to_string(),
+    }
+}
+
+/// paste_to_front_impl：DB 查询 + 编排，供测试复用（传入 fake probe/backend）。
+///
+/// 返回 PasteResultDto 而非执行窗口 hide，窗口 hide 属 OS 边界留 tauri 命令层。
+///
+/// # Errors
+/// - id 为空、不存在、图片类型
+pub fn paste_to_front_impl(conn: &Connection, id: &str) -> Result<PasteResultDto, DbError> {
+    let item = fetch_paste_item(conn, id)?;
+
     let mut clipboard = arboard::Clipboard::new()
         .map_err(|e| DbError::Other(format!("剪贴板初始化失败：{e}")))?;
     clipboard
-        .set_text(&content)
+        .set_text(&item.text)
         .map_err(|e| DbError::Other(format!("写回剪贴板失败：{e}")))?;
 
     Ok(PasteResultDto {
@@ -169,22 +215,95 @@ pub fn open_accessibility_settings() -> Result<(), String> {
     Ok(())
 }
 
-/// Tauri 命令：将指定条目写回系统剪贴板（降级实现）。
+/// 在 trusted 路径执行窗口 hide：优先 hide clip-popover，不存在则 hide main。
 ///
-/// 返回 `{ outcome: "write_back_only" }`，不模拟 ⌘V 注入。
+/// hide 失败不 panic，降级记录日志继续尝试粘贴。
+/// 隐藏后 sleep 100ms 让 macOS 把焦点归还给原 App。
+fn hide_panel_and_wait(app: &tauri::AppHandle) {
+    let hidden = app
+        .get_webview_window("clip-popover")
+        .map(|w| {
+            if let Err(e) = w.hide() {
+                eprintln!("[paste_to_front] hide clip-popover 失败: {e}");
+                false
+            } else {
+                true
+            }
+        })
+        .unwrap_or(false);
+
+    if !hidden {
+        if let Some(main_win) = app.get_webview_window("main") {
+            if let Err(e) = main_win.hide() {
+                eprintln!("[paste_to_front] hide main 失败: {e}");
+            }
+        }
+    }
+
+    std::thread::sleep(std::time::Duration::from_millis(100));
+}
+
+/// Tauri 命令：将指定条目写回系统剪贴板，trusted 时走完整粘贴路径（V5-F4-S04-9b）。
+///
+/// trusted=true 分支：写回 → hide 窗口 → 等待 100ms → Cmd+V → 返回 "full_paste"。
+/// trusted=false 或超时：仅写回 → 返回 "write_back_only"。
+/// 图片条目返回 Err。
 #[tauri::command]
-pub fn paste_to_front(state: State<'_, AppDb>, id: String) -> Result<PasteResultDto, String> {
-    with_db(&state, |conn| {
-        paste_to_front_impl(conn, &id).map_err(|e| e.to_string())
-    })
+pub fn paste_to_front(
+    state: State<'_, AppDb>,
+    app: tauri::AppHandle,
+    id: String,
+) -> Result<PasteResultDto, String> {
+    let item = with_db(&state, |conn| {
+        fetch_paste_item(conn, &id).map_err(|e| e.to_string())
+    })?;
+
+    let outcome = run_paste_with_backend(&app, &item);
+
+    Ok(PasteResultDto { outcome })
+}
+
+/// 构造平台后端/probe，执行粘贴编排（含 trusted 分支的窗口 hide）。
+///
+/// 拆出独立函数以降低 paste_to_front 函数体长度，cfg 分流在此隔离。
+#[cfg(target_os = "macos")]
+fn run_paste_with_backend(app: &tauri::AppHandle, item: &CapturedItem) -> String {
+    use crate::macos_paste::{MacOsAccessibilityProbe, MacOsPasteBackend};
+
+    let probe = MacOsAccessibilityProbe;
+    let mut backend = MacOsPasteBackend::new();
+
+    if probe.is_trusted() {
+        backend.write_with_marker(item);
+        hide_panel_and_wait(app);
+        backend.send_paste();
+        "full_paste".to_string()
+    } else {
+        backend.write_with_marker(item);
+        "write_back_only".to_string()
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn run_paste_with_backend(app: &tauri::AppHandle, item: &CapturedItem) -> String {
+    use crate::macos_paste::FallbackAccessibilityProbe;
+    use crate::macos_paste::FallbackPasteBackend;
+
+    let probe = FallbackAccessibilityProbe;
+    let mut backend = FallbackPasteBackend::new();
+    let _ = app;
+
+    paste_orchestrate(&probe, &mut backend, item)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::db::ingest;
+    use crate::clipboard::CapturedItem;
+    use crate::onboarding::AccessibilityProbe;
+    use crate::paste::PasteBackend;
 
-    /// 构造最小合法内存 SQLite，初始化 clip_items 表。
     fn make_test_conn() -> Connection {
         let conn = Connection::open_in_memory().expect("内存库开启失败");
         conn.execute_batch(
@@ -205,6 +324,51 @@ mod tests {
         conn
     }
 
+    struct FakeProbe {
+        trusted: bool,
+    }
+    impl AccessibilityProbe for FakeProbe {
+        fn is_trusted(&self) -> bool {
+            self.trusted
+        }
+    }
+
+    struct FakeBackend {
+        count: u64,
+        text: Option<String>,
+        send_paste_called: bool,
+        freeze_count: bool,
+    }
+    impl FakeBackend {
+        fn trusted_normal() -> Self {
+            Self { count: 0, text: None, send_paste_called: false, freeze_count: false }
+        }
+        fn frozen_count() -> Self {
+            Self { count: 0, text: None, send_paste_called: false, freeze_count: true }
+        }
+    }
+    impl PasteBackend for FakeBackend {
+        fn change_count(&self) -> u64 {
+            self.count
+        }
+        fn write_with_marker(&mut self, item: &CapturedItem) {
+            self.text = Some(item.text.clone());
+            if !self.freeze_count {
+                self.count += 1;
+            }
+        }
+        fn current_text(&self) -> Option<String> {
+            self.text.clone()
+        }
+        fn send_paste(&mut self) {
+            self.send_paste_called = true;
+        }
+    }
+
+    fn test_item(text: &str) -> CapturedItem {
+        CapturedItem { text: text.to_string(), html: None }
+    }
+
     /// T1：get_storage_stats_impl — 空库返回 live_count=0，file_size_bytes=0（无路径）
     #[test]
     fn get_storage_stats_impl_empty_db_returns_zero() {
@@ -218,14 +382,8 @@ mod tests {
     #[test]
     fn get_storage_stats_impl_counts_live_items() {
         let conn = make_test_conn();
-        let item_a = crate::clipboard::CapturedItem {
-            text: "hello".to_string(),
-            html: None,
-        };
-        let item_b = crate::clipboard::CapturedItem {
-            text: "world".to_string(),
-            html: None,
-        };
+        let item_a = CapturedItem { text: "hello".to_string(), html: None };
+        let item_b = CapturedItem { text: "world".to_string(), html: None };
         ingest(&conn, &item_a).expect("入库 A 失败");
         ingest(&conn, &item_b).expect("入库 B 失败");
 
@@ -237,10 +395,7 @@ mod tests {
     #[test]
     fn cleanup_history_impl_no_excess_returns_zeros() {
         let conn = make_test_conn();
-        let item = crate::clipboard::CapturedItem {
-            text: "only one".to_string(),
-            html: None,
-        };
+        let item = CapturedItem { text: "only one".to_string(), html: None };
         ingest(&conn, &item).expect("入库失败");
 
         let result = cleanup_history_impl(&conn).expect("不应失败");
@@ -248,24 +403,75 @@ mod tests {
         assert_eq!(result.purged, 0, "无墓碑时 purged 应为 0");
     }
 
-    /// T4：paste_to_front_impl — 空 id 应返回 Err
+    /// T4：fetch_paste_item — 空 id 应返回 Err
     #[test]
-    fn paste_to_front_impl_empty_id_returns_err() {
+    fn fetch_paste_item_empty_id_returns_err() {
         let conn = make_test_conn();
-        let result = paste_to_front_impl(&conn, "");
+        let result = fetch_paste_item(&conn, "");
         assert!(result.is_err(), "空 id 应返回错误");
     }
 
-    /// T5：paste_to_front_impl — 不存在的 id 应返回 Err
+    /// T5：fetch_paste_item — 不存在的 id 应返回 Err
     #[test]
-    fn paste_to_front_impl_nonexistent_id_returns_err() {
+    fn fetch_paste_item_nonexistent_id_returns_err() {
         let conn = make_test_conn();
-        let result = paste_to_front_impl(&conn, "nonexistent-uuid");
+        let result = fetch_paste_item(&conn, "nonexistent-uuid");
         assert!(result.is_err(), "不存在的 id 应返回错误");
         let msg = result.unwrap_err().to_string();
         assert!(
             msg.contains("不存在") || msg.contains("条目"),
             "错误信息应说明条目不存在，实际：{msg}"
         );
+    }
+
+    /// T6：map_outcome — FullPasteDone 映射 "full_paste"
+    #[test]
+    fn map_outcome_full_paste_done_returns_full_paste() {
+        assert_eq!(map_outcome(&PasteOutcome::FullPasteDone), "full_paste");
+    }
+
+    /// T7：map_outcome — WriteBackOnlyDone 映射 "write_back_only"
+    #[test]
+    fn map_outcome_write_back_only_done_returns_write_back_only() {
+        assert_eq!(map_outcome(&PasteOutcome::WriteBackOnlyDone), "write_back_only");
+    }
+
+    /// T8：paste_orchestrate — trusted=true 正常后端 → "full_paste"，send_paste 被调用
+    #[test]
+    fn paste_orchestrate_trusted_normal_returns_full_paste() {
+        let probe = FakeProbe { trusted: true };
+        let mut backend = FakeBackend::trusted_normal();
+        let item = test_item("hello world");
+
+        let outcome = paste_orchestrate(&probe, &mut backend, &item);
+
+        assert_eq!(outcome, "full_paste", "trusted 正常路径应返回 full_paste");
+        assert!(backend.send_paste_called, "trusted 路径应调用 send_paste");
+    }
+
+    /// T9：paste_orchestrate — trusted=false → "write_back_only"，send_paste 未被调用
+    #[test]
+    fn paste_orchestrate_untrusted_returns_write_back_only() {
+        let probe = FakeProbe { trusted: false };
+        let mut backend = FakeBackend::trusted_normal();
+        let item = test_item("hello world");
+
+        let outcome = paste_orchestrate(&probe, &mut backend, &item);
+
+        assert_eq!(outcome, "write_back_only", "未授权路径应返回 write_back_only");
+        assert!(!backend.send_paste_called, "未授权路径不应调用 send_paste");
+    }
+
+    /// T10：paste_orchestrate — trusted=true 但 changeCount 冻结（超时）→ "write_back_only"，不崩
+    #[test]
+    fn paste_orchestrate_trusted_timeout_returns_write_back_only() {
+        let probe = FakeProbe { trusted: true };
+        let mut backend = FakeBackend::frozen_count();
+        let item = test_item("hello world");
+
+        let outcome = paste_orchestrate(&probe, &mut backend, &item);
+
+        assert_eq!(outcome, "write_back_only", "超时应映射 write_back_only");
+        assert!(!backend.send_paste_called, "超时不应调用 send_paste");
     }
 }
