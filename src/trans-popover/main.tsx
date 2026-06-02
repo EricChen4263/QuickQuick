@@ -3,7 +3,7 @@ import ReactDOM from "react-dom/client";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { getResolved, subscribe } from "../theme/themeStore";
 import TransPopoverApp from "./TransPopoverApp";
-import "./trans-popover.css";
+import "./popover.css";
 
 function applyTheme(): void {
   document.documentElement.dataset["theme"] = getResolved();

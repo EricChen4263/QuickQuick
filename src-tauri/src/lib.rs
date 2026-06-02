@@ -7,6 +7,7 @@
 //! - `hotkey`：全局热键配置、改键持久化与冲突检测
 //! - `ipc`：所有 Tauri 命令（clipboard / translate / settings）
 //! - `pipeline`：启动数据管道（open_app_db / capture_and_ingest / ArboardBackend）
+//! - `popover`：popover 窗口的显示/隐藏与定位逻辑（clip-popover / trans-popover）
 //! - `settings`：应用配置（排除名单、provider 选择）
 //! - `tray`：系统托盘菜单构建（setup 阶段调用）
 //! - `window_pos`：预热窗口定位逻辑（光标所在显示器水平居中、靠上 15%）

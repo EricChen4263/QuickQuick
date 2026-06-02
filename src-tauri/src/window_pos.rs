@@ -7,22 +7,8 @@
 
 use tauri::{PhysicalPosition, WebviewWindow};
 
-/// 窗口尺寸（物理像素）——与 tauri.conf.json 中的 400×600 对应。
-const WINDOW_WIDTH: i32 = 400;
-
 /// 窗口顶边距离显示器顶边的比例（约 15%）。
 const TOP_RATIO: f64 = 0.15;
-
-/// 根据光标位置计算窗口应放置的物理坐标（使用模块默认宽度 400px）。
-///
-/// 返回值为绝对屏幕坐标（PhysicalPosition），直接传给 `window.set_position()`。
-/// 所有可能失败的操作均有回退，不会 panic。
-///
-/// 保留为 main 窗口定位的向后兼容 wrapper，供 tray / dock 触发逻辑调用。
-#[allow(dead_code)]
-pub fn compute_window_position(window: &WebviewWindow) -> PhysicalPosition<i32> {
-    compute_window_position_for_width(window, WINDOW_WIDTH)
-}
 
 /// 根据光标位置和指定宽度计算窗口应放置的物理坐标。
 ///
@@ -99,9 +85,9 @@ mod tests {
     /// 验证水平居中计算：显示器 1920×1080，窗口 400px 宽，x 应为 760
     #[test]
     fn center_top_x_is_centered() {
-        // Arrange: 显示器起点 (0,0)，大小 1920×1080，使用默认宽度 400
+        // Arrange: 显示器起点 (0,0)，大小 1920×1080，窗口宽 400
         // Act
-        let pos = center_top_position(0, 0, 1920, 1080, WINDOW_WIDTH);
+        let pos = center_top_position(0, 0, 1920, 1080, 400);
 
         // Assert: x = (1920 - 400) / 2 = 760
         assert_eq!(pos.x, 760, "水平居中 x 应为 760");
@@ -112,7 +98,7 @@ mod tests {
     fn center_top_y_is_fifteen_percent() {
         // Arrange
         // Act
-        let pos = center_top_position(0, 0, 1920, 1080, WINDOW_WIDTH);
+        let pos = center_top_position(0, 0, 1920, 1080, 400);
 
         // Assert: y = floor(1080 * 0.15) = 162
         assert_eq!(pos.y, 162, "靠上 15% y 应为 162");
@@ -123,7 +109,7 @@ mod tests {
     fn center_top_accounts_for_monitor_offset() {
         // Arrange
         // Act
-        let pos = center_top_position(1920, 200, 2560, 1440, WINDOW_WIDTH);
+        let pos = center_top_position(1920, 200, 2560, 1440, 400);
 
         // Assert: x = 1920 + (2560 - 400) / 2 = 1920 + 1080 = 3000
         //         y = 200 + floor(1440 * 0.15) = 200 + 216 = 416
