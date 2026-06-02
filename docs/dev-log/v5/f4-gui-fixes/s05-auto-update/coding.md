@@ -2,7 +2,7 @@
 id: f4-gui-fixes-s05-client
 title: 自动更新客户端实装
 status: 实现完成
-commit: PENDING
+commit: 34a8a85
 date: 2026-06-02
 ---
 
