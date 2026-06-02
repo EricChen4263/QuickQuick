@@ -375,4 +375,63 @@ describe("translate-page", () => {
     });
     expect(screen.getByRole("alert").textContent).toMatch(/失败/);
   });
+
+  it("translate-page: seed prop 传入文本后自动填入输入框并调用 translateText", async () => {
+    // RED：TranslatePage 尚不接受 seed prop，此测试预期失败
+    mockTranslateText.mockResolvedValue(MOCK_RESULT);
+    render(<TranslatePage seed={{ text: "hello", nonce: 1 }} />);
+
+    // Assert：translateText 被以 "hello" 调用
+    await waitFor(() => {
+      expect(mockTranslateText).toHaveBeenCalledWith("hello", undefined);
+    });
+    // Assert：输入框填入了 seed.text
+    const textarea = screen.getByRole("textbox");
+    expect((textarea as HTMLTextAreaElement).value).toBe("hello");
+    // Assert：译文渲染出来
+    await waitFor(() => {
+      expect(screen.getByText("你好世界")).toBeInTheDocument();
+    });
+  });
+
+  it("translate-page: seed nonce 自增时相同文本再次触发 translateText", async () => {
+    // 验证：nonce 变化时，即使 text 相同，也会再次触发翻译
+    mockTranslateText.mockResolvedValue(MOCK_RESULT);
+    const { rerender } = render(<TranslatePage seed={{ text: "hello", nonce: 1 }} />);
+
+    await waitFor(() => {
+      expect(mockTranslateText).toHaveBeenCalledTimes(1);
+    });
+
+    // Act：nonce 自增，文本不变
+    rerender(<TranslatePage seed={{ text: "hello", nonce: 2 }} />);
+
+    await waitFor(() => {
+      expect(mockTranslateText).toHaveBeenCalledTimes(2);
+    });
+    expect(mockTranslateText).toHaveBeenNthCalledWith(2, "hello", undefined);
+  });
+
+  it("translate-page: seed 为 null 时不调用 translateText", async () => {
+    mockTranslateText.mockResolvedValue(MOCK_RESULT);
+    render(<TranslatePage seed={null} />);
+
+    // 等待挂载完成（provider fetch 等）
+    await waitFor(() => {
+      expect(screen.getByRole("textbox")).toBeInTheDocument();
+    });
+
+    expect(mockTranslateText).not.toHaveBeenCalled();
+  });
+
+  it("translate-page: seed.text 为空字符串时不调用 translateText", async () => {
+    mockTranslateText.mockResolvedValue(MOCK_RESULT);
+    render(<TranslatePage seed={{ text: "   ", nonce: 1 }} />);
+
+    await waitFor(() => {
+      expect(screen.getByRole("textbox")).toBeInTheDocument();
+    });
+
+    expect(mockTranslateText).not.toHaveBeenCalled();
+  });
 });

@@ -6,7 +6,7 @@
  */
 
 import "./translate.css";
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import {
   translateText,
   listTranslateHistory,
@@ -22,8 +22,12 @@ import { writeToClipboard, speakText } from "./browser-api";
 import TranslateWorkspace from "./TranslateWorkspace";
 import TranslateHistoryPanel from "./TranslateHistoryPanel";
 
+interface TranslatePageProps {
+  seed?: { text: string; nonce: number } | null;
+}
+
 /** 翻译页根组件：工作区主体 + 翻译历史右栏 */
-function TranslatePage() {
+function TranslatePage({ seed }: TranslatePageProps) {
   const [inputText, setInputText] = useState("");
   const [result, setResult] = useState<TranslateResult | null>(null);
   const [isLoading, setIsLoading] = useState(false);
@@ -72,13 +76,18 @@ function TranslatePage() {
     };
   }, [fetchHistory]);
 
-  /** 执行翻译：调 IPC → 更新结果 → 刷新历史 */
-  async function handleTranslate() {
-    if (inputText.trim().length === 0) return;
+  /**
+   * 执行翻译：调 IPC → 更新结果 → 刷新历史。
+   * textOverride 为显式字符串时用之，否则读 inputText state。
+   * typeof 守卫防止 TranslateWorkspace 翻译按钮把合成事件对象泄漏为参数。
+   */
+  const handleTranslate = useCallback(async (textOverride?: string) => {
+    const text = typeof textOverride === "string" ? textOverride : inputText;
+    if (text.trim().length === 0) return;
     setIsLoading(true);
     setError(null);
     try {
-      const res = await translateText(inputText, undefined);
+      const res = await translateText(text, undefined);
       setResult(res);
       const cancelled = { current: false };
       await fetchHistory(cancelled);
@@ -88,7 +97,20 @@ function TranslatePage() {
     } finally {
       setIsLoading(false);
     }
-  }
+  }, [inputText, fetchHistory]);
+
+  // 监听 seed.nonce 变化：每次新 seed 到来自动填入文本并触发翻译。
+  // 依赖数组只放 seed?.nonce，确保同文本重复点击也能重新触发。
+  const seedRef = useRef(seed);
+  seedRef.current = seed;
+  useEffect(() => {
+    const current = seedRef.current;
+    if (current && current.text.trim().length > 0) {
+      setInputText(current.text);
+      void handleTranslate(current.text);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [seed?.nonce]);
 
   /**
    * 分发译文操作：

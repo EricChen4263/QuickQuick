@@ -24,6 +24,16 @@ function routeToTopLevel(trigger: HotkeyTrigger): TopLevel {
 /** QuickQuick 主窗口根组件：AppShell 包裹三页，路由层保持不变 */
 function App() {
   const [activeTop, setActiveTop] = useState<TopLevel>("clipboard");
+  const [translateSeed, setTranslateSeed] = useState<{ text: string; nonce: number } | null>(null);
+
+  /**
+   * 剪贴板页一键翻译回调：填入 seed 并切换到翻译页。
+   * nonce 自增确保相同文本重复点击也能重新触发翻译。
+   */
+  function handleTranslateFromClip(content: string) {
+    setTranslateSeed((prev) => ({ text: content, nonce: (prev?.nonce ?? 0) + 1 }));
+    setActiveTop((_prev) => "translate");
+  }
 
   // 监听后端 route 事件，切换一级页
   // cancelled flag 防止组件卸载后 Promise resolve 造成监听器泄漏
@@ -75,13 +85,13 @@ function App() {
         data-testid="page-clipboard"
         style={{ display: activeTop === "clipboard" ? "block" : "none", height: "100%" }}
       >
-        <ClipboardPage />
+        <ClipboardPage onTranslateItem={handleTranslateFromClip} />
       </section>
       <section
         data-testid="page-translate"
         style={{ display: activeTop === "translate" ? "block" : "none", height: "100%" }}
       >
-        <TranslatePage />
+        <TranslatePage seed={translateSeed} />
       </section>
       <section
         data-testid="page-settings"

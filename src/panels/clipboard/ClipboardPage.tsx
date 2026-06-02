@@ -48,8 +48,12 @@ const EmptyListIcon = (
   </svg>
 );
 
+interface ClipboardPageProps {
+  onTranslateItem?: (content: string) => void;
+}
+
 /** 剪贴板历史页根组件 */
-function ClipboardPage() {
+function ClipboardPage({ onTranslateItem }: ClipboardPageProps) {
   const [items, setItems] = useState<ClipItem[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [opError, setOpError] = useState<string | null>(null);
@@ -238,7 +242,7 @@ function ClipboardPage() {
         onDelete={handleDelete}
         onCopy={(_item) => { /* 复制逻辑在 ClipPreview 内部调用 writeToClipboard 完成 */ }}
         onPasteToFront={(item) => { void handlePasteToFront(item); }}
-        onTranslate={(_item) => { /* 里程碑3接入：跳转翻译页 */ }}
+        onTranslate={(item) => { onTranslateItem?.(item.content); }}
       />
     </div>
   );

@@ -374,4 +374,26 @@ describe("clipboard-page", () => {
       expect(mockOpenAccessibilitySettings).toHaveBeenCalledTimes(1);
     });
   });
+
+  it("clipboard-page: onTranslateItem prop 在点击一键翻译后以条目 content 被调用", async () => {
+    // RED：ClipboardPage 尚不接受 onTranslateItem prop，此测试预期失败
+    mockListClipItems.mockResolvedValue(MOCK_ITEMS);
+    const mockOnTranslateItem = vi.fn();
+    const user = userEvent.setup();
+    // onboardCard 隐藏：避免布局干扰
+    localStorage.setItem("qq-onboard-dismissed", "true");
+    render(<ClipboardPage onTranslateItem={mockOnTranslateItem} />);
+
+    await waitFor(() => {
+      expect(screen.getAllByText("Hello World").length).toBeGreaterThanOrEqual(1);
+    });
+
+    // 预览区高亮 item-1（text 类型）——一键翻译按钮仅非图片项可见
+    const previewRegion = screen.getByRole("region", { name: "预览" });
+    const translateBtn = within(previewRegion).getByRole("button", { name: /一键翻译/ });
+    await user.click(translateBtn);
+
+    // Assert：onTranslateItem 被以 item-1.content 调用
+    expect(mockOnTranslateItem).toHaveBeenCalledWith("Hello World");
+  });
 });
