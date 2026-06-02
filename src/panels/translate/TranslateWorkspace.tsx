@@ -17,11 +17,14 @@ interface TranslateWorkspaceProps {
   result: TranslateResult | null;
   isLoading: boolean;
   error: string | null;
+  sourceLang: string;
+  targetLang: string;
   providers: Provider[];
   selectedProviderId: string;
   onInputChange: (text: string) => void;
   onTranslate: (textOverride?: string) => void;
-  onSwap: () => void;
+  onSourceChange: (code: string) => void;
+  onTargetChange: (code: string) => void;
   onAction: (action: string) => void;
   onProviderChange: (id: string) => void;
 }
@@ -35,11 +38,14 @@ function TranslateWorkspace({
   result,
   isLoading,
   error,
+  sourceLang,
+  targetLang,
   providers,
   selectedProviderId,
   onInputChange,
   onTranslate,
-  onSwap,
+  onSourceChange,
+  onTargetChange,
   onAction,
   onProviderChange,
 }: TranslateWorkspaceProps) {
@@ -60,12 +66,13 @@ function TranslateWorkspace({
 
       <div className="tx-scroll">
         <DirBar
-          sourceLang={result?.sourceLang ?? "auto"}
-          targetLang={result?.targetLang ?? "zh"}
+          sourceLang={sourceLang}
+          targetLang={targetLang}
           providers={providers}
           selectedProviderId={selectedProviderId}
           onProviderChange={onProviderChange}
-          onSwap={result !== null && result.sourceLang !== "" && result.sourceLang !== "auto" ? onSwap : undefined}
+          onSourceChange={onSourceChange}
+          onTargetChange={onTargetChange}
         />
 
         <div className="field-label">原文</div>

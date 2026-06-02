@@ -80,7 +80,99 @@ describe("translate-page", () => {
     mockWriteToClipboard.mockResolvedValue(undefined);
   });
 
-  it("translate-page: 输入文本点击翻译后调用 translateText 并显示译文和语言方向", async () => {
+  it("translate-page: 默认 source=auto target=zh，点翻译以 (text, 'zh', undefined) 调用", async () => {
+    // Arrange
+    mockTranslateText.mockResolvedValue(MOCK_RESULT);
+    const user = userEvent.setup();
+    render(<TranslatePage />);
+
+    // Act：输入文本并点击翻译
+    const textarea = screen.getByRole("textbox");
+    await user.type(textarea, "Hello World");
+    const translateBtn = screen.getByRole("button", { name: /翻译/ });
+    await user.click(translateBtn);
+
+    // Assert：translateText 以 (text, targetLang="zh", source=undefined) 被调用
+    await waitFor(() => {
+      expect(mockTranslateText).toHaveBeenCalledWith("Hello World", "zh", undefined);
+    });
+  });
+
+  it("translate-page: 改目标语为 en 后点翻译，translateText 第二参为 'en'", async () => {
+    // Arrange
+    mockTranslateText.mockResolvedValue({ translated: "Hello World", sourceLang: "zh", targetLang: "en" });
+    const user = userEvent.setup();
+    render(<TranslatePage />);
+
+    // 等 provider 加载完成
+    await waitFor(() => {
+      expect(screen.getByRole("combobox", { name: "目标语言" })).toBeInTheDocument();
+    });
+
+    // Act：切换目标语为英文
+    const targetSelect = screen.getByRole("combobox", { name: "目标语言" });
+    await user.selectOptions(targetSelect, "en");
+
+    // 输入并翻译
+    const textarea = screen.getByRole("textbox");
+    await user.type(textarea, "你好");
+    await user.click(screen.getByRole("button", { name: /翻译/ }));
+
+    // Assert：第二参为 "en"，第三参为 undefined（source 仍是 auto）
+    await waitFor(() => {
+      expect(mockTranslateText).toHaveBeenCalledWith("你好", "en", undefined);
+    });
+  });
+
+  it("translate-page: source 选具体语言（如 en）后点翻译，translateText 第三参为 'en'", async () => {
+    // Arrange
+    mockTranslateText.mockResolvedValue(MOCK_RESULT);
+    const user = userEvent.setup();
+    render(<TranslatePage />);
+
+    // 等 provider 加载完成
+    await waitFor(() => {
+      expect(screen.getByRole("combobox", { name: "源语言" })).toBeInTheDocument();
+    });
+
+    // Act：切换源语为英文
+    const sourceSelect = screen.getByRole("combobox", { name: "源语言" });
+    await user.selectOptions(sourceSelect, "en");
+
+    // 输入并翻译
+    const textarea = screen.getByRole("textbox");
+    await user.type(textarea, "Hello");
+    await user.click(screen.getByRole("button", { name: /翻译/ }));
+
+    // Assert：第三参为 "en"（具体语言，不转为 undefined）
+    await waitFor(() => {
+      expect(mockTranslateText).toHaveBeenCalledWith("Hello", "zh", "en");
+    });
+  });
+
+  it("translate-page: source=auto 时 translateText 第三参为 undefined", async () => {
+    // Arrange
+    mockTranslateText.mockResolvedValue(MOCK_RESULT);
+    const user = userEvent.setup();
+    render(<TranslatePage />);
+
+    // 等 provider 加载完成（source 默认为 auto，不做切换）
+    await waitFor(() => {
+      expect(screen.getByRole("combobox", { name: "源语言" })).toBeInTheDocument();
+    });
+
+    // Act：直接输入并翻译（不切换源语，保持默认 auto）
+    const textarea = screen.getByRole("textbox");
+    await user.type(textarea, "Hello");
+    await user.click(screen.getByRole("button", { name: /翻译/ }));
+
+    // Assert：source=auto → 第三参为 undefined
+    await waitFor(() => {
+      expect(mockTranslateText).toHaveBeenCalledWith("Hello", "zh", undefined);
+    });
+  });
+
+  it("translate-page: 输入文本点击翻译后显示译文和语言方向", async () => {
     // Arrange
     mockTranslateText.mockResolvedValue(MOCK_RESULT);
     const user = userEvent.setup();
@@ -96,10 +188,7 @@ describe("translate-page", () => {
     await waitFor(() => {
       expect(screen.getByText("你好世界")).toBeInTheDocument();
     });
-    // Assert：translateText 被以输入文本调用（第二参为 undefined，由实现自动检测语言）
-    expect(mockTranslateText).toHaveBeenCalledWith("Hello World", undefined);
-    // Assert：方向标识（sourceLang → targetLang）——DirBar lang-pill 和译文 field-label 均含此方向，
-    // 用 getAllByText 避免多元素报错，断言至少一处存在即满足语义
+    // Assert：译文区方向标识（后端返回的实际方向）
     expect(screen.getAllByText(/en.*zh|en\s*→\s*zh/).length).toBeGreaterThanOrEqual(1);
   });
 
@@ -295,61 +384,6 @@ describe("translate-page", () => {
     });
   });
 
-  it("translate-page: swap 按钮点击后把译文填入输入框并以 sourceLang 为目标语重新翻译", async () => {
-    const swapResult = { translated: "生活", sourceLang: "en", targetLang: "zh" };
-    mockTranslateText
-      .mockResolvedValueOnce(MOCK_RESULT)
-      .mockResolvedValueOnce(swapResult);
-    const user = userEvent.setup();
-    render(<TranslatePage />);
-
-    const textarea = screen.getByRole("textbox");
-    await user.type(textarea, "Life");
-    await user.click(screen.getByRole("button", { name: /^翻译$/ }));
-    await waitFor(() => {
-      expect(screen.getByText("你好世界")).toBeInTheDocument();
-    });
-
-    const swapBtn = screen.getByRole("button", { name: "交换语言方向" });
-    await user.click(swapBtn);
-
-    await waitFor(() => {
-      expect(mockTranslateText).toHaveBeenCalledWith(MOCK_RESULT.translated, MOCK_RESULT.sourceLang);
-    });
-    await waitFor(() => {
-      expect((screen.getByRole("textbox") as HTMLTextAreaElement).value).toBe(MOCK_RESULT.translated);
-    });
-  });
-
-  it("translate-page: 无翻译结果时 swap 按钮禁用", async () => {
-    mockTranslateText.mockResolvedValue(MOCK_RESULT);
-    render(<TranslatePage />);
-
-    await waitFor(() => {
-      expect(screen.getByText("Hello")).toBeInTheDocument();
-    });
-
-    const swapBtn = screen.getByRole("button", { name: "交换语言方向" });
-    expect(swapBtn).toBeDisabled();
-  });
-
-  it("translate-page: sourceLang 为 auto 时 swap 按钮禁用", async () => {
-    const autoResult = { translated: "Life", sourceLang: "auto", targetLang: "en" };
-    mockTranslateText.mockResolvedValue(autoResult);
-    const user = userEvent.setup();
-    render(<TranslatePage />);
-
-    const textarea = screen.getByRole("textbox");
-    await user.type(textarea, "生活");
-    await user.click(screen.getByRole("button", { name: /^翻译$/ }));
-    await waitFor(() => {
-      expect(screen.getByText("Life")).toBeInTheDocument();
-    });
-
-    const swapBtn = screen.getByRole("button", { name: "交换语言方向" });
-    expect(swapBtn).toBeDisabled();
-  });
-
   it("translate-page: copy 操作 reject 时显示错误提示（role=alert）", async () => {
     // Arrange：writeToClipboard 模拟失败
     mockTranslateText.mockResolvedValue(MOCK_RESULT);
@@ -377,13 +411,12 @@ describe("translate-page", () => {
   });
 
   it("translate-page: seed prop 传入文本后自动填入输入框并调用 translateText", async () => {
-    // RED：TranslatePage 尚不接受 seed prop，此测试预期失败
     mockTranslateText.mockResolvedValue(MOCK_RESULT);
     render(<TranslatePage seed={{ text: "hello", nonce: 1 }} />);
 
-    // Assert：translateText 被以 "hello" 调用
+    // Assert：translateText 被以 "hello" 调用（target="zh", source=undefined）
     await waitFor(() => {
-      expect(mockTranslateText).toHaveBeenCalledWith("hello", undefined);
+      expect(mockTranslateText).toHaveBeenCalledWith("hello", "zh", undefined);
     });
     // Assert：输入框填入了 seed.text
     const textarea = screen.getByRole("textbox");
@@ -409,7 +442,7 @@ describe("translate-page", () => {
     await waitFor(() => {
       expect(mockTranslateText).toHaveBeenCalledTimes(2);
     });
-    expect(mockTranslateText).toHaveBeenNthCalledWith(2, "hello", undefined);
+    expect(mockTranslateText).toHaveBeenNthCalledWith(2, "hello", "zh", undefined);
   });
 
   it("translate-page: seed 为 null 时不调用 translateText", async () => {

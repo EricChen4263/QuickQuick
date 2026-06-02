@@ -32,7 +32,7 @@ fn ipc_translate_chinese_text_produces_zh_to_en_direction() {
     let fake =
         FakeExecutor::new(r#"{"responseData":{"translatedText":"Hello"},"responseStatus":200}"#);
 
-    let result = translate_text_impl(&conn, &fake, "你好", None).expect("翻译应成功");
+    let result = translate_text_impl(&conn, &fake, "你好", None, None).expect("翻译应成功");
 
     assert_eq!(result.source_lang, "zh", "中文输入 sourceLang 应为 zh");
     assert_eq!(result.target_lang, "en", "中文输入 targetLang 应为 en");
@@ -46,7 +46,7 @@ fn ipc_translate_english_text_produces_en_to_zh_direction() {
     let fake =
         FakeExecutor::new(r#"{"responseData":{"translatedText":"你好"},"responseStatus":200}"#);
 
-    let result = translate_text_impl(&conn, &fake, "Hello", None).expect("翻译应成功");
+    let result = translate_text_impl(&conn, &fake, "Hello", None, None).expect("翻译应成功");
 
     assert_eq!(result.source_lang, "en", "英文输入 sourceLang 应为 en");
     assert_eq!(result.target_lang, "zh", "英文输入 targetLang 应为 zh");
@@ -63,7 +63,7 @@ fn ipc_translate_writes_to_history_after_success() {
     let count_before =
         quickquick_lib::translate::history::translate_history_count(&conn).expect("count 应成功");
 
-    translate_text_impl(&conn, &fake, "世界", None).expect("翻译应成功");
+    translate_text_impl(&conn, &fake, "世界", None, None).expect("翻译应成功");
 
     let count_after =
         quickquick_lib::translate::history::translate_history_count(&conn).expect("count 应成功");
@@ -77,7 +77,7 @@ fn ipc_translate_empty_text_returns_error_without_calling_executor() {
     let (_dir, conn) = open_tmp_db();
     let fake = FakeExecutor::new("should not be called");
 
-    let result = translate_text_impl(&conn, &fake, "", None);
+    let result = translate_text_impl(&conn, &fake, "", None, None);
 
     assert!(result.is_err(), "空文本应返回 Err");
     assert_eq!(fake.call_count(), 0, "空文本不应触发执行器");
@@ -89,7 +89,7 @@ fn ipc_translate_whitespace_text_returns_error_without_calling_executor() {
     let (_dir, conn) = open_tmp_db();
     let fake = FakeExecutor::new("should not be called");
 
-    let result = translate_text_impl(&conn, &fake, "   \t\n", None);
+    let result = translate_text_impl(&conn, &fake, "   \t\n", None, None);
 
     assert!(result.is_err(), "全空白文本应返回 Err");
     assert_eq!(fake.call_count(), 0, "全空白文本不应触发执行器");
@@ -104,8 +104,8 @@ fn ipc_translate_list_history_returns_entries_in_desc_order() {
     let fake2 =
         FakeExecutor::new(r#"{"responseData":{"translatedText":"World"},"responseStatus":200}"#);
 
-    translate_text_impl(&conn, &fake1, "你好", None).expect("第一次翻译应成功");
-    translate_text_impl(&conn, &fake2, "世界", None).expect("第二次翻译应成功");
+    translate_text_impl(&conn, &fake1, "你好", None, None).expect("第一次翻译应成功");
+    translate_text_impl(&conn, &fake2, "世界", None, None).expect("第二次翻译应成功");
 
     let history = list_translate_history_impl(&conn).expect("list 应成功");
 

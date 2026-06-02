@@ -19,7 +19,7 @@ use crate::ipc::{with_db, AppDb};
 use crate::translate::history::{
     add_translate_history, list_translate_history as db_list_translate_history, TranslateHistoryRow,
 };
-use crate::translate::lang::resolve_direction;
+use crate::translate::lang::resolve_direction_with_source;
 use crate::translate::providers::MyMemoryProvider;
 use crate::translate::{
     Lang, ProviderHttpRequest, TranslateError, TranslateProvider, TranslateRequest,
@@ -154,7 +154,7 @@ impl From<TranslateHistoryRow> for TranslateHistoryDto {
 ///
 /// 编排流程：
 /// 1. 校验输入（空/全空白 text → Err，不发网络）
-/// 2. 本地检测方向（resolve_direction）
+/// 2. 定方向（resolve_direction_with_source）：显式源语优先，否则自动检测
 /// 3. 构造 TranslateRequest → 选默认 provider（mymemory）→ build_request → exec.execute
 /// 4. parse_response → 得译文
 /// 5. 写入翻译历史
@@ -164,12 +164,12 @@ impl From<TranslateHistoryRow> for TranslateHistoryDto {
 /// - text 为空或全空白：返回 Err（不触发执行器）
 /// - 执行器网络失败：`TranslateError`
 /// - 响应解析失败：`TranslateError`
-/// - 历史写入失败：DbError 转为 String（历史写入失败不中断译文返回的语义待后续评估；
-///   此处选择失败即报错，保持一致性）
+/// - 历史写入失败：DbError 转为 String
 pub fn translate_text_impl(
     conn: &Connection,
     exec: &dyn HttpExecutor,
     text: &str,
+    configured_source: Option<&str>,
     configured_target: Option<&str>,
 ) -> Result<TranslateResultDto, String> {
     if text.trim().is_empty() {
@@ -177,7 +177,7 @@ pub fn translate_text_impl(
     }
 
     let target_lang = configured_target.map(Lang::new);
-    let (source, target) = resolve_direction(text, target_lang);
+    let (source, target) = resolve_direction_with_source(text, configured_source, target_lang);
 
     let req = TranslateRequest {
         text: text.to_string(),
@@ -219,14 +219,18 @@ pub fn list_translate_history_impl(conn: &Connection) -> Result<Vec<TranslateHis
 }
 
 /// Tauri 命令：翻译文本，返回译文与方向信息。
+///
+/// 前端通过 `invoke("translate_text", { text, source, target })` 调用。
+/// `source` 为具体语言码（如 "ja"）时跳过检测；为 "auto"/null/省略 时回退自动检测。
 #[tauri::command]
 pub fn translate_text(
     state: State<'_, AppDb>,
     text: String,
+    source: Option<String>,
     target: Option<String>,
 ) -> Result<TranslateResultDto, String> {
     with_db(&state, |conn| {
-        translate_text_impl(conn, &UreqExecutor, &text, target.as_deref())
+        translate_text_impl(conn, &UreqExecutor, &text, source.as_deref(), target.as_deref())
     })
 }
 
@@ -236,4 +240,82 @@ pub fn list_translate_history(state: State<'_, AppDb>) -> Result<Vec<TranslateHi
     with_db(&state, |conn| {
         list_translate_history_impl(conn).map_err(|e| e.to_string())
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rusqlite::Connection;
+
+    /// 创建内存 SQLite 并初始化 translate_history 表，供测试隔离使用。
+    ///
+    /// schema 必须与 history.rs 中 add_translate_history 使用的列名完全一致。
+    fn setup_test_db() -> Connection {
+        let conn = Connection::open_in_memory().expect("内存 DB 打开失败");
+        conn.execute_batch(
+            "CREATE TABLE translate_history (
+                id              TEXT PRIMARY KEY,
+                source_text     TEXT NOT NULL,
+                translated_text TEXT NOT NULL,
+                source_lang     TEXT NOT NULL,
+                target_lang     TEXT NOT NULL,
+                provider_id     TEXT NOT NULL,
+                created_utc     INTEGER NOT NULL
+            );",
+        )
+        .expect("建表失败");
+        conn
+    }
+
+    /// MyMemory 成功响应的最小合法 JSON 模板（provider 能解析的格式）。
+    fn mymemory_ok_response(translated: &str) -> String {
+        format!(
+            r#"{{"responseStatus":200,"responseData":{{"translatedText":"{translated}"}}}}"#
+        )
+    }
+
+    #[test]
+    fn translate_text_impl_with_none_source_uses_auto_detection() {
+        // Arrange: source=None，让检测路径走；文本为英文，默认翻到 zh
+        let conn = setup_test_db();
+        let fake = FakeExecutor::new(&mymemory_ok_response("你好世界"));
+        // Act
+        let result = translate_text_impl(&conn, &fake, "hello world", None, None);
+        // Assert: 无 source 显式值，检测 en，翻到 zh
+        let dto = result.expect("应成功");
+        assert_eq!(dto.source_lang, "en");
+        assert_eq!(dto.target_lang, "zh");
+        assert_eq!(fake.call_count(), 1);
+    }
+
+    #[test]
+    fn translate_text_impl_explicit_source_and_target_reach_dto() {
+        // Arrange: 注入 FakeExecutor，显式 source="ja" target="ko"
+        let conn = setup_test_db();
+        let fake = FakeExecutor::new(&mymemory_ok_response("안녕하세요"));
+        // Act
+        let result = translate_text_impl(
+            &conn,
+            &fake,
+            "こんにちは",
+            Some("ja"),
+            Some("ko"),
+        );
+        // Assert: source_lang/target_lang 在 DTO 中正确反映显式值
+        let dto = result.expect("应成功");
+        assert_eq!(dto.source_lang, "ja");
+        assert_eq!(dto.target_lang, "ko");
+    }
+
+    #[test]
+    fn translate_text_impl_empty_text_returns_error_without_calling_executor() {
+        // Arrange: 空文本应提前 Err，不触发执行器
+        let conn = setup_test_db();
+        let fake = FakeExecutor::new("{}");
+        // Act
+        let result = translate_text_impl(&conn, &fake, "   ", None, None);
+        // Assert
+        assert!(result.is_err());
+        assert_eq!(fake.call_count(), 0, "空文本不应调用执行器");
+    }
 }

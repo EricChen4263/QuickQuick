@@ -35,6 +35,8 @@ function TranslatePage({ seed }: TranslatePageProps) {
   const [history, setHistory] = useState<TranslateHistoryItem[]>([]);
   const [providers, setProviders] = useState<Provider[]>([]);
   const [selectedProviderId, setSelectedProviderId] = useState("");
+  const [sourceLang, setSourceLang] = useState("auto");
+  const [targetLang, setTargetLang] = useState("zh");
 
   /**
    * 取翻译历史，带 cancelled flag 防卸载后写 state。
@@ -80,6 +82,7 @@ function TranslatePage({ seed }: TranslatePageProps) {
    * 执行翻译：调 IPC → 更新结果 → 刷新历史。
    * textOverride 为显式字符串时用之，否则读 inputText state。
    * typeof 守卫防止 TranslateWorkspace 翻译按钮把合成事件对象泄漏为参数。
+   * source=auto 时传 undefined，后端回退自动检测。
    */
   const handleTranslate = useCallback(async (textOverride?: string) => {
     const text = typeof textOverride === "string" ? textOverride : inputText;
@@ -87,7 +90,8 @@ function TranslatePage({ seed }: TranslatePageProps) {
     setIsLoading(true);
     setError(null);
     try {
-      const res = await translateText(text, undefined);
+      const sourceParam = sourceLang === "auto" ? undefined : sourceLang;
+      const res = await translateText(text, targetLang, sourceParam);
       setResult(res);
       const cancelled = { current: false };
       await fetchHistory(cancelled);
@@ -97,7 +101,7 @@ function TranslatePage({ seed }: TranslatePageProps) {
     } finally {
       setIsLoading(false);
     }
-  }, [inputText, fetchHistory]);
+  }, [inputText, sourceLang, targetLang, fetchHistory]);
 
   // 监听 seed.nonce 变化：每次新 seed 到来自动填入文本并触发翻译。
   // 依赖数组只放 seed?.nonce，确保同文本重复点击也能重新触发。
@@ -148,30 +152,6 @@ function TranslatePage({ seed }: TranslatePageProps) {
     }
   }
 
-  /**
-   * Swap：把当前译文填回输入框，以原 sourceLang 为目标语重新翻译。
-   * 仅在存在明确翻译结果（非 auto sourceLang）时生效，否则无操作。
-   */
-  async function handleSwap() {
-    if (result === null || result.sourceLang === "" || result.sourceLang === "auto") return;
-    const textToTranslate = result.translated;
-    const targetLang = result.sourceLang;
-    setInputText(textToTranslate);
-    setIsLoading(true);
-    setError(null);
-    try {
-      const res = await translateText(textToTranslate, targetLang);
-      setResult(res);
-      const cancelled = { current: false };
-      await fetchHistory(cancelled);
-    } catch {
-      setError("翻译失败，请稍后重试");
-      setResult(null);
-    } finally {
-      setIsLoading(false);
-    }
-  }
-
   /** 切换 provider：调 IPC 持久化，并同步本地 state */
   async function handleProviderChange(id: string) {
     try {
@@ -201,11 +181,14 @@ function TranslatePage({ seed }: TranslatePageProps) {
         result={result}
         isLoading={isLoading}
         error={error}
+        sourceLang={sourceLang}
+        targetLang={targetLang}
         providers={providers}
         selectedProviderId={selectedProviderId}
         onInputChange={setInputText}
         onTranslate={handleTranslate}
-        onSwap={handleSwap}
+        onSourceChange={setSourceLang}
+        onTargetChange={setTargetLang}
         onAction={handleAction}
         onProviderChange={handleProviderChange}
       />

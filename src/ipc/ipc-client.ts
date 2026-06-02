@@ -95,13 +95,15 @@ export async function toggleFavoriteClip(
  *
  * @param text - 待翻译文本
  * @param target - 可选目标语言代码（如 "en"、"zh"、"fr"），不传时由 Rust 侧自动检测
+ * @param source - 可选源语言代码；不传或 undefined 时后端回退自动检测
  */
 export async function translateText(
   text: string,
-  target?: string
+  target?: string,
+  source?: string
 ): Promise<TranslateResult> {
   try {
-    return await invoke<TranslateResult>("translate_text", { text, target });
+    return await invoke<TranslateResult>("translate_text", { text, target, source });
   } catch (err) {
     throw toError(err);
   }

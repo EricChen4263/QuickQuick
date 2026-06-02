@@ -31,7 +31,7 @@
   padding: 18px 22px 24px;
 }
 
-/* 语言方向栏：lang-pill 左对齐 + src-select 推到右侧 */
+/* 语言方向栏：lang-selects 左对齐 + src-select 推到右侧 */
 .dir-bar {
   display: flex;
   align-items: center;
@@ -40,21 +40,44 @@
   margin-bottom: 16px;
 }
 
-/* 语言方向药丸：等宽字体，带 swap 箭头图标 */
-.lang-pill {
+/* 语言下拉组：两个语言 select 并排，间距与 provider select 保持一致 */
+.lang-selects {
   display: inline-flex;
   align-items: center;
-  gap: 7px;
-  font-family: var(--mono);
-  font-size: 12.5px;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  padding: 5px 12px;
+  gap: 8px;
 }
 
-.lang-pill .swap {
-  color: var(--accent);
+/* 语言下拉：与 provider select 视觉一致（深色、圆角、token 变量） */
+.lang-select {
+  appearance: none;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  border-radius: var(--r-sm);
+  padding: 5px 26px 5px 10px;
+  font-size: 12.5px;
+  outline: none;
+  color: var(--fg);
+}
+
+.lang-select:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.lang-selects .wrap {
+  position: relative;
+}
+
+/* 下拉箭头定位在 select 右侧，pointer-events none 防遮住选项（与 .src-select 一致） */
+.lang-selects .wrap svg {
+  position: absolute;
+  right: 7px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 13px;
+  height: 13px;
+  color: var(--muted);
+  pointer-events: none;
 }
 
 /* 翻译源选择器容器：margin-left auto 推到右端 */

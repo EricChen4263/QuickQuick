@@ -1,41 +1,48 @@
 import type { Provider } from "../../ipc/ipc-client";
+import { SOURCE_LANGUAGES, TARGET_LANGUAGES } from "./languages";
 
 interface DirBarProps {
   sourceLang: string;
   targetLang: string;
+  onSourceChange: (code: string) => void;
+  onTargetChange: (code: string) => void;
   providers: Provider[];
   selectedProviderId: string;
   onProviderChange: (id: string) => void;
-  onSwap?: () => void;
-}
-
-function isSwappable(sourceLang: string): boolean {
-  return sourceLang.length > 0 && sourceLang !== "auto";
 }
 
 /**
- * 翻译方向栏：语言方向药丸 + 翻译源选择器。
+ * 翻译方向栏：源语下拉 + 目标语下拉 + 翻译源选择器。
  * 纯展示组件，无副作用，所有状态由父组件 TranslatePage 持有。
- * onSwap 不传或 sourceLang 为空/"auto" 时 swap 按钮禁用。
+ * 源语含"自动检测"选项；目标语不含（目标必须为具体语言）。
  */
-function DirBar({ sourceLang, targetLang, providers, selectedProviderId, onProviderChange, onSwap }: DirBarProps) {
-  const swapDisabled = !isSwappable(sourceLang) || onSwap === undefined;
-
+function DirBar({
+  sourceLang,
+  targetLang,
+  onSourceChange,
+  onTargetChange,
+  providers,
+  selectedProviderId,
+  onProviderChange,
+}: DirBarProps) {
   return (
     <div className="dir-bar">
-      <span className="lang-pill">
-        {sourceLang}
-        <button
-          className="swap"
-          type="button"
-          aria-label="交换语言方向"
-          disabled={swapDisabled}
-          onClick={onSwap}
-        >
+      <span className="lang-selects">
+        <span className="wrap">
+          <select
+            aria-label="源语言"
+            className="lang-select"
+            value={sourceLang}
+            onChange={(e) => onSourceChange(e.target.value)}
+          >
+            {SOURCE_LANGUAGES.map((l) => (
+              <option key={l.code} value={l.code}>
+                {l.label}
+              </option>
+            ))}
+          </select>
           <svg
             viewBox="0 0 24 24"
-            width="15"
-            height="15"
             fill="none"
             stroke="currentColor"
             strokeWidth="1.8"
@@ -43,13 +50,35 @@ function DirBar({ sourceLang, targetLang, providers, selectedProviderId, onProvi
             strokeLinejoin="round"
             aria-hidden="true"
           >
-            <path d="M8 3 4 7l4 4" />
-            <path d="M4 7h16" />
-            <path d="m16 21 4-4-4-4" />
-            <path d="M20 17H4" />
+            <path d="m6 9 6 6 6-6" />
           </svg>
-        </button>
-        {targetLang}
+        </span>
+
+        <span className="wrap">
+          <select
+            aria-label="目标语言"
+            className="lang-select"
+            value={targetLang}
+            onChange={(e) => onTargetChange(e.target.value)}
+          >
+            {TARGET_LANGUAGES.map((l) => (
+              <option key={l.code} value={l.code}>
+                {l.label}
+              </option>
+            ))}
+          </select>
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.8"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            aria-hidden="true"
+          >
+            <path d="m6 9 6 6 6-6" />
+          </svg>
+        </span>
       </span>
 
       <span className="src-select">

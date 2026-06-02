@@ -73,6 +73,55 @@ pub fn resolve_direction(text: &str, configured_target: Option<Lang>) -> (Lang, 
     (source, target)
 }
 
+/// "auto" 占位符：前端传此值代表"不指定源语，走检测"。
+const AUTO_SOURCE: &str = "auto";
+
+/// 智能定方向，支持显式源语覆盖。
+///
+/// 决策规则：
+/// - `configured_source` 为非空、非 "auto" 的具体语言码 → 直接用作源语，跳过检测
+/// - 否则（None / 空串 / "auto"）→ 调 `detect_lang` 自动检测源语
+///
+/// 目标语规则：
+/// - `configured_target` 有值 → 直接用
+/// - 否则按源语走默认方向：zh → en，其余 → zh
+pub fn resolve_direction_with_source(
+    text: &str,
+    configured_source: Option<&str>,
+    configured_target: Option<Lang>,
+) -> (Lang, Lang) {
+    let source = if is_explicit_source(configured_source) {
+        // 调用方已明确指定源语，无需扫描文本
+        Lang::new(configured_source.unwrap().trim())
+    } else {
+        detect_lang(text)
+    };
+
+    let default_target = if source.as_str() == "zh" {
+        Lang::new("en")
+    } else {
+        Lang::new("zh")
+    };
+    let target = configured_target.unwrap_or(default_target);
+    (source, target)
+}
+
+/// 判定 configured_source 是否为有效的显式源语。
+///
+/// 满足以下全部条件才算有效：
+/// 1. 不是 None
+/// 2. trim 后非空串
+/// 3. 不等于 AUTO_SOURCE（"auto"）
+fn is_explicit_source(configured_source: Option<&str>) -> bool {
+    match configured_source {
+        None => false,
+        Some(s) => {
+            let trimmed = s.trim();
+            !trimmed.is_empty() && trimmed != AUTO_SOURCE
+        }
+    }
+}
+
 /// 把内部 BCP-47 语言代码映射为指定 provider 期望的格式。
 ///
 /// 各 provider 的中文代码差异（zh 变体归一）：
@@ -162,5 +211,76 @@ mod tests {
         assert!(is_cjk_char('好'));
         assert!(!is_cjk_char('A'));
         assert!(!is_cjk_char('あ'));
+    }
+
+    // resolve_direction_with_source 新增测试
+
+    #[test]
+    fn resolve_direction_with_source_explicit_source_overrides_detection() {
+        // Arrange: 文本是中文，但显式指定 source="ja"
+        // Act: 源语应为 ja，不应走 detect_lang
+        let (source, _target) =
+            resolve_direction_with_source("你好世界", Some("ja"), None);
+        // Assert: source 应为 ja，而非 detect_lang 返回的 zh
+        assert_eq!(source.as_str(), "ja");
+    }
+
+    #[test]
+    fn resolve_direction_with_source_auto_falls_back_to_detection() {
+        // Arrange: source="auto" 不是有效显式源语
+        // Act: 应回退 detect_lang，中文文本检测为 zh
+        let (source, _target) =
+            resolve_direction_with_source("你好世界", Some("auto"), None);
+        // Assert: 回退检测，中文 → zh
+        assert_eq!(source.as_str(), "zh");
+    }
+
+    #[test]
+    fn resolve_direction_with_source_none_falls_back_to_detection() {
+        // Arrange: source=None，走检测路径
+        let (source, _target) =
+            resolve_direction_with_source("hello world", None, None);
+        // Assert: 回退检测，非中文 → en
+        assert_eq!(source.as_str(), "en");
+    }
+
+    #[test]
+    fn resolve_direction_with_source_both_source_and_target_given() {
+        // Arrange: 显式给定 source="ja" 和 target="ko"
+        let (source, target) = resolve_direction_with_source(
+            "hello",
+            Some("ja"),
+            Some(Lang::new("ko")),
+        );
+        // Assert: source 和 target 均按显式值生效
+        assert_eq!(source.as_str(), "ja");
+        assert_eq!(target.as_str(), "ko");
+    }
+
+    #[test]
+    fn resolve_direction_with_source_explicit_source_no_target_uses_default_direction() {
+        // Arrange: 显式给定 source="ja"，target=None
+        // Act: 应按默认方向逻辑决定 target（非中文 → zh）
+        let (_source, target) =
+            resolve_direction_with_source("dummy", Some("ja"), None);
+        // Assert: 默认方向 ja（非中文）→ zh
+        assert_eq!(target.as_str(), "zh");
+    }
+
+    // 多语言直通 sanity 测试
+
+    #[test]
+    fn map_lang_for_provider_mymemory_passes_through_non_zh_langs() {
+        // 验证 mymemory provider 对 ja/ko/fr/de/es/ru 原样透传
+        // 这保证这些语言的 langpair 能拼出正确的 API 参数
+        for lang_code in &["ja", "ko", "fr", "de", "es", "ru"] {
+            let lang = Lang::new(*lang_code);
+            let mapped = map_lang_for_provider("mymemory", &lang);
+            assert_eq!(
+                mapped,
+                *lang_code,
+                "mymemory 应原样透传语言码 {lang_code}"
+            );
+        }
     }
 }
