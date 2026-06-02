@@ -1,8 +1,12 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
+import { emit } from "@tauri-apps/api/event";
+import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { listClipItems, translateText } from "../ipc/ipc-client";
 import type { TranslateResult } from "../ipc/ipc-client";
 import { writeToClipboard, speakText } from "../panels/translate/browser-api";
 import { pickLatestText } from "./source-text";
+import { shouldRetranslate } from "./retranslate";
 import MiniTranslate from "./MiniTranslate";
 
 type Status = "loading" | "empty" | "translating" | "done" | "error";
@@ -12,45 +16,68 @@ type Status = "loading" | "empty" | "translating" | "done" | "error";
  *
  * 取词方案：挂载时自读 listClipItems()[0]，避免 Rust emit 事件在前端
  * 监听就绪前丢失的竞态（详见 Batch C1 设计决策）。
- * 获焦重读见 Batch C2。
+ * 获焦重读：窗口每次 focus 时重读剪贴板，用 shouldRetranslate 去重（Batch C2）。
  */
 function TransPopoverApp(): React.ReactElement {
   const [status, setStatus] = useState<Status>("loading");
   const [result, setResult] = useState<TranslateResult | null>(null);
   const [errorMsg, setErrorMsg] = useState<string>("");
+  const lastTextRef = useRef<string | null>(null);
+
+  async function runTranslateFromClipboard(cancelledRef: { value: boolean }): Promise<void> {
+    try {
+      const items = await listClipItems();
+      const text = pickLatestText(items);
+
+      if (cancelledRef.value) return;
+
+      if (!shouldRetranslate(text, lastTextRef.current)) {
+        if (text === null && lastTextRef.current === null) {
+          setStatus("empty");
+        }
+        return;
+      }
+
+      lastTextRef.current = text;
+      setStatus("translating");
+      const translated = await translateText(text!);
+
+      if (cancelledRef.value) return;
+      setResult(translated);
+      setStatus("done");
+    } catch {
+      if (cancelledRef.value) return;
+      setErrorMsg("翻译失败，请稍后重试");
+      setStatus("error");
+    }
+  }
 
   useEffect(() => {
-    let cancelled = false;
+    const cancelledRef = { value: false };
 
-    async function run(): Promise<void> {
-      try {
-        const items = await listClipItems();
-        const text = pickLatestText(items);
+    void runTranslateFromClipboard(cancelledRef);
 
-        if (cancelled) return;
+    let unlisten: (() => void) | undefined;
 
-        if (text === null) {
-          setStatus("empty");
-          return;
+    getCurrentWindow()
+      .listen("tauri://focus", () => {
+        if (cancelledRef.value) return;
+        void runTranslateFromClipboard(cancelledRef);
+      })
+      .then((fn) => {
+        if (!cancelledRef.value) {
+          unlisten = fn;
+        } else {
+          fn();
         }
-
-        setStatus("translating");
-        const translated = await translateText(text);
-
-        if (cancelled) return;
-        setResult(translated);
-        setStatus("done");
-      } catch {
-        if (cancelled) return;
-        setErrorMsg("翻译失败，请稍后重试");
-        setStatus("error");
-      }
-    }
-
-    void run();
+      })
+      .catch((err: unknown) => {
+        console.warn("[trans-popover] focus listen failed:", err);
+      });
 
     return () => {
-      cancelled = true;
+      cancelledRef.value = true;
+      unlisten?.();
     };
   }, []);
 
@@ -64,6 +91,19 @@ function TransPopoverApp(): React.ReactElement {
   function handleSpeak(): void {
     if (result === null) return;
     speakText(result.translated);
+  }
+
+  // v1 仅跳转翻译页，不预填文本（主窗翻译输入预填为后续增强）
+  async function handleExpand(): Promise<void> {
+    try {
+      await emit("route", "translate");
+      const main = await WebviewWindow.getByLabel("main");
+      await main?.show();
+      await main?.setFocus();
+      await getCurrentWindow().hide();
+    } catch (err: unknown) {
+      console.error("[trans-popover] expand failed:", err);
+    }
   }
 
   if (status === "loading" || status === "translating") {
@@ -95,9 +135,7 @@ function TransPopoverApp(): React.ReactElement {
       result={result!}
       onCopy={handleCopy}
       onSpeak={handleSpeak}
-      onExpand={() => {
-        /* 展开跳转 main 见 Batch C2 */
-      }}
+      onExpand={() => void handleExpand()}
     />
   );
 }

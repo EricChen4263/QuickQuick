@@ -2,24 +2,51 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
-vi.mock("../ipc/ipc-client", () => ({
+const mocks = vi.hoisted(() => ({
   listClipItems: vi.fn(),
   translateText: vi.fn(),
+  speakText: vi.fn(),
+  writeToClipboard: vi.fn().mockResolvedValue(undefined),
+  hide: vi.fn().mockResolvedValue(undefined),
+  listen: vi.fn().mockResolvedValue(() => undefined),
+  emit: vi.fn().mockResolvedValue(undefined),
+  mainShow: vi.fn().mockResolvedValue(undefined),
+  mainSetFocus: vi.fn().mockResolvedValue(undefined),
+}));
+
+vi.mock("../ipc/ipc-client", () => ({
+  listClipItems: mocks.listClipItems,
+  translateText: mocks.translateText,
 }));
 
 vi.mock("../panels/translate/browser-api", () => ({
-  speakText: vi.fn(),
-  writeToClipboard: vi.fn().mockResolvedValue(undefined),
+  speakText: mocks.speakText,
+  writeToClipboard: mocks.writeToClipboard,
 }));
 
-import { listClipItems, translateText } from "../ipc/ipc-client";
-import { writeToClipboard, speakText } from "../panels/translate/browser-api";
-import TransPopoverApp from "./TransPopoverApp";
+vi.mock("@tauri-apps/api/window", () => ({
+  getCurrentWindow: vi.fn(() => ({
+    hide: mocks.hide,
+    listen: mocks.listen,
+  })),
+}));
 
-const mockListClipItems = vi.mocked(listClipItems);
-const mockTranslateText = vi.mocked(translateText);
-const mockWriteToClipboard = vi.mocked(writeToClipboard);
-const mockSpeakText = vi.mocked(speakText);
+vi.mock("@tauri-apps/api/webviewWindow", () => ({
+  WebviewWindow: {
+    getByLabel: vi.fn().mockImplementation(() =>
+      Promise.resolve({
+        show: mocks.mainShow,
+        setFocus: mocks.mainSetFocus,
+      }),
+    ),
+  },
+}));
+
+vi.mock("@tauri-apps/api/event", () => ({
+  emit: mocks.emit,
+}));
+
+import TransPopoverApp from "./TransPopoverApp";
 
 const MOCK_TEXT_ITEM = {
   id: "clip-1",
@@ -38,34 +65,39 @@ const MOCK_RESULT = {
 describe("TransPopoverApp", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockWriteToClipboard.mockResolvedValue(undefined);
+    mocks.writeToClipboard.mockResolvedValue(undefined);
+    mocks.hide.mockResolvedValue(undefined);
+    mocks.listen.mockResolvedValue(() => undefined);
+    mocks.emit.mockResolvedValue(undefined);
+    mocks.mainShow.mockResolvedValue(undefined);
+    mocks.mainSetFocus.mockResolvedValue(undefined);
   });
 
   it("剪贴板有文本 → 调 translateText 并渲染译文", async () => {
-    mockListClipItems.mockResolvedValue([MOCK_TEXT_ITEM]);
-    mockTranslateText.mockResolvedValue(MOCK_RESULT);
+    mocks.listClipItems.mockResolvedValue([MOCK_TEXT_ITEM]);
+    mocks.translateText.mockResolvedValue(MOCK_RESULT);
 
     render(<TransPopoverApp />);
 
     const translated = await screen.findByText("你好，世界");
     expect(translated).toBeDefined();
-    expect(mockTranslateText).toHaveBeenCalledWith("Hello world");
+    expect(mocks.translateText).toHaveBeenCalledWith("Hello world");
   });
 
   it("剪贴板为空 → 渲染降级文案", async () => {
-    mockListClipItems.mockResolvedValue([]);
-    mockTranslateText.mockResolvedValue(MOCK_RESULT);
+    mocks.listClipItems.mockResolvedValue([]);
+    mocks.translateText.mockResolvedValue(MOCK_RESULT);
 
     render(<TransPopoverApp />);
 
     const fallback = await screen.findByText(/请先复制文字/);
     expect(fallback).toBeDefined();
-    expect(mockTranslateText).not.toHaveBeenCalled();
+    expect(mocks.translateText).not.toHaveBeenCalled();
   });
 
   it("translateText 失败 → 渲染错误文案", async () => {
-    mockListClipItems.mockResolvedValue([MOCK_TEXT_ITEM]);
-    mockTranslateText.mockRejectedValue(new Error("network error"));
+    mocks.listClipItems.mockResolvedValue([MOCK_TEXT_ITEM]);
+    mocks.translateText.mockRejectedValue(new Error("network error"));
 
     render(<TransPopoverApp />);
 
@@ -74,8 +106,8 @@ describe("TransPopoverApp", () => {
   });
 
   it("点复制 → writeToClipboard 以译文调用", async () => {
-    mockListClipItems.mockResolvedValue([MOCK_TEXT_ITEM]);
-    mockTranslateText.mockResolvedValue(MOCK_RESULT);
+    mocks.listClipItems.mockResolvedValue([MOCK_TEXT_ITEM]);
+    mocks.translateText.mockResolvedValue(MOCK_RESULT);
 
     render(<TransPopoverApp />);
     await screen.findByText("你好，世界");
@@ -83,12 +115,12 @@ describe("TransPopoverApp", () => {
     const copyBtn = screen.getByRole("button", { name: /复制/ });
     await userEvent.click(copyBtn);
 
-    expect(mockWriteToClipboard).toHaveBeenCalledWith("你好，世界");
+    expect(mocks.writeToClipboard).toHaveBeenCalledWith("你好，世界");
   });
 
   it("点朗读 → speakText 以译文调用", async () => {
-    mockListClipItems.mockResolvedValue([MOCK_TEXT_ITEM]);
-    mockTranslateText.mockResolvedValue(MOCK_RESULT);
+    mocks.listClipItems.mockResolvedValue([MOCK_TEXT_ITEM]);
+    mocks.translateText.mockResolvedValue(MOCK_RESULT);
 
     render(<TransPopoverApp />);
     await screen.findByText("你好，世界");
@@ -96,6 +128,22 @@ describe("TransPopoverApp", () => {
     const speakBtn = screen.getByRole("button", { name: /朗读/ });
     await userEvent.click(speakBtn);
 
-    expect(mockSpeakText).toHaveBeenCalledWith("你好，世界");
+    expect(mocks.speakText).toHaveBeenCalledWith("你好，世界");
+  });
+
+  it("点展开 → emit('route','translate')、main.show、main.setFocus、当前窗口 hide 依序调用", async () => {
+    mocks.listClipItems.mockResolvedValue([MOCK_TEXT_ITEM]);
+    mocks.translateText.mockResolvedValue(MOCK_RESULT);
+
+    render(<TransPopoverApp />);
+    await screen.findByText("你好，世界");
+
+    const expandBtn = screen.getByRole("button", { name: /展开/ });
+    await userEvent.click(expandBtn);
+
+    expect(mocks.emit).toHaveBeenCalledWith("route", "translate");
+    expect(mocks.mainShow).toHaveBeenCalled();
+    expect(mocks.mainSetFocus).toHaveBeenCalled();
+    expect(mocks.hide).toHaveBeenCalled();
   });
 });
