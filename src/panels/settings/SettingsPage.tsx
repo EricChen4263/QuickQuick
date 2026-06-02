@@ -2,49 +2,11 @@ import { useState } from "react";
 import "./settings.css";
 import { settingsSections, type SettingsSection } from "../../main-window/settings/sections";
 import SectionNav from "./SectionNav";
-import PanelHeader from "./PanelHeader";
-import SettingGroup from "./SettingGroup";
-import SettingToggle from "./SettingToggle";
 import HotkeyPanel from "./HotkeyPanel";
 import TranslateSourcePanel from "./TranslateSourcePanel";
 import PrivacyPanel from "./PrivacyPanel";
 import StoragePanel from "./StoragePanel";
-import { useGeneralSettings } from "./useGeneralSettings";
-
-/** 通用子项面板：开机自启动 / 托盘常驻 / 自动检查更新 */
-function GeneralPanel() {
-  const {
-    launchOnLogin, setLaunchOnLogin,
-    stayInTray, setStayInTray,
-    autoUpdate, setAutoUpdate,
-  } = useGeneralSettings();
-
-  return (
-    <div>
-      <PanelHeader title="通用" subtitle="启动方式与基础行为。" />
-      <SettingGroup>
-        <SettingToggle
-          label="开机自启动"
-          description="登录系统时在后台启动 QuickQuick"
-          checked={launchOnLogin}
-          onChange={setLaunchOnLogin}
-        />
-        <SettingToggle
-          label="托盘常驻"
-          description="关闭窗口后保留托盘图标与剪贴板监听"
-          checked={stayInTray}
-          onChange={setStayInTray}
-        />
-        <SettingToggle
-          label="自动检查更新"
-          description="通过签名清单静默拉取新版本"
-          checked={autoUpdate}
-          onChange={setAutoUpdate}
-        />
-      </SettingGroup>
-    </div>
-  );
-}
+import GeneralPanel from "./GeneralPanel";
 
 /** 关于子项面板：logo + 应用名 + 版本号 + 描述 */
 function AboutPanel() {

@@ -12,6 +12,7 @@ pub mod clipboard;
 pub mod settings;
 pub mod system;
 pub mod translate;
+pub mod update;
 
 /// Tauri 托管状态：持有可选数据库连接（Mutex 包裹保证跨命令线程安全）。
 ///

@@ -8,6 +8,8 @@ date: 2026-06-02
 
 # 自动检查更新 endpoint · 评估结论
 
+> 【2026-06-02 更新】客户端 check_for_updates 命令 + 设置页「立即检查更新」按钮已实装（见 coding.md）；仍缺的是服务端 infra（更新服务器+签名密钥+发布 CI）。
+
 ## 现状
 - `src-tauri/tauri.conf.json` `bundle.updater`：`endpoints` 指向 **`https://placeholder.example.com/quickquick/{{target}}/{{arch}}/{{current_version}}`**（占位）；`pubkey` 为一个示例 minisign 公钥。
 - `src-tauri/src/lib.rs`：已注册 `tauri_plugin_updater::Builder::new().build()`，但**全仓没有任何 `app.updater().check()` 调用**——即从未真正发起更新检查。

@@ -394,3 +394,26 @@ export async function pasteToFront(id: string): Promise<PasteResult> {
     throw toError(err);
   }
 }
+
+/** 检查更新结果，与 Rust CheckUpdateResult（camelCase）对齐。 */
+export interface CheckUpdateResult {
+  /** 是否有可用新版本 */
+  available: boolean;
+  /** 新版本号（有更新时），无更新时为空串 */
+  version: string;
+  /** 当前已安装版本号 */
+  currentVersion: string;
+}
+
+/**
+ * 手动检查是否有可用的应用更新。
+ *
+ * endpoint 为占位地址时会 reject，调用方应以友好文案展示错误。
+ */
+export async function checkForUpdates(): Promise<CheckUpdateResult> {
+  try {
+    return await invoke<CheckUpdateResult>("check_for_updates");
+  } catch (err) {
+    throw toError(err);
+  }
+}

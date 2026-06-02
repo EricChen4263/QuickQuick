@@ -122,6 +122,7 @@ pub fn run() {
             ipc::system::cleanup_history,
             ipc::system::open_accessibility_settings,
             ipc::system::paste_to_front,
+            ipc::update::check_for_updates,
         ])
         .setup(|app| {
             setup_app_db(app);
