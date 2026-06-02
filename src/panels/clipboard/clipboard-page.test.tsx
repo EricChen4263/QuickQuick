@@ -405,6 +405,57 @@ describe("clipboard-page", () => {
     expect(mockOnTranslateItem).toHaveBeenCalledWith("Hello World");
   });
 
+  it("clipboard-page: 删除操作成功后触发 listClipItems 重加载刷新列表", async () => {
+    // 验证 handleDelete 的完整业务流：deleteClipItem 成功 → loadItems 重新拉取列表。
+    // 这同时覆盖 I-02 修复后 cancelledRef 被正确传入 loadItems 的路径。
+    // （竞态 guard 的"卸载后不 setState"行为在 React 18 + jsdom 下无可观测信号，
+    //  由 tester 的代码结构变异验证守门。）
+    mockListClipItems.mockResolvedValue(MOCK_ITEMS);
+    const user = userEvent.setup();
+    render(<ClipboardPage />);
+
+    await waitFor(() => {
+      expect(screen.getAllByText("Hello World").length).toBeGreaterThanOrEqual(1);
+    });
+
+    // 初始挂载调用了一次
+    expect(mockListClipItems).toHaveBeenCalledTimes(1);
+
+    // 触发删除
+    const previewRegion = screen.getByRole("region", { name: "预览" });
+    const deleteButton = within(previewRegion).getByRole("button", { name: /删除/ });
+    await user.click(deleteButton);
+
+    // delete 成功后 loadItems 被再次调用
+    await waitFor(() => {
+      expect(mockListClipItems).toHaveBeenCalledTimes(2);
+    });
+    expect(mockDeleteClipItem).toHaveBeenCalledWith("item-1");
+  });
+
+  it("clipboard-page: 收藏操作成功后触发 listClipItems 重加载刷新列表", async () => {
+    // 验证 handleToggleFavorite 的完整业务流：toggleFavoriteClip 成功 → loadItems 重拉。
+    // 同样覆盖 I-02 修复后 cancelledRef 被正确传入 loadItems 的路径。
+    mockListClipItems.mockResolvedValue(MOCK_ITEMS);
+    const user = userEvent.setup();
+    render(<ClipboardPage />);
+
+    await waitFor(() => {
+      expect(screen.getAllByText("Hello World").length).toBeGreaterThanOrEqual(1);
+    });
+
+    expect(mockListClipItems).toHaveBeenCalledTimes(1);
+
+    // 触发收藏（item-1 isFavorite=false，点后应变 true）
+    const favoriteButtons = screen.getAllByRole("button", { name: /收藏/ });
+    await user.click(favoriteButtons[0]);
+
+    await waitFor(() => {
+      expect(mockListClipItems).toHaveBeenCalledTimes(2);
+    });
+    expect(mockToggleFavoriteClip).toHaveBeenCalledWith("item-1", true);
+  });
+
   it("clipboard-page: 收到 clipboard-changed 事件后触发 listClipItems 重新加载", async () => {
     // Arrange：捕获 listen 注册的回调，以便后续手动触发
     let capturedCallback: (() => void) | undefined;

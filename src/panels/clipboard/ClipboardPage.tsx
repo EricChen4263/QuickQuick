@@ -4,7 +4,7 @@
  * 对应验收项 V1-F2-A07。
  */
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useRef, useState, useCallback } from "react";
 import { listen } from "@tauri-apps/api/event";
 import {
   listClipItems,
@@ -65,6 +65,17 @@ function ClipboardPage({ onTranslateItem }: ClipboardPageProps) {
     () => localStorage.getItem(ONBOARD_DISMISSED_KEY) === "true",
   );
   const [pasteMsg, setPasteMsg] = useState<string | null>(null);
+
+  // 组件生命周期级 cancelled ref，供 handleToggleFavorite / handleDelete 共享。
+  // 卸载时 cleanup 置 true，loadItems 内的 guard 据此跳过已卸载组件的 setState。
+  // 注意：setup 里复位为 false，处理 StrictMode 卸载-重挂后 ref 残留 true 的问题。
+  const cancelledRef = useRef(false);
+  useEffect(() => {
+    cancelledRef.current = false;
+    return () => {
+      cancelledRef.current = true;
+    };
+  }, []);
 
   /**
    * loadItems 接受 cancelled ref，避免卸载后写入已卸载组件的 state。
@@ -156,8 +167,7 @@ function ClipboardPage({ onTranslateItem }: ClipboardPageProps) {
   async function handleToggleFavorite(item: ClipItem): Promise<void> {
     try {
       await toggleFavoriteClip(item.id, !item.isFavorite);
-      const cancelled = { current: false };
-      await loadItems(cancelled);
+      await loadItems(cancelledRef);
     } catch {
       setOpError("操作失败，请稍后重试");
     }
@@ -166,8 +176,7 @@ function ClipboardPage({ onTranslateItem }: ClipboardPageProps) {
   async function handleDelete(item: ClipItem): Promise<void> {
     try {
       await deleteClipItem(item.id);
-      const cancelled = { current: false };
-      await loadItems(cancelled);
+      await loadItems(cancelledRef);
     } catch {
       setOpError("操作失败，请稍后重试");
     }
