@@ -2,7 +2,7 @@
 id: f3-s02-batch-a-frontend
 title: 里程碑4 popover · Batch A2：前端脚手架
 status: 实现完成
-commit: PENDING
+commit: fb6a690
 date: 2026-06-02
 ---
 

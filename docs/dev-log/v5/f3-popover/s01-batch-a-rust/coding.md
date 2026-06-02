@@ -2,7 +2,7 @@
 id: f3-popover-s01-batch-a-rust
 title: 里程碑4 popover · Batch A1：Rust 骨架
 status: 实现完成
-commit: PENDING
+commit: fb6a690
 date: 2026-06-02
 ---
 
@@ -24,13 +24,12 @@ test result: ok. 67 passed; 0 failed（lib）
 window_pos 模块：7 passed（含 3 个新增 width 用例）
 ```
 
-## 偏离架构的地方
+## 偏离架构的地方（均已在 Batch A 内闭合修正）
 
-- `.transparent(true)` 未启用：Tauri 2 在 macOS 上 `transparent` 需 `macos-private-api` feature，当前未开启，去掉该调用。popover 用 `decorations(false)` 已实现无边框，透明背景可在 A2 前端层用 CSS `background: transparent` 实现，不影响核心功能。
+- `.transparent(true)` 一度未启用（缺 `macos-private-api` feature）→ **已补回**：启用 `macos-private-api` cargo feature + `tauri.conf.json` `macOSPrivateApi: true` + 恢复 `.transparent(true)`，`cargo check`/`cargo test` 全绿。毛玻璃透明窗口为架构核心，不降级。
+- 窗口 url 一度为 `clip-popover/index.html` → **A2 改为 `src/clip-popover/index.html`**（Vite MPA 入口在 `src/` 下时 dev/prod 路径均带 `src/`，须一致）。
 
-## 衔接提示（给 A2 / tester）
+## 衔接提示（给 tester）
 
-- `clip-popover` 窗口 url 指向 `clip-popover/index.html`（Vite 输出需含此路由）。
-- `trans-popover` 窗口 url 指向 `trans-popover/index.html`。
-- A2 前端入口须在 Vite 配置里新增这两个 HTML 入口，否则窗口加载会 404。
 - popover 窗口失焦即自动 hide，前端无需额外处理关闭逻辑。
+- 本批可单测的核心逻辑是 `window_pos::center_top_position` 的宽度参数化；popover 窗口的懒建/定位/失焦/毛玻璃属 GUI 行为，需手动验证（pnpm tauri dev）。
