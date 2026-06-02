@@ -25,6 +25,7 @@ pub mod portable;
 pub mod privacy;
 pub mod settings;
 pub mod translate;
+mod popover;
 mod tray;
 mod window_pos;
 
@@ -33,7 +34,7 @@ use std::sync::{
     Arc, Mutex, RwLock,
 };
 
-use tauri::{Emitter, Manager, Runtime, WindowEvent};
+use tauri::{Manager, Runtime, WindowEvent};
 use tauri_plugin_global_shortcut::GlobalShortcutExt;
 
 /// 运行时捕获状态：通过原子布尔在主线程与轮询线程间共享，无锁读写。
@@ -294,7 +295,7 @@ fn register_hotkeys(handle: &tauri::AppHandle) {
     if let Err(e) = handle.global_shortcut().on_shortcut(
         history_key.as_str(),
         move |_app, _shortcut, _event| {
-            trigger_window(&handle_history, "history");
+            popover::trigger_popover(&handle_history, "clip-popover");
         },
     ) {
         eprintln!("[QuickQuick] history 热键注册失败（可能已被占用）: {e}");
@@ -304,37 +305,13 @@ fn register_hotkeys(handle: &tauri::AppHandle) {
     if let Err(e) = handle.global_shortcut().on_shortcut(
         translate_key.as_str(),
         move |_app, _shortcut, _event| {
-            trigger_window(&handle_translate, "translate");
+            popover::trigger_popover(&handle_translate, "trans-popover");
         },
     ) {
         eprintln!("[QuickQuick] translate 热键注册失败（可能已被占用）: {e}");
     }
 }
 
-/// 热键触发时：定位窗口 → 显示 → 聚焦 → 向前端发送路由事件。
-fn trigger_window(handle: &tauri::AppHandle, route: &'static str) {
-    let Some(window) = handle.get_webview_window("main") else {
-        eprintln!("[QuickQuick] 找不到 main 窗口");
-        return;
-    };
-
-    // 计算目标位置（光标所在显示器水平居中、靠上约 15%）
-    let position = window_pos::compute_window_position(&window);
-
-    if let Err(e) = window.set_position(position) {
-        eprintln!("[QuickQuick] 设置窗口位置失败: {e}");
-    }
-    if let Err(e) = window.show() {
-        eprintln!("[QuickQuick] 显示窗口失败: {e}");
-        return;
-    }
-    if let Err(e) = window.set_focus() {
-        eprintln!("[QuickQuick] 设置窗口焦点失败: {e}");
-    }
-    if let Err(e) = handle.emit("route", route) {
-        eprintln!("[QuickQuick] emit route 事件失败: {e}");
-    }
-}
 
 /// 从 `AppSettings` 初始化运行时 `CaptureState`。
 ///
