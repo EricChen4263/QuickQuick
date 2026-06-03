@@ -194,17 +194,34 @@ pub fn cleanup_history(state: State<'_, AppDb>) -> Result<CleanupResultDto, Stri
     })
 }
 
+/// 辅助功能设置打开逻辑的可测实现：同步执行 `program <url>` 并按退出码返回结果。
+///
+/// 参数化 `program`/`url` 而非写死 `open`，是为了在单元/集成测试中注入假命令
+/// （真实退出码 0 的 `true`、非零的 `false`、不存在的命令）覆盖三条返回路径；
+/// 生产仅由下方 `open_accessibility_settings` 以 `open` 调用，语义专用于打开设置。
+///
+/// 用 `.status()` 而非 `.spawn()`：`Child` drop 时既不 wait 也不 kill，常驻托盘进程从不
+/// 回收子进程、也未装 SIGCHLD 回收器，每次调用都会泄漏一个 defunct 僵尸进程直到 app 退出
+/// 才被收割。`open` 是请求型命令（向 LaunchServices 发起后毫秒级返回），同步等待开销可忽略，
+/// 借此原地回收子进程避免僵尸堆积；并能拿到退出码，让前台感知打开失败。
+pub fn run_open_status_impl(program: &str, url: &str) -> Result<(), String> {
+    let status = std::process::Command::new(program)
+        .arg(url)
+        .status()
+        .map_err(|e| format!("无法打开辅助功能设置：{e}"))?;
+    if !status.success() {
+        return Err(format!("打开辅助功能设置失败：open 退出码 {status}"));
+    }
+    Ok(())
+}
+
 /// Tauri 命令：打开 macOS 辅助功能系统设置深链。
 ///
-/// 使用 `std::process::Command("open")` 打开深链 URL（项目未依赖 tauri-plugin-opener，
-/// Cargo.toml 中无此依赖，改用系统 `open` 命令直接打开）。
+/// 使用系统 `open` 命令打开深链 URL（项目未依赖 tauri-plugin-opener，Cargo.toml 中无此
+/// 依赖）。子进程回收语义见 `run_open_status_impl`。
 #[tauri::command]
 pub fn open_accessibility_settings() -> Result<(), String> {
-    std::process::Command::new("open")
-        .arg(ACCESSIBILITY_DEEPLINK)
-        .spawn()
-        .map_err(|e| format!("无法打开辅助功能设置：{e}"))?;
-    Ok(())
+    run_open_status_impl("open", ACCESSIBILITY_DEEPLINK)
 }
 
 /// 在 trusted 路径执行窗口 hide，让出前台，固定等待焦点转移完成（WaitForeground）。
