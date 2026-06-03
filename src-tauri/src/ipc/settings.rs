@@ -33,9 +33,9 @@ use tauri::{AppHandle, Manager, State};
 
 use crate::autostart::AutostartConfig;
 use crate::hotkey::{HotkeyAction, HotkeyConfig, HotkeyError, HotkeyRegistrar};
-use crate::CaptureState;
 use crate::settings::AppSettings;
 use crate::translate::providers::registry;
+use crate::CaptureState;
 
 /// 热键配置 DTO（返回给前端）。
 ///
@@ -148,9 +148,8 @@ pub fn set_exclude_list_impl(
     settings.save(settings_path).map_err(|e| e.to_string())?;
 
     if let Some(lock) = runtime_list {
-        let new_exclude = crate::privacy::ExcludeList::new_with_apps(
-            list.iter().map(String::as_str),
-        );
+        let new_exclude =
+            crate::privacy::ExcludeList::new_with_apps(list.iter().map(String::as_str));
         match lock.write() {
             Ok(mut guard) => *guard = new_exclude,
             Err(e) => eprintln!("[QuickQuick] 排除名单写锁中毒，跳过运行时更新: {e}"),
@@ -404,7 +403,7 @@ pub fn set_theme_impl(theme: &str, settings_path: &Path) -> Result<(), String> {
 }
 
 /// 单张图片原图阈值合法区间下限（1 MiB）。
-const MIN_IMAGE_THRESHOLD: u64 = 1 * 1024 * 1024;
+const MIN_IMAGE_THRESHOLD: u64 = 1024 * 1024;
 /// 单张图片原图阈值合法区间上限（500 MiB）。
 const MAX_IMAGE_THRESHOLD: u64 = 500 * 1024 * 1024;
 
@@ -427,7 +426,7 @@ pub fn get_image_threshold_impl(settings_path: &Path) -> Result<u64, String> {
 /// - 越界值：返回说明合法范围的错误字符串
 /// - 文件写入失败：返回错误字符串
 pub fn set_image_threshold_impl(bytes: u64, settings_path: &Path) -> Result<(), String> {
-    if bytes < MIN_IMAGE_THRESHOLD || bytes > MAX_IMAGE_THRESHOLD {
+    if !(MIN_IMAGE_THRESHOLD..=MAX_IMAGE_THRESHOLD).contains(&bytes) {
         return Err(format!(
             "图片阈值超出范围：{bytes} 字节，合法范围为 {MIN_IMAGE_THRESHOLD}（1MiB）到 {MAX_IMAGE_THRESHOLD}（500MiB）字节"
         ));
@@ -575,8 +574,8 @@ mod tests {
     use tempfile::NamedTempFile;
 
     fn make_state(paused: bool, skip_sensitive: bool, stay_in_tray: bool) -> CaptureState {
-        use std::sync::RwLock;
         use crate::privacy::ExcludeList;
+        use std::sync::RwLock;
         CaptureState {
             paused: Arc::new(AtomicBool::new(paused)),
             skip_sensitive: Arc::new(AtomicBool::new(skip_sensitive)),
@@ -710,7 +709,10 @@ mod tests {
     #[test]
     fn set_exclude_list_persists_to_file() {
         let file = NamedTempFile::new().unwrap();
-        let apps = vec!["com.1password.1password".to_string(), "com.foo.bar".to_string()];
+        let apps = vec![
+            "com.1password.1password".to_string(),
+            "com.foo.bar".to_string(),
+        ];
         set_exclude_list_impl(apps.clone(), file.path(), None).unwrap();
         let settings = AppSettings::load_or_default(file.path());
         assert_eq!(settings.excluded_apps, apps);
@@ -759,8 +761,8 @@ mod tests {
 
     #[test]
     fn set_exclude_list_updates_runtime_immediately() {
-        use std::sync::RwLock;
         use crate::privacy::ExcludeList;
+        use std::sync::RwLock;
 
         let lock = RwLock::new(ExcludeList::default());
         let apps = vec!["com.1password.1password".to_string()];
