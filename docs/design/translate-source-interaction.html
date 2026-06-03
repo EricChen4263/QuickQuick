@@ -1,0 +1,259 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>翻译源卡片交互 · 重设计原型</title>
+<style>
+  /* ── 复刻 QuickQuick 暗色主题（取自截图） ── */
+  :root{
+    --page:#14181e; --panel:#1a1f27; --row:#1d232c; --row-hover:#222a34;
+    --logo:#2b333e; --border:#2a313b; --border-soft:#242b34;
+    --fg:#e6edf3; --fg-dim:#8b949e; --fg-faint:#6b7480;
+    --accent:#3b82f6; --accent-soft:rgba(59,130,246,.16);
+    --ok:#46c97e; --ok-bg:rgba(70,201,126,.12);
+    --warn:#d99a3a; --warn-bg:rgba(217,154,58,.12);
+    --grey-bg:#2a313b; --danger:#f47174;
+    --r:12px; --r-sm:7px;
+    font-synthesis:none; -webkit-font-smoothing:antialiased;
+  }
+  *{box-sizing:border-box;}
+  body{
+    margin:0; background:var(--page); color:var(--fg);
+    font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Segoe UI",sans-serif;
+    padding:40px 28px 80px;
+  }
+  .wrap{max-width:720px;margin:0 auto;}
+  h1{font-size:19px;font-weight:650;margin:0 0 4px;letter-spacing:.01em;}
+  .sub{color:var(--fg-dim);font-size:13px;margin:0 0 22px;}
+
+  /* 变体切换器 */
+  .seg{display:inline-flex;background:var(--panel);border:1px solid var(--border);
+    border-radius:10px;padding:3px;gap:2px;margin-bottom:10px;}
+  .seg button{appearance:none;border:0;background:transparent;color:var(--fg-dim);
+    font-size:12.5px;padding:7px 13px;border-radius:7px;cursor:pointer;font-family:inherit;
+    transition:.12s;white-space:nowrap;}
+  .seg button.on{background:var(--accent);color:#fff;}
+  .seg button:not(.on):hover{color:var(--fg);background:var(--row-hover);}
+
+  .why{font-size:12.5px;color:var(--fg-dim);line-height:1.6;margin:0 0 22px;
+    border-left:2px solid var(--border);padding:2px 0 2px 12px;}
+  .why b{color:var(--fg);font-weight:600;}
+
+  /* 状态读出 */
+  .readout{display:flex;gap:18px;font-size:12px;color:var(--fg-faint);
+    margin:0 0 14px;font-family:ui-monospace,SFMono-Regular,monospace;}
+  .readout span b{color:var(--accent);font-weight:600;}
+
+  /* ── 翻译源面板 ── */
+  .ph-title{font-size:22px;font-weight:650;margin:8px 0 3px;}
+  .ph-sub{color:var(--fg-dim);font-size:13px;margin:0 0 16px;}
+  .panel{background:var(--panel);border:1px solid var(--border);border-radius:var(--r);
+    overflow:hidden;}
+  .card{display:flex;align-items:center;gap:13px;padding:15px 16px;cursor:default;
+    border-bottom:1px solid var(--border-soft);position:relative;}
+  .card:last-of-type{border-bottom:0;}
+  .logo{width:40px;height:40px;border-radius:9px;background:var(--logo);flex:0 0 auto;
+    display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:600;
+    color:#cdd6e0;letter-spacing:.02em;}
+  .name{font-size:15px;font-weight:500;}
+  .grow{flex:1 1 auto;min-width:0;}
+
+  .badge{font-size:11.5px;padding:3px 9px;border-radius:999px;border:1px solid transparent;
+    white-space:nowrap;}
+  .badge.def{background:var(--grey-bg);color:var(--fg-dim);}
+  .badge.ok{color:var(--ok);border-color:rgba(70,201,126,.4);background:var(--ok-bg);}
+  .badge.warn{color:var(--warn);border-color:rgba(217,154,58,.45);background:var(--warn-bg);}
+
+  /* 设为默认 radio */
+  .radio{width:19px;height:19px;border-radius:50%;border:2px solid var(--fg-faint);
+    flex:0 0 auto;display:flex;align-items:center;justify-content:center;transition:.12s;}
+  .radio.sel{border-color:var(--accent);}
+  .radio.sel::after{content:"";width:9px;height:9px;border-radius:50%;background:var(--accent);}
+  .sel-hit{display:flex;align-items:center;gap:13px;flex:1 1 auto;min-width:0;cursor:pointer;
+    border-radius:8px;margin:-6px;padding:6px;transition:background .12s;}
+  .sel-hit:hover{background:var(--row-hover);}
+
+  /* 配置按钮（齿轮 / 文字） */
+  .cfg-btn{appearance:none;border:1px solid var(--border);background:transparent;
+    color:var(--fg-dim);font-size:12.5px;padding:6px 11px;border-radius:7px;cursor:pointer;
+    font-family:inherit;display:inline-flex;align-items:center;gap:6px;transition:.12s;white-space:nowrap;}
+  .cfg-btn:hover{color:var(--fg);border-color:var(--fg-faint);background:var(--row-hover);}
+  .cfg-btn.open{color:var(--accent);border-color:var(--accent);background:var(--accent-soft);}
+  .gear{width:15px;height:15px;display:inline-block;}
+  .chev{transition:transform .18s;display:inline-block;}
+  .chev.open{transform:rotate(90deg);}
+
+  /* 可点击徽标（变体B） */
+  .badge.clickable{cursor:pointer;}
+  .badge.warn.clickable:hover{background:rgba(217,154,58,.22);}
+  .badge.ok.clickable:hover{background:rgba(70,201,126,.22);}
+
+  /* key 表单 */
+  .form{display:grid;grid-template-columns:1fr;gap:11px;padding:4px 16px 18px 69px;
+    border-bottom:1px solid var(--border-soft);background:rgba(0,0,0,.14);}
+  .card:last-of-type + .form, .form:last-child{border-bottom:0;}
+  .field{display:flex;flex-direction:column;gap:5px;}
+  .field label{font-size:12.5px;color:var(--fg);}
+  .field input{width:100%;background:#20262e;border:1px solid var(--border);border-radius:var(--r-sm);
+    color:var(--fg);font-size:13px;padding:8px 10px;font-family:inherit;outline:none;}
+  .field input:focus{border-color:var(--accent);}
+  .field input::placeholder{color:var(--fg-faint);}
+  .save{align-self:flex-start;appearance:none;border:0;background:var(--accent);color:#fff;
+    font-size:13px;font-weight:550;padding:8px 18px;border-radius:var(--r-sm);cursor:pointer;
+    font-family:inherit;margin-top:2px;}
+  .save:hover{filter:brightness(1.08);}
+  .hidden{display:none !important;}
+
+  .hint{font-size:11.5px;color:var(--fg-faint);margin-top:9px;text-align:center;}
+  .toast{position:fixed;bottom:26px;left:50%;transform:translateX(-50%) translateY(20px);
+    background:#222a34;border:1px solid var(--border);color:var(--fg);font-size:12.5px;
+    padding:9px 16px;border-radius:9px;opacity:0;transition:.22s;pointer-events:none;}
+  .toast.show{opacity:1;transform:translateX(-50%) translateY(0);}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>翻译源卡片交互 · 重设计</h1>
+  <p class="sub">把「设为默认」与「配置 Key」拆成两个独立、不重叠的点击目标。下面 3 个变体都可点击试。</p>
+
+  <div class="seg" id="seg">
+    <button data-v="A" class="on">变体 A · 齿轮配置按钮（推荐）</button>
+    <button data-v="B">变体 B · 可点徽标</button>
+    <button data-v="C">变体 C · 两段式分区</button>
+  </div>
+
+  <p class="why" id="why"></p>
+
+  <div class="readout">
+    <span>当前默认：<b id="ro-def">MyMemory</b></span>
+    <span>展开的配置：<b id="ro-cfg">无</b></span>
+  </div>
+
+  <!-- 面板 -->
+  <div class="ph-title">翻译源</div>
+  <div class="ph-sub">选择用于划词翻译的服务商</div>
+  <div class="panel" id="panel"></div>
+
+  <p class="hint" id="hint"></p>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const PROVIDERS = [
+  { id:"mymemory", abbr:"MY", name:"MyMemory", keyed:false,
+    fields:[] },
+  { id:"baidu", abbr:"百度", name:"百度翻译", keyed:true,
+    fields:[{key:"app_id",label:"AppID",secret:false},{key:"secret_key",label:"Secret Key",secret:true}], configured:false },
+  { id:"deepl_free", abbr:"DE", name:"DeepL Free", keyed:true,
+    fields:[{key:"auth_key",label:"Auth Key",secret:true}], configured:false },
+  { id:"google", abbr:"GO", name:"Google 翻译", keyed:true,
+    fields:[{key:"api_key",label:"API Key",secret:true}], configured:false },
+];
+
+const WHY = {
+  A:"<b>变体 A（推荐）</b>：整张卡左侧区域 = 设为默认（带 radio 指示，hover 高亮可点区）；右侧一个独立「⚙ 配置」按钮控制 key 表单展开。两个目标空间分离、各有明确反馈——这是 macOS 系统设置最常见的「列表项 + 单选 + 配置入口」范式。",
+  B:"<b>变体 B</b>：卡片主体点击 = 设为默认；需 key 的源把「待配置/已配置」<b>徽标本身做成按钮</b>（hover 有态）点它打开表单。省一个控件，但「徽标可点」的可发现性弱于显式按钮。",
+  C:"<b>变体 C</b>：卡片用分隔线切成两段——左段大区域 = 设为默认，右段一个独立「配置」文字按钮（仅 keyed）。区隔最强、最不会误触，但右段占横向空间，窄窗下略挤。",
+};
+const HINT = {
+  A:"试试：点卡片左侧 → 只切默认；点「⚙ 配置」→ 只展开表单，互不影响。",
+  B:"试试：点卡片 → 只切默认；点「待配置」徽标 → 只展开表单。",
+  C:"试试：点左段 → 只切默认；点右侧「配置」→ 只展开表单。",
+};
+
+let variant = "A";
+let selected = "mymemory";
+let openCfg = null; // provider id whose form is open
+
+const panel = document.getElementById("panel");
+const toastEl = document.getElementById("toast");
+let toastT;
+function toast(msg){
+  toastEl.textContent = msg; toastEl.classList.add("show");
+  clearTimeout(toastT); toastT = setTimeout(()=>toastEl.classList.remove("show"),1400);
+}
+
+function badgeFor(p){
+  if(selected===p.id) return `<span class="badge def">默认</span>`;
+  if(!p.keyed) return `<span class="badge ok">无需 Key</span>`;
+  const cls = p.configured ? "ok" : "warn";
+  const txt = p.configured ? "已配置" : "待配置";
+  const clickable = variant==="B" ? " clickable" : "";
+  return `<span class="badge ${cls}${clickable}" data-badge="${p.id}">${txt}</span>`;
+}
+
+const gearSvg = `<svg class="gear" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>`;
+
+function cfgControl(p){
+  if(!p.keyed) return "";
+  const isOpen = openCfg===p.id;
+  if(variant==="A"){
+    return `<button class="cfg-btn ${isOpen?"open":""}" data-cfg="${p.id}">${gearSvg}配置</button>`;
+  }
+  if(variant==="C"){
+    return `<button class="cfg-btn ${isOpen?"open":""}" data-cfg="${p.id}">配置 <span class="chev ${isOpen?"open":""}">›</span></button>`;
+  }
+  return ""; // B：无独立按钮，徽标即入口
+}
+
+function formHtml(p){
+  if(openCfg!==p.id) return "";
+  const fields = p.fields.map(f=>`
+    <div class="field">
+      <label>${f.label}</label>
+      <input type="${f.secret?"password":"text"}" placeholder="${f.secret&&p.configured?"已设置（留空不修改）":""}" />
+    </div>`).join("");
+  return `<div class="form" data-form="${p.id}">${fields}
+    <button class="save" data-save="${p.id}">保存</button></div>`;
+}
+
+function render(){
+  panel.innerHTML = PROVIDERS.map(p=>{
+    const selHit = `
+      <div class="sel-hit" data-sel="${p.id}">
+        <div class="radio ${selected===p.id?"sel":""}"></div>
+        <div class="logo">${p.abbr}</div>
+        <div class="grow"><div class="name">${p.name}</div></div>
+        ${badgeFor(p)}
+      </div>`;
+    // 变体 C：分隔右段
+    const rightSep = variant==="C" && p.keyed
+      ? `<div style="width:1px;height:30px;background:var(--border);margin:0 4px;"></div>` : "";
+    return `<div class="card">
+        ${selHit}
+        ${rightSep}
+        ${cfgControl(p)}
+      </div>${formHtml(p)}`;
+  }).join("");
+  document.getElementById("ro-def").textContent = PROVIDERS.find(p=>p.id===selected).name;
+  document.getElementById("ro-cfg").textContent = openCfg ? PROVIDERS.find(p=>p.id===openCfg).name : "无";
+  document.getElementById("why").innerHTML = WHY[variant];
+  document.getElementById("hint").textContent = HINT[variant];
+}
+
+panel.addEventListener("click", e=>{
+  const sel = e.target.closest("[data-sel]");
+  const cfg = e.target.closest("[data-cfg]");
+  const badge = e.target.closest("[data-badge]");
+  const save = e.target.closest("[data-save]");
+  if(save){ toast("已保存 "+PROVIDERS.find(p=>p.id===save.dataset.save).name+" 的密钥（仅原型）");
+    const p=PROVIDERS.find(p=>p.id===save.dataset.save); p.configured=true; openCfg=null; render(); return; }
+  if(cfg){ const id=cfg.dataset.cfg; openCfg = openCfg===id?null:id; render(); return; }
+  if(badge && variant==="B"){ const id=badge.dataset.badge; openCfg = openCfg===id?null:id; render(); return; }
+  if(sel){ selected = sel.dataset.sel; render();
+    toast("默认翻译源 → "+PROVIDERS.find(p=>p.id===selected).name); return; }
+});
+
+document.getElementById("seg").addEventListener("click", e=>{
+  const b = e.target.closest("button[data-v]"); if(!b) return;
+  variant = b.dataset.v; openCfg=null;
+  document.querySelectorAll("#seg button").forEach(x=>x.classList.toggle("on", x===b));
+  render();
+});
+
+render();
+</script>
+</body>
+</html>
