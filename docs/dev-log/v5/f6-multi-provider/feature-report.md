@@ -6,7 +6,7 @@ parent: V5
 created: 2026-06-03T00:00:00Z
 status: 已完成（代码门禁全过，待 GUI 实测）
 author: orchestrator
-children: [f6-s01-backend-routing, f6-s02-credential-ipc, f6-s03-frontend-form, f6-s04-translate-page-fixes, f6-s05-baidu-sign-trim]
+children: [f6-s01-backend-routing, f6-s02-credential-ipc, f6-s03-frontend-form, f6-s04-translate-page-fixes, f6-s05-baidu-sign-trim, f6-s06-credential-reset-ux]
 ---
 
 # 大功能报告 · V5-F6 多翻译源端到端接通
@@ -24,6 +24,7 @@ children: [f6-s01-backend-routing, f6-s02-credential-ipc, f6-s03-frontend-form, 
 | s01 后端动态路由 | translate_text_impl 改为读 selected_provider→load_credentials→build_provider 动态选源；历史写真实 provider_id（不再硬编码 mymemory）；缺 key 返回明确错误不回退 | tester 三变异（含首轮打回补测动态路由历史不变量）+ 安全(secret 不泄漏)；reviewer 通过；cargo 330 全绿 | e838919 |
 | s02 凭据 IPC | 暴露 get_provider_credential_schema / get_provider_credentials（secret 只回 isSet）/ set_provider_credentials（密入 keychain，HashMap 入参） | tester 三变异（含安全断言 secret 泄漏守护）全红复绿；reviewer 通过安全红线明确；cargo 336 全绿 | e838919 |
 | s03 前端 schema 驱动表单 | 选中 keyed provider 就地展开 key 表单（password+留空不修改）→保存→徽标转「已配置」；ipc-client 包装 + isProviderConfigured 纯函数 + CredentialForm 组件 | tester 三变异全红复绿、跨端契约静态一致；reviewer 通过且逐项核对命令名/参数键/DTO camelCase 与后端一致；前端 413 全绿 tsc 干净 | e838919 |
+| s06 凭据清除/重置 UX | 收口百度排障暴露的 UX 缺口（错密钥残留无法清除）：后端 delete_provider_credentials 命令（按 schema 删 keychain 密钥+DB 非密，幂等，emit 刷新）；前端「清除已存密钥」按钮（confirm 二次确认）+「已配置·重填覆盖」提示+暗色 CSS；handleCredentialSaved 补 .catch() 保守回退 | tester 4 变异全红复绿、幂等/不泄漏/confirm 守卫核对；reviewer 通过(Important85 已修)；前端 435 + cargo 347 全绿 | 13d7f9b |
 | s05 百度签名修复 | GUI 逐步定位：52003(未开通通用翻译,用户自行开通)→54001(签名错误)。签名算法/编码核实正确，真因是粘贴 appid/密钥带首尾空白进了签名。build_provider 的 find 闭包加 trim+空判定（统一覆盖全 provider，trim 后空=缺失走 Err） | tester 2 变异全红复绿、trim 覆盖完整、无凭据泄漏；reviewer 通过无≥80问题；cargo 338 全绿 | 2189d6a |
 | s04 翻译页修复 | GUI 实测暴露：③ 错误吞成通用文案+显示在顶部→改 catch(err) 透传真实后端错误+移到译文结果区；① 翻译源下拉对所有 needsKey 无条件禁用+页面不卸载不刷新→DirBar 解禁已配置源+TranslatePage 取 configuredIds+监听 PROVIDER_CONFIG_CHANGED_EVENT 跨页刷新（后端 set_provider_credentials emit）。② 百度报错本身待真实错误现形后另修 | tester 四变异全红复绿、事件名两端一致、真实错误透传；reviewer 通过(100% 置信)；前端 427 + cargo 336 全绿 | 9dcf287 |
 
