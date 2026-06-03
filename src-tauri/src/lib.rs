@@ -78,6 +78,10 @@ pub struct CaptureState {
 ///
 /// 函数签名对 Runtime 泛型化，允许生产代码（`Wry`）和测试（`MockRuntime`）共用同一套
 /// 插件注册逻辑，避免测试与生产漂移。
+///
+/// 注意：`tauri-plugin-single-instance` **不在此列**。它依赖真实 runtime
+/// （进程间锁），且官方要求必须最先注册；放进本泛型函数会污染 MockRuntime 测试路径，
+/// 故单独在 `run()` 内以 desktop-only 守卫、最先注册（详见 `run()`）。
 pub fn register_plugins<R: Runtime>(builder: tauri::Builder<R>) -> tauri::Builder<R> {
     builder
         .plugin(tauri_plugin_autostart::init(
@@ -90,6 +94,11 @@ pub fn register_plugins<R: Runtime>(builder: tauri::Builder<R>) -> tauri::Builde
 
 /// 启动 Tauri 应用。
 ///
+/// 单实例语义：通过 `tauri-plugin-single-instance` 保证全机仅一个进程存活。
+/// 第二个实例启动时立即退出，已运行实例在回调里显示并聚焦 main 窗口
+/// （行为与托盘「显示 QuickQuick」一致），消除「开机自启 + 用户手动再开」导致的
+/// 双进程（双剪贴板轮询线程、热键重复抢注册）。该插件必须最先注册（官方硬性要求）。
+///
 /// 插件注册委托给 `register_plugins`；setup 阶段：
 /// - 打开加密数据库并通过 `app.manage(AppDb(...))` 注册为 Tauri 状态
 /// - 启动剪贴板轮询后台线程（500ms 间隔）
@@ -101,7 +110,18 @@ pub fn register_plugins<R: Runtime>(builder: tauri::Builder<R>) -> tauri::Builde
 /// # Panics
 /// 若 Tauri builder 初始化失败则 panic（属于不可恢复的启动错误）。
 pub fn run() {
-    register_plugins(tauri::Builder::default())
+    let builder = tauri::Builder::default();
+
+    // single-instance 必须在所有其它插件之前注册（官方硬性要求）。
+    // 第二个实例会立即退出，回调在已运行实例中触发——复用托盘的显示逻辑，
+    // 把 main 窗口显示并聚焦。仅桌面端有意义，故用 cfg(desktop) 守卫。
+    // 回调签名为 Fn(&AppHandle, Vec<String>, String)，依次是 app/argv/cwd，此处仅需 app。
+    #[cfg(desktop)]
+    let builder = builder.plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+        tray::show_and_focus_window(app);
+    }));
+
+    register_plugins(builder)
         .invoke_handler(tauri::generate_handler![
             ipc::clipboard::list_clip_items,
             ipc::clipboard::delete_clip_item,

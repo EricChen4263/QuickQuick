@@ -90,7 +90,10 @@ fn handle_tray_icon_event(app: &tauri::AppHandle, event: &TrayIconEvent) {
 }
 
 /// 显示 main 窗口并设置焦点；失败时记录日志不 panic。
-fn show_and_focus_window(app: &tauri::AppHandle) {
+///
+/// 可见性为 `pub(crate)` 供 single-instance 插件回调复用：第二个实例启动时，
+/// 已运行实例需执行与托盘「显示 QuickQuick」一致的显示行为，复用此函数避免重复实现。
+pub(crate) fn show_and_focus_window(app: &tauri::AppHandle) {
     let Some(window) = app.get_webview_window("main") else {
         eprintln!("[QuickQuick] 托盘：找不到 main 窗口");
         return;
