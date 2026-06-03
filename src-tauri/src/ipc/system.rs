@@ -7,15 +7,15 @@
 //! - `paste_to_front`              — 将指定条目写回系统剪贴板，trusted 时走完整粘贴路径
 //!
 //! paste_to_front 行为（V5-F4-S04-9b）：
-//! - trusted=true：写回剪贴板 → 隐藏 clip-popover/main 窗口 → hide app 让出前台 → 等待 100ms
-//!   → Cmd+V 注入 → 返回 "full_paste"
+//! - trusted=true：写回剪贴板 → 隐藏 clip-popover/main 窗口 → hide app 让出前台
+//!   → 固定等待 FOCUS_YIELD_WAIT_MS → Cmd+V 注入 → 返回 "full_paste"
 //! - trusted=false 或超时：仅写回剪贴板 → 返回 "write_back_only"
 //! - 图片条目：拒绝，返回错误
 //!
 //! 焦点编排（FocusStep 序列）：
 //! - HidePanel：hide clip-popover（或 main）
 //! - HideApp：app.hide() 隐藏整个 QuickQuick 进程，macOS 自动把前台还给上一个 app
-//! - WaitForeground：sleep 100ms 等系统完成前台切换，确保 Cmd+V 落在正确 app
+//! - WaitForeground：固定等待 FOCUS_YIELD_WAIT_MS，让焦点转移自然完成后再 send_paste
 //! - SimulatePaste：send_paste(Cmd+V)
 
 use rusqlite::{Connection, OptionalExtension};
@@ -60,6 +60,15 @@ pub struct PasteResultDto {
 
 /// 保留条目上限：超过此数量的非收藏旧条目将被软删。
 const KEEP_RECENT_COUNT: usize = 500;
+
+/// app.hide() 后等待焦点转移完成的固定时长（毫秒）。
+///
+/// AppKit 的前台/激活状态在非主线程（paste 命令线程）读取是 stale 的，
+/// 无法可靠轮询 NSWorkspace.frontmostApplication()——实测该 API 在命令线程始终返回
+/// QuickQuick 自身 pid，轮询条件永不成立。
+/// app.hide() 异步完成焦点转移约需 250-350ms，固定等待是此约束下的务实选择。
+/// 100ms 实测过短致 Cmd+V 落空，800ms 可靠但用户感知明显卡顿，350ms 为平衡点。
+const FOCUS_YIELD_WAIT_MS: u64 = 350;
 
 /// get_storage_stats 的纯函数实现，可在测试中直接调用。
 ///
@@ -198,22 +207,23 @@ pub fn open_accessibility_settings() -> Result<(), String> {
     Ok(())
 }
 
-/// 在 trusted 路径执行窗口 hide，让出前台，再等待 100ms（WaitForeground）。
+/// 在 trusted 路径执行窗口 hide，让出前台，固定等待焦点转移完成（WaitForeground）。
 ///
 /// 三步顺序（FocusStep 序列的后半段）：
 /// 1. HidePanel：hide clip-popover（或 main）
 /// 2. HideApp：app.hide() 隐藏整个 QuickQuick 进程，macOS 自动把前台还给上一个 app
-/// 3. WaitForeground：sleep 100ms 等系统完成前台切换，确保 Cmd+V 落在正确 app
+/// 3. WaitForeground：固定等待 FOCUS_YIELD_WAIT_MS，让焦点转移自然完成
 ///
-/// 为何用 app.hide() 而非显式 activate 原 app：
-/// 旧的 NSRunningApplication.activateWithOptions(empty) 在 macOS 26.5 上无效；
-/// hide 整个 QuickQuick 进程后，macOS 自动把前台还给上一个 app，无需 PID 记录。
+/// 为何用固定等待而非条件轮询：
+/// AppKit 前台/激活状态在非主线程读取是 stale 的，NSWorkspace.frontmostApplication()
+/// 在 paste 命令线程始终返回 QuickQuick 自身 pid，轮询条件永不成立（实测每次跑满上限）。
+/// 固定等待是此约束下的务实选择，详见 FOCUS_YIELD_WAIT_MS 注释。
 ///
 /// hide 失败均不 panic，降级记录日志继续尝试粘贴。
 fn hide_and_restore_focus(app: &tauri::AppHandle) {
     hide_popover_window(app);
     hide_app(app);
-    std::thread::sleep(std::time::Duration::from_millis(100));
+    std::thread::sleep(std::time::Duration::from_millis(FOCUS_YIELD_WAIT_MS));
 }
 
 /// 优先 hide clip-popover，不存在则 hide main。
