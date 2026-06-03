@@ -25,11 +25,13 @@ pub fn build_provider(
     provider_id: &str,
     credentials: &[(String, String)],
 ) -> Result<Box<dyn super::TranslateProvider>, String> {
+    // trim 后空字符串视同缺失，避免把全空白值当有效凭据，防止签名错误（如百度 54001）。
     let find = |key: &str| -> Option<&str> {
         credentials
             .iter()
             .find(|(k, _)| k == key)
-            .map(|(_, v)| v.as_str())
+            .map(|(_, v)| v.trim())
+            .filter(|s| !s.is_empty())
     };
 
     match provider_id {
@@ -698,5 +700,46 @@ mod tests {
         if let Err(err) = result {
             assert!(!err.is_empty(), "Err 消息不应为空");
         }
+    }
+
+    // TDD RED: 带首尾空格的百度凭据应被 trim，build_request body 中 appid 是干净值
+    #[test]
+    fn build_provider_baidu_trims_whitespace_in_credentials() {
+        let creds = vec![
+            ("app_id".to_string(), " 12345 ".to_string()),
+            ("secret_key".to_string(), " mysecret ".to_string()),
+        ];
+        let provider = build_provider("baidu", &creds).expect("带空格凭据应成功构造");
+
+        let req = super::super::TranslateRequest {
+            text: "hello".to_string(),
+            source_lang: super::super::Lang("auto".to_string()),
+            target_lang: super::super::Lang("zh".to_string()),
+        };
+        let http_req = provider.build_request(&req);
+        let body = http_req.body.expect("百度请求应有 body");
+
+        assert!(
+            body.contains("appid=12345"),
+            "trim 后 appid 应为 12345，body 实际为：{body}"
+        );
+        assert!(
+            !body.contains("%2012345") && !body.contains("12345%20"),
+            "appid 不应含空格编码 %20，body 实际为：{body}"
+        );
+    }
+
+    // TDD RED: 全空白的必填字段 trim 后为空，build_provider 应返回 Err
+    #[test]
+    fn build_provider_baidu_whitespace_only_app_id_returns_err() {
+        let creds = vec![
+            ("app_id".to_string(), "   ".to_string()),
+            ("secret_key".to_string(), "valid_key".to_string()),
+        ];
+        let result = build_provider("baidu", &creds);
+        assert!(
+            result.is_err(),
+            "全空白 app_id trim 后为空应视同缺失，返回 Err"
+        );
     }
 }
