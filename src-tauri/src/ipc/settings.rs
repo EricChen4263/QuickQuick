@@ -248,13 +248,38 @@ pub fn get_hotkeys(app: AppHandle) -> Result<HotkeyDto, String> {
     get_hotkeys_impl(&path)
 }
 
-/// Tauri 命令：将指定动作改绑到新加速键（含冲突检测）。
+/// Tauri 命令：将指定动作改绑到新加速键（含冲突检测 + 运行时即时应用）。
+///
+/// 流程：读出旧键（用于注销）→ 持久化新键 → 注销旧键 → 注册新键并绑回调。
+/// 持久化失败时直接返回 Err，运行时状态不改动，保证一致性。
+/// 运行时注册失败时，持久化已完成，重启后新键仍会生效，但会把错误反馈给前端。
 #[tauri::command]
 pub fn set_hotkey(app: AppHandle, action: String, accelerator: String) -> Result<(), String> {
+    use tauri_plugin_global_shortcut::GlobalShortcutExt;
+
     let hotkey_action = parse_action(&action)?;
     let path = resolve_config_path(&app, "hotkey.json")?;
+
+    // 读出旧加速键，供后续注销使用
+    let old_accelerator = get_hotkeys_impl(&path).ok().map(|dto| match hotkey_action {
+        HotkeyAction::History => dto.history,
+        HotkeyAction::Translate => dto.translate,
+    });
+
+    // 持久化新键（含冲突检测），失败直接返回，运行时不动
     let registrar = SystemHotkeyRegistrar { app: &app };
-    set_hotkey_impl(hotkey_action, &accelerator, &path, &registrar)
+    set_hotkey_impl(hotkey_action, &accelerator, &path, &registrar)?;
+
+    // 注销旧键；「未注册」不视为错误（静默忽略），其他错误也仅记录
+    if let Some(old) = old_accelerator {
+        if old != accelerator {
+            let _ = app.global_shortcut().unregister(old.as_str());
+        }
+    }
+
+    // 注册新键并绑 popover 回调；失败映射为 String 返回前端
+    crate::register_action_shortcut(&app, hotkey_action, &accelerator)
+        .map_err(|e| format!("热键运行时注册失败（持久化已完成，重启后生效）: {e}"))
 }
 
 /// Tauri 命令：读取排除名单。

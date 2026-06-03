@@ -303,6 +303,36 @@ fn apply_autostart_preference(app: &mut tauri::App) {
     autostart::apply_to_os(&app.handle().clone(), pref.enabled);
 }
 
+/// 将 `HotkeyAction` 映射为对应 popover 窗口的标签字符串。
+///
+/// 此映射是纯函数，与运行时解耦，可在单测中直接验证。
+/// 标签值必须与前端 popover 窗口的 `label` 字段严格一致。
+pub fn popover_label_for_action(action: hotkey::HotkeyAction) -> &'static str {
+    match action {
+        hotkey::HotkeyAction::History => "clip-popover",
+        hotkey::HotkeyAction::Translate => "trans-popover",
+    }
+}
+
+/// 注册单个动作的全局快捷键并绑定对应的 popover 回调。
+///
+/// 供启动期 `register_hotkeys` 和运行时改键 `set_hotkey` 命令共用，消除回调逻辑重复。
+/// 失败时返回 `tauri_plugin_global_shortcut::Error`，由调用方决定处理策略
+/// （启动期仅 eprintln 降级；改键时映射为 String 返回前端）。
+pub fn register_action_shortcut(
+    handle: &tauri::AppHandle,
+    action: hotkey::HotkeyAction,
+    accelerator: &str,
+) -> Result<(), tauri_plugin_global_shortcut::Error> {
+    let label = popover_label_for_action(action);
+    let handle_cb = handle.clone();
+    handle
+        .global_shortcut()
+        .on_shortcut(accelerator, move |_app, _shortcut, _event| {
+            popover::trigger_popover(&handle_cb, label);
+        })
+}
+
 /// 注册全局热键（history / translate）。
 ///
 /// 热键值优先从 `app_config_dir()/hotkey.json` 读取持久化配置，
@@ -323,34 +353,18 @@ fn register_hotkeys(handle: &tauri::AppHandle) {
             }
         })
         .unwrap_or_default();
-    let history_key = config
-        .get_accelerator(hotkey::HotkeyAction::History)
-        .to_string();
-    let translate_key = config
-        .get_accelerator(hotkey::HotkeyAction::Translate)
-        .to_string();
 
-    let handle_history = handle.clone();
-    let handle_translate = handle.clone();
-
-    // 注册 history 热键；失败则记录并优雅降级
-    if let Err(e) = handle.global_shortcut().on_shortcut(
-        history_key.as_str(),
-        move |_app, _shortcut, _event| {
-            popover::trigger_popover(&handle_history, "clip-popover");
-        },
-    ) {
-        eprintln!("[QuickQuick] history 热键注册失败（可能已被占用）: {e}");
-    }
-
-    // 注册 translate 热键；失败则记录并优雅降级
-    if let Err(e) = handle.global_shortcut().on_shortcut(
-        translate_key.as_str(),
-        move |_app, _shortcut, _event| {
-            popover::trigger_popover(&handle_translate, "trans-popover");
-        },
-    ) {
-        eprintln!("[QuickQuick] translate 热键注册失败（可能已被占用）: {e}");
+    for action in [
+        hotkey::HotkeyAction::History,
+        hotkey::HotkeyAction::Translate,
+    ] {
+        let key = config.get_accelerator(action).to_string();
+        if let Err(e) = register_action_shortcut(handle, action, &key) {
+            eprintln!(
+                "[QuickQuick] {:?} 热键注册失败（可能已被占用）: {e}",
+                action
+            );
+        }
     }
 }
 
@@ -419,6 +433,26 @@ fn setup_main_window_behavior(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// History 动作应映射到 clip-popover 标签
+    #[test]
+    fn popover_label_for_history_action_returns_clip_popover() {
+        // Arrange & Act
+        let label = popover_label_for_action(hotkey::HotkeyAction::History);
+
+        // Assert
+        assert_eq!(label, "clip-popover");
+    }
+
+    /// Translate 动作应映射到 trans-popover 标签
+    #[test]
+    fn popover_label_for_translate_action_returns_trans_popover() {
+        // Arrange & Act
+        let label = popover_label_for_action(hotkey::HotkeyAction::Translate);
+
+        // Assert
+        assert_eq!(label, "trans-popover");
+    }
 
     /// 冒烟测试：验证 HotkeyConfig 默认值非空且与设计文档约定一致（A04 后端侧）
     #[test]
