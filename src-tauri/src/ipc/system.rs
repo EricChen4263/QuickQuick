@@ -7,13 +7,16 @@
 //! - `paste_to_front`              — 将指定条目写回系统剪贴板，trusted 时走完整粘贴路径
 //!
 //! paste_to_front 行为（V5-F4-S04-9b）：
-//! - trusted=true：写回剪贴板 → 隐藏 clip-popover/main 窗口 → 等待 100ms → Cmd+V 注入
-//!   → 返回 "full_paste"
+//! - trusted=true：写回剪贴板 → 隐藏 clip-popover/main 窗口 → hide app 让出前台 → 等待 100ms
+//!   → Cmd+V 注入 → 返回 "full_paste"
 //! - trusted=false 或超时：仅写回剪贴板 → 返回 "write_back_only"
 //! - 图片条目：拒绝，返回错误
 //!
-//! 已知限制：务实焦点方案依赖 macOS 在窗口 hide 后自动把焦点还给上一个 App，
-//! 未实现显式 RecordFrontmost/ActivateOriginalApp（完整 FocusStep 序列）。
+//! 焦点编排（FocusStep 序列）：
+//! - HidePanel：hide clip-popover（或 main）
+//! - HideApp：app.hide() 隐藏整个 QuickQuick 进程，macOS 自动把前台还给上一个 app
+//! - WaitForeground：sleep 100ms 等系统完成前台切换，确保 Cmd+V 落在正确 app
+//! - SimulatePaste：send_paste(Cmd+V)
 
 use rusqlite::{Connection, OptionalExtension};
 use serde::Serialize;
@@ -22,7 +25,9 @@ use tauri::{Manager, State};
 use crate::clipboard::CapturedItem;
 use crate::db::{self, DbError};
 use crate::ipc::{with_db, AppDb};
-use crate::onboarding::{perform_paste_or_degrade, AccessibilityProbe, PasteOutcome, ACCESSIBILITY_DEEPLINK};
+use crate::onboarding::{
+    perform_paste_or_degrade, AccessibilityProbe, PasteOutcome, ACCESSIBILITY_DEEPLINK,
+};
 use crate::paste::{self, PasteBackend};
 
 /// 存储统计 DTO。
@@ -118,9 +123,7 @@ pub fn fetch_paste_item(conn: &Connection, id: &str) -> Result<CapturedItem, DbE
     let (content, kind) = row.ok_or_else(|| DbError::Other("条目不存在或已删除".to_string()))?;
 
     if kind == "image" {
-        return Err(DbError::Other(
-            "图片条目暂不支持写回剪贴板".to_string(),
-        ));
+        return Err(DbError::Other("图片条目暂不支持写回剪贴板".to_string()));
     }
 
     Ok(CapturedItem {
@@ -195,11 +198,26 @@ pub fn open_accessibility_settings() -> Result<(), String> {
     Ok(())
 }
 
-/// 在 trusted 路径执行窗口 hide：优先 hide clip-popover，不存在则 hide main。
+/// 在 trusted 路径执行窗口 hide，让出前台，再等待 100ms（WaitForeground）。
 ///
-/// hide 失败不 panic，降级记录日志继续尝试粘贴。
-/// 隐藏后 sleep 100ms 让 macOS 把焦点归还给原 App。
-fn hide_panel_and_wait(app: &tauri::AppHandle) {
+/// 三步顺序（FocusStep 序列的后半段）：
+/// 1. HidePanel：hide clip-popover（或 main）
+/// 2. HideApp：app.hide() 隐藏整个 QuickQuick 进程，macOS 自动把前台还给上一个 app
+/// 3. WaitForeground：sleep 100ms 等系统完成前台切换，确保 Cmd+V 落在正确 app
+///
+/// 为何用 app.hide() 而非显式 activate 原 app：
+/// 旧的 NSRunningApplication.activateWithOptions(empty) 在 macOS 26.5 上无效；
+/// hide 整个 QuickQuick 进程后，macOS 自动把前台还给上一个 app，无需 PID 记录。
+///
+/// hide 失败均不 panic，降级记录日志继续尝试粘贴。
+fn hide_and_restore_focus(app: &tauri::AppHandle) {
+    hide_popover_window(app);
+    hide_app(app);
+    std::thread::sleep(std::time::Duration::from_millis(100));
+}
+
+/// 优先 hide clip-popover，不存在则 hide main。
+fn hide_popover_window(app: &tauri::AppHandle) {
     let hidden = app
         .get_webview_window("clip-popover")
         .map(|w| {
@@ -219,9 +237,23 @@ fn hide_panel_and_wait(app: &tauri::AppHandle) {
             }
         }
     }
-
-    std::thread::sleep(std::time::Duration::from_millis(100));
 }
+
+/// 隐藏整个 QuickQuick 进程，macOS 会自动把前台还给上一个 app。
+///
+/// 使用 AppHandle::hide()（macOS 专有 API）而非直接调用 NSApp.hide()：
+/// paste_to_front 命令跑在非主线程，AppHandle::hide() 内部负责线程派发，安全可用。
+/// 失败时降级记录日志，不 panic。
+#[cfg(target_os = "macos")]
+fn hide_app(app: &tauri::AppHandle) {
+    if let Err(e) = app.hide() {
+        eprintln!("[paste_to_front] hide app 失败: {e}");
+    }
+}
+
+/// 非 macOS 平台：空实现，编译时零开销消除。
+#[cfg(not(target_os = "macos"))]
+fn hide_app(_app: &tauri::AppHandle) {}
 
 /// Tauri 命令：将指定条目写回系统剪贴板，trusted 时走完整粘贴路径（V5-F4-S04-9b）。
 ///
@@ -265,7 +297,7 @@ fn run_paste_with_backend(app: &tauri::AppHandle, item: &CapturedItem) -> String
     if probe.is_trusted() {
         match paste::write_and_confirm(&mut backend, item) {
             Ok(()) => {
-                hide_panel_and_wait(app);
+                hide_and_restore_focus(app);
                 backend.send_paste();
                 "full_paste".to_string()
             }
@@ -298,8 +330,8 @@ fn run_paste_with_backend(app: &tauri::AppHandle, item: &CapturedItem) -> String
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::ingest;
     use crate::clipboard::CapturedItem;
+    use crate::db::ingest;
     use crate::onboarding::AccessibilityProbe;
     use crate::paste::PasteBackend;
 
@@ -340,10 +372,20 @@ mod tests {
     }
     impl FakeBackend {
         fn trusted_normal() -> Self {
-            Self { count: 0, text: None, send_paste_called: false, freeze_count: false }
+            Self {
+                count: 0,
+                text: None,
+                send_paste_called: false,
+                freeze_count: false,
+            }
         }
         fn frozen_count() -> Self {
-            Self { count: 0, text: None, send_paste_called: false, freeze_count: true }
+            Self {
+                count: 0,
+                text: None,
+                send_paste_called: false,
+                freeze_count: true,
+            }
         }
     }
     impl PasteBackend for FakeBackend {
@@ -365,7 +407,10 @@ mod tests {
     }
 
     fn test_item(text: &str) -> CapturedItem {
-        CapturedItem { text: text.to_string(), html: None }
+        CapturedItem {
+            text: text.to_string(),
+            html: None,
+        }
     }
 
     /// T1：get_storage_stats_impl — 空库返回 live_count=0，file_size_bytes=0（无路径）
@@ -381,8 +426,14 @@ mod tests {
     #[test]
     fn get_storage_stats_impl_counts_live_items() {
         let conn = make_test_conn();
-        let item_a = CapturedItem { text: "hello".to_string(), html: None };
-        let item_b = CapturedItem { text: "world".to_string(), html: None };
+        let item_a = CapturedItem {
+            text: "hello".to_string(),
+            html: None,
+        };
+        let item_b = CapturedItem {
+            text: "world".to_string(),
+            html: None,
+        };
         ingest(&conn, &item_a).expect("入库 A 失败");
         ingest(&conn, &item_b).expect("入库 B 失败");
 
@@ -394,7 +445,10 @@ mod tests {
     #[test]
     fn cleanup_history_impl_no_excess_returns_zeros() {
         let conn = make_test_conn();
-        let item = CapturedItem { text: "only one".to_string(), html: None };
+        let item = CapturedItem {
+            text: "only one".to_string(),
+            html: None,
+        };
         ingest(&conn, &item).expect("入库失败");
 
         let result = cleanup_history_impl(&conn).expect("不应失败");
@@ -432,7 +486,10 @@ mod tests {
     /// T7：map_outcome — WriteBackOnlyDone 映射 "write_back_only"
     #[test]
     fn map_outcome_write_back_only_done_returns_write_back_only() {
-        assert_eq!(map_outcome(&PasteOutcome::WriteBackOnlyDone), "write_back_only");
+        assert_eq!(
+            map_outcome(&PasteOutcome::WriteBackOnlyDone),
+            "write_back_only"
+        );
     }
 
     /// T8：paste_orchestrate — trusted=true 正常后端 → "full_paste"，send_paste 被调用
@@ -457,7 +514,10 @@ mod tests {
 
         let outcome = paste_orchestrate(&probe, &mut backend, &item);
 
-        assert_eq!(outcome, "write_back_only", "未授权路径应返回 write_back_only");
+        assert_eq!(
+            outcome, "write_back_only",
+            "未授权路径应返回 write_back_only"
+        );
         assert!(!backend.send_paste_called, "未授权路径不应调用 send_paste");
     }
 

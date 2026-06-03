@@ -44,7 +44,7 @@ const POPOVER_SPECS: &[PopoverSpec] = &[
     },
 ];
 
-/// 触发指定 label 的 popover 窗口：get_or_create → 定位 → 显示 → 聚焦。
+/// 触发指定 label 的 popover 窗口：get_or_create → 定位 → 显示 → 激活 app → 聚焦。
 ///
 /// `label` 必须是 `"clip-popover"` 或 `"trans-popover"`；
 /// 未知 label 会记录错误并立即返回。
@@ -67,16 +67,53 @@ pub fn trigger_popover(handle: &tauri::AppHandle, label: &str) {
         eprintln!("[QuickQuick] {label} show 失败: {e}");
         return;
     }
+    // 先激活 app，再聚焦窗口。
+    // 顺序说明：macOS 要求进程本身处于"活跃"(active)状态后，
+    // 窗口的 makeKeyAndOrderFront 才能拿到 key 状态。
+    // 若反序（先 set_focus 后 activate），窗口已前置但 app 未激活，
+    // 依然收不到键盘事件——全局热键回调场景必须显式激活。
+    activate_app_macos();
     if let Err(e) = window.set_focus() {
         eprintln!("[QuickQuick] {label} set_focus 失败: {e}");
     }
 }
 
+/// 显式激活当前 app，使 QuickQuick 成为 macOS 活跃应用。
+///
+/// 为何需要此调用：tauri/tao 的 `window.set_focus()` 底层用的是已废弃的
+/// `activateIgnoringOtherApps:YES`，在 macOS 14+（含 macOS 26.5）上该方法
+/// 已成 no-op。从全局热键触发时前台是其他 app，QuickQuick 进程未被激活，
+/// `makeKeyAndOrderFront` 无法让窗口真正拿到 key——键盘事件永远不会进入 webview。
+///
+/// 此 helper 调用 `NSApplication.activate()`（macOS 14+ 正式接口），
+/// 替代已废弃的 `activateIgnoringOtherApps:`，确保进程被激活。
+///
+/// 拿不到 MainThreadMarker（理论上不应发生：热键回调在主线程）时优雅跳过，
+/// 不 panic，与本文件其他错误处理风格（eprintln 降级）一致。
+#[cfg(target_os = "macos")]
+fn activate_app_macos() {
+    use objc2::MainThreadMarker;
+    use objc2_app_kit::NSApplication;
+
+    // MainThreadMarker::new() 是安全函数：内部读 pthread_main_np() 判断线程，
+    // 全局热键回调在主线程，实践中此处总返回 Some；拿不到时优雅跳过。
+    let Some(mtm) = MainThreadMarker::new() else {
+        eprintln!("[QuickQuick] activate_app_macos: 非主线程，跳过激活");
+        return;
+    };
+
+    // sharedApplication 与 activate 均为 objc2-app-kit 0.3 安全 API，
+    // MainThreadMarker 已保证主线程约束，无需额外 unsafe。
+    let app = NSApplication::sharedApplication(mtm);
+    app.activate();
+}
+
+/// 非 macOS 平台：空实现，编译时零开销消除。
+#[cfg(not(target_os = "macos"))]
+fn activate_app_macos() {}
+
 /// 获取已存在的 popover 窗口，或在首次调用时按规格创建并注册失焦隐藏。
-fn get_or_create_popover(
-    handle: &tauri::AppHandle,
-    spec: &PopoverSpec,
-) -> Option<WebviewWindow> {
+fn get_or_create_popover(handle: &tauri::AppHandle, spec: &PopoverSpec) -> Option<WebviewWindow> {
     // 已存在则直接复用，无需重建
     if let Some(existing) = handle.get_webview_window(spec.label) {
         return Some(existing);
@@ -120,4 +157,27 @@ fn register_focus_lost_hide(window: &WebviewWindow) {
             }
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    // activate_app_macos 是纯 FFI 包装，无法在无 GUI 的 headless 环境中真正调用
+    // NSApplication（sharedApplication 在无 NSApp 时行为未定义）。
+    // 此处验证的是：函数签名存在、可被引用、cfg 门控正确——即"编译即通过"的结构测试。
+    // 运行时激活行为需通过手动集成测试（全局热键触发 + 键盘输入验证）验证。
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn activate_app_macos_is_callable_as_fn_pointer() {
+        // 将私有函数赋值给函数指针，确认签名为 fn()。
+        // 此测试在 headless CI 中不调用 NSApplication，只验证函数存在且类型正确。
+        let _f: fn() = super::activate_app_macos;
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn activate_app_macos_noop_on_non_macos() {
+        // 非 macOS 平台的空实现应可被安全调用，无副作用。
+        super::activate_app_macos();
+    }
 }

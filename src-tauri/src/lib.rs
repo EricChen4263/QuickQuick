@@ -23,11 +23,11 @@ pub mod macos_paste;
 pub mod onboarding;
 pub mod paste;
 pub mod pipeline;
+mod popover;
 pub mod portable;
 pub mod privacy;
 pub mod settings;
 pub mod translate;
-mod popover;
 mod tray;
 mod window_pos;
 
@@ -240,7 +240,7 @@ fn start_clipboard_poll(
             let policy = privacy::CapturePolicy {
                 paused: paused.load(Ordering::Relaxed),
                 skip_sensitive: skip_sensitive.load(Ordering::Relaxed),
-                exclude: &*exclude_guard,
+                exclude: &exclude_guard,
             };
 
             // 每轮（约 500ms）读一次 settings.json 取 max_image_bytes。
@@ -257,7 +257,13 @@ fn start_clipboard_poll(
                 })
                 .unwrap_or_else(|| settings::AppSettings::default().max_image_bytes);
 
-            match pipeline::capture_and_ingest(&backend, &mut last_seen, conn, &policy, max_image_bytes) {
+            match pipeline::capture_and_ingest(
+                &backend,
+                &mut last_seen,
+                conn,
+                &policy,
+                max_image_bytes,
+            ) {
                 Ok(outcomes) => {
                     // 有新条目或条目被置顶时通知前端刷新列表
                     if should_notify_clip_change(&outcomes) {
@@ -348,7 +354,6 @@ fn register_hotkeys(handle: &tauri::AppHandle) {
     }
 }
 
-
 /// 从 `AppSettings` 初始化运行时 `CaptureState`。
 ///
 /// 读取持久化的 settings.json（不存在则用默认值），将三个布尔字段
@@ -365,9 +370,8 @@ fn init_capture_state(app: &tauri::App) -> CaptureState {
         .map(|path| settings::AppSettings::load_or_default(&path))
         .unwrap_or_default();
 
-    let exclude_list = privacy::ExcludeList::new_with_apps(
-        settings.excluded_apps.iter().map(String::as_str),
-    );
+    let exclude_list =
+        privacy::ExcludeList::new_with_apps(settings.excluded_apps.iter().map(String::as_str));
 
     CaptureState {
         paused: Arc::new(AtomicBool::new(settings.pause_capture)),
@@ -394,23 +398,19 @@ fn setup_main_window_behavior(
     };
 
     let win = window.clone();
-    window.on_window_event(move |event| {
-        match event {
-            WindowEvent::Focused(false) => {
-                if stay_in_tray.load(Ordering::Relaxed) {
-                    let _ = win.hide();
-                } else {
-                    win.app_handle().exit(0);
-                }
+    window.on_window_event(move |event| match event {
+        WindowEvent::Focused(false) => {
+            if stay_in_tray.load(Ordering::Relaxed) {
+                let _ = win.hide();
+            } else {
+                win.app_handle().exit(0);
             }
-            WindowEvent::CloseRequested { api, .. } => {
-                if stay_in_tray.load(Ordering::Relaxed) {
-                    api.prevent_close();
-                    let _ = win.hide();
-                }
-            }
-            _ => {}
         }
+        WindowEvent::CloseRequested { api, .. } if stay_in_tray.load(Ordering::Relaxed) => {
+            api.prevent_close();
+            let _ = win.hide();
+        }
+        _ => {}
     });
 
     Ok(())

@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import type { ClipItem } from "../ipc/ipc-client";
 import { listClipItems, pasteToFront } from "../ipc/ipc-client";
 import { writeToClipboard } from "../panels/translate/browser-api";
@@ -37,6 +37,10 @@ export default function ClipPopoverApp() {
   const [query, setQuery] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
+  const inputRef = useRef<HTMLInputElement>(null);
+  // ref 暴露最新的 visibleFlatList，避免 onFocusChanged 回调产生 stale closure
+  const visibleFlatListRef = useRef<ClipItem[]>([]);
+
   useEffect(() => {
     listClipItems()
       .then((loaded) => {
@@ -50,12 +54,35 @@ export default function ClipPopoverApp() {
       });
   }, []);
 
+  // 每次窗口获得焦点时：聚焦输入框、重置搜索、选中回第一项
+  useEffect(() => {
+    const win = getCurrentWindow();
+    let unlisten: (() => void) | null = null;
+
+    win.onFocusChanged(({ payload: focused }) => {
+      if (!focused) return;
+      inputRef.current?.focus();
+      setQuery("");
+      const firstId = visibleFlatListRef.current[0]?.id ?? null;
+      setSelectedId(firstId);
+    }).then((fn) => {
+      unlisten = fn;
+    });
+
+    return () => {
+      unlisten?.();
+    };
+  }, []);
+
   const groups = useMemo(() => {
     const filtered = filterClipBySearch(items, query);
     return groupClipItems(filtered, Date.now());
   }, [items, query]);
 
   const visibleFlatList = useMemo(() => buildFlatList(groups), [groups]);
+
+  // 同步 ref，使 onFocusChanged 回调始终能读到最新列表（避免 stale closure）
+  visibleFlatListRef.current = visibleFlatList;
 
   // 过滤后当前 selectedId 可能不在新列表中，自动重置到第一项
   useEffect(() => {
@@ -104,6 +131,18 @@ export default function ClipPopoverApp() {
         .catch((err: unknown) => {
           console.error("[clip-popover] copy failed:", err);
         });
+      return;
+    }
+
+    if (e.key === "Escape") {
+      // WKWebView 会把 Esc 键原生"清空 search input"行为吞掉，不冒泡到 document。
+      // 在 onKeyDown 处显式拦截并关窗，才能让 Esc 在输入框已获焦时正常工作。
+      e.preventDefault();
+      getCurrentWindow()
+        .hide()
+        .catch((err: unknown) => {
+          console.error("[clip-popover] hide on Esc failed:", err);
+        });
     }
   }
 
@@ -119,7 +158,8 @@ export default function ClipPopoverApp() {
     <div className="popover-shell">
       <div className="popover-search-row">
         <input
-          type="search"
+          ref={inputRef}
+          type="text"
           role="searchbox"
           className="popover-search-input"
           placeholder="搜索剪贴板…"
