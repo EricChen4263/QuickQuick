@@ -2,7 +2,7 @@
 id: s12-trans-degenerate-pair
 title: 翻译同语种退化对兜底（zh→zh 修复）
 status: done
-commit: pending
+commit: acdbf05
 date: 2026-06-03
 ---
 

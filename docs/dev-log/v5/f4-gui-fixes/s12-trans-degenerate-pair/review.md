@@ -5,7 +5,7 @@ level: 小功能
 parent: V5-F4
 created: 2026-06-03T00:00:00Z
 status: 通过
-commit: pending
+commit: acdbf05
 acceptance_ids: []
 author: code-reviewer
 ---
