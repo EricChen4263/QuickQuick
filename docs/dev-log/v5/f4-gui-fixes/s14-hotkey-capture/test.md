@@ -2,7 +2,7 @@
 id: s14-hotkey-capture
 title: 热键按键捕获改键 测试留痕
 status: passed
-commit: pending
+commit: 950cfdc
 date: 2026-06-03
 ---
 

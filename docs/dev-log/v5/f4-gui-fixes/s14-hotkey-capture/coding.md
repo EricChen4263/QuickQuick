@@ -2,7 +2,7 @@
 id: s14-hotkey-capture
 title: 热键改键改为按键捕获 UX
 status: done
-commit: pending
+commit: 950cfdc
 date: 2026-06-03
 ---
 

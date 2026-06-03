@@ -2,7 +2,7 @@
 id: s15-hotkey-live-register
 title: 改热键运行时即时生效（修「改了不生效」）
 status: done
-commit: pending
+commit: ad8cc62
 date: 2026-06-03
 ---
 
