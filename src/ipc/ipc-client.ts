@@ -397,6 +397,64 @@ export async function pasteToFront(id: string): Promise<PasteResult> {
   }
 }
 
+/** 凭据字段 schema，与 Rust CredentialFieldDto（camelCase）对齐。 */
+export interface CredentialField {
+  key: string;
+  label: string;
+  isSecret: boolean;
+  required: boolean;
+}
+
+/** 凭据当前值，与 Rust CredentialValueDto（camelCase）对齐。secret 字段 value 永远 null，只看 isSet。 */
+export interface CredentialValue {
+  key: string;
+  value: string | null;
+  isSet: boolean;
+}
+
+/**
+ * 获取指定 Provider 的凭据字段 schema。
+ *
+ * 未知 providerId 返回空数组。
+ */
+export async function getProviderCredentialSchema(
+  providerId: string
+): Promise<CredentialField[]> {
+  try {
+    return await invoke<CredentialField[]>("get_provider_credential_schema", { providerId });
+  } catch (err) {
+    throw toError(err);
+  }
+}
+
+/** 获取指定 Provider 已存储的凭据值列表。secret 字段 value 永远 null，通过 isSet 判断是否已设置。 */
+export async function getProviderCredentials(
+  providerId: string
+): Promise<CredentialValue[]> {
+  try {
+    return await invoke<CredentialValue[]>("get_provider_credentials", { providerId });
+  } catch (err) {
+    throw toError(err);
+  }
+}
+
+/**
+ * 保存指定 Provider 的凭据值。
+ *
+ * @param providerId - Provider ID
+ * @param values - 键值对对象（Record<string,string>），后端映射为 HashMap；不传空串以避免覆盖已有 secret。
+ */
+export async function setProviderCredentials(
+  providerId: string,
+  values: Record<string, string>
+): Promise<void> {
+  try {
+    await invoke<void>("set_provider_credentials", { providerId, values });
+  } catch (err) {
+    throw toError(err);
+  }
+}
+
 /** 检查更新结果，与 Rust CheckUpdateResult（camelCase）对齐。 */
 export interface CheckUpdateResult {
   /** 是否有可用新版本 */

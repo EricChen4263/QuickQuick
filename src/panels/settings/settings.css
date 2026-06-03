@@ -245,22 +245,91 @@
  * D2 用到的翻译源/隐私面板专属类，在此预定义，D2 组件直接使用无需修改 CSS。
  */
 
-/* 翻译源卡片行：图标 + 名称 + 状态标签横排，pointer 指示可点击 */
+/* 翻译源卡片行：左侧「设默认」热区 + 右侧配置按钮，flex 行布局 */
 .src-card {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 13px 16px;
+  gap: 8px;
+  padding: 10px 16px;
   border-bottom: 1px solid var(--border);
-  cursor: pointer;
 }
 
 .src-card:last-child {
   border-bottom: 0;
 }
 
-.src-card:hover {
+/* 左侧「设默认」可点区域：radio 圆点 + logo + 名称 + 徽标，hover 高亮 */
+.src-select {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex: 1 1 auto;
+  min-width: 0;
+  cursor: pointer;
+  border-radius: 8px;
+  padding: 3px 6px;
+  margin: -3px -6px;
+  transition: background-color 120ms ease;
+}
+
+.src-select:hover {
   background: var(--hover);
+}
+
+/* radio 圆点指示：未选中空心圆，选中时 accent 边框 + 内圆点 */
+.src-radio {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  border: 2px solid var(--border);
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: border-color 120ms ease;
+}
+
+.src-radio.sel {
+  border-color: var(--accent);
+}
+
+.src-radio.sel::after {
+  content: "";
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+/* 配置按钮：边框风格，与 .btn 协调；展开态 accent 高亮 */
+.src-cfg-btn {
+  appearance: none;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--muted);
+  font-size: 12.5px;
+  font-family: inherit;
+  padding: 5px 10px;
+  border-radius: var(--r-sm);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  white-space: nowrap;
+  flex: none;
+  transition: background-color 120ms ease, border-color 120ms ease, color 120ms ease;
+}
+
+.src-cfg-btn:hover {
+  color: var(--fg);
+  border-color: var(--muted);
+  background: var(--hover);
+}
+
+.src-cfg-btn.open {
+  color: var(--accent);
+  border-color: var(--accent-line);
+  background: var(--accent-soft);
 }
 
 /* 翻译源 logo 方块：等宽字体缩写，圆角方块背景 */
@@ -277,6 +346,38 @@
   border: 1px solid var(--border);
   color: var(--fg);
   flex: none;
+}
+
+/* 凭据表单：纵向排列字段 + 保存按钮，与卡片内边距对齐 */
+.credential-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px 16px;
+}
+
+/* 凭据字段：label 在上、input 在下，间距协调 */
+.credential-field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.credential-field label {
+  font-size: 13px;
+  color: var(--fg);
+}
+
+/* 凭据表单输入框：全宽，与 .set-input 统一风格 */
+.credential-form .set-input {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+/* 保存按钮与字段组间留顶部间距 */
+.credential-form .btn {
+  align-self: flex-start;
+  margin-top: 4px;
 }
 
 /* 标签芯片行：flex wrap，用于排除名单 App 列表 */

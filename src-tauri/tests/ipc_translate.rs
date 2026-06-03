@@ -12,8 +12,38 @@ use quickquick_lib::db;
 use quickquick_lib::ipc::translate::{
     list_translate_history_impl, translate_text_impl, FakeExecutor,
 };
+use quickquick_lib::translate::credential::{CredError, CredStore};
 use rusqlite::Connection;
+use std::collections::HashMap;
+use std::io::Write;
+use std::sync::Mutex;
 use tempfile::tempdir;
+
+/// 集成测试用内存 CredStore，不触碰 OS keychain（headless）。
+struct LocalMockCredStore {
+    store: Mutex<HashMap<String, String>>,
+}
+
+impl LocalMockCredStore {
+    fn new() -> Self {
+        Self {
+            store: Mutex::new(HashMap::new()),
+        }
+    }
+}
+
+impl CredStore for LocalMockCredStore {
+    fn set_secret(&self, provider_id: &str, field_key: &str, value: &str) -> Result<(), CredError> {
+        let key = format!("{provider_id}.{field_key}");
+        self.store.lock().unwrap().insert(key, value.to_string());
+        Ok(())
+    }
+
+    fn get_secret(&self, provider_id: &str, field_key: &str) -> Result<Option<String>, CredError> {
+        let key = format!("{provider_id}.{field_key}");
+        Ok(self.store.lock().unwrap().get(&key).cloned())
+    }
+}
 
 const KEY: [u8; 32] = [7u8; 32];
 
@@ -25,14 +55,25 @@ fn open_tmp_db() -> (tempfile::TempDir, Connection) {
     (dir, conn)
 }
 
+/// 在 dir 下写入 settings.json，包含指定的 selected_provider。
+fn write_settings(dir: &tempfile::TempDir, provider_id: &str) -> std::path::PathBuf {
+    let path = dir.path().join("settings.json");
+    let mut f = std::fs::File::create(&path).expect("创建 settings.json 失败");
+    write!(f, r#"{{"selected_provider":"{provider_id}"}}"#).expect("写入失败");
+    path
+}
+
 /// V4-F1-A02：中文输入时方向应为 zh→en，译文应等于执行器预置值
 #[test]
 fn ipc_translate_chinese_text_produces_zh_to_en_direction() {
     let (_dir, conn) = open_tmp_db();
+    let settings_path = write_settings(&_dir, "mymemory");
+    let store = LocalMockCredStore::new();
     let fake =
         FakeExecutor::new(r#"{"responseData":{"translatedText":"Hello"},"responseStatus":200}"#);
 
-    let result = translate_text_impl(&conn, &fake, "你好", None, None).expect("翻译应成功");
+    let result = translate_text_impl(&conn, &fake, "你好", None, None, &settings_path, &store)
+        .expect("翻译应成功");
 
     assert_eq!(result.source_lang, "zh", "中文输入 sourceLang 应为 zh");
     assert_eq!(result.target_lang, "en", "中文输入 targetLang 应为 en");
@@ -43,10 +84,13 @@ fn ipc_translate_chinese_text_produces_zh_to_en_direction() {
 #[test]
 fn ipc_translate_english_text_produces_en_to_zh_direction() {
     let (_dir, conn) = open_tmp_db();
+    let settings_path = write_settings(&_dir, "mymemory");
+    let store = LocalMockCredStore::new();
     let fake =
         FakeExecutor::new(r#"{"responseData":{"translatedText":"你好"},"responseStatus":200}"#);
 
-    let result = translate_text_impl(&conn, &fake, "Hello", None, None).expect("翻译应成功");
+    let result = translate_text_impl(&conn, &fake, "Hello", None, None, &settings_path, &store)
+        .expect("翻译应成功");
 
     assert_eq!(result.source_lang, "en", "英文输入 sourceLang 应为 en");
     assert_eq!(result.target_lang, "zh", "英文输入 targetLang 应为 zh");
@@ -57,13 +101,16 @@ fn ipc_translate_english_text_produces_en_to_zh_direction() {
 #[test]
 fn ipc_translate_writes_to_history_after_success() {
     let (_dir, conn) = open_tmp_db();
+    let settings_path = write_settings(&_dir, "mymemory");
+    let store = LocalMockCredStore::new();
     let fake =
         FakeExecutor::new(r#"{"responseData":{"translatedText":"World"},"responseStatus":200}"#);
 
     let count_before =
         quickquick_lib::translate::history::translate_history_count(&conn).expect("count 应成功");
 
-    translate_text_impl(&conn, &fake, "世界", None, None).expect("翻译应成功");
+    translate_text_impl(&conn, &fake, "世界", None, None, &settings_path, &store)
+        .expect("翻译应成功");
 
     let count_after =
         quickquick_lib::translate::history::translate_history_count(&conn).expect("count 应成功");
@@ -75,9 +122,11 @@ fn ipc_translate_writes_to_history_after_success() {
 #[test]
 fn ipc_translate_empty_text_returns_error_without_calling_executor() {
     let (_dir, conn) = open_tmp_db();
+    let settings_path = write_settings(&_dir, "mymemory");
+    let store = LocalMockCredStore::new();
     let fake = FakeExecutor::new("should not be called");
 
-    let result = translate_text_impl(&conn, &fake, "", None, None);
+    let result = translate_text_impl(&conn, &fake, "", None, None, &settings_path, &store);
 
     assert!(result.is_err(), "空文本应返回 Err");
     assert_eq!(fake.call_count(), 0, "空文本不应触发执行器");
@@ -87,9 +136,11 @@ fn ipc_translate_empty_text_returns_error_without_calling_executor() {
 #[test]
 fn ipc_translate_whitespace_text_returns_error_without_calling_executor() {
     let (_dir, conn) = open_tmp_db();
+    let settings_path = write_settings(&_dir, "mymemory");
+    let store = LocalMockCredStore::new();
     let fake = FakeExecutor::new("should not be called");
 
-    let result = translate_text_impl(&conn, &fake, "   \t\n", None, None);
+    let result = translate_text_impl(&conn, &fake, "   \t\n", None, None, &settings_path, &store);
 
     assert!(result.is_err(), "全空白文本应返回 Err");
     assert_eq!(fake.call_count(), 0, "全空白文本不应触发执行器");
@@ -99,13 +150,17 @@ fn ipc_translate_whitespace_text_returns_error_without_calling_executor() {
 #[test]
 fn ipc_translate_list_history_returns_entries_in_desc_order() {
     let (_dir, conn) = open_tmp_db();
+    let settings_path = write_settings(&_dir, "mymemory");
+    let store = LocalMockCredStore::new();
     let fake1 =
         FakeExecutor::new(r#"{"responseData":{"translatedText":"Hello"},"responseStatus":200}"#);
     let fake2 =
         FakeExecutor::new(r#"{"responseData":{"translatedText":"World"},"responseStatus":200}"#);
 
-    translate_text_impl(&conn, &fake1, "你好", None, None).expect("第一次翻译应成功");
-    translate_text_impl(&conn, &fake2, "世界", None, None).expect("第二次翻译应成功");
+    translate_text_impl(&conn, &fake1, "你好", None, None, &settings_path, &store)
+        .expect("第一次翻译应成功");
+    translate_text_impl(&conn, &fake2, "世界", None, None, &settings_path, &store)
+        .expect("第二次翻译应成功");
 
     let history = list_translate_history_impl(&conn).expect("list 应成功");
 

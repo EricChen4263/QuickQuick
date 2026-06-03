@@ -14,16 +14,18 @@ use rusqlite::Connection;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, State};
 
+use std::path::Path;
+
 use crate::db::DbError;
+use crate::ipc::settings::{get_selected_provider_impl, resolve_config_path};
 use crate::ipc::{with_db, AppDb};
+use crate::translate::credential::{load_credentials, CredStore, KeyringCredStore};
 use crate::translate::history::{
     add_translate_history, list_translate_history as db_list_translate_history, TranslateHistoryRow,
 };
 use crate::translate::lang::resolve_direction_with_source;
-use crate::translate::providers::MyMemoryProvider;
-use crate::translate::{
-    Lang, ProviderHttpRequest, TranslateError, TranslateProvider, TranslateRequest,
-};
+use crate::translate::providers::build_provider;
+use crate::translate::{Lang, ProviderHttpRequest, TranslateError, TranslateRequest};
 
 /// 翻译历史变化事件名。与前端 src/ipc/events.ts 的 TRANSLATE_HISTORY_CHANGED_EVENT 必须一致。
 /// Tauri 事件名跨语言无法编译期共享，改动需两端同步。
@@ -158,27 +160,36 @@ impl From<TranslateHistoryRow> for TranslateHistoryDto {
 ///
 /// 编排流程：
 /// 1. 校验输入（空/全空白 text → Err，不发网络）
-/// 2. 定方向（resolve_direction_with_source）：显式源语优先，否则自动检测
-/// 3. 构造 TranslateRequest → 选默认 provider（mymemory）→ build_request → exec.execute
-/// 4. parse_response → 得译文
-/// 5. 写入翻译历史
-/// 6. 返回 TranslateResultDto
+/// 2. 读 settings_path 取 selected_provider_id
+/// 3. load_credentials(provider_id, cred_store, conn) 加载凭据
+/// 4. build_provider(provider_id, &creds) 动态构造 provider（缺必填凭据 → Err）
+/// 5. 定方向（resolve_direction_with_source）
+/// 6. build_request → exec.execute → parse_response
+/// 7. 写入翻译历史（provider_id 为真实选中的 id）
+/// 8. 返回 TranslateResultDto
 ///
 /// # Errors
 /// - text 为空或全空白：返回 Err（不触发执行器）
-/// - 执行器网络失败：`TranslateError`
-/// - 响应解析失败：`TranslateError`
-/// - 历史写入失败：DbError 转为 String
+/// - 必填凭据缺失：返回含"未配置"的中文 Err（不触发执行器）
+/// - 执行器网络失败：`TranslateError` 转字符串
+/// - 响应解析失败：`TranslateError` 转字符串
+/// - 历史写入失败：DbError 转字符串
 pub fn translate_text_impl(
     conn: &Connection,
     exec: &dyn HttpExecutor,
     text: &str,
     configured_source: Option<&str>,
     configured_target: Option<&str>,
+    settings_path: &Path,
+    cred_store: &dyn CredStore,
 ) -> Result<TranslateResultDto, String> {
     if text.trim().is_empty() {
         return Err("翻译文本不能为空或全空白".to_string());
     }
+
+    let provider_id = get_selected_provider_impl(settings_path)?;
+    let creds = load_credentials(&provider_id, cred_store, conn).map_err(|e| e.to_string())?;
+    let provider = build_provider(&provider_id, &creds)?;
 
     let target_lang = configured_target.map(Lang::new);
     let (source, target) = resolve_direction_with_source(text, configured_source, target_lang);
@@ -189,7 +200,6 @@ pub fn translate_text_impl(
         target_lang: target.clone(),
     };
 
-    let provider = MyMemoryProvider::new(None);
     let http_req = provider.build_request(&req);
     let raw = exec.execute(&http_req).map_err(|e| e.to_string())?;
     let resp = provider.parse_response(&raw).map_err(|e| e.to_string())?;
@@ -200,7 +210,7 @@ pub fn translate_text_impl(
         &resp.translated,
         source.as_str(),
         target.as_str(),
-        "mymemory",
+        &provider_id,
     )
     .map_err(|e| e.to_string())?;
 
@@ -236,6 +246,8 @@ pub fn translate_text(
     source: Option<String>,
     target: Option<String>,
 ) -> Result<TranslateResultDto, String> {
+    let settings_path = resolve_config_path(&app, "settings.json")?;
+    let cred_store = KeyringCredStore;
     let result = with_db(&state, |conn| {
         translate_text_impl(
             conn,
@@ -243,6 +255,8 @@ pub fn translate_text(
             &text,
             source.as_deref(),
             target.as_deref(),
+            &settings_path,
+            &cred_store,
         )
     });
     if result.is_ok() {
@@ -266,9 +280,12 @@ mod tests {
     use super::*;
     use rusqlite::Connection;
 
-    /// 创建内存 SQLite 并初始化 translate_history 表，供测试隔离使用。
+    use crate::translate::credential::MockCredStore;
+
+    /// 创建内存 SQLite 并初始化所需表，供测试隔离使用。
     ///
-    /// schema 必须与 history.rs 中 add_translate_history 使用的列名完全一致。
+    /// 包含 translate_history 和 provider_config，
+    /// schema 必须与各自对应模块中实际 SQL 一致。
     fn setup_test_db() -> Connection {
         let conn = Connection::open_in_memory().expect("内存 DB 打开失败");
         conn.execute_batch(
@@ -280,10 +297,22 @@ mod tests {
                 target_lang     TEXT NOT NULL,
                 provider_id     TEXT NOT NULL,
                 created_utc     INTEGER NOT NULL
+            );
+            CREATE TABLE provider_config (
+                provider_id  TEXT NOT NULL,
+                field_key    TEXT NOT NULL,
+                value        TEXT NOT NULL,
+                PRIMARY KEY (provider_id, field_key)
             );",
         )
         .expect("建表失败");
         conn
+    }
+
+    /// 写入临时 settings.json，包含指定的 selected_provider。
+    fn write_settings_with_provider(path: &std::path::Path, provider_id: &str) {
+        let content = format!(r#"{{"selected_provider":"{provider_id}"}}"#);
+        std::fs::write(path, content).expect("写 settings 失败");
     }
 
     /// MyMemory 成功响应的最小合法 JSON 模板（provider 能解析的格式）。
@@ -293,11 +322,22 @@ mod tests {
 
     #[test]
     fn translate_text_impl_with_none_source_uses_auto_detection() {
-        // Arrange: source=None，让检测路径走；文本为英文，默认翻到 zh
+        // Arrange
         let conn = setup_test_db();
         let fake = FakeExecutor::new(&mymemory_ok_response("你好世界"));
+        let store = MockCredStore::new();
+        let settings_file = tempfile::NamedTempFile::new().unwrap();
+        write_settings_with_provider(settings_file.path(), "mymemory");
         // Act
-        let result = translate_text_impl(&conn, &fake, "hello world", None, None);
+        let result = translate_text_impl(
+            &conn,
+            &fake,
+            "hello world",
+            None,
+            None,
+            settings_file.path(),
+            &store,
+        );
         // Assert: 无 source 显式值，检测 en，翻到 zh
         let dto = result.expect("应成功");
         assert_eq!(dto.source_lang, "en");
@@ -307,12 +347,23 @@ mod tests {
 
     #[test]
     fn translate_text_impl_explicit_source_and_target_reach_dto() {
-        // Arrange: 注入 FakeExecutor，显式 source="ja" target="ko"
+        // Arrange
         let conn = setup_test_db();
         let fake = FakeExecutor::new(&mymemory_ok_response("안녕하세요"));
+        let store = MockCredStore::new();
+        let settings_file = tempfile::NamedTempFile::new().unwrap();
+        write_settings_with_provider(settings_file.path(), "mymemory");
         // Act
-        let result = translate_text_impl(&conn, &fake, "こんにちは", Some("ja"), Some("ko"));
-        // Assert: source_lang/target_lang 在 DTO 中正确反映显式值
+        let result = translate_text_impl(
+            &conn,
+            &fake,
+            "こんにちは",
+            Some("ja"),
+            Some("ko"),
+            settings_file.path(),
+            &store,
+        );
+        // Assert
         let dto = result.expect("应成功");
         assert_eq!(dto.source_lang, "ja");
         assert_eq!(dto.target_lang, "ko");
@@ -320,13 +371,122 @@ mod tests {
 
     #[test]
     fn translate_text_impl_empty_text_returns_error_without_calling_executor() {
-        // Arrange: 空文本应提前 Err，不触发执行器
+        // Arrange
         let conn = setup_test_db();
         let fake = FakeExecutor::new("{}");
+        let store = MockCredStore::new();
+        let settings_file = tempfile::NamedTempFile::new().unwrap();
+        write_settings_with_provider(settings_file.path(), "mymemory");
         // Act
-        let result = translate_text_impl(&conn, &fake, "   ", None, None);
+        let result = translate_text_impl(
+            &conn,
+            &fake,
+            "   ",
+            None,
+            None,
+            settings_file.path(),
+            &store,
+        );
         // Assert
         assert!(result.is_err());
         assert_eq!(fake.call_count(), 0, "空文本不应调用执行器");
+    }
+
+    #[test]
+    fn translate_text_impl_selected_mymemory_writes_provider_id_in_history() {
+        // Arrange
+        let conn = setup_test_db();
+        let fake = FakeExecutor::new(&mymemory_ok_response("世界你好"));
+        let store = MockCredStore::new();
+        let settings_file = tempfile::NamedTempFile::new().unwrap();
+        write_settings_with_provider(settings_file.path(), "mymemory");
+        // Act
+        translate_text_impl(
+            &conn,
+            &fake,
+            "hello world",
+            None,
+            None,
+            settings_file.path(),
+            &store,
+        )
+        .expect("应成功");
+        // Assert：历史记录中 provider_id 应为 "mymemory"，不应是硬编码字符串
+        let rows = crate::translate::history::list_translate_history(&conn).expect("查历史失败");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].provider_id, "mymemory");
+    }
+
+    /// DeepL Free 成功响应的最小合法 JSON（provider 能解析的格式）。
+    fn deepl_ok_response(translated: &str) -> String {
+        format!(r#"{{"translations":[{{"text":"{translated}","detected_source_language":"ZH"}}]}}"#)
+    }
+
+    /// 动态路由不变量（非 mymemory 场景）：
+    /// selected_provider="deepl_free" 时，写入历史的 provider_id 应为 "deepl_free"，
+    /// 而非硬编码的 "mymemory"——守护动态路由写历史的核心不变量。
+    #[test]
+    fn translate_text_impl_selected_deepl_free_writes_deepl_provider_id_in_history() {
+        // Arrange
+        let conn = setup_test_db();
+        let fake = FakeExecutor::new(&deepl_ok_response("Good"));
+        let store = MockCredStore::new();
+        store
+            .set_secret("deepl_free", "auth_key", "test-deepl-auth-key-xxx")
+            .expect("预置 deepl_free auth_key 应成功");
+        let settings_file = tempfile::NamedTempFile::new().unwrap();
+        write_settings_with_provider(settings_file.path(), "deepl_free");
+
+        // Act
+        translate_text_impl(
+            &conn,
+            &fake,
+            "你好",
+            None,
+            None,
+            settings_file.path(),
+            &store,
+        )
+        .expect("deepl_free 翻译应成功");
+
+        // Assert：历史 provider_id 应为 "deepl_free"，不能是硬编码 "mymemory"
+        let rows: Vec<String> = conn
+            .prepare("SELECT provider_id FROM translate_history")
+            .expect("prepare 应成功")
+            .query_map([], |row| row.get(0))
+            .expect("query_map 应成功")
+            .map(|r| r.expect("row 应可读"))
+            .collect();
+        assert_eq!(rows.len(), 1, "应有 1 条历史记录");
+        assert_eq!(
+            rows[0], "deepl_free",
+            "历史 provider_id 应为 \"deepl_free\"，实际: {}",
+            rows[0]
+        );
+    }
+
+    #[test]
+    fn translate_text_impl_selected_baidu_without_creds_returns_err_with_hint() {
+        // Arrange：settings 选 baidu，但 store 里没有凭据
+        let conn = setup_test_db();
+        let fake = FakeExecutor::new("{}");
+        let store = MockCredStore::new();
+        let settings_file = tempfile::NamedTempFile::new().unwrap();
+        write_settings_with_provider(settings_file.path(), "baidu");
+        // Act
+        let result = translate_text_impl(
+            &conn,
+            &fake,
+            "hello world",
+            None,
+            None,
+            settings_file.path(),
+            &store,
+        );
+        // Assert：应返回含"未配置"的错误，执行器不应被调用
+        assert!(result.is_err(), "百度无凭据应返回 Err");
+        let err = result.unwrap_err();
+        assert!(err.contains("未配置"), "错误消息应提示未配置凭据：{err}");
+        assert_eq!(fake.call_count(), 0, "凭据缺失时执行器不应被调用");
     }
 }

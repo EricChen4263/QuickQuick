@@ -31,9 +31,14 @@ use std::sync::RwLock;
 use serde::Serialize;
 use tauri::{AppHandle, Manager, State};
 
+use std::collections::HashMap;
+
 use crate::autostart::AutostartConfig;
 use crate::hotkey::{HotkeyAction, HotkeyConfig, HotkeyError, HotkeyRegistrar};
 use crate::settings::AppSettings;
+use crate::translate::credential::{
+    credential_schema, load_credentials, save_credentials, KeyringCredStore,
+};
 use crate::translate::providers::registry;
 use crate::CaptureState;
 
@@ -210,7 +215,10 @@ pub fn set_selected_provider_impl(id: &str, settings_path: &Path) -> Result<(), 
 ///
 /// 若无法取得配置目录则返回 Err；目录不存在时尝试创建。
 /// 此函数是不可单测的胶水层，仅供命令函数调用。
-fn resolve_config_path(app: &AppHandle, filename: &str) -> Result<std::path::PathBuf, String> {
+pub(crate) fn resolve_config_path(
+    app: &AppHandle,
+    filename: &str,
+) -> Result<std::path::PathBuf, String> {
     let dir = app
         .path()
         .app_config_dir()
@@ -592,6 +600,157 @@ pub fn set_launch_on_login(app: AppHandle, value: bool) -> Result<(), String> {
     Ok(())
 }
 
+/// provider 凭据字段 DTO（返回给前端，camelCase）。
+///
+/// 描述该字段是否为 secret、是否必填，供前端动态渲染凭据表单。
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CredentialFieldDto {
+    /// 字段标识符（存取路由键）
+    pub key: String,
+    /// UI 显示标签
+    pub label: String,
+    /// 是否为 secret（true = 写 keychain，输入框用密码形式）
+    pub is_secret: bool,
+    /// 是否必填
+    pub required: bool,
+}
+
+/// provider 凭据值 DTO（返回给前端，camelCase）。
+///
+/// 安全约定：secret 字段（is_secret=true）的 value 永远为 None，仅用 is_set 表示是否已存；
+/// 非密字段（is_secret=false）的 value 为 Some(已存值) 或 None（未存）。
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CredentialValueDto {
+    /// 字段标识符
+    pub key: String,
+    /// 字段当前值：secret 字段永远为 None；非密字段为 Some(值) 或 None
+    pub value: Option<String>,
+    /// 是否已保存过（secret 字段靠此布尔判断；非密字段 value.is_some() 与此等价）
+    pub is_set: bool,
+}
+
+/// `get_provider_credential_schema` 的纯函数实现，可在测试中直接调用。
+///
+/// 映射 `credential_schema` 返回的 `CredentialField` 列表为 DTO。
+/// 未知 provider_id 返回空 Vec（不 Err），与 credential_schema 语义一致。
+pub fn get_provider_credential_schema_impl(provider_id: &str) -> Vec<CredentialFieldDto> {
+    credential_schema(provider_id)
+        .into_iter()
+        .map(|f| CredentialFieldDto {
+            key: f.key.to_string(),
+            label: f.label.to_string(),
+            is_secret: f.is_secret,
+            required: f.required,
+        })
+        .collect()
+}
+
+/// `get_provider_credentials` 的纯函数实现，可在测试中直接调用。
+///
+/// 遍历 schema 中每个字段，从 store/DB 加载已保存值，组装 DTO 列表：
+/// - secret 字段：value 永远为 None，is_set 表示是否在 store 中存在
+/// - 非密字段：value 为 Some(已存值) 或 None，is_set 与 value.is_some() 等价
+///
+/// # 安全
+/// secret 字段的实际值永不出现在返回结果中，调用方无法从响应中读取明文密钥。
+///
+/// # Errors
+/// store 读取失败或 DB 操作失败时返回错误字符串。
+pub fn get_provider_credentials_impl(
+    provider_id: &str,
+    store: &dyn crate::translate::credential::CredStore,
+    conn: &rusqlite::Connection,
+) -> Result<Vec<CredentialValueDto>, String> {
+    let loaded = load_credentials(provider_id, store, conn).map_err(|e| e.to_string())?;
+
+    let result = credential_schema(provider_id)
+        .into_iter()
+        .map(|field| {
+            let saved_value = loaded
+                .iter()
+                .find(|(k, _)| k == field.key)
+                .map(|(_, v)| v.clone());
+
+            if field.is_secret {
+                CredentialValueDto {
+                    key: field.key.to_string(),
+                    value: None,
+                    is_set: saved_value.is_some(),
+                }
+            } else {
+                let is_set = saved_value.is_some();
+                CredentialValueDto {
+                    key: field.key.to_string(),
+                    value: saved_value,
+                    is_set,
+                }
+            }
+        })
+        .collect();
+
+    Ok(result)
+}
+
+/// `set_provider_credentials` 的纯函数实现，可在测试中直接调用。
+///
+/// 将前端传入的 `HashMap<String, String>` 转为 save_credentials 所需的 `&[(&str, &str)]`，
+/// 再调 save_credentials 按 schema 路由（secret→store，非密→DB）。
+///
+/// # 安全
+/// - 函数/日志/错误消息绝不打印 secret 字段的值
+/// - 未知 field_key 由 save_credentials 拒绝（返回 CredError::UnknownField）
+///
+/// # Errors
+/// - 未知 provider_id：返回错误字符串
+/// - 未知 field_key：返回错误字符串（不含字段值）
+/// - store 写入失败 / DB 操作失败：返回错误字符串
+pub fn set_provider_credentials_impl(
+    provider_id: &str,
+    values: HashMap<String, String>,
+    store: &dyn crate::translate::credential::CredStore,
+    conn: &rusqlite::Connection,
+) -> Result<(), String> {
+    let pairs: Vec<(&str, &str)> = values
+        .iter()
+        .map(|(k, v)| (k.as_str(), v.as_str()))
+        .collect();
+
+    save_credentials(provider_id, &pairs, store, conn).map_err(|e| e.to_string())
+}
+
+/// Tauri 命令：获取指定 provider 的凭据字段 schema。
+#[tauri::command]
+pub fn get_provider_credential_schema(provider_id: String) -> Vec<CredentialFieldDto> {
+    get_provider_credential_schema_impl(&provider_id)
+}
+
+/// Tauri 命令：获取指定 provider 的已保存凭据（secret 字段只返回 is_set，不回明文）。
+#[tauri::command]
+pub fn get_provider_credentials(
+    state: State<'_, super::AppDb>,
+    provider_id: String,
+) -> Result<Vec<CredentialValueDto>, String> {
+    let store = KeyringCredStore;
+    super::with_db(&state, |conn| {
+        get_provider_credentials_impl(&provider_id, &store, conn)
+    })
+}
+
+/// Tauri 命令：保存指定 provider 的凭据（secret→keychain，非密→加密 DB）。
+#[tauri::command]
+pub fn set_provider_credentials(
+    state: State<'_, super::AppDb>,
+    provider_id: String,
+    values: HashMap<String, String>,
+) -> Result<(), String> {
+    let store = KeyringCredStore;
+    super::with_db(&state, |conn| {
+        set_provider_credentials_impl(&provider_id, values, &store, conn)
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -803,5 +962,112 @@ mod tests {
             lock.read().unwrap().contains("com.1password.1password"),
             "运行时排除名单应在 set_exclude_list 后立即生效"
         );
+    }
+
+    fn make_cred_db() -> rusqlite::Connection {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS provider_config (
+                provider_id  TEXT NOT NULL,
+                field_key    TEXT NOT NULL,
+                value        TEXT NOT NULL,
+                PRIMARY KEY (provider_id, field_key)
+            );",
+        )
+        .unwrap();
+        conn
+    }
+
+    #[test]
+    fn get_provider_credential_schema_impl_baidu_returns_two_fields() {
+        let fields = get_provider_credential_schema_impl("baidu");
+        assert_eq!(fields.len(), 2, "百度 schema 应有 2 个字段");
+        let keys: Vec<&str> = fields.iter().map(|f| f.key.as_str()).collect();
+        assert!(keys.contains(&"app_id"), "应含 app_id 字段");
+        assert!(keys.contains(&"secret_key"), "应含 secret_key 字段");
+    }
+
+    #[test]
+    fn get_provider_credential_schema_impl_unknown_returns_empty() {
+        let fields = get_provider_credential_schema_impl("unknown_provider");
+        assert!(fields.is_empty(), "未知 provider 应返回空 schema");
+    }
+
+    #[test]
+    fn get_provider_credentials_impl_unset_fields_are_not_set() {
+        use crate::translate::credential::MockCredStore;
+        let store = MockCredStore::new();
+        let conn = make_cred_db();
+
+        let results = get_provider_credentials_impl("baidu", &store, &conn).unwrap();
+        assert_eq!(results.len(), 2, "百度凭据应返回 2 个字段");
+        for item in &results {
+            assert!(!item.is_set, "未保存时所有字段 is_set 应为 false");
+            assert!(item.value.is_none(), "未保存时 value 应为 None");
+        }
+    }
+
+    #[test]
+    fn get_provider_credentials_impl_secret_field_value_is_always_none() {
+        use crate::translate::credential::MockCredStore;
+        use std::collections::HashMap;
+        let store = MockCredStore::new();
+        let conn = make_cred_db();
+
+        let mut values = HashMap::new();
+        values.insert("app_id".to_string(), "my_app_id".to_string());
+        values.insert("secret_key".to_string(), "super_secret".to_string());
+        set_provider_credentials_impl("baidu", values, &store, &conn).unwrap();
+
+        let results = get_provider_credentials_impl("baidu", &store, &conn).unwrap();
+        let secret_field = results.iter().find(|f| f.key == "secret_key").unwrap();
+        assert!(
+            secret_field.value.is_none(),
+            "secret 字段的 value 永远应为 None（不回明文）"
+        );
+        assert!(secret_field.is_set, "已保存的 secret 字段 is_set 应为 true");
+
+        let non_secret = results.iter().find(|f| f.key == "app_id").unwrap();
+        assert_eq!(
+            non_secret.value,
+            Some("my_app_id".to_string()),
+            "非密字段已保存后应返回 Some(值)"
+        );
+        assert!(non_secret.is_set, "已保存的非密字段 is_set 应为 true");
+    }
+
+    #[test]
+    fn set_provider_credentials_impl_persists_and_loadable() {
+        use crate::translate::credential::MockCredStore;
+        use std::collections::HashMap;
+        let store = MockCredStore::new();
+        let conn = make_cred_db();
+
+        let mut values = HashMap::new();
+        values.insert("app_id".to_string(), "test_id".to_string());
+        values.insert("secret_key".to_string(), "test_secret".to_string());
+
+        set_provider_credentials_impl("baidu", values, &store, &conn).unwrap();
+
+        let results = get_provider_credentials_impl("baidu", &store, &conn).unwrap();
+        let app_id = results.iter().find(|f| f.key == "app_id").unwrap();
+        assert_eq!(app_id.value, Some("test_id".to_string()));
+        let secret_key = results.iter().find(|f| f.key == "secret_key").unwrap();
+        assert!(secret_key.is_set);
+        assert!(secret_key.value.is_none(), "secret 字段 value 永远 None");
+    }
+
+    #[test]
+    fn set_provider_credentials_impl_unknown_field_returns_err() {
+        use crate::translate::credential::MockCredStore;
+        use std::collections::HashMap;
+        let store = MockCredStore::new();
+        let conn = make_cred_db();
+
+        let mut values = HashMap::new();
+        values.insert("nonexistent_field".to_string(), "val".to_string());
+
+        let result = set_provider_credentials_impl("baidu", values, &store, &conn);
+        assert!(result.is_err(), "未知 field_key 应返回 Err");
     }
 }

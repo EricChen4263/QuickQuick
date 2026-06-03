@@ -253,46 +253,41 @@ fn keychain_account(provider_id: &str, field_key: &str) -> String {
     format!("cred.{provider_id}.{field_key}")
 }
 
+/// 测试用内存 CredStore，不触碰 OS keychain（headless CI/单元测试专用）。
+///
+/// 仅在 `#[cfg(test)]` 下编译，不进入生产二进制。
+/// 集成测试和单元测试均可 import 使用。
+#[cfg(test)]
+pub struct MockCredStore {
+    store: std::sync::Mutex<std::collections::HashMap<String, String>>,
+}
+
+#[cfg(test)]
+impl MockCredStore {
+    pub fn new() -> Self {
+        Self {
+            store: std::sync::Mutex::new(std::collections::HashMap::new()),
+        }
+    }
+}
+
+#[cfg(test)]
+impl CredStore for MockCredStore {
+    fn set_secret(&self, provider_id: &str, field_key: &str, value: &str) -> Result<(), CredError> {
+        let key = format!("{provider_id}.{field_key}");
+        self.store.lock().unwrap().insert(key, value.to_string());
+        Ok(())
+    }
+
+    fn get_secret(&self, provider_id: &str, field_key: &str) -> Result<Option<String>, CredError> {
+        let key = format!("{provider_id}.{field_key}");
+        Ok(self.store.lock().unwrap().get(&key).cloned())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashMap;
-    use std::sync::Mutex;
-
-    /// 测试用内存 CredStore，不触碰 OS keychain（headless）。
-    struct MockCredStore {
-        store: Mutex<HashMap<String, String>>,
-    }
-
-    impl MockCredStore {
-        fn new() -> Self {
-            Self {
-                store: Mutex::new(HashMap::new()),
-            }
-        }
-    }
-
-    impl CredStore for MockCredStore {
-        fn set_secret(
-            &self,
-            provider_id: &str,
-            field_key: &str,
-            value: &str,
-        ) -> Result<(), CredError> {
-            let key = format!("{provider_id}.{field_key}");
-            self.store.lock().unwrap().insert(key, value.to_string());
-            Ok(())
-        }
-
-        fn get_secret(
-            &self,
-            provider_id: &str,
-            field_key: &str,
-        ) -> Result<Option<String>, CredError> {
-            let key = format!("{provider_id}.{field_key}");
-            Ok(self.store.lock().unwrap().get(&key).cloned())
-        }
-    }
 
     #[test]
     fn credential_schema_baidu_fields_count_is_two() {

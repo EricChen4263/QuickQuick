@@ -8,6 +8,56 @@ use super::{
     TranslateProvider, TranslateRequest, TranslateResponse,
 };
 
+/// 按 provider_id 与凭据切片动态构造对应的 `TranslateProvider`。
+///
+/// `credentials` 为 `(field_key, value)` 键值对切片，与 `load_credentials` 返回类型一致。
+/// 字段名必须与 `credential_schema` 声明的 key 逐字对齐：
+/// - `mymemory`：`email`（可选，缺失也成功）
+/// - `baidu`：`app_id`（必填）、`secret_key`（必填）
+/// - `deepl_free`：`auth_key`（必填）
+/// - `google`：`api_key`（必填）
+///
+/// # Errors
+/// - 未知 provider_id → Err（中文描述）
+/// - 必填字段缺失 → Err（中文描述，不含字段值，符合安全约定）
+/// - 不 panic、不回退到 mymemory
+pub fn build_provider(
+    provider_id: &str,
+    credentials: &[(String, String)],
+) -> Result<Box<dyn super::TranslateProvider>, String> {
+    let find = |key: &str| -> Option<&str> {
+        credentials
+            .iter()
+            .find(|(k, _)| k == key)
+            .map(|(_, v)| v.as_str())
+    };
+
+    match provider_id {
+        "mymemory" => {
+            let email = find("email").map(|s| s.to_string());
+            Ok(Box::new(MyMemoryProvider::new(email)))
+        }
+        "baidu" => {
+            let app_id = find("app_id")
+                .ok_or_else(|| "baidu 未配置 AppID，请前往设置填入 API Key".to_string())?;
+            let secret_key = find("secret_key")
+                .ok_or_else(|| "baidu 未配置 SecretKey，请前往设置填入 API Key".to_string())?;
+            Ok(Box::new(BaiduProvider::new(app_id, secret_key)))
+        }
+        "deepl_free" => {
+            let auth_key = find("auth_key")
+                .ok_or_else(|| "deepl_free 未配置 auth_key，请前往设置填入 API Key".to_string())?;
+            Ok(Box::new(DeepLFreeProvider::new(auth_key)))
+        }
+        "google" => {
+            let api_key = find("api_key")
+                .ok_or_else(|| "google 未配置 api_key，请前往设置填入 API Key".to_string())?;
+            Ok(Box::new(GoogleProvider::new(api_key)))
+        }
+        other => Err(format!("未知翻译 provider：{other}")),
+    }
+}
+
 /// 返回编译期静态注册表：4 家 provider 的能力声明列表。
 ///
 /// 调用方可枚举此列表渲染 UI 选择器或构建凭据表单，无需运行时反射。
@@ -572,6 +622,81 @@ mod tests {
         assert_eq!(first.len(), second.len());
         for (a, b) in first.iter().zip(second.iter()) {
             assert_eq!(a.id, b.id);
+        }
+    }
+
+    #[test]
+    fn build_provider_mymemory_with_empty_creds_succeeds() {
+        let result = build_provider("mymemory", &[]);
+        assert!(result.is_ok(), "mymemory 空凭据应成功");
+        assert_eq!(result.unwrap().capability().id, "mymemory");
+    }
+
+    #[test]
+    fn build_provider_mymemory_with_email_cred_succeeds() {
+        let creds = vec![("email".to_string(), "test@example.com".to_string())];
+        let result = build_provider("mymemory", &creds);
+        assert!(result.is_ok(), "mymemory 带邮箱应成功");
+        assert_eq!(result.unwrap().capability().id, "mymemory");
+    }
+
+    #[test]
+    fn build_provider_baidu_missing_required_fields_returns_err() {
+        let result = build_provider("baidu", &[]);
+        assert!(result.is_err(), "百度缺凭据应返回 Err");
+        if let Err(err) = result {
+            assert!(
+                err.contains("未配置") || err.contains("AppID"),
+                "错误应提示未配置：{err}"
+            );
+        }
+    }
+
+    #[test]
+    fn build_provider_baidu_with_all_fields_succeeds() {
+        let creds = vec![
+            ("app_id".to_string(), "test_app_id".to_string()),
+            ("secret_key".to_string(), "test_secret".to_string()),
+        ];
+        let result = build_provider("baidu", &creds);
+        assert!(result.is_ok(), "百度全字段应成功");
+        assert_eq!(result.unwrap().capability().id, "baidu");
+    }
+
+    #[test]
+    fn build_provider_google_with_api_key_succeeds() {
+        let creds = vec![("api_key".to_string(), "test_key".to_string())];
+        let result = build_provider("google", &creds);
+        assert!(result.is_ok(), "google 有 key 应成功");
+        assert_eq!(result.unwrap().capability().id, "google");
+    }
+
+    #[test]
+    fn build_provider_deepl_free_missing_auth_key_returns_err() {
+        let result = build_provider("deepl_free", &[]);
+        assert!(result.is_err(), "deepl_free 缺 auth_key 应返回 Err");
+        if let Err(err) = result {
+            assert!(
+                err.contains("未配置") || err.contains("auth_key"),
+                "错误应提示未配置：{err}"
+            );
+        }
+    }
+
+    #[test]
+    fn build_provider_deepl_free_with_auth_key_succeeds() {
+        let creds = vec![("auth_key".to_string(), "test_auth_key".to_string())];
+        let result = build_provider("deepl_free", &creds);
+        assert!(result.is_ok(), "deepl_free 有 auth_key 应成功");
+        assert_eq!(result.unwrap().capability().id, "deepl_free");
+    }
+
+    #[test]
+    fn build_provider_unknown_id_returns_err() {
+        let result = build_provider("nonexistent_provider", &[]);
+        assert!(result.is_err(), "未知 id 应返回 Err");
+        if let Err(err) = result {
+            assert!(!err.is_empty(), "Err 消息不应为空");
         }
     }
 }
