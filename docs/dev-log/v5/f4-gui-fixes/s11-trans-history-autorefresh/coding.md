@@ -2,7 +2,7 @@
 id: s11-trans-history-autorefresh
 title: 翻译历史栏自动刷新（事件驱动）
 status: done
-commit: pending
+commit: 25297c7
 date: 2026-06-03
 ---
 
