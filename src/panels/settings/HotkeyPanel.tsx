@@ -3,7 +3,6 @@ import { getHotkeys, setHotkey, type Hotkeys, type HotkeyAction } from "../../ip
 import { validateRebind } from "../../main-window/settings/rebind";
 import PanelHeader from "./PanelHeader";
 import SettingGroup from "./SettingGroup";
-import SettingToggle from "./SettingToggle";
 
 interface HotkeyRowProps {
   action: HotkeyAction;
@@ -92,9 +91,6 @@ function HotkeyRow({
 function HotkeyPanel() {
   const [hotkeys, setHotkeys] = useState<Hotkeys | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
-  // 里程碑3接入 IPC 前的本地占位：回车粘贴开关
-  const [enterToPaste, setEnterToPaste] = useState(true);
-
   const fetchHotkeys = useCallback(async (cancelled: { current: boolean }) => {
     try {
       const result = await getHotkeys();
@@ -147,15 +143,6 @@ function HotkeyPanel() {
           currentValue={hotkeys.translate}
           occupiedValues={[hotkeys.history]}
           onSaved={handleSaved}
-        />
-      </SettingGroup>
-      {/* 里程碑3接入：回车粘贴开关，当前用本地 state 占位 */}
-      <SettingGroup>
-        <SettingToggle
-          label="回车粘贴"
-          description="在历史面板按回车时自动粘贴到前台应用"
-          checked={enterToPaste}
-          onChange={setEnterToPaste}
         />
       </SettingGroup>
     </div>

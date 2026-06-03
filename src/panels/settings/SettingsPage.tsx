@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
+import { getVersion } from "@tauri-apps/api/app";
 import "./settings.css";
 import { settingsSections, type SettingsSection } from "../../main-window/settings/sections";
 import SectionNav from "./SectionNav";
@@ -10,6 +11,22 @@ import GeneralPanel from "./GeneralPanel";
 
 /** 关于子项面板：logo + 应用名 + 版本号 + 描述 */
 function AboutPanel() {
+  const [version, setVersion] = useState<string | null>(null);
+
+  useEffect(() => {
+    const cancelled = { current: false };
+    getVersion().then((v) => {
+      if (!cancelled.current) setVersion(v);
+    }).catch((err: unknown) => {
+      console.error("getVersion failed", err);
+    });
+    return () => {
+      cancelled.current = true;
+    };
+  }, []);
+
+  const versionText = version !== null ? `v${version} · Tauri 2.0` : "v… · Tauri 2.0";
+
   return (
     <div className="about">
       <div className="logo-mark">
@@ -20,7 +37,7 @@ function AboutPanel() {
         </svg>
       </div>
       <h2>QuickQuick</h2>
-      <div className="ver num">v1.0.0 · Tauri 2.0</div>
+      <div className="ver num">{versionText}</div>
       <p>托盘常驻的剪贴板历史 + 翻译小工具。本地加密存储，每台机器各一份、互相独立。</p>
     </div>
   );

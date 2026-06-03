@@ -3,7 +3,7 @@ id: V5-F4-report
 type: feature_report
 level: 大功能
 parent: V5
-children: [f4-s01-tray-icon, f4-s02-clip-translate-jump, f4-s03-image-threshold, f4-s04-auto-paste, f4-s05-auto-update, f4-s07-close-to-tray, f4-s08-clip-autorefresh, f4-s09-unmount-race, f4-s10-event-const, f4-s11-trans-history-autorefresh, f4-s12-trans-degenerate-pair]
+children: [f4-s01-tray-icon, f4-s02-clip-translate-jump, f4-s03-image-threshold, f4-s04-auto-paste, f4-s05-auto-update, f4-s07-close-to-tray, f4-s08-clip-autorefresh, f4-s09-unmount-race, f4-s10-event-const, f4-s11-trans-history-autorefresh, f4-s12-trans-degenerate-pair, f4-s13-settings-cleanup]
 created: 2026-06-02T00:00:00Z
 status: 已闭合（含 1 项外部阻塞）
 author: orchestrator
@@ -29,6 +29,7 @@ author: orchestrator
 | s10 事件名常量 | 纯重构：clipboard-changed 字面量抽为前端 src/ipc/events.ts + 后端 lib.rs 各一处常量 CLIPBOARD_CHANGED_EVENT（消除同语言内重复，I-01），两端注释互指 | tester：前端偏离常量后测试变红、跨语言值一致；reviewer 通过；cargo 301 + 前端 358 全绿 | ee38d39 |
 | s11 翻译历史自动刷新 | s08 的孪生：快捷翻译（trans-popover）写库后历史栏不刷新——记录其实已存进 translate_history，但后端写完不 emit、前端只挂载/主面板翻译时读。后端 translate_text 成功后 emit `translate-history-changed`（仅 Ok 时发，抽常量两端互指承 s10），前端 TranslatePage listen→fetchHistory 重读 | tester 命中+2 变异（错误事件名/移除回调）全红再复绿、fetchHistory 稳定无抖动；reviewer 通过无高中危；cargo 67 + 前端 364 全绿 | 25297c7 |
 | s12 同语种退化对兜底 | f5 回归：主翻译页/一键翻译翻中文报「翻译失败」。根因 TranslatePage 默认 targetLang=zh 总显式传后端，覆盖智能双向→中文输入成 zh→zh，MyMemory 403「需两种不同语言」（已 curl 证实）。后端 resolve_direction_with_source 加守卫：source==target 时回退 default_target（zh→en/其余→zh，构造上恒≠source） | tester 命中+2 变异（移除守卫/过度修正）全红再复绿、default_target≠source 不变量成立、变体边界主路径不可达；reviewer 通过无 Critical（I-01 DRY 非阻塞）；cargo 317 全绿 | acdbf05 |
+| s13 设置页占位清理 | 设置页端到端审计（6 分区逐项追踪）收口：移除热键页「回车粘贴」纯本地占位开关（无 IPC、刷新即丢、不影响行为）；关于页版本号由硬编码 v1.0.0 改读 getVersion() 真实值（v0.0.1）。审计结论：9 项可用、1 项外部阻塞（自动更新 endpoint）、本 s13 清 1 占位+1 瑕疵 | tester 命中+2 变异（加回占位/改回硬编码）全红再复绿、SettingToggle 本体未误伤；reviewer 通过无≥80问题；前端 366 全绿 | pending |
 
 ## 关键决策与亮点
 - **托盘 bug 根因定位**：template image 只取 alpha 轮廓——彩色应用图标套 template 必成实心色块，故必须用真正的单色模板图（tray.png 本身正确，问题在加载路径）。`include_bytes!` 摆脱 resource_dir 依赖，dev/prod 一致。

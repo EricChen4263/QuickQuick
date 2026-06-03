@@ -3,6 +3,11 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import SettingsPage from "./SettingsPage";
 
+// Mock Tauri app API：隔离运行时，使 getVersion 在测试中可控
+vi.mock("@tauri-apps/api/app", () => ({
+  getVersion: vi.fn(),
+}));
+
 // Mock IPC client：隔离 Tauri 运行时
 vi.mock("../../ipc/ipc-client", () => ({
   getHotkeys: vi.fn(),
@@ -28,6 +33,7 @@ vi.mock("../../ipc/ipc-client", () => ({
   setImageThreshold: vi.fn(),
 }));
 
+import { getVersion } from "@tauri-apps/api/app";
 import {
   getHotkeys,
   setHotkey,
@@ -52,6 +58,7 @@ import {
   setImageThreshold,
 } from "../../ipc/ipc-client";
 
+const mockGetVersion = vi.mocked(getVersion);
 const mockGetHotkeys = vi.mocked(getHotkeys);
 const mockSetHotkey = vi.mocked(setHotkey);
 const mockGetExcludeList = vi.mocked(getExcludeList);
@@ -84,6 +91,7 @@ const MOCK_EXCLUDE_LIST = ["Xcode", "Terminal"];
 describe("settings-page", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockGetVersion.mockResolvedValue("0.0.1");
     mockGetHotkeys.mockResolvedValue(MOCK_HOTKEYS);
     mockSetHotkey.mockResolvedValue(undefined);
     mockGetExcludeList.mockResolvedValue(MOCK_EXCLUDE_LIST);
@@ -366,8 +374,10 @@ describe("settings-page", () => {
     const nav = screen.getByRole("navigation", { name: "设置子项" });
     await user.click(within(nav).getByRole("button", { name: "关于" }));
 
-    // 版本号文字可见
-    expect(screen.getByText(/v1\.0\.0/)).toBeInTheDocument();
+    // 版本号文字可见（从 getVersion 读取，非硬编码）
+    await waitFor(() => {
+      expect(screen.getByText(/v0\.0\.1/)).toBeInTheDocument();
+    });
     // h2 标题 QuickQuick
     expect(screen.getByRole("heading", { level: 2, name: "QuickQuick" })).toBeInTheDocument();
   });
@@ -536,5 +546,32 @@ describe("settings-page", () => {
       expect(mockGetStorageStats).toHaveBeenCalledTimes(2);
       expect(screen.getByText(/37 条/)).toBeInTheDocument();
     });
+  });
+
+  it("settings-page: 热键面板不渲染「回车粘贴」占位开关（已移除本地占位）", async () => {
+    const user = userEvent.setup();
+    render(<SettingsPage />);
+
+    const nav = screen.getByRole("navigation", { name: "设置子项" });
+    await user.click(within(nav).getByRole("button", { name: "热键" }));
+
+    await waitFor(() => {
+      expect(screen.getByDisplayValue("CmdOrCtrl+Shift+H")).toBeInTheDocument();
+    });
+
+    expect(screen.queryByText("回车粘贴")).not.toBeInTheDocument();
+  });
+
+  it("settings-page: 关于面板版本号从 getVersion 读取（非硬编码 v1.0.0）", async () => {
+    const user = userEvent.setup();
+    render(<SettingsPage />);
+
+    const nav = screen.getByRole("navigation", { name: "设置子项" });
+    await user.click(within(nav).getByRole("button", { name: "关于" }));
+
+    await waitFor(() => {
+      expect(screen.getByText(/v0\.0\.1 · Tauri 2\.0/)).toBeInTheDocument();
+    });
+    expect(screen.queryByText(/v1\.0\.0/)).not.toBeInTheDocument();
   });
 });
