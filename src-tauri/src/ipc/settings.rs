@@ -29,7 +29,7 @@ use std::sync::atomic::Ordering;
 use std::sync::RwLock;
 
 use serde::Serialize;
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 use std::collections::HashMap;
 
@@ -62,6 +62,10 @@ pub struct ProviderDto {
     pub name: String,
     pub needs_key: bool,
 }
+
+/// provider 凭据配置变化事件名。与前端 src/ipc/events.ts 的 PROVIDER_CONFIG_CHANGED_EVENT 必须一致。
+/// Tauri 事件名跨语言无法编译期共享，改动需两端同步。
+const PROVIDER_CONFIG_CHANGED_EVENT: &str = "provider-config-changed";
 
 /// 将 `action` 字符串解析为 `HotkeyAction`。
 ///
@@ -739,8 +743,13 @@ pub fn get_provider_credentials(
 }
 
 /// Tauri 命令：保存指定 provider 的凭据（secret→keychain，非密→加密 DB）。
+///
+/// 保存成功后向前端 emit `provider-config-changed` 事件，
+/// 使翻译页实时刷新 configuredIds、解禁已配置的 keyed 源选项。
+/// emit 失败仅记录日志，不影响命令返回值。
 #[tauri::command]
 pub fn set_provider_credentials(
+    app: AppHandle,
     state: State<'_, super::AppDb>,
     provider_id: String,
     values: HashMap<String, String>,
@@ -748,7 +757,11 @@ pub fn set_provider_credentials(
     let store = KeyringCredStore;
     super::with_db(&state, |conn| {
         set_provider_credentials_impl(&provider_id, values, &store, conn)
-    })
+    })?;
+    if let Err(e) = app.emit(PROVIDER_CONFIG_CHANGED_EVENT, ()) {
+        eprintln!("[QuickQuick] provider-config-changed emit 失败: {e}");
+    }
+    Ok(())
 }
 
 #[cfg(test)]

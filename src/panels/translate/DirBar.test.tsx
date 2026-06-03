@@ -280,4 +280,61 @@ describe("DirBar", () => {
 
     expect(screen.queryByRole("button", { name: "交换语言方向" })).not.toBeInTheDocument();
   });
+
+  it("①: needsKey=true 且在 configuredIds 中 → option 不 disabled", () => {
+    const onProviderChange = vi.fn();
+    render(
+      <DirBar
+        sourceLang="auto"
+        targetLang="zh"
+        providers={PROVIDERS_WITH_NEEDS_KEY}
+        selectedProviderId="mymemory"
+        configuredIds={new Set(["baidu"])}
+        onProviderChange={onProviderChange}
+        onSourceChange={vi.fn()}
+        onTargetChange={vi.fn()}
+      />
+    );
+
+    const baiduOption = screen.getByRole("option", { name: "百度翻译" }) as HTMLOptionElement;
+    expect(baiduOption.disabled).toBe(false);
+  });
+
+  it("①: needsKey=true 且不在 configuredIds 中 → option disabled", () => {
+    const onProviderChange = vi.fn();
+    render(
+      <DirBar
+        sourceLang="auto"
+        targetLang="zh"
+        providers={PROVIDERS_WITH_NEEDS_KEY}
+        selectedProviderId="mymemory"
+        configuredIds={new Set<string>()}
+        onProviderChange={onProviderChange}
+        onSourceChange={vi.fn()}
+        onTargetChange={vi.fn()}
+      />
+    );
+
+    const baiduOption = screen.getByRole("option", { name: "百度翻译" }) as HTMLOptionElement;
+    expect(baiduOption.disabled).toBe(true);
+  });
+
+  it("①: needsKey=false 的 option 无论 configuredIds → 不 disabled", () => {
+    const onProviderChange = vi.fn();
+    render(
+      <DirBar
+        sourceLang="auto"
+        targetLang="zh"
+        providers={PROVIDERS_WITH_NEEDS_KEY}
+        selectedProviderId="mymemory"
+        configuredIds={new Set<string>()}
+        onProviderChange={onProviderChange}
+        onSourceChange={vi.fn()}
+        onTargetChange={vi.fn()}
+      />
+    );
+
+    const mymemoryOption = screen.getByRole("option", { name: "MyMemory · 默认" }) as HTMLOptionElement;
+    expect(mymemoryOption.disabled).toBe(false);
+  });
 });

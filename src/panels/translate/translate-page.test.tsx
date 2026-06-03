@@ -17,6 +17,8 @@ vi.mock("../../ipc/ipc-client", () => ({
   getTranslateProviders: vi.fn(),
   getSelectedProvider: vi.fn(),
   setSelectedProvider: vi.fn(),
+  getProviderCredentialSchema: vi.fn(),
+  getProviderCredentials: vi.fn(),
 }));
 
 // Mock browser-api：隔离 navigator.clipboard / speechSynthesis（jsdom secure-context 限制）
@@ -33,7 +35,10 @@ import {
   getTranslateProviders,
   getSelectedProvider,
   setSelectedProvider,
+  getProviderCredentialSchema,
+  getProviderCredentials,
 } from "../../ipc/ipc-client";
+import { PROVIDER_CONFIG_CHANGED_EVENT } from "../../ipc/events";
 import { writeToClipboard, speakText } from "./browser-api";
 
 const mockListen = vi.mocked(listen);
@@ -42,6 +47,8 @@ const mockListTranslateHistory = vi.mocked(listTranslateHistory);
 const mockGetTranslateProviders = vi.mocked(getTranslateProviders);
 const mockGetSelectedProvider = vi.mocked(getSelectedProvider);
 const mockSetSelectedProvider = vi.mocked(setSelectedProvider);
+const mockGetProviderCredentialSchema = vi.mocked(getProviderCredentialSchema);
+const mockGetProviderCredentials = vi.mocked(getProviderCredentials);
 const mockWriteToClipboard = vi.mocked(writeToClipboard);
 const mockSpeakText = vi.mocked(speakText);
 
@@ -81,9 +88,19 @@ describe("translate-page", () => {
     // provider fetch 必须返回有效值，否则 TranslatePage 挂载时 reject 会写 console.error 干扰断言
     mockGetTranslateProviders.mockResolvedValue([
       { id: "mymemory", name: "MyMemory · 默认", needsKey: false },
+      { id: "baidu", name: "百度翻译", needsKey: true },
     ]);
     mockGetSelectedProvider.mockResolvedValue("mymemory");
     mockSetSelectedProvider.mockResolvedValue(undefined);
+    // 凭据相关 mock 默认返回空（未配置）
+    mockGetProviderCredentialSchema.mockResolvedValue([
+      { key: "app_id", label: "App ID", isSecret: false, required: true },
+      { key: "secret_key", label: "Secret Key", isSecret: true, required: true },
+    ]);
+    mockGetProviderCredentials.mockResolvedValue([
+      { key: "app_id", value: null, isSet: false },
+      { key: "secret_key", value: null, isSet: false },
+    ]);
     // browser-api mock 的默认实现已在 vi.mock factory 中设置，clearAllMocks 后恢复默认即可
     mockWriteToClipboard.mockResolvedValue(undefined);
   });
@@ -476,11 +493,118 @@ describe("translate-page", () => {
     expect(mockTranslateText).not.toHaveBeenCalled();
   });
 
+  it("③: translateText reject(Error('百度翻译签名错误')) → 错误显示真实消息而非固定兜底文案", async () => {
+    mockTranslateText.mockRejectedValue(new Error("百度翻译签名错误: invalid sign"));
+    const user = userEvent.setup();
+    render(<TranslatePage />);
+
+    const textarea = screen.getByRole("textbox");
+    await user.type(textarea, "Hello");
+    await user.click(screen.getByRole("button", { name: /翻译/ }));
+
+    await waitFor(() => {
+      expect(screen.getByRole("alert")).toBeInTheDocument();
+    });
+    expect(screen.getByRole("alert").textContent).toContain("百度翻译签名错误");
+  });
+
+  it("③: translateText reject 时错误渲染在结果区（.tx-result 内），顶部不再有 .tx-error", async () => {
+    mockTranslateText.mockRejectedValue(new Error("百度翻译签名错误: invalid sign"));
+    const user = userEvent.setup();
+    const { container } = render(<TranslatePage />);
+
+    const textarea = screen.getByRole("textbox");
+    await user.type(textarea, "Hello");
+    await user.click(screen.getByRole("button", { name: /翻译/ }));
+
+    await waitFor(() => {
+      expect(screen.getByRole("alert")).toBeInTheDocument();
+    });
+
+    // 顶部 .tx-error 不再存在
+    expect(container.querySelector(".tx-error")).toBeNull();
+    // 错误渲染在 .tx-scroll 内的结果区（alert 在 .tx-scroll 内）
+    const txScroll = container.querySelector(".tx-scroll");
+    expect(txScroll).not.toBeNull();
+    expect(txScroll!.querySelector("[role='alert']")).not.toBeNull();
+  });
+
+  it("①: 挂载时对 needsKey provider 取凭据，已配置的 provider 在 DirBar 中不 disabled", async () => {
+    // baidu 已配置
+    mockGetProviderCredentials.mockResolvedValue([
+      { key: "app_id", value: "my_id", isSet: true },
+      { key: "secret_key", value: null, isSet: true },
+    ]);
+    render(<TranslatePage />);
+
+    await waitFor(() => {
+      expect(mockGetProviderCredentials).toHaveBeenCalledWith("baidu");
+    });
+
+    // 等待 DirBar 渲染后，百度翻译 option 不应 disabled
+    await waitFor(() => {
+      const baiduOption = screen.getByRole("option", { name: "百度翻译" }) as HTMLOptionElement;
+      expect(baiduOption.disabled).toBe(false);
+    });
+  });
+
+  it("①: 挂载时 needsKey provider 未配置 → DirBar 中该 option disabled", async () => {
+    // 默认 beforeEach 返回 isSet=false（未配置）
+    render(<TranslatePage />);
+
+    await waitFor(() => {
+      expect(mockGetProviderCredentials).toHaveBeenCalledWith("baidu");
+    });
+
+    await waitFor(() => {
+      const baiduOption = screen.getByRole("option", { name: "百度翻译" }) as HTMLOptionElement;
+      expect(baiduOption.disabled).toBe(true);
+    });
+  });
+
+  it("①: 收到 PROVIDER_CONFIG_CHANGED_EVENT → 重新取凭据并解禁已配置的 option", async () => {
+    // 捕获所有 listen 调用的回调
+    const callbacks = new Map<string, () => void>();
+    mockListen.mockImplementation((eventName, handler) => {
+      callbacks.set(eventName as string, handler as () => void);
+      return Promise.resolve(() => {});
+    });
+
+    // 初始未配置
+    mockGetProviderCredentials.mockResolvedValue([
+      { key: "app_id", value: null, isSet: false },
+      { key: "secret_key", value: null, isSet: false },
+    ]);
+
+    render(<TranslatePage />);
+
+    await waitFor(() => {
+      expect(screen.getByRole("option", { name: "百度翻译" })).toBeInTheDocument();
+    });
+
+    // 初始 disabled
+    expect((screen.getByRole("option", { name: "百度翻译" }) as HTMLOptionElement).disabled).toBe(true);
+
+    // 模拟用户在设置页配好了 key，再次取凭据时已配置
+    mockGetProviderCredentials.mockResolvedValue([
+      { key: "app_id", value: "my_id", isSet: true },
+      { key: "secret_key", value: null, isSet: true },
+    ]);
+
+    // 触发 provider-config-changed 事件
+    callbacks.get(PROVIDER_CONFIG_CHANGED_EVENT)?.();
+
+    await waitFor(() => {
+      const baiduOption = screen.getByRole("option", { name: "百度翻译" }) as HTMLOptionElement;
+      expect(baiduOption.disabled).toBe(false);
+    });
+  });
+
   it("translate-page: 收到 translate-history-changed 事件后触发 listTranslateHistory 重新加载", async () => {
-    // Arrange：捕获 listen 注册的回调，以便后续手动触发
-    let capturedCallback: (() => void) | undefined;
-    mockListen.mockImplementation((_eventName, handler) => {
-      capturedCallback = handler as () => void;
+    // Arrange：按事件名分别捕获回调，以便后续精确触发目标事件
+    const callbacks = new Map<string, () => void>();
+    mockListen.mockImplementation((eventName, handler) => {
+      callbacks.set(eventName as string, handler as () => void);
       return Promise.resolve(() => {});
     });
     mockListTranslateHistory.mockResolvedValue(MOCK_HISTORY);
@@ -495,7 +619,7 @@ describe("translate-page", () => {
     expect(mockListen).toHaveBeenCalledWith(TRANSLATE_HISTORY_CHANGED_EVENT, expect.any(Function));
 
     // Act：模拟后端触发 translate-history-changed 事件
-    capturedCallback!();
+    callbacks.get(TRANSLATE_HISTORY_CHANGED_EVENT)?.();
 
     // Assert：listTranslateHistory 被再次调用（第 2 次）以刷新历史
     await waitFor(() => {

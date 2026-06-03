@@ -9,6 +9,8 @@ interface DirBarProps {
   providers: Provider[];
   selectedProviderId: string;
   onProviderChange: (id: string) => void;
+  /** 已完整配置凭据的 provider id 集合；needsKey 源仅在此集合内时才可选 */
+  configuredIds?: Set<string>;
 }
 
 /**
@@ -24,6 +26,7 @@ function DirBar({
   providers,
   selectedProviderId,
   onProviderChange,
+  configuredIds = new Set(),
 }: DirBarProps) {
   return (
     <div className="dir-bar">
@@ -90,8 +93,8 @@ function DirBar({
             onChange={(e) => onProviderChange(e.target.value)}
           >
             {providers.map((p) => (
-              // v1 未提供 key 配置入口，故 needsKey 源暂禁用；里程碑3 若加 key 配置再解禁
-              <option key={p.id} value={p.id} disabled={p.needsKey}>
+              // needsKey 源：已在设置页配好凭据（configuredIds 包含）时可选，否则禁用
+              <option key={p.id} value={p.id} disabled={p.needsKey && !configuredIds.has(p.id)}>
                 {p.name}
               </option>
             ))}

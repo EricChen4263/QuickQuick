@@ -21,6 +21,8 @@ interface TranslateWorkspaceProps {
   targetLang: string;
   providers: Provider[];
   selectedProviderId: string;
+  /** 已完整配置凭据的 provider id 集合，透传给 DirBar 解禁已配置的 keyed 源 */
+  configuredIds: Set<string>;
   onInputChange: (text: string) => void;
   onTranslate: (textOverride?: string) => void;
   onSourceChange: (code: string) => void;
@@ -42,6 +44,7 @@ function TranslateWorkspace({
   targetLang,
   providers,
   selectedProviderId,
+  configuredIds,
   onInputChange,
   onTranslate,
   onSourceChange,
@@ -55,11 +58,6 @@ function TranslateWorkspace({
 
   return (
     <div className="tx-work">
-      {error !== null && (
-        <div role="alert" className="tx-error">
-          {error}
-        </div>
-      )}
       <div className="pane-head">
         <span className="pane-title">翻译</span>
       </div>
@@ -70,6 +68,7 @@ function TranslateWorkspace({
           targetLang={targetLang}
           providers={providers}
           selectedProviderId={selectedProviderId}
+          configuredIds={configuredIds}
           onProviderChange={onProviderChange}
           onSourceChange={onSourceChange}
           onTargetChange={onTargetChange}
@@ -95,7 +94,19 @@ function TranslateWorkspace({
           <span className="meta">{charCount} 字符</span>
         </div>
 
-        {result !== null && (
+        {error !== null && (
+          <div className="tx-result">
+            <div
+              role="alert"
+              className="tx-out"
+              style={{ color: "var(--danger)" }}
+            >
+              {error}
+            </div>
+          </div>
+        )}
+
+        {error === null && result !== null && (
           <div className="tx-result">
             <div className="field-label">
               译文 · {result.sourceLang} → {result.targetLang}

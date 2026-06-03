@@ -8,17 +8,20 @@
 import "./translate.css";
 import { useEffect, useState, useCallback, useRef } from "react";
 import { listen } from "@tauri-apps/api/event";
-import { TRANSLATE_HISTORY_CHANGED_EVENT } from "../../ipc/events";
+import { TRANSLATE_HISTORY_CHANGED_EVENT, PROVIDER_CONFIG_CHANGED_EVENT } from "../../ipc/events";
 import {
   translateText,
   listTranslateHistory,
   getTranslateProviders,
   getSelectedProvider,
   setSelectedProvider,
+  getProviderCredentialSchema,
+  getProviderCredentials,
   type TranslateResult,
   type TranslateHistoryItem,
   type Provider,
 } from "../../ipc/ipc-client";
+import { isProviderConfigured } from "../../ipc/credential-utils";
 import { resolveTranslateAction } from "../../translate/translate-actions";
 import { writeToClipboard, speakText } from "./browser-api";
 import TranslateWorkspace from "./TranslateWorkspace";
@@ -39,6 +42,7 @@ function TranslatePage({ seed }: TranslatePageProps) {
   const [selectedProviderId, setSelectedProviderId] = useState("");
   const [sourceLang, setSourceLang] = useState("auto");
   const [targetLang, setTargetLang] = useState("zh");
+  const [configuredIds, setConfiguredIds] = useState<Set<string>>(new Set());
 
   /**
    * 取翻译历史，带 cancelled flag 防卸载后写 state。
@@ -56,7 +60,36 @@ function TranslatePage({ seed }: TranslatePageProps) {
   }, []);
 
   /**
-   * 挂载时并发 fetch：历史列表 + provider 列表 + 当前选中 provider。
+   * 对每个 needsKey provider 并行取 schema + credentials，计算 configuredIds。
+   * providerList 由调用方传入，避免重复 fetch。
+   */
+  const fetchConfiguredIds = useCallback(
+    async (providerList: Provider[], cancelled: { current: boolean }) => {
+      const needsKeyProviders = providerList.filter((p) => p.needsKey);
+      if (needsKeyProviders.length === 0) return;
+
+      const results = await Promise.all(
+        needsKeyProviders.map(async (p) => {
+          try {
+            const [schema, credentials] = await Promise.all([
+              getProviderCredentialSchema(p.id),
+              getProviderCredentials(p.id),
+            ]);
+            return { id: p.id, configured: isProviderConfigured(schema, credentials) };
+          } catch {
+            return { id: p.id, configured: false };
+          }
+        })
+      );
+
+      if (cancelled.current) return;
+      setConfiguredIds(new Set(results.filter((r) => r.configured).map((r) => r.id)));
+    },
+    []
+  );
+
+  /**
+   * 挂载时并发 fetch：历史列表 + provider 列表 + 当前选中 provider + 凭据配置状态。
    * 用同一 cancelled ref 统一防卸载后写 state。
    */
   useEffect(() => {
@@ -69,6 +102,7 @@ function TranslatePage({ seed }: TranslatePageProps) {
         if (cancelled.current) return;
         setProviders(providerList);
         setSelectedProviderId(currentId);
+        void fetchConfiguredIds(providerList, cancelled);
       })
       .catch((err) => {
         // provider 取数失败降级为空列表，不阻断翻译工作流
@@ -78,7 +112,7 @@ function TranslatePage({ seed }: TranslatePageProps) {
     return () => {
       cancelled.current = true;
     };
-  }, [fetchHistory]);
+  }, [fetchHistory, fetchConfiguredIds]);
 
   // 订阅后端 translate-history-changed 事件，快捷翻译（trans-popover）写库后通知历史栏刷新。
   // 采用与 ClipboardPage 订阅 clipboard-changed 相同的 cancelled+unlisten 范式，防卸载后泄漏。
@@ -104,6 +138,33 @@ function TranslatePage({ seed }: TranslatePageProps) {
     };
   }, [fetchHistory]);
 
+  // 订阅后端 provider-config-changed 事件，设置页保存凭据后通知翻译页刷新 configuredIds。
+  // 采用相同的 cancelled+unlisten 范式，防卸载后泄漏。
+  useEffect(() => {
+    const cancelled = { current: false };
+    let unlisten: (() => void) | undefined;
+    listen(PROVIDER_CONFIG_CHANGED_EVENT, () => {
+      setProviders((currentProviders) => {
+        void fetchConfiguredIds(currentProviders, cancelled);
+        return currentProviders;
+      });
+    })
+      .then((fn) => {
+        if (cancelled.current) {
+          fn();
+        } else {
+          unlisten = fn;
+        }
+      })
+      .catch((err: unknown) => {
+        console.error("[QuickQuick] provider-config-changed 监听注册失败:", err);
+      });
+    return () => {
+      cancelled.current = true;
+      unlisten?.();
+    };
+  }, [fetchConfiguredIds]);
+
   /**
    * 执行翻译：调 IPC → 更新结果 → 刷新历史。
    * textOverride 为显式字符串时用之，否则读 inputText state。
@@ -121,8 +182,8 @@ function TranslatePage({ seed }: TranslatePageProps) {
       setResult(res);
       const cancelled = { current: false };
       await fetchHistory(cancelled);
-    } catch {
-      setError("翻译失败，请稍后重试");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "翻译失败，请稍后重试");
       setResult(null);
     } finally {
       setIsLoading(false);
@@ -211,6 +272,7 @@ function TranslatePage({ seed }: TranslatePageProps) {
         targetLang={targetLang}
         providers={providers}
         selectedProviderId={selectedProviderId}
+        configuredIds={configuredIds}
         onInputChange={setInputText}
         onTranslate={handleTranslate}
         onSourceChange={setSourceLang}
