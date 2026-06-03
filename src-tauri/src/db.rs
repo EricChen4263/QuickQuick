@@ -624,7 +624,8 @@ fn insert_image_clip(
 
     conn.execute_batch("SAVEPOINT ingest_image_clip;")?;
 
-    let result = try_insert_image_clip(conn, &item_id, &content, now_ms, png_bytes, max_image_bytes);
+    let result =
+        try_insert_image_clip(conn, &item_id, &content, now_ms, png_bytes, max_image_bytes);
 
     match result {
         Ok(()) => {
@@ -968,7 +969,8 @@ mod tests {
         let png = make_test_png(4, 4);
 
         // 首次入库
-        let first = ingest_image_as_clip(&conn, 4, 4, &png, 20 * 1024 * 1024).expect("首次入库失败");
+        let first =
+            ingest_image_as_clip(&conn, 4, 4, &png, 20 * 1024 * 1024).expect("首次入库失败");
         let first_id = match &first {
             IngestOutcome::Inserted(id) => id.clone(),
             _ => panic!("首次应 Inserted"),
@@ -988,7 +990,8 @@ mod tests {
         std::thread::sleep(std::time::Duration::from_millis(5));
 
         // 二次调用
-        let second = ingest_image_as_clip(&conn, 4, 4, &png, 20 * 1024 * 1024).expect("二次调用失败");
+        let second =
+            ingest_image_as_clip(&conn, 4, 4, &png, 20 * 1024 * 1024).expect("二次调用失败");
         assert!(
             matches!(second, IngestOutcome::Bumped(_)),
             "同一 PNG 二次调用应返回 Bumped"
@@ -1068,7 +1071,8 @@ mod tests {
         let png = make_test_png(3, 3);
 
         // 首次入库
-        let first = ingest_image_as_clip(&conn, 3, 3, &png, 20 * 1024 * 1024).expect("首次入库失败");
+        let first =
+            ingest_image_as_clip(&conn, 3, 3, &png, 20 * 1024 * 1024).expect("首次入库失败");
         let first_item_id = match first {
             IngestOutcome::Inserted(id) => id,
             _ => panic!("首次应 Inserted"),
@@ -1092,7 +1096,8 @@ mod tests {
         assert_eq!(orphan_count, 1, "应有 1 条孤立行");
 
         // 二次调用同一 PNG — 应走 insert_image_clip 领养孤立行
-        let second = ingest_image_as_clip(&conn, 3, 3, &png, 20 * 1024 * 1024).expect("二次调用失败");
+        let second =
+            ingest_image_as_clip(&conn, 3, 3, &png, 20 * 1024 * 1024).expect("二次调用失败");
         let second_item_id = match second {
             IngestOutcome::Inserted(id) => id,
             IngestOutcome::Bumped(_) => panic!("孤立行路径应返回 Inserted，不应 Bumped"),
@@ -1154,8 +1159,7 @@ mod tests {
         let conn = make_test_conn();
         let png = make_test_png(2, 2);
         // 阈值设为 1 字节，任何图片都会超阈值
-        let outcome = ingest_image_as_clip(&conn, 2, 2, &png, 1)
-            .expect("小阈值入库不应 Err");
+        let outcome = ingest_image_as_clip(&conn, 2, 2, &png, 1).expect("小阈值入库不应 Err");
         let item_id = match outcome {
             IngestOutcome::Inserted(id) => id,
             IngestOutcome::Bumped(_) => panic!("首次入库应返回 Inserted"),
@@ -1179,8 +1183,8 @@ mod tests {
         let conn = make_test_conn();
         let png = make_test_png(2, 2);
         // 阈值设为 100MiB，任何测试图片都不超阈值
-        let outcome = ingest_image_as_clip(&conn, 2, 2, &png, 100 * 1024 * 1024)
-            .expect("大阈值入库不应 Err");
+        let outcome =
+            ingest_image_as_clip(&conn, 2, 2, &png, 100 * 1024 * 1024).expect("大阈值入库不应 Err");
         let item_id = match outcome {
             IngestOutcome::Inserted(id) => id,
             IngestOutcome::Bumped(_) => panic!("首次入库应返回 Inserted"),

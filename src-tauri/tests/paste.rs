@@ -205,7 +205,10 @@ fn write_and_confirm_normal_returns_ok_without_send_paste() {
 
     let result = write_and_confirm(&mut backend, &item);
 
-    assert!(result.is_ok(), "正常递增时 write_and_confirm 应返回 Ok，实际: {result:?}");
+    assert!(
+        result.is_ok(),
+        "正常递增时 write_and_confirm 应返回 Ok，实际: {result:?}"
+    );
     assert!(
         backend.paste_sent_at_count.is_none(),
         "write_and_confirm 不应调用 send_paste（只负责写入确认）"

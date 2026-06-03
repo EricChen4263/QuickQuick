@@ -130,16 +130,16 @@ mod macos_impl {
             };
 
             let post_key = |keydown: bool| -> bool {
-                let ev =
-                    match CGEvent::new_keyboard_event(source.clone(), KeyCode::ANSI_V, keydown) {
-                        Ok(e) => e,
-                        Err(()) => {
-                            eprintln!(
-                                "[MacOsPasteBackend] send_paste: CGEvent 创建失败 keydown={keydown}"
-                            );
-                            return false;
-                        }
-                    };
+                let ev = match CGEvent::new_keyboard_event(source.clone(), KeyCode::ANSI_V, keydown)
+                {
+                    Ok(e) => e,
+                    Err(()) => {
+                        eprintln!(
+                            "[MacOsPasteBackend] send_paste: CGEvent 创建失败 keydown={keydown}"
+                        );
+                        return false;
+                    }
+                };
                 ev.set_flags(CGEventFlags::CGEventFlagCommand);
                 ev.post(CGEventTapLocation::HID);
                 true

@@ -230,7 +230,13 @@ pub fn translate_text(
     target: Option<String>,
 ) -> Result<TranslateResultDto, String> {
     with_db(&state, |conn| {
-        translate_text_impl(conn, &UreqExecutor, &text, source.as_deref(), target.as_deref())
+        translate_text_impl(
+            conn,
+            &UreqExecutor,
+            &text,
+            source.as_deref(),
+            target.as_deref(),
+        )
     })
 }
 
@@ -269,9 +275,7 @@ mod tests {
 
     /// MyMemory 成功响应的最小合法 JSON 模板（provider 能解析的格式）。
     fn mymemory_ok_response(translated: &str) -> String {
-        format!(
-            r#"{{"responseStatus":200,"responseData":{{"translatedText":"{translated}"}}}}"#
-        )
+        format!(r#"{{"responseStatus":200,"responseData":{{"translatedText":"{translated}"}}}}"#)
     }
 
     #[test]
@@ -294,13 +298,7 @@ mod tests {
         let conn = setup_test_db();
         let fake = FakeExecutor::new(&mymemory_ok_response("안녕하세요"));
         // Act
-        let result = translate_text_impl(
-            &conn,
-            &fake,
-            "こんにちは",
-            Some("ja"),
-            Some("ko"),
-        );
+        let result = translate_text_impl(&conn, &fake, "こんにちは", Some("ja"), Some("ko"));
         // Assert: source_lang/target_lang 在 DTO 中正确反映显式值
         let dto = result.expect("应成功");
         assert_eq!(dto.source_lang, "ja");

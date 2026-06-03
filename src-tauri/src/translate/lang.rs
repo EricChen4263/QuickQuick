@@ -219,8 +219,7 @@ mod tests {
     fn resolve_direction_with_source_explicit_source_overrides_detection() {
         // Arrange: 文本是中文，但显式指定 source="ja"
         // Act: 源语应为 ja，不应走 detect_lang
-        let (source, _target) =
-            resolve_direction_with_source("你好世界", Some("ja"), None);
+        let (source, _target) = resolve_direction_with_source("你好世界", Some("ja"), None);
         // Assert: source 应为 ja，而非 detect_lang 返回的 zh
         assert_eq!(source.as_str(), "ja");
     }
@@ -229,8 +228,7 @@ mod tests {
     fn resolve_direction_with_source_auto_falls_back_to_detection() {
         // Arrange: source="auto" 不是有效显式源语
         // Act: 应回退 detect_lang，中文文本检测为 zh
-        let (source, _target) =
-            resolve_direction_with_source("你好世界", Some("auto"), None);
+        let (source, _target) = resolve_direction_with_source("你好世界", Some("auto"), None);
         // Assert: 回退检测，中文 → zh
         assert_eq!(source.as_str(), "zh");
     }
@@ -238,8 +236,7 @@ mod tests {
     #[test]
     fn resolve_direction_with_source_none_falls_back_to_detection() {
         // Arrange: source=None，走检测路径
-        let (source, _target) =
-            resolve_direction_with_source("hello world", None, None);
+        let (source, _target) = resolve_direction_with_source("hello world", None, None);
         // Assert: 回退检测，非中文 → en
         assert_eq!(source.as_str(), "en");
     }
@@ -247,11 +244,8 @@ mod tests {
     #[test]
     fn resolve_direction_with_source_both_source_and_target_given() {
         // Arrange: 显式给定 source="ja" 和 target="ko"
-        let (source, target) = resolve_direction_with_source(
-            "hello",
-            Some("ja"),
-            Some(Lang::new("ko")),
-        );
+        let (source, target) =
+            resolve_direction_with_source("hello", Some("ja"), Some(Lang::new("ko")));
         // Assert: source 和 target 均按显式值生效
         assert_eq!(source.as_str(), "ja");
         assert_eq!(target.as_str(), "ko");
@@ -261,8 +255,7 @@ mod tests {
     fn resolve_direction_with_source_explicit_source_no_target_uses_default_direction() {
         // Arrange: 显式给定 source="ja"，target=None
         // Act: 应按默认方向逻辑决定 target（非中文 → zh）
-        let (_source, target) =
-            resolve_direction_with_source("dummy", Some("ja"), None);
+        let (_source, target) = resolve_direction_with_source("dummy", Some("ja"), None);
         // Assert: 默认方向 ja（非中文）→ zh
         assert_eq!(target.as_str(), "zh");
     }
@@ -276,11 +269,7 @@ mod tests {
         for lang_code in &["ja", "ko", "fr", "de", "es", "ru"] {
             let lang = Lang::new(*lang_code);
             let mapped = map_lang_for_provider("mymemory", &lang);
-            assert_eq!(
-                mapped,
-                *lang_code,
-                "mymemory 应原样透传语言码 {lang_code}"
-            );
+            assert_eq!(mapped, *lang_code, "mymemory 应原样透传语言码 {lang_code}");
         }
     }
 }
