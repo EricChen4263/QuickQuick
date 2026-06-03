@@ -61,6 +61,8 @@ pub fn detect_lang(text: &str) -> Lang {
 /// - 源为非中文 → 目标中文（en → zh）
 ///
 /// 若 `configured_target` 有值，则用它覆盖上述默认目标。
+/// 守卫：若 configured_target 与检测到的源语相同，则回退 default_target，
+/// 避免源==目标的退化对（provider 会拒绝，如 MyMemory 返回 403）。
 pub fn resolve_direction(text: &str, configured_target: Option<Lang>) -> (Lang, Lang) {
     let source = detect_lang(text);
     // 复用 source 的检测结果决定默认方向，避免二次扫描文本
@@ -69,7 +71,12 @@ pub fn resolve_direction(text: &str, configured_target: Option<Lang>) -> (Lang, 
     } else {
         Lang::new("zh")
     };
-    let target = configured_target.unwrap_or(default_target);
+    // 守卫：configured_target 只在与 source 不同时采用，否则回退 default_target。
+    // 源==目标无法翻译（provider 报需两种不同语言，已 curl 证实 MyMemory 403）。
+    let target = match configured_target {
+        Some(t) if t.as_str() != source.as_str() => t,
+        _ => default_target,
+    };
     (source, target)
 }
 
@@ -83,8 +90,10 @@ const AUTO_SOURCE: &str = "auto";
 /// - 否则（None / 空串 / "auto"）→ 调 `detect_lang` 自动检测源语
 ///
 /// 目标语规则：
-/// - `configured_target` 有值 → 直接用
-/// - 否则按源语走默认方向：zh → en，其余 → zh
+/// - `configured_target` 有值且与源语不同 → 直接用
+/// - `configured_target` 与源语相同（退化对）→ 回退 default_target，
+///   避免 provider 收到相同源/目标（如 MyMemory 返回 403 已 curl 证实）
+/// - `configured_target` 为 None → 按源语走默认方向：zh → en，其余 → zh
 pub fn resolve_direction_with_source(
     text: &str,
     configured_source: Option<&str>,
@@ -102,7 +111,12 @@ pub fn resolve_direction_with_source(
     } else {
         Lang::new("zh")
     };
-    let target = configured_target.unwrap_or(default_target);
+    // 守卫：configured_target 只在与 source 不同时采用，否则回退 default_target。
+    // 源==目标无法翻译（provider 报需两种不同语言，已 curl 证实 MyMemory 403）。
+    let target = match configured_target {
+        Some(t) if t.as_str() != source.as_str() => t,
+        _ => default_target,
+    };
     (source, target)
 }
 
@@ -258,6 +272,62 @@ mod tests {
         let (_source, target) = resolve_direction_with_source("dummy", Some("ja"), None);
         // Assert: 默认方向 ja（非中文）→ zh
         assert_eq!(target.as_str(), "zh");
+    }
+
+    // 同语种退化对守卫测试（核心 bug 修复）
+
+    #[test]
+    fn resolve_direction_with_source_chinese_text_with_zh_target_falls_back_to_en() {
+        // Arrange: 中文文本 + 前端默认传 target=zh，会产生 zh→zh 退化对
+        // Act & Assert: 守卫应回退为 zh→en，provider 不会收到相同源/目标
+        let (source, target) = resolve_direction_with_source("接受", None, Some(Lang::new("zh")));
+        assert_eq!(source.as_str(), "zh");
+        assert_eq!(target.as_str(), "en");
+    }
+
+    #[test]
+    fn resolve_direction_with_source_auto_source_zh_target_falls_back_to_en() {
+        // Arrange: source="auto"（前端明确传 auto）+ target=zh，中文文本
+        // Act & Assert: auto 回退检测到 zh，守卫介入，目标回退为 en
+        let (source, target) =
+            resolve_direction_with_source("接受", Some("auto"), Some(Lang::new("zh")));
+        assert_eq!(source.as_str(), "zh");
+        assert_eq!(target.as_str(), "en");
+    }
+
+    #[test]
+    fn resolve_direction_with_source_explicit_same_lang_pair_falls_back_to_default_target() {
+        // Arrange: 显式指定 source="ja" + target="ja"，产生 ja→ja 退化对
+        // Act & Assert: 守卫介入，target 回退为 default_target（ja 非 zh → zh）
+        let (source, target) =
+            resolve_direction_with_source("hello", Some("ja"), Some(Lang::new("ja")));
+        assert_eq!(source.as_str(), "ja");
+        assert_eq!(target.as_str(), "zh");
+    }
+
+    #[test]
+    fn resolve_direction_with_source_english_text_with_zh_target_not_affected() {
+        // Arrange: 英文文本 + target=zh，是合法的 en→zh 对，守卫不应介入
+        let (source, target) = resolve_direction_with_source("hello", None, Some(Lang::new("zh")));
+        assert_eq!(source.as_str(), "en");
+        assert_eq!(target.as_str(), "zh");
+    }
+
+    #[test]
+    fn resolve_direction_with_source_cross_language_pair_not_affected() {
+        // Arrange: 跨语种且不同语言（ja→ko），守卫不应介入
+        let (source, target) =
+            resolve_direction_with_source("hello", Some("ja"), Some(Lang::new("ko")));
+        assert_eq!(source.as_str(), "ja");
+        assert_eq!(target.as_str(), "ko");
+    }
+
+    #[test]
+    fn resolve_direction_same_lang_pair_falls_back_to_default_target() {
+        // resolve_direction 变体：zh 文本 + target=zh 退化对，守卫介入回退 en
+        let (source, target) = resolve_direction("接受", Some(Lang::new("zh")));
+        assert_eq!(source.as_str(), "zh");
+        assert_eq!(target.as_str(), "en");
     }
 
     // 多语言直通 sanity 测试
