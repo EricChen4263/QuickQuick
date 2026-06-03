@@ -7,6 +7,8 @@
 
 import "./translate.css";
 import { useEffect, useState, useCallback, useRef } from "react";
+import { listen } from "@tauri-apps/api/event";
+import { TRANSLATE_HISTORY_CHANGED_EVENT } from "../../ipc/events";
 import {
   translateText,
   listTranslateHistory,
@@ -75,6 +77,30 @@ function TranslatePage({ seed }: TranslatePageProps) {
 
     return () => {
       cancelled.current = true;
+    };
+  }, [fetchHistory]);
+
+  // 订阅后端 translate-history-changed 事件，快捷翻译（trans-popover）写库后通知历史栏刷新。
+  // 采用与 ClipboardPage 订阅 clipboard-changed 相同的 cancelled+unlisten 范式，防卸载后泄漏。
+  useEffect(() => {
+    const cancelled = { current: false };
+    let unlisten: (() => void) | undefined;
+    listen(TRANSLATE_HISTORY_CHANGED_EVENT, () => {
+      void fetchHistory(cancelled);
+    })
+      .then((fn) => {
+        if (cancelled.current) {
+          fn();
+        } else {
+          unlisten = fn;
+        }
+      })
+      .catch((err: unknown) => {
+        console.error("[QuickQuick] translate-history-changed 监听注册失败:", err);
+      });
+    return () => {
+      cancelled.current = true;
+      unlisten?.();
     };
   }, [fetchHistory]);
 

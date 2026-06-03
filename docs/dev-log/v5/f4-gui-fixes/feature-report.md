@@ -3,7 +3,7 @@ id: V5-F4-report
 type: feature_report
 level: 大功能
 parent: V5
-children: [f4-s01-tray-icon, f4-s02-clip-translate-jump, f4-s03-image-threshold, f4-s04-auto-paste, f4-s05-auto-update, f4-s07-close-to-tray, f4-s08-clip-autorefresh, f4-s09-unmount-race, f4-s10-event-const]
+children: [f4-s01-tray-icon, f4-s02-clip-translate-jump, f4-s03-image-threshold, f4-s04-auto-paste, f4-s05-auto-update, f4-s07-close-to-tray, f4-s08-clip-autorefresh, f4-s09-unmount-race, f4-s10-event-const, f4-s11-trans-history-autorefresh]
 created: 2026-06-02T00:00:00Z
 status: 已闭合（含 1 项外部阻塞）
 author: orchestrator
@@ -27,6 +27,7 @@ author: orchestrator
 | s08 剪贴板自动刷新 | 列表仅挂载时读一次、复制新内容不刷新（页面 display 切换不卸载）。后端写库非空 emit `clipboard-changed`（抽纯函数 should_notify_clip_change 作可测接缝），前端 listen→loadItems 重读 | tester 后端4+前端 命中+变异全红；reviewer 通过；cargo 301 + 前端 356 全绿 | fcfd997 |
 | s09 删除/收藏卸载竞态 | handler 用局部 {current:false}（永不置 true）→卸载后 setState。改共享组件生命周期 cancelledRef（卸载 cleanup 置 true） | tester：正向流有判别力；**实证 React18 下该竞态不可黑盒证伪**；reviewer 通过；前端 358 全绿 | c208198 |
 | s10 事件名常量 | 纯重构：clipboard-changed 字面量抽为前端 src/ipc/events.ts + 后端 lib.rs 各一处常量 CLIPBOARD_CHANGED_EVENT（消除同语言内重复，I-01），两端注释互指 | tester：前端偏离常量后测试变红、跨语言值一致；reviewer 通过；cargo 301 + 前端 358 全绿 | ee38d39 |
+| s11 翻译历史自动刷新 | s08 的孪生：快捷翻译（trans-popover）写库后历史栏不刷新——记录其实已存进 translate_history，但后端写完不 emit、前端只挂载/主面板翻译时读。后端 translate_text 成功后 emit `translate-history-changed`（仅 Ok 时发，抽常量两端互指承 s10），前端 TranslatePage listen→fetchHistory 重读 | tester 命中+2 变异（错误事件名/移除回调）全红再复绿、fetchHistory 稳定无抖动；reviewer 通过无高中危；cargo 67 + 前端 364 全绿 | pending |
 
 ## 关键决策与亮点
 - **托盘 bug 根因定位**：template image 只取 alpha 轮廓——彩色应用图标套 template 必成实心色块，故必须用真正的单色模板图（tray.png 本身正确，问题在加载路径）。`include_bytes!` 摆脱 resource_dir 依赖，dev/prod 一致。
@@ -40,6 +41,7 @@ author: orchestrator
 - **s04 自动粘贴**：授予 QuickQuick「辅助功能(Accessibility)」权限后，GUI 实测 ⌘V 注入是否真把内容粘到目标 App（含焦点回归、100ms 延时是否够）。务实焦点方案未做 RecordFrontmost/ActivateOriginalApp，慢机/特殊 App 下可能需调延时或补完整焦点链。
 - **s07 关闭到后台**：重启 app（改了 lib.rs 需重新构建），点主窗关闭按钮→应隐藏到托盘/Dock 继续运行而非退出；托盘「退出」菜单→才真正退出。
 - **s08 剪贴板自动刷新**：重启 app，保持主窗开着复制一段新文本→列表应在约半秒内自动冒出新条目，无需手动操作。
+- **s11 翻译历史自动刷新**：重启 app（改了 Rust 需重新构建），主窗停在翻译页→复制一段文字按 Cmd+Shift+T 快捷翻译→主窗翻译历史栏应自动冒出这条新记录，无需切页或手动刷新。
 
 ## 仍遗留（外部阻塞 / 后续）
 - s05 自动更新：待更新服务器 + 签名密钥 + 发布 CI 就绪后，做客户端 check() 接线（纯代码，届时可在本仓完成）。详见 assessment.md。

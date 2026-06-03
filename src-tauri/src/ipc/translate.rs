@@ -12,7 +12,7 @@ use std::sync::Arc;
 
 use rusqlite::Connection;
 use serde::Serialize;
-use tauri::State;
+use tauri::{AppHandle, Emitter, State};
 
 use crate::db::DbError;
 use crate::ipc::{with_db, AppDb};
@@ -24,6 +24,10 @@ use crate::translate::providers::MyMemoryProvider;
 use crate::translate::{
     Lang, ProviderHttpRequest, TranslateError, TranslateProvider, TranslateRequest,
 };
+
+/// 翻译历史变化事件名。与前端 src/ipc/events.ts 的 TRANSLATE_HISTORY_CHANGED_EVENT 必须一致。
+/// Tauri 事件名跨语言无法编译期共享，改动需两端同步。
+const TRANSLATE_HISTORY_CHANGED_EVENT: &str = "translate-history-changed";
 
 /// 可注入 HTTP 执行器抽象。
 ///
@@ -222,14 +226,17 @@ pub fn list_translate_history_impl(conn: &Connection) -> Result<Vec<TranslateHis
 ///
 /// 前端通过 `invoke("translate_text", { text, source, target })` 调用。
 /// `source` 为具体语言码（如 "ja"）时跳过检测；为 "auto"/null/省略 时回退自动检测。
+/// 翻译成功后 emit `TRANSLATE_HISTORY_CHANGED_EVENT`，通知前端历史栏刷新；
+/// emit 失败仅 eprintln 记录，不影响翻译结果返回。
 #[tauri::command]
 pub fn translate_text(
+    app: AppHandle,
     state: State<'_, AppDb>,
     text: String,
     source: Option<String>,
     target: Option<String>,
 ) -> Result<TranslateResultDto, String> {
-    with_db(&state, |conn| {
+    let result = with_db(&state, |conn| {
         translate_text_impl(
             conn,
             &UreqExecutor,
@@ -237,7 +244,13 @@ pub fn translate_text(
             source.as_deref(),
             target.as_deref(),
         )
-    })
+    });
+    if result.is_ok() {
+        if let Err(e) = app.emit(TRANSLATE_HISTORY_CHANGED_EVENT, ()) {
+            eprintln!("[QuickQuick] 发送 {TRANSLATE_HISTORY_CHANGED_EVENT} 事件失败: {e}");
+        }
+    }
+    result
 }
 
 /// Tauri 命令：按时间倒序列出翻译历史。

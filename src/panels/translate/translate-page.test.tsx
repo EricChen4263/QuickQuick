@@ -3,6 +3,11 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import TranslatePage from "./TranslatePage";
 
+// Mock Tauri event API：渲染测试环境无 Tauri 运行时
+vi.mock("@tauri-apps/api/event", () => ({
+  listen: vi.fn().mockResolvedValue(() => {}),
+}));
+
 // Mock IPC：渲染测试环境无 Tauri 运行时
 // getTranslateProviders / getSelectedProvider / setSelectedProvider 需补齐，
 // 否则 TranslatePage 挂载时的 provider fetch 会 reject，干扰翻译/历史断言。
@@ -20,6 +25,8 @@ vi.mock("./browser-api", () => ({
   speakText: vi.fn(),
 }));
 
+import { listen } from "@tauri-apps/api/event";
+import { TRANSLATE_HISTORY_CHANGED_EVENT } from "../../ipc/events";
 import {
   translateText,
   listTranslateHistory,
@@ -29,6 +36,7 @@ import {
 } from "../../ipc/ipc-client";
 import { writeToClipboard, speakText } from "./browser-api";
 
+const mockListen = vi.mocked(listen);
 const mockTranslateText = vi.mocked(translateText);
 const mockListTranslateHistory = vi.mocked(listTranslateHistory);
 const mockGetTranslateProviders = vi.mocked(getTranslateProviders);
@@ -466,5 +474,32 @@ describe("translate-page", () => {
     });
 
     expect(mockTranslateText).not.toHaveBeenCalled();
+  });
+
+  it("translate-page: 收到 translate-history-changed 事件后触发 listTranslateHistory 重新加载", async () => {
+    // Arrange：捕获 listen 注册的回调，以便后续手动触发
+    let capturedCallback: (() => void) | undefined;
+    mockListen.mockImplementation((_eventName, handler) => {
+      capturedCallback = handler as () => void;
+      return Promise.resolve(() => {});
+    });
+    mockListTranslateHistory.mockResolvedValue(MOCK_HISTORY);
+
+    render(<TranslatePage />);
+
+    // 等待挂载时的初始加载完成（listTranslateHistory 第 1 次调用）
+    await waitFor(() => {
+      expect(mockListTranslateHistory).toHaveBeenCalledTimes(1);
+    });
+    // 确认已订阅正确的事件名
+    expect(mockListen).toHaveBeenCalledWith(TRANSLATE_HISTORY_CHANGED_EVENT, expect.any(Function));
+
+    // Act：模拟后端触发 translate-history-changed 事件
+    capturedCallback!();
+
+    // Assert：listTranslateHistory 被再次调用（第 2 次）以刷新历史
+    await waitFor(() => {
+      expect(mockListTranslateHistory).toHaveBeenCalledTimes(2);
+    });
   });
 });
