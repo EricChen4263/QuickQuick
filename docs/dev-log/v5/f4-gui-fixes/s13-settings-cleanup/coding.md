@@ -2,7 +2,7 @@
 id: s13-settings-cleanup
 title: 设置页占位清理（移除回车粘贴占位 + 关于页版本号读真实值）
 status: done
-commit: pending
+commit: d6c9ae8
 date: 2026-06-03
 ---
 

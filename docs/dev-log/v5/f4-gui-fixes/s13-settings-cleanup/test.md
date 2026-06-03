@@ -2,7 +2,7 @@
 id: s13-settings-cleanup
 title: 设置页占位清理 测试留痕
 status: passed
-commit: pending
+commit: d6c9ae8
 date: 2026-06-03
 ---
 
