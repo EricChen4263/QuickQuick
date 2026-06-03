@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { render, screen, waitFor, within, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import SettingsPage from "./SettingsPage";
 
@@ -146,7 +146,7 @@ describe("settings-page", () => {
     expect(within(nav).getByRole("button", { name: "通用" })).not.toHaveAttribute("aria-current");
   });
 
-  it("settings-page: 热键面板——输入与另一动作相同的键显示已被占用且不调用 setHotkey", async () => {
+  it("settings-page: 热键面板——捕获与另一动作相同的键显示已被占用且不调用 setHotkey", async () => {
     // Arrange
     const user = userEvent.setup();
     render(<SettingsPage />);
@@ -154,26 +154,30 @@ describe("settings-page", () => {
     const nav = screen.getByRole("navigation", { name: "设置子项" });
     await user.click(within(nav).getByRole("button", { name: "热键" }));
 
-    // 等待热键数据加载完成
+    // 等待热键数据加载完成（两行「修改」按钮出现）
     await waitFor(() => {
-      expect(screen.getByDisplayValue("CmdOrCtrl+Shift+H")).toBeInTheDocument();
+      expect(screen.getAllByRole("button", { name: "修改" })).toHaveLength(2);
     });
 
-    // Act：修改 history 热键输入框，输入 translate 热键的当前值（已被占用）
-    const historyInput = screen.getByDisplayValue("CmdOrCtrl+Shift+H");
-    await user.clear(historyInput);
-    await user.type(historyInput, "CmdOrCtrl+Shift+T");
+    // Act：点击第一行「修改」进入录制模式
+    const editButtons = screen.getAllByRole("button", { name: "修改" });
+    await user.click(editButtons[0]);
+
+    // 录制模式下模拟按下 CmdOrCtrl+Shift+T（与 translate 键冲突）
+    const captureArea = screen.getByRole("button", { name: "录制中…请按下快捷键" });
+    fireEvent.keyDown(captureArea, { code: "KeyT", metaKey: true, shiftKey: true });
 
     // 点击保存
-    const saveButtons = screen.getAllByRole("button", { name: "保存" });
-    await user.click(saveButtons[0]);
+    await user.click(screen.getByRole("button", { name: "保存" }));
 
     // Assert：显示"已被占用"，setHotkey 不被调用
-    expect(screen.getByText("已被占用")).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getByText("已被占用")).toBeInTheDocument();
+    });
     expect(mockSetHotkey).not.toHaveBeenCalled();
   });
 
-  it("settings-page: 热键面板——输入不冲突键后调用 setHotkey(正确参数)", async () => {
+  it("settings-page: 热键面板——捕获不冲突键后调用 setHotkey(正确参数)", async () => {
     // Arrange
     const user = userEvent.setup();
     render(<SettingsPage />);
@@ -182,16 +186,19 @@ describe("settings-page", () => {
     await user.click(within(nav).getByRole("button", { name: "热键" }));
 
     await waitFor(() => {
-      expect(screen.getByDisplayValue("CmdOrCtrl+Shift+H")).toBeInTheDocument();
+      expect(screen.getAllByRole("button", { name: "修改" })).toHaveLength(2);
     });
 
-    // Act：修改 history 热键为不冲突的键
-    const historyInput = screen.getByDisplayValue("CmdOrCtrl+Shift+H");
-    await user.clear(historyInput);
-    await user.type(historyInput, "CmdOrCtrl+Shift+Y");
+    // Act：点击第一行「修改」进入录制模式
+    const editButtons = screen.getAllByRole("button", { name: "修改" });
+    await user.click(editButtons[0]);
 
-    const saveButtons = screen.getAllByRole("button", { name: "保存" });
-    await user.click(saveButtons[0]);
+    // 录制模式下模拟按下 CmdOrCtrl+Shift+Y（不冲突）
+    const captureArea = screen.getByRole("button", { name: "录制中…请按下快捷键" });
+    fireEvent.keyDown(captureArea, { code: "KeyY", metaKey: true, shiftKey: true });
+
+    // 点击保存
+    await user.click(screen.getByRole("button", { name: "保存" }));
 
     // Assert：调用 setHotkey 传正确参数
     await waitFor(() => {
@@ -408,8 +415,8 @@ describe("settings-page", () => {
     expect(screen.queryByText("待配置")).not.toBeInTheDocument();
   });
 
-  it("settings-page: 热键面板——每行有 .kbd-combo 展示当前键（设计系统重塑）", async () => {
-    // Arrange: 验证改造后 HotkeyPanel 每行有 kbd 展示当前热键
+  it("settings-page: 热键面板——每行有 kbd 芯片展示当前键和「修改」按钮", async () => {
+    // Arrange: 验证改造后 HotkeyPanel 每行有 kbd 展示当前热键、有「修改」按钮
     const user = userEvent.setup();
     render(<SettingsPage />);
 
@@ -417,13 +424,70 @@ describe("settings-page", () => {
     await user.click(within(nav).getByRole("button", { name: "热键" }));
 
     await waitFor(() => {
-      expect(screen.getByDisplayValue("CmdOrCtrl+Shift+H")).toBeInTheDocument();
+      expect(screen.getAllByRole("button", { name: "修改" })).toHaveLength(2);
     });
 
-    // 两行都有保存按钮
-    expect(screen.getAllByRole("button", { name: "保存" })).toHaveLength(2);
-    // 两个热键 input 均在 DOM（getByDisplayValue 已验证一个，另一个也在）
-    expect(screen.getByDisplayValue("CmdOrCtrl+Shift+T")).toBeInTheDocument();
+    // 两行都有「修改」按钮，当前无「保存」按钮（未进录制模式）
+    expect(screen.getAllByRole("button", { name: "修改" })).toHaveLength(2);
+    expect(screen.queryByRole("button", { name: "保存" })).not.toBeInTheDocument();
+    // 无旧版 input（已移除手打改键）
+    expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
+  });
+
+  it("settings-page: 热键面板——点「修改」进入录制模式，Esc 取消还原到「修改」按钮", async () => {
+    // Arrange
+    const user = userEvent.setup();
+    render(<SettingsPage />);
+
+    const nav = screen.getByRole("navigation", { name: "设置子项" });
+    await user.click(within(nav).getByRole("button", { name: "热键" }));
+
+    await waitFor(() => {
+      expect(screen.getAllByRole("button", { name: "修改" })).toHaveLength(2);
+    });
+
+    // Act：点击第一行「修改」进入录制模式
+    const editButtons = screen.getAllByRole("button", { name: "修改" });
+    await user.click(editButtons[0]);
+
+    // 录制模式中：「修改」消失、出现录制中按钮
+    expect(screen.queryAllByRole("button", { name: "修改" })).toHaveLength(1);
+    const captureArea = screen.getByRole("button", { name: "录制中…请按下快捷键" });
+    expect(captureArea).toBeInTheDocument();
+
+    // 按 Esc 取消
+    fireEvent.keyDown(captureArea, { code: "Escape" });
+
+    // 退出录制模式：「修改」按钮恢复为 2，录制中按钮消失
+    await waitFor(() => {
+      expect(screen.getAllByRole("button", { name: "修改" })).toHaveLength(2);
+    });
+    expect(screen.queryByRole("button", { name: "录制中…请按下快捷键" })).not.toBeInTheDocument();
+  });
+
+  it("settings-page: 热键面板——未捕获到有效键时「保存」按钮禁用", async () => {
+    // Arrange
+    const user = userEvent.setup();
+    render(<SettingsPage />);
+
+    const nav = screen.getByRole("navigation", { name: "设置子项" });
+    await user.click(within(nav).getByRole("button", { name: "热键" }));
+
+    await waitFor(() => {
+      expect(screen.getAllByRole("button", { name: "修改" })).toHaveLength(2);
+    });
+
+    // Act：进入录制模式但不按有效键
+    const editButtons = screen.getAllByRole("button", { name: "修改" });
+    await user.click(editButtons[0]);
+
+    // 尝试按纯修饰键（无有效主键）
+    const captureArea = screen.getByRole("button", { name: "录制中…请按下快捷键" });
+    fireEvent.keyDown(captureArea, { code: "ShiftLeft", shiftKey: true });
+
+    // Assert：「保存」按钮禁用
+    const saveBtn = screen.getByRole("button", { name: "保存" });
+    expect(saveBtn).toBeDisabled();
   });
 
   it("settings-page: 隐私面板——App 名单以 .chip 形式渲染（设计系统重塑）", async () => {
@@ -556,7 +620,7 @@ describe("settings-page", () => {
     await user.click(within(nav).getByRole("button", { name: "热键" }));
 
     await waitFor(() => {
-      expect(screen.getByDisplayValue("CmdOrCtrl+Shift+H")).toBeInTheDocument();
+      expect(screen.getAllByRole("button", { name: "修改" })).toHaveLength(2);
     });
 
     expect(screen.queryByText("回车粘贴")).not.toBeInTheDocument();

@@ -1,6 +1,7 @@
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { getHotkeys, setHotkey, type Hotkeys, type HotkeyAction } from "../../ipc/ipc-client";
 import { validateRebind } from "../../main-window/settings/rebind";
+import { keyEventToAccelerator } from "../../main-window/settings/key-capture";
 import PanelHeader from "./PanelHeader";
 import SettingGroup from "./SettingGroup";
 
@@ -13,7 +14,18 @@ interface HotkeyRowProps {
   onSaved: () => void;
 }
 
-/** 单行热键编辑：kbd 展示当前键 + input 改键 + 保存按钮 + 冲突校验 */
+/** kbd 芯片组：按 + 分段渲染每段为一个 <kbd> */
+function KbdCombo({ accelerator }: { accelerator: string }) {
+  return (
+    <span className="kbd-combo">
+      {accelerator.split("+").map((part) => (
+        <kbd key={part}>{part}</kbd>
+      ))}
+    </span>
+  );
+}
+
+/** 单行热键编辑：kbd 展示当前键 + 录制模式捕获 + 保存/取消 */
 function HotkeyRow({
   action,
   label,
@@ -22,19 +34,59 @@ function HotkeyRow({
   occupiedValues,
   onSaved,
 }: HotkeyRowProps) {
-  const [inputValue, setInputValue] = useState(currentValue);
+  const [isRecording, setIsRecording] = useState(false);
+  const [captured, setCaptured] = useState<string | null>(null);
   const [conflictError, setConflictError] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const captureRef = useRef<HTMLButtonElement>(null);
 
-  // 父组件刷新 currentValue 时（保存成功后重拉）同步输入框
   useEffect(() => {
-    setInputValue(currentValue);
+    setIsRecording(false);
+    setCaptured(null);
     setConflictError(null);
     setSaveError(null);
   }, [currentValue]);
 
+  function enterRecording() {
+    setIsRecording(true);
+    setCaptured(null);
+    setConflictError(null);
+    setSaveError(null);
+    setTimeout(() => captureRef.current?.focus(), 0);
+  }
+
+  function cancelRecording() {
+    setIsRecording(false);
+    setCaptured(null);
+    setConflictError(null);
+    setSaveError(null);
+  }
+
+  function handleCaptureKeyDown(e: React.KeyboardEvent<HTMLButtonElement>) {
+    e.preventDefault();
+
+    if (e.code === "Escape") {
+      cancelRecording();
+      return;
+    }
+
+    const accel = keyEventToAccelerator({
+      metaKey: e.metaKey,
+      ctrlKey: e.ctrlKey,
+      altKey: e.altKey,
+      shiftKey: e.shiftKey,
+      code: e.code,
+    });
+
+    if (accel !== null) {
+      setCaptured(accel);
+    }
+  }
+
   async function handleSave() {
-    const result = validateRebind(inputValue, occupiedValues);
+    if (captured === null) return;
+
+    const result = validateRebind(captured, occupiedValues);
     if (!result.ok) {
       setConflictError(result.error);
       return;
@@ -43,6 +95,8 @@ function HotkeyRow({
     try {
       await setHotkey(action, result.accelerator);
       setSaveError(null);
+      setIsRecording(false);
+      setCaptured(null);
       onSaved();
     } catch (err: unknown) {
       setSaveError(err instanceof Error ? err.message : "保存失败，请稍后重试");
@@ -51,8 +105,44 @@ function HotkeyRow({
 
   const errorMessage = conflictError ?? saveError;
 
-  // kbd 展示：按 + 分段，每段一个 <kbd>
-  const kbdParts = currentValue.split("+");
+  if (isRecording) {
+    return (
+      <div className="set-row column">
+        <div className="hotkey-row-inner">
+          <div className="grow">
+            <div className="label">{label}</div>
+            <div className="desc">{description}</div>
+          </div>
+          {captured !== null ? (
+            <KbdCombo accelerator={captured} />
+          ) : null}
+          <button
+            ref={captureRef}
+            className="btn capture-area"
+            aria-label="录制中…请按下快捷键"
+            onKeyDown={handleCaptureKeyDown}
+          >
+            录制中…请按下快捷键
+          </button>
+          <button
+            className="btn btn-primary"
+            disabled={captured === null}
+            onClick={() => void handleSave()}
+          >
+            保存
+          </button>
+          <button className="btn" onClick={cancelRecording}>
+            取消
+          </button>
+        </div>
+        {errorMessage !== null && (
+          <div role="alert" className="hotkey-error">
+            {errorMessage}
+          </div>
+        )}
+      </div>
+    );
+  }
 
   return (
     <div className="set-row column">
@@ -61,22 +151,10 @@ function HotkeyRow({
           <div className="label">{label}</div>
           <div className="desc">{description}</div>
         </div>
-        <span className="kbd-combo">
-          {kbdParts.map((part) => (
-            <kbd key={part}>{part}</kbd>
-          ))}
-        </span>
-        <input
-          type="text"
-          className="set-input"
-          value={inputValue}
-          onChange={(e) => {
-            setInputValue(e.target.value);
-            setConflictError(null);
-            setSaveError(null);
-          }}
-        />
-        <button className="btn" onClick={() => void handleSave()}>保存</button>
+        <KbdCombo accelerator={currentValue} />
+        <button className="btn" onClick={enterRecording}>
+          修改
+        </button>
       </div>
       {errorMessage !== null && (
         <div role="alert" className="hotkey-error">
@@ -91,6 +169,7 @@ function HotkeyRow({
 function HotkeyPanel() {
   const [hotkeys, setHotkeys] = useState<Hotkeys | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
+
   const fetchHotkeys = useCallback(async (cancelled: { current: boolean }) => {
     try {
       const result = await getHotkeys();
