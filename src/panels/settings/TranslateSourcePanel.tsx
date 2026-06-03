@@ -209,23 +209,35 @@ function TranslateSourcePanel() {
   }
 
   function handleCredentialSaved(providerId: string) {
-    void getProviderCredentials(providerId).then((credentials) => {
-      if (!isMounted.current) return;
-      const schema = schemaCache[providerId] ?? [];
-      const configured = isProviderConfigured(schema, credentials);
-      setConfiguredIds((prev) => {
-        const next = new Set(prev);
+    void getProviderCredentials(providerId)
+      .then((credentials) => {
+        if (!isMounted.current) return;
+        const schema = schemaCache[providerId] ?? [];
+        const configured = isProviderConfigured(schema, credentials);
+        setConfiguredIds((prev) => {
+          const next = new Set(prev);
+          if (configured) {
+            next.add(providerId);
+          } else {
+            next.delete(providerId);
+          }
+          return next;
+        });
         if (configured) {
-          next.add(providerId);
-        } else {
-          next.delete(providerId);
+          setExpandedId(null);
         }
-        return next;
+      })
+      .catch((err) => {
+        // 复核请求失败时无法确认配置态，保守回退为「待配置」（移除该 id），
+        // 避免清除/保存后徽标与实际状态矛盾。
+        if (!isMounted.current) return;
+        console.error("[TranslateSourcePanel] 复核凭据状态失败，回退为待配置:", err);
+        setConfiguredIds((prev) => {
+          const next = new Set(prev);
+          next.delete(providerId);
+          return next;
+        });
       });
-      if (configured) {
-        setExpandedId(null);
-      }
-    });
   }
 
   if (loadError !== null) {
@@ -255,6 +267,7 @@ function TranslateSourcePanel() {
                 providerId={provider.id}
                 schema={schemaCache[provider.id] ?? []}
                 onSaved={() => handleCredentialSaved(provider.id)}
+                isConfigured={configuredIds.has(provider.id)}
               />
             )}
           </div>

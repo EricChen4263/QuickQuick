@@ -774,6 +774,12 @@ impl CredStore for MockCredStore {
         let k = format!("{provider_id}.{field_key}");
         Ok(self.inner.lock().unwrap().get(&k).cloned())
     }
+
+    fn delete_secret(&self, provider_id: &str, field_key: &str) -> Result<(), CredError> {
+        let k = format!("{provider_id}.{field_key}");
+        self.inner.lock().unwrap().remove(&k);
+        Ok(())
+    }
 }
 
 /// A05-a：百度 schema 含 app_id(非密必填) + secret_key(密必填)

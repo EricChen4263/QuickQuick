@@ -37,7 +37,7 @@ use crate::autostart::AutostartConfig;
 use crate::hotkey::{HotkeyAction, HotkeyConfig, HotkeyError, HotkeyRegistrar};
 use crate::settings::AppSettings;
 use crate::translate::credential::{
-    credential_schema, load_credentials, save_credentials, KeyringCredStore,
+    credential_schema, delete_credentials, load_credentials, save_credentials, KeyringCredStore,
 };
 use crate::translate::providers::registry;
 use crate::CaptureState;
@@ -764,6 +764,43 @@ pub fn set_provider_credentials(
     Ok(())
 }
 
+/// `delete_provider_credentials` 的纯函数实现，可在测试中直接调用。
+///
+/// 按 schema 遍历 provider 所有字段：secret→store.delete_secret，非密→DELETE FROM DB。
+/// 幂等——字段不存在也不报错。
+///
+/// # Errors
+/// - 未知 provider_id：返回错误字符串
+/// - store 删除失败 / DB 操作失败：返回错误字符串
+pub fn delete_provider_credentials_impl(
+    provider_id: &str,
+    store: &dyn crate::translate::credential::CredStore,
+    conn: &rusqlite::Connection,
+) -> Result<(), String> {
+    delete_credentials(provider_id, store, conn).map_err(|e| e.to_string())
+}
+
+/// Tauri 命令：清除指定 provider 的所有已保存凭据（keychain + DB 均清）。
+///
+/// 删除成功后向前端 emit `provider-config-changed` 事件，
+/// 使翻译页徽标从「已配置」变回「待配置」。
+/// emit 失败仅记录日志，不影响命令返回值。
+#[tauri::command]
+pub fn delete_provider_credentials(
+    app: AppHandle,
+    state: State<'_, super::AppDb>,
+    provider_id: String,
+) -> Result<(), String> {
+    let store = KeyringCredStore;
+    super::with_db(&state, |conn| {
+        delete_provider_credentials_impl(&provider_id, &store, conn)
+    })?;
+    if let Err(e) = app.emit(PROVIDER_CONFIG_CHANGED_EVENT, ()) {
+        eprintln!("[QuickQuick] provider-config-changed emit 失败（delete）: {e}");
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1082,5 +1119,48 @@ mod tests {
 
         let result = set_provider_credentials_impl("baidu", values, &store, &conn);
         assert!(result.is_err(), "未知 field_key 应返回 Err");
+    }
+
+    #[test]
+    fn delete_provider_credentials_impl_clears_all_fields() {
+        use crate::translate::credential::MockCredStore;
+        use std::collections::HashMap;
+        let store = MockCredStore::new();
+        let conn = make_cred_db();
+
+        let mut values = HashMap::new();
+        values.insert("app_id".to_string(), "test_id".to_string());
+        values.insert("secret_key".to_string(), "test_secret".to_string());
+        set_provider_credentials_impl("baidu", values, &store, &conn).unwrap();
+
+        delete_provider_credentials_impl("baidu", &store, &conn).unwrap();
+
+        let results = get_provider_credentials_impl("baidu", &store, &conn).unwrap();
+        for item in &results {
+            assert!(
+                !item.is_set,
+                "删除后所有字段 is_set 应为 false，实际：{item:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn delete_provider_credentials_impl_unknown_provider_returns_err() {
+        use crate::translate::credential::MockCredStore;
+        let store = MockCredStore::new();
+        let conn = make_cred_db();
+
+        let result = delete_provider_credentials_impl("unknown_xyz", &store, &conn);
+        assert!(result.is_err(), "未知 provider 应返回 Err");
+    }
+
+    #[test]
+    fn delete_provider_credentials_impl_idempotent() {
+        use crate::translate::credential::MockCredStore;
+        let store = MockCredStore::new();
+        let conn = make_cred_db();
+
+        let result = delete_provider_credentials_impl("baidu", &store, &conn);
+        assert!(result.is_ok(), "空 provider 也应成功（幂等）: {result:?}");
     }
 }

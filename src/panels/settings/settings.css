@@ -380,6 +380,41 @@
   margin-top: 4px;
 }
 
+/* 已配置提示：次要文字，置于字段上方，与下方留间距 */
+.credential-configured-hint {
+  font-size: 12.5px;
+  color: var(--muted);
+  margin-bottom: 2px;
+}
+
+/* 操作按钮行：保存 / 清除横向排布 */
+.credential-actions {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 10px;
+  margin-top: 4px;
+}
+
+/* 行内按钮已由容器控制间距，去掉单按钮的顶部留白 */
+.credential-actions .btn {
+  margin-top: 0;
+}
+
+/* 清除已存密钥：默认克制（次要边框态），hover 才显 danger */
+.btn-clear-cred {
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--muted);
+  transition: background-color 120ms ease, border-color 120ms ease, color 120ms ease;
+}
+
+.btn-clear-cred:hover:not(:disabled) {
+  color: var(--danger);
+  border-color: var(--danger);
+  background: color-mix(in oklch, var(--danger) 10%, transparent);
+}
+
 /* 标签芯片行：flex wrap，用于排除名单 App 列表 */
 .chip-row {
   display: flex;

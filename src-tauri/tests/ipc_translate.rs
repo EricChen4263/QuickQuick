@@ -43,6 +43,12 @@ impl CredStore for LocalMockCredStore {
         let key = format!("{provider_id}.{field_key}");
         Ok(self.store.lock().unwrap().get(&key).cloned())
     }
+
+    fn delete_secret(&self, provider_id: &str, field_key: &str) -> Result<(), CredError> {
+        let key = format!("{provider_id}.{field_key}");
+        self.store.lock().unwrap().remove(&key);
+        Ok(())
+    }
 }
 
 const KEY: [u8; 32] = [7u8; 32];

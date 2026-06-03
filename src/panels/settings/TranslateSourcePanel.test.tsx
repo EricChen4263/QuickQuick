@@ -9,6 +9,7 @@ vi.mock("../../ipc/ipc-client", () => ({
   getProviderCredentialSchema: vi.fn(),
   getProviderCredentials: vi.fn(),
   setProviderCredentials: vi.fn(),
+  deleteProviderCredentials: vi.fn(),
 }));
 
 import {
@@ -18,6 +19,7 @@ import {
   getProviderCredentialSchema,
   getProviderCredentials,
   setProviderCredentials,
+  deleteProviderCredentials,
 } from "../../ipc/ipc-client";
 import type { Provider, CredentialField, CredentialValue } from "../../ipc/ipc-client";
 import TranslateSourcePanel from "./TranslateSourcePanel";
@@ -218,5 +220,44 @@ describe("TranslateSourcePanel 配置按钮（解耦）", () => {
     await waitFor(() => {
       expect(cfgBtn.classList.contains("open")).toBe(true);
     });
+  });
+});
+
+describe("TranslateSourcePanel 复核失败回退", () => {
+  it("清除后复核 getProviderCredentials reject → 该 provider 从已配置回退为待配置", async () => {
+    const user = userEvent.setup();
+    const mockDelete = vi.mocked(deleteProviderCredentials);
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    // 初始加载 + CredentialForm 自身加载：已配置态（徽标「已配置」）
+    mockGetProviderCredentials.mockResolvedValue(BAIDU_CREDENTIALS_SET);
+    mockDelete.mockResolvedValue(undefined);
+
+    render(<TranslateSourcePanel />);
+
+    await waitFor(() => {
+      expect(screen.getByText("已配置")).toBeInTheDocument();
+    });
+
+    // 展开配置表单
+    await user.click(screen.getByRole("button", { name: /配置/ }));
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /清除/ })).toBeInTheDocument();
+    });
+
+    // 清除后 handleCredentialSaved 复核请求 reject
+    mockGetProviderCredentials.mockRejectedValue(new Error("复核请求失败"));
+    await user.click(screen.getByRole("button", { name: /清除/ }));
+
+    // 复核失败保守回退：徽标变「待配置」，「已配置」消失
+    await waitFor(() => {
+      expect(screen.getByText("待配置")).toBeInTheDocument();
+    });
+    expect(screen.queryByText("已配置")).not.toBeInTheDocument();
+    expect(errorSpy).toHaveBeenCalled();
+
+    confirmSpy.mockRestore();
+    errorSpy.mockRestore();
   });
 });

@@ -133,6 +133,7 @@ pub fn run() {
             ipc::settings::get_provider_credential_schema,
             ipc::settings::get_provider_credentials,
             ipc::settings::set_provider_credentials,
+            ipc::settings::delete_provider_credentials,
             ipc::system::get_storage_stats,
             ipc::system::cleanup_history,
             ipc::system::open_accessibility_settings,

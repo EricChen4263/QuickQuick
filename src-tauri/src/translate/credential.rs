@@ -68,6 +68,9 @@ pub trait CredStore {
 
     /// 读取 secret；未找到时返回 None（不算错误）
     fn get_secret(&self, provider_id: &str, field_key: &str) -> Result<Option<String>, CredError>;
+
+    /// 删除 secret；未找到时视为成功（幂等）
+    fn delete_secret(&self, provider_id: &str, field_key: &str) -> Result<(), CredError>;
 }
 
 /// 生产用 CredStore：调用 keyring crate 写 OS keychain。
@@ -92,6 +95,19 @@ impl CredStore for KeyringCredStore {
         match entry.get_secret() {
             Ok(bytes) => Ok(Some(String::from_utf8_lossy(&bytes).into_owned())),
             Err(keyring::Error::NoEntry) => Ok(None),
+            Err(e) => Err(CredError::Keychain(e.to_string())),
+        }
+    }
+
+    /// keyring 3.6.3 删除方法：`entry.delete_credential()`；
+    /// `NoEntry` 错误视为成功（凭据已不存在，幂等）。
+    fn delete_secret(&self, provider_id: &str, field_key: &str) -> Result<(), CredError> {
+        let account = keychain_account(provider_id, field_key);
+        let entry = keyring::Entry::new("io.quickquick.app", &account)
+            .map_err(|e| CredError::Keychain(e.to_string()))?;
+        match entry.delete_credential() {
+            Ok(()) => Ok(()),
+            Err(keyring::Error::NoEntry) => Ok(()),
             Err(e) => Err(CredError::Keychain(e.to_string())),
         }
     }
@@ -217,6 +233,37 @@ pub fn load_credentials(
     Ok(result)
 }
 
+/// 删除 provider 全部已保存凭据（store + DB 均清）。
+///
+/// 按 schema 遍历：is_secret 字段调 `store.delete_secret`；非密字段 DELETE FROM DB。
+/// 幂等——字段不存在也不报错。
+///
+/// # Errors
+/// - `CredError::UnknownProvider`：provider_id 不在任何已知 schema 中
+/// - `CredError::Keychain`：store 删除失败（NoEntry 已在 store 层视为成功）
+/// - `CredError::Db`：SQL 执行失败
+pub fn delete_credentials(
+    provider_id: &str,
+    store: &dyn CredStore,
+    conn: &Connection,
+) -> Result<(), CredError> {
+    let schema = credential_schema(provider_id);
+
+    if schema.is_empty() {
+        return Err(CredError::UnknownProvider(provider_id.to_string()));
+    }
+
+    for field in &schema {
+        if field.is_secret {
+            store.delete_secret(provider_id, field.key)?;
+        } else {
+            delete_from_db(conn, provider_id, field.key)?;
+        }
+    }
+
+    Ok(())
+}
+
 /// 将非密字段写入加密 DB（UPSERT 语义）。
 fn write_to_db(
     conn: &Connection,
@@ -246,6 +293,19 @@ fn read_from_db(
         |row| row.get(0),
     )
     .optional()
+}
+
+/// 从加密 DB 删除非密字段（幂等，不存在时不报错）。
+fn delete_from_db(
+    conn: &Connection,
+    provider_id: &str,
+    field_key: &str,
+) -> Result<(), rusqlite::Error> {
+    conn.execute(
+        "DELETE FROM provider_config WHERE provider_id = ?1 AND field_key = ?2",
+        rusqlite::params![provider_id, field_key],
+    )?;
+    Ok(())
 }
 
 /// 构造 keychain account 名：`cred.<provider_id>.<field_key>`
@@ -283,11 +343,107 @@ impl CredStore for MockCredStore {
         let key = format!("{provider_id}.{field_key}");
         Ok(self.store.lock().unwrap().get(&key).cloned())
     }
+
+    fn delete_secret(&self, provider_id: &str, field_key: &str) -> Result<(), CredError> {
+        let key = format!("{provider_id}.{field_key}");
+        self.store.lock().unwrap().remove(&key);
+        Ok(())
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn make_test_db() -> rusqlite::Connection {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS provider_config (
+                provider_id  TEXT NOT NULL,
+                field_key    TEXT NOT NULL,
+                value        TEXT NOT NULL,
+                PRIMARY KEY (provider_id, field_key)
+            );",
+        )
+        .unwrap();
+        conn
+    }
+
+    #[test]
+    fn delete_credentials_removes_secret_from_store() {
+        let store = MockCredStore::new();
+        let conn = make_test_db();
+        store
+            .set_secret("baidu", "secret_key", "supersecret")
+            .unwrap();
+        assert!(store.get_secret("baidu", "secret_key").unwrap().is_some());
+
+        delete_credentials("baidu", &store, &conn).unwrap();
+
+        assert!(
+            store.get_secret("baidu", "secret_key").unwrap().is_none(),
+            "删除后 secret 应从 store 移除"
+        );
+    }
+
+    #[test]
+    fn delete_credentials_removes_non_secret_from_db() {
+        let store = MockCredStore::new();
+        let conn = make_test_db();
+        write_to_db(&conn, "baidu", "app_id", "my_app_id").unwrap();
+        assert!(read_from_db(&conn, "baidu", "app_id").unwrap().is_some());
+
+        delete_credentials("baidu", &store, &conn).unwrap();
+
+        assert!(
+            read_from_db(&conn, "baidu", "app_id").unwrap().is_none(),
+            "删除后非密字段应从 DB 移除"
+        );
+    }
+
+    #[test]
+    fn delete_credentials_is_idempotent_when_nothing_stored() {
+        let store = MockCredStore::new();
+        let conn = make_test_db();
+
+        let result = delete_credentials("baidu", &store, &conn);
+        assert!(result.is_ok(), "删除不存在的凭据应成功（幂等）: {result:?}");
+    }
+
+    #[test]
+    fn delete_credentials_unknown_provider_returns_err() {
+        let store = MockCredStore::new();
+        let conn = make_test_db();
+
+        let result = delete_credentials("unknown_provider", &store, &conn);
+        assert!(result.is_err(), "未知 provider 应返回 Err");
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("未知 provider"),
+            "错误信息应含未知 provider：{err_msg}"
+        );
+    }
+
+    #[test]
+    fn delete_secret_mock_removes_key() {
+        let store = MockCredStore::new();
+        store.set_secret("baidu", "secret_key", "val").unwrap();
+        store.delete_secret("baidu", "secret_key").unwrap();
+        assert!(
+            store.get_secret("baidu", "secret_key").unwrap().is_none(),
+            "delete_secret 后应取不到值"
+        );
+    }
+
+    #[test]
+    fn delete_secret_mock_nonexistent_is_ok() {
+        let store = MockCredStore::new();
+        let result = store.delete_secret("baidu", "nonexistent_key");
+        assert!(
+            result.is_ok(),
+            "删除不存在的 key 应视为成功（幂等）: {result:?}"
+        );
+    }
 
     #[test]
     fn credential_schema_baidu_fields_count_is_two() {

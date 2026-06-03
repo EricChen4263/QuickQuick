@@ -455,6 +455,22 @@ export async function setProviderCredentials(
   }
 }
 
+/**
+ * 清除指定 Provider 的所有已保存凭据（keychain + DB 均清）。
+ *
+ * 幂等——凭据不存在时也不报错。
+ * 成功后后端会 emit provider-config-changed 事件使翻译页刷新状态。
+ *
+ * @param providerId - Provider ID
+ */
+export async function deleteProviderCredentials(providerId: string): Promise<void> {
+  try {
+    await invoke<void>("delete_provider_credentials", { providerId });
+  } catch (err) {
+    throw toError(err);
+  }
+}
+
 /** 检查更新结果，与 Rust CheckUpdateResult（camelCase）对齐。 */
 export interface CheckUpdateResult {
   /** 是否有可用新版本 */

@@ -5,14 +5,20 @@ import userEvent from "@testing-library/user-event";
 vi.mock("../../ipc/ipc-client", () => ({
   getProviderCredentials: vi.fn(),
   setProviderCredentials: vi.fn(),
+  deleteProviderCredentials: vi.fn(),
 }));
 
-import { getProviderCredentials, setProviderCredentials } from "../../ipc/ipc-client";
+import {
+  getProviderCredentials,
+  setProviderCredentials,
+  deleteProviderCredentials,
+} from "../../ipc/ipc-client";
 import type { CredentialField, CredentialValue } from "../../ipc/ipc-client";
 import CredentialForm from "./CredentialForm";
 
 const mockGetProviderCredentials = vi.mocked(getProviderCredentials);
 const mockSetProviderCredentials = vi.mocked(setProviderCredentials);
+const mockDeleteProviderCredentials = vi.mocked(deleteProviderCredentials);
 
 const BAIDU_SCHEMA: CredentialField[] = [
   { key: "appId", label: "App ID", isSecret: false, required: true },
@@ -33,6 +39,8 @@ beforeEach(() => {
   vi.clearAllMocks();
   mockGetProviderCredentials.mockResolvedValue(EMPTY_CREDENTIALS);
   mockSetProviderCredentials.mockResolvedValue(undefined);
+  mockDeleteProviderCredentials.mockResolvedValue(undefined);
+  vi.spyOn(window, "confirm").mockReturnValue(true);
 });
 
 describe("CredentialForm", () => {
@@ -159,6 +167,142 @@ describe("CredentialForm", () => {
 
     await user.type(screen.getByLabelText("App ID"), "test-id");
     await user.click(screen.getByRole("button", { name: "保存" }));
+
+    await waitFor(() => {
+      expect(screen.getByRole("alert")).toBeInTheDocument();
+    });
+  });
+});
+
+describe("CredentialForm - isConfigured prop", () => {
+  it("isConfigured=true 时显示清除按钮", async () => {
+    render(
+      <CredentialForm
+        providerId="baidu"
+        schema={BAIDU_SCHEMA}
+        onSaved={vi.fn()}
+        isConfigured={true}
+      />
+    );
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /清除/ })).toBeInTheDocument();
+    });
+  });
+
+  it("isConfigured=true 时显示已配置提示文字", async () => {
+    render(
+      <CredentialForm
+        providerId="baidu"
+        schema={BAIDU_SCHEMA}
+        onSaved={vi.fn()}
+        isConfigured={true}
+      />
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText(/已配置/)).toBeInTheDocument();
+    });
+  });
+
+  it("isConfigured=false 时不显示清除按钮", async () => {
+    render(
+      <CredentialForm
+        providerId="baidu"
+        schema={BAIDU_SCHEMA}
+        onSaved={vi.fn()}
+        isConfigured={false}
+      />
+    );
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("App ID")).toBeInTheDocument();
+    });
+
+    expect(screen.queryByRole("button", { name: /清除/ })).not.toBeInTheDocument();
+  });
+
+  it("isConfigured 默认值（undefined）不显示清除按钮", async () => {
+    render(
+      <CredentialForm
+        providerId="baidu"
+        schema={BAIDU_SCHEMA}
+        onSaved={vi.fn()}
+      />
+    );
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("App ID")).toBeInTheDocument();
+    });
+
+    expect(screen.queryByRole("button", { name: /清除/ })).not.toBeInTheDocument();
+  });
+
+  it("点击清除并确认后调 deleteProviderCredentials 且调 onSaved", async () => {
+    const user = userEvent.setup();
+    const onSaved = vi.fn();
+
+    render(
+      <CredentialForm
+        providerId="baidu"
+        schema={BAIDU_SCHEMA}
+        onSaved={onSaved}
+        isConfigured={true}
+      />
+    );
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /清除/ })).toBeInTheDocument();
+    });
+
+    await user.click(screen.getByRole("button", { name: /清除/ }));
+
+    await waitFor(() => {
+      expect(mockDeleteProviderCredentials).toHaveBeenCalledWith("baidu");
+      expect(onSaved).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("点击清除但取消确认时不调 deleteProviderCredentials", async () => {
+    const user = userEvent.setup();
+    vi.spyOn(window, "confirm").mockReturnValue(false);
+
+    render(
+      <CredentialForm
+        providerId="baidu"
+        schema={BAIDU_SCHEMA}
+        onSaved={vi.fn()}
+        isConfigured={true}
+      />
+    );
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /清除/ })).toBeInTheDocument();
+    });
+
+    await user.click(screen.getByRole("button", { name: /清除/ }));
+
+    expect(mockDeleteProviderCredentials).not.toHaveBeenCalled();
+  });
+
+  it("清除失败时显示错误提示（role=alert）", async () => {
+    const user = userEvent.setup();
+    mockDeleteProviderCredentials.mockRejectedValue(new Error("清除失败"));
+
+    render(
+      <CredentialForm
+        providerId="baidu"
+        schema={BAIDU_SCHEMA}
+        onSaved={vi.fn()}
+        isConfigured={true}
+      />
+    );
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /清除/ })).toBeInTheDocument();
+    });
+
+    await user.click(screen.getByRole("button", { name: /清除/ }));
 
     await waitFor(() => {
       expect(screen.getByRole("alert")).toBeInTheDocument();
