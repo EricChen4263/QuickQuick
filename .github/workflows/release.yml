@@ -47,7 +47,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22        # pnpm 11 要求 Node ≥22.13（用到 node:sqlite 内建），20 会崩
           cache: pnpm
 
       - uses: dtolnay/rust-toolchain@stable
