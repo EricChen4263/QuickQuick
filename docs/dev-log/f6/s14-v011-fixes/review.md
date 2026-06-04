@@ -170,3 +170,57 @@ author: code-reviewer
 **VERDICT: APPROVE**
 
 无置信度 ≥80 的 Critical 或 Important 问题。一条置信度 70 的 Important 观察（测试 mock 漏添导致 stderr 噪音）供后续跟进，不阻塞。
+
+---
+
+## B 二次修正复审（NSWindow 重定位）
+
+**复审时间**：2026-06-05
+**改动范围**：
+- `src-tauri/src/lib.rs`：新增 `traffic_light_logical_position()` + `reposition_traffic_lights()`（macOS）+ no-op（非 macOS）；`setup_main_window_behavior` 接线调用
+- `src-tauri/Cargo.toml`：objc2-app-kit 加 NSWindow/NSView/NSControl/NSButton feature；objc2-foundation 加 NSGeometry feature
+- `src-tauri/tauri.conf.json`：`trafficLightPosition` y 13→12（与 NSWindow 重定位值对齐，作 fallback）
+- `src/theme/components.css`：`.qq-titlebar` padding-left 76→96px；font-size 13→15px
+
+### unsafe 安全性（通过）
+
+`ns_window()` 返回 `Result<*mut c_void, _>`，`let Ok(ns_window_ptr)` 排除 Err。tauri 的 `ns_window()` 在 OK 路径保证指针非 null（窗口存活期内），转为 `&NSWindow` 不会 null deref。内联注释 `// ns_window() 返回的指针在窗口存活期间有效` 已标注生命周期前提，调用点在 setup（窗口刚创建、立即存活），生命周期假设成立。`close.superview()` 已包裹在 `unsafe {}` 块内，返回 `Option` 用 `let Some(...)` 处理，不 panic。**通过**。
+
+### 坐标换算正确性（通过）
+
+NSView 使用左下原点（非翻转坐标系）；`new_y = container_height - y - frame.size.height` 将"距顶 y"正确转换为左下原点的 origin.y。`base_x = close.frame().origin.x` 取最左按钮基准，`new_x = x + (frame.origin.x - base_x)` 对 close 按钮 delta=0，对 miniaturize/zoom 保持原相对间距整体平移，不改变三颗按钮间距。container 是 close 的 superview（NSTitlebarContainerView），三颗按钮共享同一 superview，height 取值合理。数学正确。**通过**。
+
+### 健壮性（通过）
+
+全部失败路径均 early return 不 panic：ns_window 失败 → eprintln + return；close 按钮 None → return；superview None → return；循环内单颗按钮 None → continue。`setFrameOrigin` 无返回值，正确忽略。**通过**。
+
+### cfg 对称（通过）
+
+`#[cfg(target_os = "macos")]` 实现 + `#[cfg(not(target_os = "macos"))]` no-op，函数签名完全一致；调用点用 `#[cfg(target_os = "macos")]` 守卫，非 macOS 编译路径干净。Cargo.toml 新增 feature 为 NSWindow/NSView/NSControl/NSButton（按钮类型链）+ NSGeometry（NSPoint/NSRect），最小必要。**通过**。
+
+### 重定位时机（通过，已知前提）
+
+在 `setup_main_window_behavior`（窗口 visible:false 阶段）调用一次。用户本地 release 实测已确认按钮位置正确、AppKit 在 show 时未重排覆盖——此为已验证的可接受前提，注释已说明 config 失效原因及 NSWindow 直接重定位的理由。**通过（依赖实测确认）**。
+
+### 函数长度与规范（通过）
+
+- `traffic_light_logical_position`：1 行体，纯函数便于单测。
+- `reposition_traffic_lights`（macOS）：函数体约 37 行，远 ≤ 50 行。
+- 注释均写"为什么"（tafficLightPosition 在隐藏窗口失效的根因、坐标系说明、base_x 间距保持语义）；无装饰注释；命名为动词+名词。**通过**。
+
+### CSS 改动（通过）
+
+- `padding-left 76→96px`：注释说明原因（76px 时绿灯紧贴"QuickQuick"）。合理。
+- `font-size 13→15px`：纯视觉调整，无逻辑影响。**通过**。
+
+### 问题列表
+
+**无置信度 ≥80 的 Critical 或 Important 问题。**
+
+---
+
+**B 二次修正复审结论：通过（APPROVE）。**
+
+NSWindow 直接重定位方案各核查项全部通过：unsafe 生命周期前提有注释且成立、坐标翻转公式正确、全路径健壮无 panic、cfg 对称、函数规范。CSS 调整合理。无置信度 ≥80 的阻塞问题。
+
+**VERDICT: APPROVE**

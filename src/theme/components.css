@@ -22,15 +22,16 @@
 }
 
 /* 自绘标题栏：macOS Overlay 模式下替代系统标题栏
-   左侧 padding-left 76px 为系统红绿灯留出空间，整条可拖拽移窗 */
+   左侧 padding-left 96px 为系统红绿灯留出空间并在其右侧留清晰间隙
+   （76px 时绿灯紧贴「QuickQuick」），整条可拖拽移窗 */
 .qq-titlebar {
   height: 38px;
   display: flex;
   align-items: center;
-  padding: 0 16px 0 76px;
+  padding: 0 16px 0 96px;
   border-bottom: 1px solid var(--border);
   background: var(--surface);
-  font-size: 13px;
+  font-size: 15px;
   font-weight: 600;
   letter-spacing: -0.01em;
   color: var(--fg);
@@ -183,12 +184,20 @@
   height: 15px;
 }
 
-.btn:hover {
+.btn:hover:not(:disabled) {
   background: var(--hover);
 }
 
-.btn:active {
+.btn:active:not(:disabled) {
   transform: translateY(1px);
+}
+
+/* 禁用态：需与可点击态有明显视觉区分，让用户看出按钮不可点击（如翻译进行中）。
+   用 opacity 置灰天然跨深色/浅色主题；hover/active 一律 :not(:disabled)，
+   禁用按钮不应给出任何悬停反馈，避免误导用户它仍可点。 */
+.btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 /* 主操作按钮：accent 填充色，白色文字 */
@@ -198,7 +207,7 @@
   color: white;
 }
 
-.btn-primary:hover {
+.btn-primary:hover:not(:disabled) {
   background: color-mix(in oklch, var(--accent) 88%, black);
 }
 
@@ -208,7 +217,7 @@
   background: transparent;
 }
 
-.btn-ghost:hover {
+.btn-ghost:hover:not(:disabled) {
   background: var(--hover);
 }
 

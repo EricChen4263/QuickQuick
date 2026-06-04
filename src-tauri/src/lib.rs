@@ -491,6 +491,69 @@ fn init_capture_state(app: &tauri::App) -> CaptureState {
     }
 }
 
+/// 主窗口红绿灯（交通灯）按钮的逻辑坐标 (x, y)。
+///
+/// 自绘标题栏 `.qq-titlebar` 高 38px，macOS 红绿灯按钮约 14px。
+/// - x=18：接近标题栏左缩进，不与「QuickQuick」文字重叠。
+/// - y=12：几何居中为 (38-14)/2=12，按钮中线 ≈ 12+7=19 正对栏中线 19，与标题文字中线对齐。
+///   （config 字段在隐藏窗口上常失效，故由 NSWindow 重定位兜底，不依赖 config。）
+///
+/// 抽成纯函数便于单测，定位副作用由 [`reposition_traffic_lights`] 在 macOS 守卫下执行。
+pub fn traffic_light_logical_position() -> (f64, f64) {
+    (18.0, 12.0)
+}
+
+/// macOS：把 NSWindow 的三颗红绿灯按钮整体移到 [`traffic_light_logical_position`] 给定位置。
+///
+/// 为何不用 tauri 的 `trafficLightPosition` config：该值在 `visible:false` 初始隐藏窗口上
+/// 常被忽略（实测按钮偏高未居中）。这里直接拿底层 NSWindow 重设按钮 frame，可靠生效。
+///
+/// 坐标系：标题栏 superview 用左下原点（未翻转），(x, y) 以「距左、距顶」语义给出，
+/// 故按钮 origin.y = 容器高 - y - 按钮高。三颗按钮保持原间距，整体平移、不改尺寸。
+/// 任一句柄缺失（无 NSWindow / 无按钮 / 无 superview）则跳过、不 panic。
+#[cfg(target_os = "macos")]
+fn reposition_traffic_lights(window: &tauri::WebviewWindow) {
+    use objc2_app_kit::{NSWindow, NSWindowButton};
+    use objc2_foundation::NSPoint;
+
+    let Ok(ns_window_ptr) = window.ns_window() else {
+        eprintln!("重定位红绿灯：取 NSWindow 失败");
+        return;
+    };
+    // ns_window() 返回的指针在窗口存活期间有效；转成 NSWindow 引用读取标准按钮。
+    let ns_window: &NSWindow = unsafe { &*(ns_window_ptr as *const NSWindow) };
+
+    let buttons = [
+        NSWindowButton::CloseButton,
+        NSWindowButton::MiniaturizeButton,
+        NSWindowButton::ZoomButton,
+    ];
+    let Some(close) = ns_window.standardWindowButton(buttons[0]) else {
+        return;
+    };
+    let Some(container) = (unsafe { close.superview() }) else {
+        return;
+    };
+
+    let (x, y) = traffic_light_logical_position();
+    let container_height = container.frame().size.height;
+    // 以最左的关闭按钮 origin.x 为基准，保持三颗按钮的相对间距整体平移。
+    let base_x = close.frame().origin.x;
+    for button_id in buttons {
+        let Some(button) = ns_window.standardWindowButton(button_id) else {
+            continue;
+        };
+        let frame = button.frame();
+        let new_x = x + (frame.origin.x - base_x);
+        let new_y = container_height - y - frame.size.height;
+        button.setFrameOrigin(NSPoint::new(new_x, new_y));
+    }
+}
+
+/// 非 macOS：无红绿灯按钮，no-op；保留签名让 setup 通用、cfg 对称。
+#[cfg(not(target_os = "macos"))]
+fn reposition_traffic_lights(_window: &tauri::WebviewWindow) {}
+
 /// 监听主窗口失焦与关闭请求事件：
 /// - 失焦（`Focused(false)`）：`stay_in_tray == true` 时隐藏窗口，否则退出应用。
 /// - 关闭按钮（`CloseRequested`）：`stay_in_tray == true` 时拦截并隐藏到后台，
@@ -506,6 +569,11 @@ fn setup_main_window_behavior(
     let Some(window) = app.get_webview_window("main") else {
         return Ok(());
     };
+
+    // 红绿灯定位：config 的 trafficLightPosition 在 visible:false 初始隐藏窗口上常被忽略，
+    // 故直接操作底层 NSWindow 显式重定位。失败不致命，仅记录后继续。
+    #[cfg(target_os = "macos")]
+    reposition_traffic_lights(&window);
 
     let win = window.clone();
     window.on_window_event(move |event| match event {

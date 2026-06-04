@@ -51,14 +51,22 @@ objc2-app-kit = { version = "0.3", features = [
     "NSResponder",
     "NSWorkspace",
     "NSRunningApplication",
+    # 红绿灯（交通灯）按钮重定位：需 NSWindow.standardWindowButton 取按钮，
+    # NSView 的 frame/setFrameOrigin 移动；NSButton/NSControl 为按钮类型链。
+    "NSWindow",
+    "NSView",
+    "NSControl",
+    "NSButton",
 ] }
 # NSWorkspace 通知中心走 block 形式注册观察者（addObserverForName:object:queue:usingBlock:），
-# 需 objc2-foundation 提供 NSNotification/NSDictionary/NSString，block2 提供 RcBlock。
+# 需 objc2-foundation 提供 NSNotification/NSDictionary/NSString，block2 提供 RcBlock；
+# NSGeometry 提供 NSPoint/NSRect 用于读写按钮 frame。
 objc2-foundation = { version = "0.3", features = [
     "NSNotification",
     "NSDictionary",
     "NSString",
     "NSValue",
+    "NSGeometry",
 ] }
 block2 = "0.6"
 
