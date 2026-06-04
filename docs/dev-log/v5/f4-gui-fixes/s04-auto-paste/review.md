@@ -5,8 +5,8 @@ level: 小功能
 parent: V5-F4
 children: []
 created: 2026-06-02T00:00:00Z
-status: 未过
-commit: 143ff71
+status: 通过
+commit: 001ccd8
 acceptance_ids: [V5-F4-S04-9a, V5-F4-S04-9b]
 author: code-reviewer
 ---
@@ -122,3 +122,18 @@ macOS 生产路径绕过这一保证，在写入尚未被 OS 接受时就发 Cmd
 3. **[I-03]（中）`MacOsPasteBackend::new()` 在命令路径中 expect panic**——应改为 Result 返回并降级
 
 FFI 安全包装、cfg 分流、非 mac 降级、CGEvent 事件配对均无问题。
+
+---
+
+## 复审（commit 001ccd8）
+
+高危收口修复 commit 为 `001ccd8`（fix(paste): 自动粘贴 review 高危收口）；原始实现 commit 为 `143ff71`/`de538d9`。
+
+| 初审问题 | 修复（已核实位置 文件:行号） |
+|---|---|
+| I-01：macOS trusted 路径绕过 A15 changeCount 轮询，可能在写入未生效时盲发 Cmd+V | 已修复。`src-tauri/src/ipc/system.rs` 约 266-282 行：trusted 分支改为 `paste::write_and_confirm(&mut backend, item)` 确认写入（内部调用 `wait_for_count_increase` 轮询 changeCount，超时返回 Err）→ 成功后 `hide_panel_and_wait(app)` → `backend.send_paste()`；Err 时返回 `"write_back_only".to_string()`，不盲发。`paste.rs` 新增 `write_and_confirm` 函数（约 92-107 行），模块注释明确描述 A15 保证。 |
+| I-02：paste_to_front_impl 死代码，pub 暴露且注释描述与实现不符 | 已修复。`src-tauri/src/ipc/system.rs` 中 `paste_to_front_impl` 已删除（grep 无输出确认）。 |
+| I-03：MacOsPasteBackend::new() 及 FallbackPasteBackend::new() 在命令路径中 expect panic | 已修复。`src-tauri/src/macos_paste.rs` 约 78、187 行：两个 `new()` 均改为 `Result<Self, String>` 返回；`run_paste_with_backend`（system.rs 约 258-265 行）对 `Err` 走 `eprintln` + 返回 `"write_back_only".to_string()`，优雅降级。 |
+| L-01（建议）：objc2-foundation 冗余依赖 | 已处理。commit 001ccd8 的 Cargo.toml diff 中删除了 `objc2-foundation` 依赖。 |
+
+终态：通过

@@ -5,8 +5,8 @@ level: 小功能
 parent: V5-F2
 children: []
 created: 2026-06-01T15:00:00Z
-status: 未过
-commit: WIP
+status: 通过
+commit: 8432186
 acceptance_ids: []
 evidence: []
 author: code-reviewer
@@ -247,3 +247,17 @@ return mediaQuery?.matches ? "dark" : "light";
 **未过——3 项 Important 需修复后方可通过。**
 
 代码整体质量较高：类型系统严格（tsc 零错误）、禁 any 彻底、无死代码、FOUC 脚本与 store 逻辑完全一致、compat alias 覆盖完整（9/9 无遗漏）、subscribe/unsubscribe 无泄漏、测试结构清晰（AAA）。3 项 Important 均为小改动（inline→class 迁移 + 1行删除 + 1行守卫），改完后可直接通过，无需重新完整审查，复审只核对三项修复点即可。
+
+---
+
+## 复审（commit 8432186）
+
+逐条核实首轮必改项在 commit `8432186`（feat(ui): 设计系统底座+应用外壳，里程碑1）中的落实情况。
+
+| 初审问题 | 修复（已核实位置） | 结论 |
+|---|---|---|
+| M1：`AppShell.tsx:19` inline style `display:grid/gridTemplateColumns/height:100vh` 应移入 `.qq-main` CSS class | `src/shell/AppShell.tsx` 中 `<div className="qq-main">` 无任何 style prop；`src/theme/components.css:8-14` 的 `.qq-main` 规则已含 `display: grid`、`grid-template-columns: 92px 1fr`、`height: 100vh` | 已修复 |
+| M2：`SideBar.tsx:66` spacer div 冗余 `style={{ flex: 1 }}` 应删除 | `src/shell/SideBar.tsx` spacer 行为 `<div className="spacer" />`，无 style prop | 已修复 |
+| M3：`themeStore.ts` `init()` 缺少 `typeof window === "undefined"` 早返回守卫 | `src/theme/themeStore.ts:87` 首行为 `if (typeof window === "undefined") return;`，守卫已加；第 91 行也已简化为 `if (window.matchMedia)`，去除冗余 typeof 检查 | 已修复 |
+
+终态：通过

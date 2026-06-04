@@ -5,8 +5,8 @@ level: 小功能
 parent: V5-F1
 children: []
 created: 2026-06-01T00:00:00Z
-status: 未过
-commit: WIP
+status: 通过
+commit: 977d361
 acceptance_ids: []
 author: code-reviewer
 ---
@@ -112,3 +112,14 @@ T3：空字节触发 make_thumbnail 失败，SAVEPOINT ROLLBACK，clip_items/cli
 ### 建议改项（不强制阻断，但建议本阶段一并处理）
 
 **S1（对应 Important）**：为孤立行场景增加 T4 测试；在 `Bumped` 分支匹配处补写解释注释。
+
+---
+
+## 复审（commit 977d361）
+
+| 初审问题 | 修复（已核实位置 文件:行号） |
+|---|---|
+| M1 Critical：UPDATE clip_images SET clip_item_id 脱离 SAVEPOINT 保护，可能产生半关联孤立数据 | 已修复。UPDATE 移入 `try_insert_image_clip` 函数体内（`src-tauri/src/db.rs` 约 664-671 行），在 RELEASE SAVEPOINT 之前执行，三步写操作（INSERT clip_items + ingest_image_with_policy + UPDATE clip_images）全部在 SAVEPOINT 保护内。doc-comment 第 c/d 步顺序亦已对调（c=UPDATE，d=RELEASE）。 |
+| S1 Important（建议）：孤立行场景缺 T4 测试，Bumped 分支缺解释注释 | 已处理。T4 测试新增于 `src-tauri/src/db.rs` 约 1052-1105 行；Bumped 分支补写注释"Bumped 命中孤立行时返回旧 image_id，UPDATE 将其关联到本次新建的 item_id"（约 659 行）。 |
+
+终态：通过

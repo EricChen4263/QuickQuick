@@ -5,8 +5,8 @@ level: 小功能
 parent: V5-F1
 children: []
 created: 2026-06-01T10:00:00Z
-status: 未过
-commit: WIP
+status: 通过
+commit: 977d361
 acceptance_ids: []
 author: code-reviewer
 ---
@@ -152,3 +152,13 @@ Some(bytes) if !bytes.is_empty() => {
 }
 Some(_) => Ok(None),  // 降级图（original_present=0），original 为空 BLOB
 ```
+
+---
+
+## 复审（commit 977d361）
+
+| 初审问题 | 修复（已核实位置 文件:行号） |
+|---|---|
+| M1 Critical：get_clip_image_original_impl 对降级图（original_present=0，空 BLOB）返回语义错误的空 data URL | 已修复（备选方案）。`src-tauri/src/ipc/clipboard.rs` 约 151-157 行：`Some(bytes)` 分支加 `if !bytes.is_empty()` 守卫（`Some(bytes) if !bytes.is_empty() => { ... }`），空 BLOB 与 `None` 均走 `_ => Ok(None)` 分支，注释说明"None 或空 BLOB（降级图 original_present=0 时写入 X''）均视为无原图，前端回退缩略图"。 |
+
+终态：通过

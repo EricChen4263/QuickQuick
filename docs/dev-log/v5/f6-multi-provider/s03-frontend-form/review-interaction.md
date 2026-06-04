@@ -5,7 +5,7 @@ level: 小功能
 parent: V5-F6-S03
 children: []
 created: 2026-06-03T05:30:00Z
-status: 未过
+status: 通过
 commit: e838919
 acceptance_ids: []
 author: code-reviewer
@@ -136,3 +136,15 @@ settings.css 新增规则引用的所有 CSS 变量逐一核对 `src/theme/token
 `handleSelect` 第 202 行 `setExpandedId(id)` 与本次改动的核心设计目标（选中不展开）直接矛盾，且导致测试 `TranslateSourcePanel.test.tsx` 中验证解耦行为的 2 条用例必然失败。必须删除该行后重新提交。
 
 其余部分（`handleToggleConfigure` 解耦结构、isMounted 修复、CSS 变量全部存在、a11y、无 any、测试设计）均审查通过，无其他阻断项。
+
+---
+
+## 复审（commit e838919）
+
+初审判定 **打回（1 Critical）**：`handleSelect` 内 `setExpandedId(id)` 破坏「选中不展开」解耦。该项已在同一 commit `e838919`（message：「多翻译源端到端接通——动态路由+凭据配置+**解耦交互**」）的提交态内修复，复审核实在已提交代码内：
+
+| 项 | 初审问题 | 修复（已核实位置） |
+|---|---|---|
+| Critical | `handleSelect` 调 `setExpandedId(id)`，选中即展开，与解耦目标矛盾，2 条解耦测试必败 | `src/panels/settings/TranslateSourcePanel.tsx:197-205` `handleSelect` 仅 `setSelectedProvider`/`setSelectedId`/`setOpError`，无 `setExpandedId`；展开逻辑独立在 `handleToggleConfigure`（:208）。e838919 提交态已核实无该行（文件后由 translate/ 迁至 settings/，逻辑不变）。 |
+
+终态：**通过**。

@@ -5,8 +5,8 @@ level: 小功能
 parent: V5-F2
 children: []
 created: 2026-06-01T17:30:00Z
-status: 未过
-commit: WIP
+status: 通过
+commit: ae0227b
 acceptance_ids: []
 evidence: []
 author: code-reviewer
@@ -204,3 +204,17 @@ author: code-reviewer
 - `ProviderCard` 考虑改为 `<label>` 包裹 radio 的无障碍标准做法
 
 **合格项**（无需改动）：行为契约完整保持、待接 toggle 抽象质量高、测试演进断言非恒真、CSS token 迁移彻底、代码无 any/装饰注释/TODO 残留、所有主要图标 aria-hidden 覆盖。
+
+---
+
+## 复审（commit ae0227b）
+
+逐条核实首轮必改项在 commit `ae0227b`（feat(ui): 主窗三页视觉重塑，里程碑2）中的落实情况。
+
+| 初审问题 | 修复（已核实位置） | 结论 |
+|---|---|---|
+| 必改项1：`TranslateHistoryPanel` `button[role="option"]` 缺 listbox 父容器，`aria-selected` 硬编码 false | `src/panels/translate/TranslateHistoryPanel.tsx`：`.tx-hist-list` 改为 `<div role="listbox" aria-label="翻译历史列表">`；组件内新增 `selectedId` state；`aria-selected={item.id === selectedId}` 动态绑定；`handleSelect` 同时更新 `selectedId` 并调用 `onSelectItem` | 已修复 |
+| 必改项2：`HotkeyPanel` HotkeyRow inline style（布局容器 flexDirection column、input width/padding/border）应迁移至 CSS class | `src/panels/settings/HotkeyPanel.tsx`：HotkeyRow 容器改用 `className="set-row column"`；input 改用 `className="set-input"`；save 按钮改用 `className="btn"`；错误提示改用 `className="hotkey-error"`；无残留 inline style | 已修复 |
+| 必改项3：`PrivacyPanel` input inline style 与 HotkeyPanel 重复，需抽为共享 CSS class | `src/panels/settings/PrivacyPanel.tsx`：排除名单 input 改用 `className="set-input"`；添加按钮改用 `className="btn"`；无残留 inline style；与 HotkeyPanel 共用同一 CSS class | 已修复 |
+
+终态：通过
