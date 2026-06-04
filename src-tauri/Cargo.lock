@@ -3162,7 +3162,7 @@ dependencies = [
 
 [[package]]
 name = "quickquick"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "aes-gcm",
  "arboard",

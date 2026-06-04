@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "QuickQuick",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "identifier": "com.quickquick.app",
   "build": {
     "frontendDist": "../dist",
@@ -32,6 +32,7 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "createUpdaterArtifacts": true,
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -42,9 +43,9 @@
   },
   "plugins": {
     "updater": {
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXkKUldTUGhkZFBPZUZDQXZmTVVaZFhUOHZZN3RUNkVOQlhSZFdNWFhnYVBGRlZIczlvRFhBQVBhOUQK",
+      "pubkey": "ZFc1MGNuVnpkR1ZrSUdOdmJXMWxiblE2SUcxcGJtbHphV2R1SUhCMVlteHBZeUJyWlhrNklESTFRMFJFTUVZeVFVTkdNRE5HUWtNS1VsZFRPRkF2UTNNNGRFUk9TbVJvT1ZWdU1XdDVia2t4VFdkS2JWaGphV3h1UzJ0cWRXaFlSa3czUm1RclNqWTFWR041YmpOS01XVUs=",
       "endpoints": [
-        "https://placeholder.example.com/quickquick/{{target}}/{{arch}}/{{current_version}}"
+        "https://github.com/EricChen4263/QuickQuick/releases/latest/download/latest.json"
       ]
     }
   }
