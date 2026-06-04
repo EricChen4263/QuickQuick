@@ -6,8 +6,6 @@ import DirBar from "./DirBar";
 const ACTION_LABELS: Record<string, string> = {
   copy: "复制",
   speak: "朗读",
-  switch_target: "切换目标语",
-  switch_source_retranslate: "换源重译",
   // save_history 已自动写入，展示"刷新历史"语义由父组件处理，此处禁用
   save_history: "刷新历史",
 };
@@ -130,22 +128,6 @@ function TranslateWorkspace({
                     </button>
                   );
                 })}
-            </div>
-
-            <div className="dict-slot" aria-label="词典区">
-              <svg
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="1.7"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                aria-hidden="true"
-              >
-                <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" />
-                <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" />
-              </svg>
-              词典区位置预留 —— 单词查询时显示音标 / 词性 / 例句（fast-follow）
             </div>
           </div>
         )}

@@ -3,17 +3,12 @@
 // 职责：定义译文操作类型，并提供纯函数建模操作解析。
 // UI 命令字符串 → TranslateAction 的映射关系集中在此，便于测试和复用。
 
-/** 译文操作枚举：一键复制 / 朗读 / 切目标语 / 换源重译 / 存翻译历史 */
-export type TranslateAction =
-  | "copy"
-  | "speak"
-  | "switch_target"
-  | "switch_source_retranslate"
-  | "save_history";
+/** 译文操作枚举：一键复制 / 朗读 / 存翻译历史 */
+export type TranslateAction = "copy" | "speak" | "save_history";
 
 /** 全部可用操作的有序列表（用于 UI 渲染和操作完整性断言）。 */
 export function availableActions(): TranslateAction[] {
-  return ["copy", "speak", "switch_target", "switch_source_retranslate", "save_history"];
+  return ["copy", "speak", "save_history"];
 }
 
 /**

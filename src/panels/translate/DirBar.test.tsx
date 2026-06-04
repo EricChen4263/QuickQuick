@@ -16,325 +16,176 @@ const PROVIDERS_WITH_NEEDS_KEY: Provider[] = [
   { id: "deepl-free", name: "DeepL Free", needsKey: true },
 ];
 
+/** 默认 props 工厂：减少各用例重复装配 onXxx mock */
+function renderDirBar(overrides: Partial<React.ComponentProps<typeof DirBar>> = {}) {
+  const props = {
+    sourceLang: "auto",
+    targetLang: "zh",
+    providers: MOCK_PROVIDERS,
+    selectedProviderId: "mymemory",
+    onProviderChange: vi.fn(),
+    onSourceChange: vi.fn(),
+    onTargetChange: vi.fn(),
+    ...overrides,
+  };
+  render(<DirBar {...props} />);
+  return props;
+}
+
 describe("DirBar", () => {
-  it("渲染源语和目标语两个 select", () => {
-    const onProviderChange = vi.fn();
-    const onSourceChange = vi.fn();
-    const onTargetChange = vi.fn();
-    render(
+  it("渲染源语和目标语两个下拉 trigger", () => {
+    renderDirBar();
+
+    expect(screen.getByRole("button", { name: "源语言" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "目标语言" })).toBeInTheDocument();
+  });
+
+  it("源语与目标语之间渲染方向箭头：装饰性、aria-hidden、不可交互", () => {
+    const { container } = render(
       <DirBar
         sourceLang="auto"
         targetLang="zh"
         providers={MOCK_PROVIDERS}
         selectedProviderId="mymemory"
-        onProviderChange={onProviderChange}
-        onSourceChange={onSourceChange}
-        onTargetChange={onTargetChange}
+        onProviderChange={vi.fn()}
+        onSourceChange={vi.fn()}
+        onTargetChange={vi.fn()}
       />
     );
 
-    expect(screen.getByRole("combobox", { name: "源语言" })).toBeInTheDocument();
-    expect(screen.getByRole("combobox", { name: "目标语言" })).toBeInTheDocument();
+    // 箭头是 .lang-selects 内的装饰 svg，标 aria-hidden、非 button（不进无障碍树、不可点）
+    const arrow = container.querySelector(".lang-selects .lang-dir-arrow");
+    expect(arrow).not.toBeNull();
+    expect(arrow).toHaveAttribute("aria-hidden", "true");
+    expect(screen.queryByRole("button", { name: "交换语言方向" })).not.toBeInTheDocument();
   });
 
-  it("源语 select 含自动检测选项，目标语 select 不含自动检测", () => {
-    const onProviderChange = vi.fn();
-    const onSourceChange = vi.fn();
-    const onTargetChange = vi.fn();
-    render(
-      <DirBar
-        sourceLang="auto"
-        targetLang="zh"
-        providers={MOCK_PROVIDERS}
-        selectedProviderId="mymemory"
-        onProviderChange={onProviderChange}
-        onSourceChange={onSourceChange}
-        onTargetChange={onTargetChange}
-      />
-    );
-
-    const sourceSelect = screen.getByRole("combobox", { name: "源语言" });
-    const targetSelect = screen.getByRole("combobox", { name: "目标语言" });
-
-    // 源语下拉的 option 列表里应包含 "自动检测"
-    const sourceOptions = Array.from(sourceSelect.querySelectorAll("option")).map((o) => o.textContent);
-    expect(sourceOptions).toContain("自动检测");
-
-    // 目标语下拉不含 "自动检测"
-    const targetOptions = Array.from(targetSelect.querySelectorAll("option")).map((o) => o.textContent);
-    expect(targetOptions).not.toContain("自动检测");
-  });
-
-  it("改变源语 select 触发 onSourceChange 带新 code", async () => {
-    const onProviderChange = vi.fn();
-    const onSourceChange = vi.fn();
-    const onTargetChange = vi.fn();
+  it("源语下拉含自动检测选项，目标语下拉不含自动检测", async () => {
     const user = userEvent.setup();
-    render(
-      <DirBar
-        sourceLang="auto"
-        targetLang="zh"
-        providers={MOCK_PROVIDERS}
-        selectedProviderId="mymemory"
-        onProviderChange={onProviderChange}
-        onSourceChange={onSourceChange}
-        onTargetChange={onTargetChange}
-      />
-    );
+    renderDirBar();
 
-    const sourceSelect = screen.getByRole("combobox", { name: "源语言" });
-    await user.selectOptions(sourceSelect, "en");
+    // 展开源语下拉，应含"自动检测"
+    await user.click(screen.getByRole("button", { name: "源语言" }));
+    expect(screen.getByRole("option", { name: "自动检测" })).toBeInTheDocument();
+    await user.keyboard("{Escape}");
+
+    // 展开目标语下拉，不应含"自动检测"
+    await user.click(screen.getByRole("button", { name: "目标语言" }));
+    expect(screen.queryByRole("option", { name: "自动检测" })).not.toBeInTheDocument();
+  });
+
+  it("选源语选项触发 onSourceChange 带新 code", async () => {
+    const user = userEvent.setup();
+    const { onSourceChange } = renderDirBar();
+
+    await user.click(screen.getByRole("button", { name: "源语言" }));
+    await user.click(screen.getByRole("option", { name: "英文" }));
 
     expect(onSourceChange).toHaveBeenCalledWith("en");
   });
 
-  it("改变目标语 select 触发 onTargetChange 带新 code", async () => {
-    const onProviderChange = vi.fn();
-    const onSourceChange = vi.fn();
-    const onTargetChange = vi.fn();
+  it("选目标语选项触发 onTargetChange 带新 code", async () => {
     const user = userEvent.setup();
-    render(
-      <DirBar
-        sourceLang="auto"
-        targetLang="zh"
-        providers={MOCK_PROVIDERS}
-        selectedProviderId="mymemory"
-        onProviderChange={onProviderChange}
-        onSourceChange={onSourceChange}
-        onTargetChange={onTargetChange}
-      />
-    );
+    const { onTargetChange } = renderDirBar();
 
-    const targetSelect = screen.getByRole("combobox", { name: "目标语言" });
-    await user.selectOptions(targetSelect, "en");
+    await user.click(screen.getByRole("button", { name: "目标语言" }));
+    await user.click(screen.getByRole("option", { name: "英文" }));
 
     expect(onTargetChange).toHaveBeenCalledWith("en");
   });
 
-  it("provider select 仍在且功能正常", () => {
-    const onProviderChange = vi.fn();
-    const onSourceChange = vi.fn();
-    const onTargetChange = vi.fn();
-    render(
-      <DirBar
-        sourceLang="auto"
-        targetLang="zh"
-        providers={MOCK_PROVIDERS}
-        selectedProviderId="mymemory"
-        onProviderChange={onProviderChange}
-        onSourceChange={onSourceChange}
-        onTargetChange={onTargetChange}
-      />
-    );
-
-    const select = screen.getByRole("combobox", { name: /翻译源/ });
-    expect(select).toBeInTheDocument();
-    expect(screen.getByText("MyMemory · 默认")).toBeInTheDocument();
-    expect(screen.getByText("百度翻译")).toBeInTheDocument();
-  });
-
-  it("renders provider select with all provider options", () => {
-    const onProviderChange = vi.fn();
-    const onSourceChange = vi.fn();
-    const onTargetChange = vi.fn();
-    render(
-      <DirBar
-        sourceLang="auto"
-        targetLang="zh"
-        providers={MOCK_PROVIDERS}
-        selectedProviderId="mymemory"
-        onProviderChange={onProviderChange}
-        onSourceChange={onSourceChange}
-        onTargetChange={onTargetChange}
-      />
-    );
-
-    const select = screen.getByRole("combobox", { name: /翻译源/ });
-    expect(select).toBeInTheDocument();
-    expect(screen.getByText("DeepL Free")).toBeInTheDocument();
-  });
-
-  it("provider select value reflects selectedProviderId", () => {
-    const onProviderChange = vi.fn();
-    const onSourceChange = vi.fn();
-    const onTargetChange = vi.fn();
-    render(
-      <DirBar
-        sourceLang="auto"
-        targetLang="zh"
-        providers={MOCK_PROVIDERS}
-        selectedProviderId="baidu"
-        onProviderChange={onProviderChange}
-        onSourceChange={onSourceChange}
-        onTargetChange={onTargetChange}
-      />
-    );
-
-    const select = screen.getByRole("combobox", { name: /翻译源/ }) as HTMLSelectElement;
-    expect(select.value).toBe("baidu");
-  });
-
-  it("calls onProviderChange with new id when select changes", async () => {
-    const onProviderChange = vi.fn();
-    const onSourceChange = vi.fn();
-    const onTargetChange = vi.fn();
+  it("翻译源下拉仍在且列出全部 provider", async () => {
     const user = userEvent.setup();
-    render(
-      <DirBar
-        sourceLang="auto"
-        targetLang="zh"
-        providers={MOCK_PROVIDERS}
-        selectedProviderId="mymemory"
-        onProviderChange={onProviderChange}
-        onSourceChange={onSourceChange}
-        onTargetChange={onTargetChange}
-      />
-    );
+    renderDirBar();
 
-    const select = screen.getByRole("combobox", { name: /翻译源/ });
-    await user.selectOptions(select, "deepl");
+    const trigger = screen.getByRole("button", { name: "翻译源" });
+    expect(trigger).toBeInTheDocument();
+    // trigger 显示当前选中 provider 名
+    expect(trigger).toHaveTextContent("MyMemory · 默认");
+
+    await user.click(trigger);
+    expect(screen.getByRole("option", { name: "百度翻译" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "DeepL Free" })).toBeInTheDocument();
+  });
+
+  it("翻译源 trigger 文案反映 selectedProviderId", () => {
+    renderDirBar({ selectedProviderId: "baidu" });
+
+    expect(screen.getByRole("button", { name: "翻译源" })).toHaveTextContent("百度翻译");
+  });
+
+  it("选翻译源选项触发 onProviderChange 带新 id", async () => {
+    const user = userEvent.setup();
+    const { onProviderChange } = renderDirBar();
+
+    await user.click(screen.getByRole("button", { name: "翻译源" }));
+    await user.click(screen.getByRole("option", { name: "DeepL Free" }));
 
     expect(onProviderChange).toHaveBeenCalledWith("deepl");
   });
 
-  it("renders empty providers list without crashing", () => {
-    const onProviderChange = vi.fn();
-    const onSourceChange = vi.fn();
-    const onTargetChange = vi.fn();
-    render(
-      <DirBar
-        sourceLang="auto"
-        targetLang="zh"
-        providers={[]}
-        selectedProviderId=""
-        onProviderChange={onProviderChange}
-        onSourceChange={onSourceChange}
-        onTargetChange={onTargetChange}
-      />
-    );
+  it("providers 为空时翻译源 trigger 仍渲染不崩", () => {
+    renderDirBar({ providers: [], selectedProviderId: "" });
 
-    const select = screen.getByRole("combobox", { name: /翻译源/ });
-    expect(select).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "翻译源" })).toBeInTheDocument();
   });
 
-  it("needsKey=true 的 option 带 disabled 属性，needsKey=false 的不带", () => {
-    const onProviderChange = vi.fn();
-    const onSourceChange = vi.fn();
-    const onTargetChange = vi.fn();
-    render(
-      <DirBar
-        sourceLang="auto"
-        targetLang="zh"
-        providers={PROVIDERS_WITH_NEEDS_KEY}
-        selectedProviderId="mymemory"
-        onProviderChange={onProviderChange}
-        onSourceChange={onSourceChange}
-        onTargetChange={onTargetChange}
-      />
-    );
+  it("needsKey 源未配置时 option 标记 aria-disabled，needsKey=false 的不标", async () => {
+    const user = userEvent.setup();
+    renderDirBar({ providers: PROVIDERS_WITH_NEEDS_KEY });
 
-    const mymemoryOption = screen.getByRole("option", { name: "MyMemory · 默认" }) as HTMLOptionElement;
-    const baiduOption = screen.getByRole("option", { name: "百度翻译" }) as HTMLOptionElement;
-    const deeplOption = screen.getByRole("option", { name: "DeepL Free" }) as HTMLOptionElement;
-
-    expect(mymemoryOption.disabled).toBe(false);
-    expect(baiduOption.disabled).toBe(true);
-    expect(deeplOption.disabled).toBe(true);
+    await user.click(screen.getByRole("button", { name: "翻译源" }));
+    expect(screen.getByRole("option", { name: "MyMemory · 默认" })).toHaveAttribute("aria-disabled", "false");
+    expect(screen.getByRole("option", { name: "百度翻译" })).toHaveAttribute("aria-disabled", "true");
+    expect(screen.getByRole("option", { name: "DeepL Free" })).toHaveAttribute("aria-disabled", "true");
   });
 
-  it("selectedProviderId 为 needsKey 源时 select 正确显示当前值且不崩", () => {
-    const onProviderChange = vi.fn();
-    const onSourceChange = vi.fn();
-    const onTargetChange = vi.fn();
-    render(
-      <DirBar
-        sourceLang="auto"
-        targetLang="zh"
-        providers={PROVIDERS_WITH_NEEDS_KEY}
-        selectedProviderId="baidu"
-        onProviderChange={onProviderChange}
-        onSourceChange={onSourceChange}
-        onTargetChange={onTargetChange}
-      />
-    );
+  it("selectedProviderId 为 needsKey 源时 trigger 正确显示当前值且不崩", () => {
+    renderDirBar({ providers: PROVIDERS_WITH_NEEDS_KEY, selectedProviderId: "baidu" });
 
-    const select = screen.getByRole("combobox", { name: /翻译源/ }) as HTMLSelectElement;
-    expect(select.value).toBe("baidu");
+    expect(screen.getByRole("button", { name: "翻译源" })).toHaveTextContent("百度翻译");
   });
 
   it("不再渲染交换语言方向按钮", () => {
-    const onProviderChange = vi.fn();
-    const onSourceChange = vi.fn();
-    const onTargetChange = vi.fn();
-    render(
-      <DirBar
-        sourceLang="auto"
-        targetLang="zh"
-        providers={MOCK_PROVIDERS}
-        selectedProviderId="mymemory"
-        onProviderChange={onProviderChange}
-        onSourceChange={onSourceChange}
-        onTargetChange={onTargetChange}
-      />
-    );
+    renderDirBar();
 
     expect(screen.queryByRole("button", { name: "交换语言方向" })).not.toBeInTheDocument();
   });
 
-  it("①: needsKey=true 且在 configuredIds 中 → option 不 disabled", () => {
-    const onProviderChange = vi.fn();
-    render(
-      <DirBar
-        sourceLang="auto"
-        targetLang="zh"
-        providers={PROVIDERS_WITH_NEEDS_KEY}
-        selectedProviderId="mymemory"
-        configuredIds={new Set(["baidu"])}
-        onProviderChange={onProviderChange}
-        onSourceChange={vi.fn()}
-        onTargetChange={vi.fn()}
-      />
-    );
+  it("①: needsKey=true 且在 configuredIds 中 → option 不 disabled", async () => {
+    const user = userEvent.setup();
+    renderDirBar({ providers: PROVIDERS_WITH_NEEDS_KEY, configuredIds: new Set(["baidu"]) });
 
-    const baiduOption = screen.getByRole("option", { name: "百度翻译" }) as HTMLOptionElement;
-    expect(baiduOption.disabled).toBe(false);
+    await user.click(screen.getByRole("button", { name: "翻译源" }));
+    expect(screen.getByRole("option", { name: "百度翻译" })).toHaveAttribute("aria-disabled", "false");
   });
 
-  it("①: needsKey=true 且不在 configuredIds 中 → option disabled", () => {
-    const onProviderChange = vi.fn();
-    render(
-      <DirBar
-        sourceLang="auto"
-        targetLang="zh"
-        providers={PROVIDERS_WITH_NEEDS_KEY}
-        selectedProviderId="mymemory"
-        configuredIds={new Set<string>()}
-        onProviderChange={onProviderChange}
-        onSourceChange={vi.fn()}
-        onTargetChange={vi.fn()}
-      />
-    );
+  it("①: needsKey=true 且不在 configuredIds 中 → option disabled", async () => {
+    const user = userEvent.setup();
+    renderDirBar({ providers: PROVIDERS_WITH_NEEDS_KEY, configuredIds: new Set<string>() });
 
-    const baiduOption = screen.getByRole("option", { name: "百度翻译" }) as HTMLOptionElement;
-    expect(baiduOption.disabled).toBe(true);
+    await user.click(screen.getByRole("button", { name: "翻译源" }));
+    expect(screen.getByRole("option", { name: "百度翻译" })).toHaveAttribute("aria-disabled", "true");
   });
 
-  it("①: needsKey=false 的 option 无论 configuredIds → 不 disabled", () => {
-    const onProviderChange = vi.fn();
-    render(
-      <DirBar
-        sourceLang="auto"
-        targetLang="zh"
-        providers={PROVIDERS_WITH_NEEDS_KEY}
-        selectedProviderId="mymemory"
-        configuredIds={new Set<string>()}
-        onProviderChange={onProviderChange}
-        onSourceChange={vi.fn()}
-        onTargetChange={vi.fn()}
-      />
-    );
+  it("①: needsKey=false 的 option 无论 configuredIds → 不 disabled", async () => {
+    const user = userEvent.setup();
+    renderDirBar({ providers: PROVIDERS_WITH_NEEDS_KEY, configuredIds: new Set<string>() });
 
-    const mymemoryOption = screen.getByRole("option", { name: "MyMemory · 默认" }) as HTMLOptionElement;
-    expect(mymemoryOption.disabled).toBe(false);
+    await user.click(screen.getByRole("button", { name: "翻译源" }));
+    expect(screen.getByRole("option", { name: "MyMemory · 默认" })).toHaveAttribute("aria-disabled", "false");
+  });
+
+  it("点击 disabled 翻译源 option 不触发 onProviderChange", async () => {
+    const user = userEvent.setup();
+    const { onProviderChange } = renderDirBar({
+      providers: PROVIDERS_WITH_NEEDS_KEY,
+      configuredIds: new Set<string>(),
+    });
+
+    await user.click(screen.getByRole("button", { name: "翻译源" }));
+    await user.click(screen.getByRole("option", { name: "百度翻译" }));
+
+    expect(onProviderChange).not.toHaveBeenCalled();
   });
 });

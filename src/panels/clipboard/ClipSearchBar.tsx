@@ -3,6 +3,8 @@
  * 键盘事件透传到父组件处理（↑↓ 高亮、Enter 选中等）。
  */
 
+import { Select } from "../../components/Select";
+import type { SelectOption } from "../../components/Select";
 import type { HistoryFilter } from "../history/filter";
 
 /** 类型筛选选项的显示标签 */
@@ -12,6 +14,11 @@ const FILTER_LABELS: Record<HistoryFilter, string> = {
   richtext: "富文本",
   image: "图片",
 };
+
+/** 类型筛选下拉选项（顺序即 FILTER_LABELS 的声明序） */
+const FILTER_OPTIONS: SelectOption[] = (Object.keys(FILTER_LABELS) as HistoryFilter[]).map(
+  (key) => ({ value: key, label: FILTER_LABELS[key] })
+);
 
 interface ClipSearchBarProps {
   searchQuery: string;
@@ -55,30 +62,12 @@ export function ClipSearchBar({
           onKeyDown={onKeyDown}
         />
       </div>
-      <div className="filter-select">
-        <select
-          value={typeFilter}
-          onChange={(e) => onTypeFilterChange(e.target.value as HistoryFilter)}
-          aria-label="类型筛选"
-        >
-          {(Object.keys(FILTER_LABELS) as HistoryFilter[]).map((key) => (
-            <option key={key} value={key}>
-              {FILTER_LABELS[key]}
-            </option>
-          ))}
-        </select>
-        <svg
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="1.8"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          aria-hidden="true"
-        >
-          <path d="m6 9 6 6 6-6" />
-        </svg>
-      </div>
+      <Select
+        ariaLabel="类型筛选"
+        value={typeFilter}
+        options={FILTER_OPTIONS}
+        onChange={(value) => onTypeFilterChange(value as HistoryFilter)}
+      />
     </div>
   );
 }

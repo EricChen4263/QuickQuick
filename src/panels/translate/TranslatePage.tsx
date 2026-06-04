@@ -207,7 +207,6 @@ function TranslatePage({ seed }: TranslatePageProps) {
    * 分发译文操作：
    * - copy → clipboard.writeText(译文)
    * - speak → speechSynthesis.speak(SpeechSynthesisUtterance)
-   * - switch_target / switch_source_retranslate → 重新翻译（简化：直接重发当前文本）
    * - save_history → 已自动写入，刷新历史列表即可
    */
   async function handleAction(cmd: string) {
@@ -223,10 +222,6 @@ function TranslatePage({ seed }: TranslatePageProps) {
       if (action === "speak") {
         speakText(result.translated);
         setError(null);
-        return;
-      }
-      if (action === "switch_target" || action === "switch_source_retranslate") {
-        await handleTranslate();
         return;
       }
       if (action === "save_history") {

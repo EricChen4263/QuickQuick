@@ -1,0 +1,86 @@
+/*
+ * 自定义下拉组件样式。
+ * trigger 复用原生 select 的外观（深色面、圆角、token 变量、右侧 chevron）；
+ * 菜单浮层 portal 到 body、fixed 定位，绕开 overflow 容器裁剪。
+ */
+
+.qq-select {
+  position: relative;
+  display: inline-flex;
+}
+
+.qq-select-trigger {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  border-radius: var(--r-sm);
+  padding: 5px 8px 5px 10px;
+  font-size: 12.5px;
+  font-family: var(--font);
+  color: var(--fg);
+  outline: none;
+  cursor: pointer;
+  width: 100%;
+}
+
+.qq-select-trigger:focus-visible,
+.qq-select[data-open="true"] .qq-select-trigger {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.qq-select-value {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.qq-select-chevron {
+  width: 13px;
+  height: 13px;
+  flex: none;
+  color: var(--muted);
+}
+
+/* 浮层菜单：fixed 定位与宽度（min/max/max-content）由组件内联 style 给出，
+   这里只管视觉与纵向滚动。宽度随内容撑开，故所有选项左右内距一致。 */
+.qq-select-menu {
+  list-style: none;
+  margin: 0;
+  padding: 4px;
+  z-index: 1000;
+  max-height: 260px;
+  overflow-y: auto;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  box-shadow: var(--shadow-pop);
+}
+
+.qq-select-option {
+  padding: 6px 10px;
+  font-size: 12.5px;
+  border-radius: var(--r-sm);
+  color: var(--fg);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.qq-select-option.is-active {
+  background: var(--hover);
+}
+
+.qq-select-option[aria-selected="true"] {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.qq-select-option.is-disabled {
+  color: var(--muted);
+  opacity: 0.5;
+  cursor: not-allowed;
+}

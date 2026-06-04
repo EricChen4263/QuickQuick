@@ -114,9 +114,9 @@ describe("clipboard-page", () => {
       expect(screen.getAllByText("Hello World").length).toBeGreaterThanOrEqual(1);
     });
 
-    // Act：选择 richtext 筛选
-    const filterSelect = screen.getByRole("combobox");
-    await user.selectOptions(filterSelect, "richtext");
+    // Act：展开类型筛选下拉并选 richtext（自定义 Select：点 trigger 再点选项）
+    await user.click(screen.getByRole("button", { name: "类型筛选" }));
+    await user.click(screen.getByRole("option", { name: "富文本" }));
 
     // Assert：只剩富文本条目，纯文本条目消失
     await waitFor(() => {

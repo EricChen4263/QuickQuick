@@ -114,7 +114,7 @@ describe("translate-page", () => {
     // Act：输入文本并点击翻译
     const textarea = screen.getByRole("textbox");
     await user.type(textarea, "Hello World");
-    const translateBtn = screen.getByRole("button", { name: /翻译/ });
+    const translateBtn = screen.getByRole("button", { name: "翻译" });
     await user.click(translateBtn);
 
     // Assert：translateText 以 (text, targetLang="zh", source=undefined) 被调用
@@ -131,17 +131,17 @@ describe("translate-page", () => {
 
     // 等 provider 加载完成
     await waitFor(() => {
-      expect(screen.getByRole("combobox", { name: "目标语言" })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "目标语言" })).toBeInTheDocument();
     });
 
-    // Act：切换目标语为英文
-    const targetSelect = screen.getByRole("combobox", { name: "目标语言" });
-    await user.selectOptions(targetSelect, "en");
+    // Act：切换目标语为英文（自定义 Select：点 trigger 再点选项）
+    await user.click(screen.getByRole("button", { name: "目标语言" }));
+    await user.click(screen.getByRole("option", { name: "英文" }));
 
     // 输入并翻译
     const textarea = screen.getByRole("textbox");
     await user.type(textarea, "你好");
-    await user.click(screen.getByRole("button", { name: /翻译/ }));
+    await user.click(screen.getByRole("button", { name: "翻译" }));
 
     // Assert：第二参为 "en"，第三参为 undefined（source 仍是 auto）
     await waitFor(() => {
@@ -157,17 +157,17 @@ describe("translate-page", () => {
 
     // 等 provider 加载完成
     await waitFor(() => {
-      expect(screen.getByRole("combobox", { name: "源语言" })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "源语言" })).toBeInTheDocument();
     });
 
-    // Act：切换源语为英文
-    const sourceSelect = screen.getByRole("combobox", { name: "源语言" });
-    await user.selectOptions(sourceSelect, "en");
+    // Act：切换源语为英文（自定义 Select：点 trigger 再点选项）
+    await user.click(screen.getByRole("button", { name: "源语言" }));
+    await user.click(screen.getByRole("option", { name: "英文" }));
 
     // 输入并翻译
     const textarea = screen.getByRole("textbox");
     await user.type(textarea, "Hello");
-    await user.click(screen.getByRole("button", { name: /翻译/ }));
+    await user.click(screen.getByRole("button", { name: "翻译" }));
 
     // Assert：第三参为 "en"（具体语言，不转为 undefined）
     await waitFor(() => {
@@ -183,13 +183,13 @@ describe("translate-page", () => {
 
     // 等 provider 加载完成（source 默认为 auto，不做切换）
     await waitFor(() => {
-      expect(screen.getByRole("combobox", { name: "源语言" })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "源语言" })).toBeInTheDocument();
     });
 
     // Act：直接输入并翻译（不切换源语，保持默认 auto）
     const textarea = screen.getByRole("textbox");
     await user.type(textarea, "Hello");
-    await user.click(screen.getByRole("button", { name: /翻译/ }));
+    await user.click(screen.getByRole("button", { name: "翻译" }));
 
     // Assert：source=auto → 第三参为 undefined
     await waitFor(() => {
@@ -206,7 +206,7 @@ describe("translate-page", () => {
     // Act：输入文本并点击翻译
     const textarea = screen.getByRole("textbox");
     await user.type(textarea, "Hello World");
-    const translateBtn = screen.getByRole("button", { name: /翻译/ });
+    const translateBtn = screen.getByRole("button", { name: "翻译" });
     await user.click(translateBtn);
 
     // Assert：显示译文文本
@@ -264,7 +264,7 @@ describe("translate-page", () => {
     // 先执行翻译使译文出现
     const textarea = screen.getByRole("textbox");
     await user.type(textarea, "Hello World");
-    await user.click(screen.getByRole("button", { name: /翻译/ }));
+    await user.click(screen.getByRole("button", { name: "翻译" }));
     await waitFor(() => {
       expect(screen.getByText("你好世界")).toBeInTheDocument();
     });
@@ -288,7 +288,7 @@ describe("translate-page", () => {
     // Act：输入文本并点击翻译
     const textarea = screen.getByRole("textbox");
     await user.type(textarea, "Hello");
-    await user.click(screen.getByRole("button", { name: /翻译/ }));
+    await user.click(screen.getByRole("button", { name: "翻译" }));
 
     // Assert：错误提示出现，不崩溃
     await waitFor(() => {
@@ -309,13 +309,13 @@ describe("translate-page", () => {
     await user.type(textarea, "Hello");
 
     // 第一次翻译成功
-    await user.click(screen.getByRole("button", { name: /翻译/ }));
+    await user.click(screen.getByRole("button", { name: "翻译" }));
     await waitFor(() => {
       expect(screen.getByText("你好世界")).toBeInTheDocument();
     });
 
     // 第二次翻译失败
-    await user.click(screen.getByRole("button", { name: /翻译/ }));
+    await user.click(screen.getByRole("button", { name: "翻译" }));
 
     // Assert：错误提示（role=alert）出现
     await waitFor(() => {
@@ -330,7 +330,7 @@ describe("translate-page", () => {
     render(<TranslatePage />);
 
     // Assert：初始状态输入为空，翻译按钮禁用
-    const translateBtn = screen.getByRole("button", { name: /翻译/ });
+    const translateBtn = screen.getByRole("button", { name: "翻译" });
     expect(translateBtn).toBeDisabled();
 
     // Act：点击禁用按钮（不应触发）
@@ -394,7 +394,7 @@ describe("translate-page", () => {
     // 先执行翻译
     const textarea = screen.getByRole("textbox");
     await user.type(textarea, "Hello World");
-    await user.click(screen.getByRole("button", { name: /翻译/ }));
+    await user.click(screen.getByRole("button", { name: "翻译" }));
     await waitFor(() => {
       expect(screen.getByText("你好世界")).toBeInTheDocument();
     });
@@ -419,7 +419,7 @@ describe("translate-page", () => {
     // 先执行翻译使译文出现
     const textarea = screen.getByRole("textbox");
     await user.type(textarea, "Hello World");
-    await user.click(screen.getByRole("button", { name: /翻译/ }));
+    await user.click(screen.getByRole("button", { name: "翻译" }));
     await waitFor(() => {
       expect(screen.getByText("你好世界")).toBeInTheDocument();
     });
@@ -500,7 +500,7 @@ describe("translate-page", () => {
 
     const textarea = screen.getByRole("textbox");
     await user.type(textarea, "Hello");
-    await user.click(screen.getByRole("button", { name: /翻译/ }));
+    await user.click(screen.getByRole("button", { name: "翻译" }));
 
     await waitFor(() => {
       expect(screen.getByRole("alert")).toBeInTheDocument();
@@ -515,7 +515,7 @@ describe("translate-page", () => {
 
     const textarea = screen.getByRole("textbox");
     await user.type(textarea, "Hello");
-    await user.click(screen.getByRole("button", { name: /翻译/ }));
+    await user.click(screen.getByRole("button", { name: "翻译" }));
 
     await waitFor(() => {
       expect(screen.getByRole("alert")).toBeInTheDocument();
@@ -535,31 +535,31 @@ describe("translate-page", () => {
       { key: "app_id", value: "my_id", isSet: true },
       { key: "secret_key", value: null, isSet: true },
     ]);
+    const user = userEvent.setup();
     render(<TranslatePage />);
 
     await waitFor(() => {
       expect(mockGetProviderCredentials).toHaveBeenCalledWith("baidu");
     });
 
-    // 等待 DirBar 渲染后，百度翻译 option 不应 disabled
+    // 展开翻译源下拉，百度翻译 option 不应标记 aria-disabled
+    await user.click(await screen.findByRole("button", { name: "翻译源" }));
     await waitFor(() => {
-      const baiduOption = screen.getByRole("option", { name: "百度翻译" }) as HTMLOptionElement;
-      expect(baiduOption.disabled).toBe(false);
+      expect(screen.getByRole("option", { name: "百度翻译" })).toHaveAttribute("aria-disabled", "false");
     });
   });
 
   it("①: 挂载时 needsKey provider 未配置 → DirBar 中该 option disabled", async () => {
     // 默认 beforeEach 返回 isSet=false（未配置）
+    const user = userEvent.setup();
     render(<TranslatePage />);
 
     await waitFor(() => {
       expect(mockGetProviderCredentials).toHaveBeenCalledWith("baidu");
     });
 
-    await waitFor(() => {
-      const baiduOption = screen.getByRole("option", { name: "百度翻译" }) as HTMLOptionElement;
-      expect(baiduOption.disabled).toBe(true);
-    });
+    await user.click(await screen.findByRole("button", { name: "翻译源" }));
+    expect(screen.getByRole("option", { name: "百度翻译" })).toHaveAttribute("aria-disabled", "true");
   });
 
   it("①: 收到 PROVIDER_CONFIG_CHANGED_EVENT → 重新取凭据并解禁已配置的 option", async () => {
@@ -576,14 +576,12 @@ describe("translate-page", () => {
       { key: "secret_key", value: null, isSet: false },
     ]);
 
+    const user = userEvent.setup();
     render(<TranslatePage />);
 
-    await waitFor(() => {
-      expect(screen.getByRole("option", { name: "百度翻译" })).toBeInTheDocument();
-    });
-
-    // 初始 disabled
-    expect((screen.getByRole("option", { name: "百度翻译" }) as HTMLOptionElement).disabled).toBe(true);
+    // 展开翻译源下拉：初始 baidu 应 disabled
+    await user.click(await screen.findByRole("button", { name: "翻译源" }));
+    expect(screen.getByRole("option", { name: "百度翻译" })).toHaveAttribute("aria-disabled", "true");
 
     // 模拟用户在设置页配好了 key，再次取凭据时已配置
     mockGetProviderCredentials.mockResolvedValue([
@@ -591,12 +589,11 @@ describe("translate-page", () => {
       { key: "secret_key", value: null, isSet: true },
     ]);
 
-    // 触发 provider-config-changed 事件
+    // 触发 provider-config-changed 事件（下拉保持展开，option 应实时解禁）
     callbacks.get(PROVIDER_CONFIG_CHANGED_EVENT)?.();
 
     await waitFor(() => {
-      const baiduOption = screen.getByRole("option", { name: "百度翻译" }) as HTMLOptionElement;
-      expect(baiduOption.disabled).toBe(false);
+      expect(screen.getByRole("option", { name: "百度翻译" })).toHaveAttribute("aria-disabled", "false");
     });
   });
 

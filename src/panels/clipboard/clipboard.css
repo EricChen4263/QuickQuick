@@ -57,34 +57,6 @@
   box-shadow: 0 0 0 3px var(--accent-soft);
 }
 
-/* 筛选下拉：隐藏原生 appearance，右侧内嵌 chevron SVG */
-.filter-select {
-  position: relative;
-}
-
-.filter-select select {
-  appearance: none;
-  border: 1px solid var(--border);
-  background: var(--surface);
-  border-radius: var(--r-sm);
-  padding: 7px 28px 7px 11px;
-  font-size: 13px;
-  font-family: var(--font);
-  color: var(--fg);
-  outline: none;
-}
-
-.filter-select svg {
-  position: absolute;
-  right: 8px;
-  top: 50%;
-  transform: translateY(-50%);
-  width: 14px;
-  height: 14px;
-  color: var(--muted);
-  pointer-events: none;
-}
-
 /* 条目列表滚动区
    min-height:0 配合父 grid 1fr 行，确保内容超出时在此滚动不冒泡外层 */
 .clip-list {

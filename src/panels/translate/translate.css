@@ -40,42 +40,18 @@
   margin-bottom: 16px;
 }
 
-/* 语言下拉组：两个语言 select 并排，间距与 provider select 保持一致 */
+/* 语言下拉组：两个语言 Select 并排，间距与翻译源 Select 保持一致 */
 .lang-selects {
   display: inline-flex;
   align-items: center;
   gap: 8px;
 }
 
-/* 语言下拉：与 provider select 视觉一致（深色、圆角、token 变量） */
-.lang-select {
-  appearance: none;
-  border: 1px solid var(--border);
-  background: var(--surface);
-  border-radius: var(--r-sm);
-  padding: 5px 26px 5px 10px;
-  font-size: 12.5px;
-  outline: none;
-  color: var(--fg);
-}
-
-.lang-select:focus {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 3px var(--accent-soft);
-}
-
-.lang-selects .wrap {
-  position: relative;
-}
-
-/* 下拉箭头定位在 select 右侧，pointer-events none 防遮住选项（与 .src-select 一致） */
-.lang-selects .wrap svg {
-  position: absolute;
-  right: 7px;
-  top: 50%;
-  transform: translateY(-50%);
-  width: 13px;
-  height: 13px;
+/* 源语 → 目标语方向箭头：装饰性，muted 色、不抢占交互 */
+.lang-dir-arrow {
+  width: 15px;
+  height: 15px;
+  flex: none;
   color: var(--muted);
   pointer-events: none;
 }
@@ -88,38 +64,6 @@
   gap: 7px;
   color: var(--muted);
   font-size: 12.5px;
-}
-
-.src-select .wrap {
-  position: relative;
-}
-
-.src-select select {
-  appearance: none;
-  border: 1px solid var(--border);
-  background: var(--surface);
-  border-radius: var(--r-sm);
-  padding: 5px 26px 5px 10px;
-  font-size: 12.5px;
-  outline: none;
-  color: var(--fg);
-}
-
-.src-select select:focus {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 3px var(--accent-soft);
-}
-
-/* 下拉箭头图标定位在 select 右侧，pointer-events none 防止遮住选项 */
-.src-select .wrap svg {
-  position: absolute;
-  right: 7px;
-  top: 50%;
-  transform: translateY(-50%);
-  width: 13px;
-  height: 13px;
-  color: var(--muted);
-  pointer-events: none;
 }
 
 /* 字段标签：小号灰色，textarea / 译文区上方 */
@@ -188,25 +132,6 @@
   display: flex;
   gap: 8px;
   flex-wrap: wrap;
-}
-
-/* 词典占位区：虚线边框，当前版本预留，fast-follow 实现 */
-.dict-slot {
-  margin-top: 22px;
-  padding: 14px 16px;
-  border: 1px dashed var(--border);
-  border-radius: var(--r);
-  color: var(--muted);
-  font-size: 12.5px;
-  display: flex;
-  align-items: center;
-  gap: 9px;
-}
-
-.dict-slot svg {
-  width: 16px;
-  height: 16px;
-  flex: none;
 }
 
 /* 历史侧栏：头部固定 + 列表可滚动

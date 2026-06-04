@@ -1,5 +1,7 @@
 import { useEffect, useState, useCallback } from "react";
 import { getStorageStats, cleanupHistory, getImageThreshold, setImageThreshold } from "../../ipc/ipc-client";
+import { Select } from "../../components/Select";
+import type { SelectOption } from "../../components/Select";
 import PanelHeader from "./PanelHeader";
 import SettingGroup from "./SettingGroup";
 
@@ -11,6 +13,12 @@ const DEFAULT_IMAGE_THRESHOLD_MB = 20;
 
 /** 图片阈值预设档位（MB），全在后端合法区间 1..500 MiB 内 */
 const IMAGE_THRESHOLD_OPTIONS = [5, 10, 20, 50, 100] as const;
+
+/** 图片阈值下拉选项（档位 → Select 选项） */
+const IMAGE_THRESHOLD_SELECT_OPTIONS: SelectOption[] = IMAGE_THRESHOLD_OPTIONS.map((mb) => ({
+  value: String(mb),
+  label: `${mb} MB`,
+}));
 
 /** 将字节数转为 MB 字符串，保留一位小数 */
 function toMB(bytes: number): string {
@@ -115,22 +123,15 @@ function StoragePanel() {
         </div>
         <div className="set-row">
           <div className="grow">
-            <label htmlFor="image-threshold-select" className="label">单张图片阈值</label>
+            <div className="label">单张图片阈值</div>
             <div className="desc">超过此大小的图片只保留缩略图，原图标记为过大未存</div>
           </div>
-          <select
-            id="image-threshold-select"
-            aria-label="单张图片阈值"
-            className="sel"
+          <Select
+            ariaLabel="单张图片阈值"
             value={String(imageThresholdMB)}
-            onChange={(e) => { void handleThresholdChange(Number(e.target.value)); }}
-          >
-            {IMAGE_THRESHOLD_OPTIONS.map((mb) => (
-              <option key={mb} value={String(mb)}>
-                {mb} MB
-              </option>
-            ))}
-          </select>
+            options={IMAGE_THRESHOLD_SELECT_OPTIONS}
+            onChange={(value) => { void handleThresholdChange(Number(value)); }}
+          />
         </div>
         <div className="set-row">
           <div className="grow">
