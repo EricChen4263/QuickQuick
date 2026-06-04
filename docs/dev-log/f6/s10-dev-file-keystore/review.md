@@ -5,8 +5,8 @@ level: 小功能
 parent: F6
 children: []
 created: 2026-06-04T00:00:00Z
-status: 未过
-commit: WIP
+status: 通过
+commit: 9846cdb
 acceptance_ids: []
 author: code-reviewer
 ---
@@ -118,3 +118,19 @@ Ok(())
 `severity(Important) · confidence(82) · src-tauri/src/translate/credential.rs:190-195 · FileCredStore::delete_secret 在文件不存在时 write_all 空 map 会静默创建 dev-credentials.json，与"幂等 no-op"注释矛盾 · 检查 removed.is_some() 再决定是否 write_all`
 
 `severity(Important) · confidence(80) · src-tauri/src/translate/credential.rs:526-537 · MockCredStore key 格式 "{pid}.{key}" 与生产 "cred.{pid}.{key}" 不一致，跨实现测试有隐性差异 · MockCredStore 改用 keychain_account()`
+
+---
+
+## 复审（commit 9846cdb）
+
+初审判定 **BLOCK**（1 Critical + 2 Important）。下列阻塞项已全部修复，复审核实在已提交代码内：
+
+| 项 | 初审问题 | 修复（已核实位置） |
+|---|---|---|
+| C1·Critical | `file_cred_store_tests`/`file_provider_tests` 仅 `#[cfg(test)]`，`cargo test --release` 编译失败 | `credential.rs:549` + `keyprovider.rs:328` 改为 `#[cfg(all(test, debug_assertions))]` |
+| I1·Important | `FileCredStore::delete_secret` 文件不存在时静默创建空 JSON，违背幂等 no-op | `credential.rs:195` 加 `if removed.is_some()` 守卫 |
+| I2·Important | `MockCredStore` key 格式与生产 `keychain_account()` 不一致 | `credential.rs:530/536/541` 统一改用 `keychain_account()` |
+
+质量门：`make verify` 五步全绿 · `cargo test --release` 363 passed · `cargo check --release` 通过（见 notes.md 留痕）。
+
+终态：**通过**。

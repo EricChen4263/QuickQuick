@@ -5,8 +5,8 @@ level: 小功能
 parent: F6
 children: []
 created: 2026-06-04T00:00:00Z
-status: 未过
-commit: WIP
+status: 通过
+commit: cca1fd7
 acceptance_ids: []
 author: code-reviewer
 ---
@@ -170,3 +170,19 @@ return () => window.removeEventListener("scroll", closeOnExternalScroll, true);
 `severity(Important) · confidence(100) · src/components/Select.css:31 + src/components/Select.tsx:140 · CSS 选择器 [data-open="true"] 对应属性从未在根 div 设置，鼠标展开状态下 trigger 无 accent 边框/光晕，视觉无反馈 · 在根 div 加 data-open={isOpen}`
 
 `severity(Important) · confidence(90) · src/components/Select.tsx:47-217 · Select 函数体 171 行，违反 code-general 函数 ≤50 行规范 · 抽取 useMenuRect / useCloseOnOutside / useCloseOnScroll 三个自定义 hook`
+
+---
+
+## 复审（commit cca1fd7）
+
+初审判定 **BLOCK**（1 Critical + 2 Important）。下列阻塞项已全部修复，复审核实在已提交代码内：
+
+| 项 | 初审问题 | 修复（已核实位置） |
+|---|---|---|
+| Critical | scroll capture 捕获菜单自身滚动即关闭，长列表无法滚动 | `Select.tsx:427-436` `closeOnExternalScroll` + `menu?.contains(event.target)` 内部滚动 return |
+| Important·100 | 根 div 未设 `data-open`，trigger 无展开高亮（死 CSS） | `Select.tsx:61` 加 `data-open={s.isOpen}` |
+| Important·90 | Select 函数体 171 行超 ≤50 行规范 | 抽出 `useSelectInteractions`/`useMenuRect`/`useCloseOnOutside`/`useCloseOnScroll` 四个 hook |
+
+后续 GUI 实测：下拉定位、长列表滚动、展开高亮、方向箭头、菜单等宽自适应均 OK，用户确认「没问题了」。
+
+终态：**通过**。

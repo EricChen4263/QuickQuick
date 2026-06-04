@@ -6,7 +6,7 @@ parent: F6
 children: []
 created: 2026-06-04T00:00:00Z
 status: 通过
-commit: WIP
+commit: 9846cdb
 acceptance_ids: []
 author: code-reviewer
 ---
@@ -141,3 +141,14 @@ store.delete_secret(provider_id, field.key)?;
 `severity(Important) · confidence(82) · src-tauri/src/translate/credential.rs:260-262 · delete_credentials 先删 keychain 再删 DB 标记，若标记删除失败则 keychain 已空但 is_set=true（设置页误报"已配置"，翻译失败） · 调整顺序：先 delete_secret_marker 再 store.delete_secret`
 
 `severity(Important) · confidence(80) · src-tauri/src/ipc/settings.rs:657-665 · get_provider_credentials_impl 文档注释三处仍描述已移除的 store 参数路径，与实现不符 · 将 "store/DB"、"在 store 中存在"、"store 读取失败" 改为实际的 secret_presence 标记表语义`
+
+---
+
+## 复审（commit 9846cdb）
+
+原判定为「通过（WARNING）」，2 条非阻塞 Important 建议已在同一提交内落实：
+
+1. `delete_credentials` secret 分支已改为「先 `delete_secret_marker` 再 `store.delete_secret`」，半途失败偏保守（`is_set=false`）。
+2. `get_provider_credentials_impl` 文档注释已更新，移除过时的 store 参数描述，改述 `secret_presence` 标记表语义。
+
+终态：**通过**。
