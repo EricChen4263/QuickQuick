@@ -189,30 +189,26 @@ pub fn run() {
 /// 这保证 Tauri 状态始终已注册，避免前端 invoke 时因状态缺失在 dispatch 层 panic。
 /// 开库失败时仅 eprintln 记录原因，不 panic——IPC 命令将通过 `with_db` 返回 Err 而非崩溃。
 fn setup_app_db(app: &mut tauri::App) {
-    let conn_opt = match app.path().app_config_dir() {
+    // resolve_config_dir 内含 create_dir_all 并按构建类型选 dev/release 子目录。
+    let conn_opt = match ipc::settings::resolve_config_dir(app.handle()) {
         Ok(dir) => {
-            if let Err(e) = std::fs::create_dir_all(&dir) {
-                eprintln!("[QuickQuick] 无法创建配置目录，数据库将不可用: {e}");
-                None
-            } else {
-                let db_path = dir.join("quickquick.db");
-                // debug 构建用文件密钥库（绕开钥匙串，消除 dev 重编反复弹密码）；
-                // release 构建仍走 OS 钥匙串。两分支密钥来源不同，切换后旧 dev DB 无法解密、需删库重建。
-                #[cfg(debug_assertions)]
-                let provider = keyprovider::FileKeyProvider::new(&dir);
-                #[cfg(not(debug_assertions))]
-                let provider = keyprovider::KeychainKeyProvider::new();
-                match pipeline::open_app_db(&provider, &db_path) {
-                    Ok(conn) => Some(conn),
-                    Err(e) => {
-                        eprintln!("[QuickQuick] 数据库打开失败，IPC 命令将返回错误而非崩溃: {e}");
-                        None
-                    }
+            let db_path = dir.join("quickquick.db");
+            // debug 构建用文件密钥库（绕开钥匙串，消除 dev 重编反复弹密码）；
+            // release 构建仍走 OS 钥匙串。两分支密钥来源不同，切换后旧 dev DB 无法解密、需删库重建。
+            #[cfg(debug_assertions)]
+            let provider = keyprovider::FileKeyProvider::new(&dir);
+            #[cfg(not(debug_assertions))]
+            let provider = keyprovider::KeychainKeyProvider::new();
+            match pipeline::open_app_db(&provider, &db_path) {
+                Ok(conn) => Some(conn),
+                Err(e) => {
+                    eprintln!("[QuickQuick] 数据库打开失败，IPC 命令将返回错误而非崩溃: {e}");
+                    None
                 }
             }
         }
         Err(e) => {
-            eprintln!("[QuickQuick] 无法获取配置目录，数据库将不可用: {e}");
+            eprintln!("[QuickQuick] 无法获取/创建配置目录，数据库将不可用: {e}");
             None
         }
     };
@@ -278,9 +274,7 @@ fn start_clipboard_poll(
             // settings.json < 1 KB，桌面端有 OS 页缓存，开销可接受；
             // 好处是用户在 UI 调整阈值后下一轮即生效，无需重启。
             // 读取或路径解析失败时回退默认值（20 MiB），不中断轮询。
-            let max_image_bytes = handle
-                .path()
-                .app_config_dir()
+            let max_image_bytes = ipc::settings::resolve_config_dir(&handle)
                 .ok()
                 .map(|dir| {
                     settings::AppSettings::load_or_default(&dir.join("settings.json"))
@@ -316,16 +310,10 @@ fn start_clipboard_poll(
 /// 配置路径优先用 `app_config_dir()`；若拿不到则跳过（仅 eprintln 不 panic）。
 /// 实际 enable/disable 逻辑委托给 `autostart::apply_to_os`，与 IPC 命令层共享。
 fn apply_autostart_preference(app: &mut tauri::App) {
-    let config_path = match app.path().app_config_dir() {
-        Ok(dir) => {
-            if let Err(e) = std::fs::create_dir_all(&dir) {
-                eprintln!("[QuickQuick] 无法创建配置目录，跳过自启动偏好应用: {e}");
-                return;
-            }
-            dir.join("autostart.json")
-        }
+    let config_path = match ipc::settings::resolve_config_dir(app.handle()) {
+        Ok(dir) => dir.join("autostart.json"),
         Err(e) => {
-            eprintln!("[QuickQuick] 无法获取配置目录，跳过自启动偏好应用: {e}");
+            eprintln!("[QuickQuick] 无法获取/创建配置目录，跳过自启动偏好应用: {e}");
             return;
         }
     };
@@ -454,9 +442,7 @@ pub fn register_action_shortcut(
 /// 使用户通过 set_hotkey 改键后重启仍可生效。
 /// 注册失败时仅记录警告，不阻断启动——错误在函数内部消化，永不向上传播。
 fn register_hotkeys(handle: &tauri::AppHandle) {
-    let config = handle
-        .path()
-        .app_config_dir()
+    let config = ipc::settings::resolve_config_dir(handle)
         .ok()
         .map(|dir| dir.join("hotkey.json"))
         .and_then(|path| {
@@ -487,14 +473,9 @@ fn register_hotkeys(handle: &tauri::AppHandle) {
 /// 读取持久化的 settings.json（不存在则用默认值），将三个布尔字段
 /// 转换为 `Arc<AtomicBool>`，供轮询线程与 IPC 命令层共享。
 fn init_capture_state(app: &tauri::App) -> CaptureState {
-    let settings = app
-        .path()
-        .app_config_dir()
+    let settings = ipc::settings::resolve_config_dir(app.handle())
         .ok()
-        .map(|dir| {
-            let _ = std::fs::create_dir_all(&dir);
-            dir.join("settings.json")
-        })
+        .map(|dir| dir.join("settings.json"))
         .map(|path| settings::AppSettings::load_or_default(&path))
         .unwrap_or_default();
 

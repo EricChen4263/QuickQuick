@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<!-- Fjord / Nordic Serenity · 内容与 coding.md 逐字一致 -->
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>f6-s13 dev/release 数据目录隔离 · 实现方案</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg: #f8f9fa; --card: #ffffff; --card-2: #f3f4f5; --mist: #e2e8f0; --mist-hover: #f1f5f9;
+  --fjord: #05192d; --ink: #191c1d; --ink-2: #44474d; --outline: #74777d; --line: #c4c6cd;
+  --glacier: #d1d5db; --accent: #3e54ac; --accent-dim: #1a338b; --accent-soft: #dde1ff;
+  --green-bg: #e6f0ea; --green-tx: #2f6b4f; --grey-bg: #ececef; --grey-tx: #6b6f76; --err: #ba1a1a;
+  --shadow: 0 12px 32px rgba(5,25,45,0.08); --radius: 12px;
+}
+* { box-sizing: border-box; }
+html { -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility; scroll-behavior: smooth; }
+body { margin: 0; background: var(--bg); color: var(--ink); font-family: 'Inter', -apple-system, sans-serif; font-size: 16px; font-weight: 400; line-height: 1.65; letter-spacing: -0.003em; }
+.mono { font-family: 'JetBrains Mono', monospace; }
+.topbar { position: sticky; top: 0; z-index: 50; background: rgba(248,249,250,0.85); backdrop-filter: blur(12px); border-bottom: 1px solid var(--line); }
+.topbar-in { max-width: 1040px; margin: 0 auto; height: 60px; padding: 0 32px; display: flex; align-items: center; justify-content: space-between; }
+.topbar .brand { font-size: 15px; font-weight: 600; color: var(--fjord); letter-spacing: -0.01em; }
+.topbar .tag { font-family: 'JetBrains Mono', monospace; font-size: 10.5px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--accent); background: var(--mist); padding: 4px 10px; border-radius: 999px; }
+.hero { background: linear-gradient(160deg, #05192d 0%, #0c2440 45%, #1c2f55 100%); color: #fff; position: relative; overflow: hidden; }
+.hero::after { content: ''; position: absolute; inset: 0; background: radial-gradient(120% 90% at 78% 8%, rgba(120,150,210,0.22), transparent 60%); pointer-events: none; }
+.hero-in { max-width: 1040px; margin: 0 auto; padding: 72px 32px 64px; position: relative; z-index: 1; }
+.hero .kicker { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 22px; }
+.hero .chip-hero { font-family: 'JetBrains Mono', monospace; font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; padding: 5px 12px; border-radius: 999px; }
+.chip-hero.solid { background: var(--accent); color: #fff; }
+.chip-hero.ghost { background: rgba(255,255,255,0.1); color: #c7d2ec; border: 1px solid rgba(255,255,255,0.18); }
+.hero h1 { font-size: clamp(32px, 5.2vw, 48px); font-weight: 700; line-height: 1.1; letter-spacing: -0.025em; margin: 0 0 24px; color: #fff; }
+.hero .lede { font-size: 17px; font-weight: 400; line-height: 1.7; color: #c7d2ec; max-width: 64ch; margin: 0; }
+.hero .meta { display: flex; flex-wrap: wrap; gap: 6px 28px; margin-top: 32px; padding-top: 22px; border-top: 1px solid rgba(255,255,255,0.14); font-family: 'JetBrains Mono', monospace; font-size: 12px; color: #9fb0d0; }
+.hero .meta b { color: #d7e0f2; font-weight: 500; }
+.wrap { max-width: 1040px; margin: 0 auto; padding: 64px 32px 120px; }
+section { margin-top: 72px; }
+section:first-child { margin-top: 0; }
+.sec-head { display: flex; align-items: baseline; gap: 14px; border-left: 4px solid var(--accent); padding-left: 16px; margin-bottom: 28px; }
+.sec-num { font-family: 'JetBrains Mono', monospace; font-size: 13px; font-weight: 500; color: var(--accent); flex: none; }
+h2 { font-size: 26px; font-weight: 600; color: var(--fjord); margin: 0; letter-spacing: -0.02em; line-height: 1.2; }
+.subhead { font-size: 18px; font-weight: 600; color: var(--fjord); margin: 40px 0 16px; letter-spacing: -0.01em; }
+p { margin: 0 0 16px; max-width: 70ch; color: var(--ink-2); }
+.intro { font-size: 17px; color: var(--ink-2); }
+code, .codeword { font-family: 'JetBrains Mono', monospace; font-size: 0.84em; background: var(--mist); color: var(--accent-dim); padding: 1.5px 6px; border-radius: 4px; word-break: break-word; }
+.tablecard { border: 1px solid var(--glacier); border-radius: var(--radius); overflow: hidden; background: var(--card); margin: 4px 0; }
+table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+thead { background: var(--mist); }
+thead th { text-align: left; padding: 13px 16px; font-size: 11px; font-weight: 600; letter-spacing: 0.02em; text-transform: uppercase; color: var(--accent); }
+tbody td { padding: 13px 16px; vertical-align: top; border-top: 1px solid var(--line); color: var(--ink-2); }
+tbody tr:first-child td { border-top: none; }
+tbody tr:hover { background: var(--mist-hover); }
+td code { font-size: 12px; }
+td strong { color: var(--fjord); font-weight: 600; }
+.chip { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; font-size: 11.5px; font-weight: 500; padding: 3px 10px; border-radius: 999px; }
+.chip.done { background: var(--green-bg); color: var(--green-tx); }
+.chip.moot { background: var(--grey-bg); color: var(--grey-tx); }
+.chip.wait { background: #f3ecda; color: #8a6d2f; }
+.chip.new { background: var(--accent-soft); color: var(--accent-dim); }
+.chip.meta { background: var(--card-2); color: var(--outline); font-family: 'JetBrains Mono', monospace; font-size: 10.5px; letter-spacing: 0.02em; }
+.st-cell { width: 110px; }
+.figures { display: grid; grid-template-columns: repeat(2,1fr); gap: 16px; margin: 20px 0 8px; }
+@media (min-width:680px){ .figures { grid-template-columns: repeat(4,1fr); } }
+.figure { background: var(--card); border: 1px solid var(--glacier); border-radius: var(--radius); padding: 20px; }
+.figure .val { font-family: 'JetBrains Mono', monospace; font-size: 20px; font-weight: 500; color: var(--fjord); letter-spacing: -0.02em; }
+.figure .lab { font-size: 12px; color: var(--outline); margin-top: 6px; line-height: 1.4; }
+.ladder { background: var(--card); border: 1px solid var(--glacier); border-radius: var(--radius); padding: 22px 24px; margin: 20px 0; font-family: 'JetBrains Mono', monospace; font-size: 13px; line-height: 2; white-space: pre; overflow-x: auto; color: var(--ink-2); }
+.ladder .a { color: var(--accent); }
+.ladder b { color: var(--fjord); font-weight: 500; }
+.callout { background: rgba(255,255,255,0.7); backdrop-filter: blur(12px); border: 1px solid var(--glacier); border-radius: var(--radius); padding: 24px 28px; margin-top: 28px; box-shadow: var(--shadow); }
+.callout .label { font-family: 'JetBrains Mono', monospace; font-size: 10.5px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--accent); display: block; margin-bottom: 12px; }
+.callout p { margin: 0; color: var(--ink-2); font-size: 15px; max-width: none; }
+.probs { display: grid; gap: 14px; margin-top: 4px; }
+@media (min-width:760px){ .probs { grid-template-columns: 1fr 1fr; } }
+.prob { background: var(--card); border: 1px solid var(--glacier); border-radius: var(--radius); padding: 22px 24px; }
+.prob-top { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; }
+.prob-id { font-family: 'JetBrains Mono', monospace; font-size: 12px; font-weight: 600; color: #fff; background: var(--fjord); padding: 2px 9px; border-radius: 6px; }
+.prob h3 { font-size: 16px; font-weight: 600; color: var(--fjord); margin: 0; flex: 1; min-width: 160px; line-height: 1.3; letter-spacing: -0.01em; }
+.prob p { margin: 0; font-size: 14px; color: var(--ink-2); max-width: none; line-height: 1.6; }
+.prob .resolve { margin-top: 12px; }
+.pcard { background: var(--card); border: 1px solid var(--glacier); border-radius: var(--radius); padding: 6px 24px; }
+.principles { list-style: none; padding: 0; margin: 0; }
+.principles li { padding: 15px 0 15px 20px; position: relative; border-top: 1px solid var(--line); font-size: 14.5px; color: var(--ink-2); }
+.principles li:first-child { border-top: none; }
+.principles li::before { content: ''; position: absolute; left: 0; top: 22px; width: 8px; height: 2px; background: var(--accent); }
+.principles b { font-weight: 600; color: var(--fjord); }
+del { color: var(--outline); }
+footer { background: var(--card-2); border-top: 1px solid var(--line); margin-top: 88px; }
+.footer-in { max-width: 1040px; margin: 0 auto; padding: 28px 32px; display: flex; justify-content: space-between; flex-wrap: wrap; gap: 10px; font-family: 'JetBrains Mono', monospace; font-size: 11.5px; color: var(--outline); }
+.footer-in b { color: var(--fjord); font-weight: 600; }
+strong { font-weight: 600; }
+@media (max-width:560px){ .topbar-in, .hero-in, .wrap, .footer-in { padding-left: 20px; padding-right: 20px; } table { font-size: 12.5px; } thead th, tbody td { padding: 10px 12px; } }
+@media print { body { background: #fff; } .topbar { position: static; } section { break-inside: avoid; } }
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="topbar-in">
+    <span class="brand">QuickQuick · dev-log f6</span>
+    <span class="tag">Nordic · s13 · 2026-06-04</span>
+  </div>
+</div>
+
+<header class="hero">
+  <div class="hero-in">
+    <div class="kicker">
+      <span class="chip-hero solid">F6-S13 实现方案</span>
+      <span class="chip-hero ghost">待实现</span>
+    </div>
+    <h1>dev/release 数据目录隔离<br>debug 落 dev 子目录</h1>
+    <p class="lede">正式版装机后剪贴板报「加载失败」——根因是 debug 与 release 共用数据目录、密钥体系不同导致 SQLCipher 解密失败。本方案在路径解析层单点收口，让 debug 构建落 dev 子目录，与 release 彻底隔离。</p>
+    <div class="meta">
+      <span><b>层级</b>　小功能 · parent F6</span>
+      <span><b>制定</b>　2026-06-04</span>
+      <span><b>状态</b>　待实现 → 交 coder</span>
+    </div>
+  </div>
+</header>
+
+<div class="wrap">
+
+  <section>
+    <div class="sec-head"><span class="sec-num">一</span><h2>要解决的 bug</h2></div>
+    <p class="intro">正式版（release，adhoc 未签名）装机后，剪贴板页报「加载失败，请稍后重试」。下列复现与定位已实测坐实，非推断。</p>
+    <div class="pcard">
+      <ul class="principles">
+        <li>从终端带日志启动 release 二进制，stderr：<code>数据库打开失败：数据库操作失败：file is not a database</code></li>
+        <li><code>file is not a database</code> 是 <b>SQLCipher 密钥不匹配</b>时的典型表现：头部解密不出来，遂报「不是数据库」。</li>
+        <li>数据目录 <code>~/Library/Application Support/com.quickquick.app/</code> 同时存在 <code>dev-master-key</code>、<code>dev-credentials.json</code>（debug 文件密钥库产物）与 <code>quickquick.db</code>——该 DB 是先前 <b>dev 构建用文件密钥</b>加密的。</li>
+        <li>release 走 <b>keychain 密钥</b>路径（<code>KeychainKeyProvider</code>），用 keychain 派生密钥去开 dev 文件密钥加密的库 → 不匹配 → 开库失败。</li>
+        <li>验证：把数据目录整体挪开后，release 从零建库（217KB 全新 <code>quickquick.db</code>，无 dev 文件、无报错），剪贴板正常。证明 <b>release 对全新用户无问题、发布有效</b>；问题仅在「同机 dev/release 共用数据目录」时出现。</li>
+      </ul>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-head"><span class="sec-num">二</span><h2>根因</h2></div>
+    <p>debug 与 release 构建共用同一 identifier <code>com.quickquick.app</code> → 同一数据目录 <code>app_config_dir()</code>。两者密钥体系不同：</p>
+    <div class="figures">
+      <div class="figure"><div class="val">debug</div><div class="lab">FileKeyProvider · 文件 dev-master-key</div></div>
+      <div class="figure"><div class="val">release</div><div class="lab">KeychainKeyProvider · macOS 钥匙串</div></div>
+      <div class="figure"><div class="val">撞车</div><div class="lab">后跑方用己方密钥开对方加密的 DB</div></div>
+      <div class="figure"><div class="val">表象</div><div class="lab">file is not a database</div></div>
+    </div>
+    <p>用户只装 release 永不触发；开发者每次切构建就踩。</p>
+  </section>
+
+  <section>
+    <div class="sec-head"><span class="sec-num">三</span><h2>方案（单点收口，DRY）</h2></div>
+    <p class="intro">所有持久化文件路径都源自 <code>app.path().app_config_dir()</code>。中心 helper <code>resolve_config_dir()</code>（<code>ipc/settings.rs:234</code>）已服务 ipc 层，但 lib.rs 有 5 处直接调 <code>app_config_dir()</code> 绕过了它。</p>
+
+    <h3 class="subhead">改动 1 · resolve_config_dir() 加 debug 子目录</h3>
+    <p>取得 <code>app_config_dir()</code> 后，<code>#[cfg(debug_assertions)]</code> 追加 <code>dev</code> 子目录；release 不追加。<code>create_dir_all</code> 对最终目录执行。</p>
+    <div class="ladder">pub(crate) fn resolve_config_dir(app: &AppHandle) -> Result&lt;PathBuf, String&gt; {
+    let base = app.path().app_config_dir()
+        .map_err(|e| format!("无法获取配置目录：{e}"))?;
+
+    <span class="a">// debug 落 dev 子目录，与 release（钥匙串密钥）彻底隔离，</span>
+    <span class="a">// 消除同机切换时 file is not a database。</span>
+    #[cfg(debug_assertions)]
+    let dir = base.join("dev");
+    #[cfg(not(debug_assertions))]
+    let dir = base;
+
+    std::fs::create_dir_all(&dir)
+        .map_err(|e| format!("无法创建配置目录：{e}"))?;
+    Ok(dir)
+}</div>
+
+    <h3 class="subhead">改动 2 · lib.rs 5 处直接调用全部改走 resolve_config_dir()</h3>
+    <div class="tablecard">
+      <table>
+        <thead><tr><th>位置</th><th>用途</th><th>现状</th><th>改为</th></tr></thead>
+        <tbody>
+          <tr><td><code>lib.rs:192</code> setup_app_db</td><td><code>quickquick.db</code> 开库目录</td><td>app_config_dir() + 手动 create_dir_all</td><td><code>resolve_config_dir(app.handle())</code></td></tr>
+          <tr><td><code>lib.rs:282</code> 捕获轮询</td><td>读 settings.json 取 max_image_bytes</td><td>直接 app_config_dir()</td><td>同上</td></tr>
+          <tr><td><code>lib.rs:319</code> autostart 同步</td><td>autostart.json</td><td>直接 app_config_dir()</td><td>同上</td></tr>
+          <tr><td><code>lib.rs:458</code> 热键读取</td><td>hotkey.json</td><td>直接 app_config_dir()</td><td>同上</td></tr>
+          <tr><td><code>lib.rs:491</code> 设置布尔字段读取</td><td>settings.json</td><td>直接 app_config_dir()</td><td>同上</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="pcard">
+      <ul class="principles">
+        <li><code>setup_app_db(app: &mut tauri::App)</code> 取 handle 用 <code>app.handle()</code>（<code>&AppHandle</code>），传给 resolve_config_dir。</li>
+        <li>各处原有「拿不到目录则 eprintln 不 panic / 跳过」的<b>降级语义必须保留</b>；返回 Err 时走原降级路径，不得改成 panic。</li>
+        <li>改后 lib.rs 不再直接 use app_config_dir（未用 import 一并清理）。</li>
+      </ul>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-head"><span class="sec-num">四</span><h2>不做什么（边界）</h2></div>
+    <div class="probs">
+      <div class="prob"><div class="prob-top"><span class="prob-id">B1</span><h3>不改 identifier</h3></div><p>tauri.conf.json 的 identifier 是构建期静态值，debug/release 同一份 conf 无法分流；路径层加子目录是最小且正确的做法。</p></div>
+      <div class="prob"><div class="prob-top"><span class="prob-id">B2</span><h3>不动 release 路径</h3></div><p>release 仍落 app_config_dir() 根，<b>已装真实用户零迁移、零影响</b>。</p></div>
+      <div class="prob"><div class="prob-top"><span class="prob-id">B3</span><h3>不做 dev 旧库迁移</h3></div><p>dev 是测试数据，落新 dev 子目录后旧根目录的 dev 文件自然弃用，无需搬迁。</p></div>
+      <div class="prob"><div class="prob-top"><span class="prob-id">B4</span><h3>不改单测</h3></div><p>keyprovider/credential 单测用 tempdir 显式传目录，与本改动正交。</p></div>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-head"><span class="sec-num">五</span><h2>验收标准</h2></div>
+    <div class="tablecard">
+      <table>
+        <thead><tr><th class="st-cell">#</th><th>验收项</th></tr></thead>
+        <tbody>
+          <tr><td><span class="chip new">1</span></td><td><code>make verify</code> 五步全绿（tsc / cargo fmt --check / clippy -D warnings / vitest / cargo test）。</td></tr>
+          <tr><td><span class="chip new">2</span></td><td>debug 构建运行后，所有文件（quickquick.db / dev-master-key / dev-credentials.json / settings.json / hotkey.json）落在 <code>&lt;app_config_dir&gt;/dev/</code>；根目录不再新增这些文件。</td></tr>
+          <tr><td><span class="chip new">3</span></td><td>release 路径不变：文件仍落 <code>&lt;app_config_dir&gt;/</code> 根（cargo build --release 跑一次或审 cfg 分支确认）。</td></tr>
+          <tr><td><span class="chip new">4</span></td><td>同机先跑 release（根目录建库）再跑 debug（dev 子目录建库），两者互不报 file is not a database。</td></tr>
+          <tr><td><span class="chip new">5</span></td><td>lib.rs 5 处降级语义（拿不到目录不 panic）保持不变。</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="callout">
+      <span class="label">TDD 说明</span>
+      <p>目录解析是既有注释明示的「不可单测的胶水层」（依赖 Tauri AppHandle 运行时）。本 slice 以改动小、cfg 对称、make verify + 手动落盘验证为主要保障。若可低成本抽出「给定 base 返回带/不带 dev 后缀」的纯函数则加单测，但不为凑测试强行过度抽象。</p>
+    </div>
+  </section>
+
+</div>
+
+<footer>
+  <div class="footer-in">
+    <span><b>f6-s13 dev/release 数据目录隔离 · 实现方案</b></span>
+    <span>2026-06-04 · Nordic Serenity</span>
+  </div>
+</footer>
+
+</body>
+</html>

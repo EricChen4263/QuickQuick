@@ -232,14 +232,30 @@ pub(crate) fn resolve_config_path(
 /// 与 `resolve_config_path` 共享同一目录解析逻辑（后者在其基础上 join 文件名）。
 /// 此函数是不可单测的胶水层，仅供命令函数调用。
 pub(crate) fn resolve_config_dir(app: &AppHandle) -> Result<std::path::PathBuf, String> {
-    let dir = app
+    let base = app
         .path()
         .app_config_dir()
         .map_err(|e| format!("无法获取配置目录：{e}"))?;
 
+    let dir = apply_dev_subdir(&base, cfg!(debug_assertions));
+
     std::fs::create_dir_all(&dir).map_err(|e| format!("无法创建配置目录：{e}"))?;
 
     Ok(dir)
+}
+
+/// 按构建类型决定配置目录：debug 在 `base` 下追加 `dev` 子目录，release 用 `base`。
+///
+/// debug 构建落 dev 子目录，与 release（钥匙串密钥）的数据/密钥彻底隔离，
+/// 消除同机 dev↔release 切换时 SQLCipher 密钥不匹配（file is not a database）。
+/// release 路径不变（仍落 app_config_dir 根），已发布用户零迁移。
+/// 抽成纯函数以可单测；`is_debug` 由调用方传 `cfg!(debug_assertions)`。
+pub fn apply_dev_subdir(base: &std::path::Path, is_debug: bool) -> std::path::PathBuf {
+    if is_debug {
+        base.join("dev")
+    } else {
+        base.to_path_buf()
+    }
 }
 
 /// 系统热键注册器：通过 Tauri global shortcut API 向 OS 注册热键。
