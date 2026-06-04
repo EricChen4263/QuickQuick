@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo, useRef } from "react";
 import type { ClipItem } from "../ipc/ipc-client";
-import { listClipItems, pasteToFront } from "../ipc/ipc-client";
+import { listClipItems, pasteToFront, hideAndReturnFocus } from "../ipc/ipc-client";
 import { writeToClipboard } from "../panels/translate/browser-api";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { filterClipBySearch, groupClipItems } from "./grouping";
@@ -137,12 +137,11 @@ export default function ClipPopoverApp() {
     if (e.key === "Escape") {
       // WKWebView 会把 Esc 键原生"清空 search input"行为吞掉，不冒泡到 document。
       // 在 onKeyDown 处显式拦截并关窗，才能让 Esc 在输入框已获焦时正常工作。
+      // 走 hideAndReturnFocus 而非裸 hide：关闭面板同时把焦点还给上一个外部 app（方案 C）。
       e.preventDefault();
-      getCurrentWindow()
-        .hide()
-        .catch((err: unknown) => {
-          console.error("[clip-popover] hide on Esc failed:", err);
-        });
+      hideAndReturnFocus().catch((err: unknown) => {
+        console.error("[clip-popover] hideAndReturnFocus on Esc failed:", err);
+      });
     }
   }
 

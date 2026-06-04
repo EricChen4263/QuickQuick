@@ -246,11 +246,58 @@ pub fn open_accessibility_settings() -> Result<(), String> {
 /// 会把焦点交给陈旧/错误的 app 致 Cmd+V 落空；显式激活记录到的目标 app 修正此问题。
 /// `target_pid` 为 None（尚未记录到）或激活失败时降级走原隐式路径，不破坏 popover 流程。
 fn hide_and_restore_focus(app: &tauri::AppHandle, target_pid: Option<i32>) {
+    hide_window_and_activate_target(app, target_pid);
+    // 仅粘贴路径需固定等待焦点转移完成后再 send_paste；纯关窗还焦（方案 C）不 send_paste，
+    // 故等待逻辑留在本函数、不下沉到共享 helper，避免给关窗路径平添 350ms 卡顿。
+    std::thread::sleep(std::time::Duration::from_millis(FOCUS_YIELD_WAIT_MS));
+}
+
+/// 隐藏窗口 + 隐藏 app + 按 pid 显式激活目标 app（hide-and-restore 的共享前半段，无等待）。
+///
+/// 三步顺序：HidePanel（hide clip-popover，无则 hide main）→ HideApp（app.hide() 让出前台）
+/// → 按 `target_pid` 显式激活目标 app。激活放在 hide 之后，让目标在还焦后成为 key app。
+///
+/// 由两条路径复用：
+/// - 粘贴路径 `hide_and_restore_focus`：在本函数后追加固定等待再 send_paste。
+/// - 关窗还焦路径 `hide_and_return_focus` 命令（方案 C）：仅需还焦、无需等待。
+///
+/// `target_pid` 为 None 或激活失败时降级走 `app.hide()` 隐式还焦路径，不 panic。
+fn hide_window_and_activate_target(app: &tauri::AppHandle, target_pid: Option<i32>) {
     hide_popover_window(app);
     hide_app(app);
-    // 激活放在 hide 之后、等待之前：让目标 app 在 Cmd+V 落键前成为 key app。
     activate_target_app(app, target_pid);
-    std::thread::sleep(std::time::Duration::from_millis(FOCUS_YIELD_WAIT_MS));
+}
+
+/// Tauri 命令：隐藏当前窗口并把前台焦点还给上一个外部 app（方案 C）。
+///
+/// 复用 `hide_window_and_activate_target`：hide 窗口（popover 优先，无则 main）→ app.hide()
+/// → 按 `LastExternalApp` 记录的 pid 显式激活。供 popover 的 Esc 关闭路径 invoke，
+/// 替代裸 `getCurrentWindow().hide()`——后者只隐藏窗口、不把焦点显式交还触发处的 app。
+///
+/// 降级：未记录到 pid 时退化为纯 `app.hide()` 隐式还焦（macOS 自动让出前台），不 panic。
+/// 不调用 send_paste、不固定等待，故无粘贴路径的 350ms 卡顿。
+#[tauri::command]
+pub fn hide_and_return_focus(
+    last_external: State<'_, Arc<LastExternalApp>>,
+    app: tauri::AppHandle,
+) {
+    hide_window_and_activate_target(&app, last_external.get());
+}
+
+/// 主窗关闭（CloseRequested）路径的还焦：app.hide() + 按记录 pid 显式激活上一个外部 app（方案 C）。
+///
+/// 与命令 `hide_and_return_focus` 的差异：此处窗口已由 `CloseRequested` 分支的 `win.hide()`
+/// 隐藏，故不再 hide 窗口，只补 app.hide() 让出前台 + 显式激活目标，保留 stay_in_tray 语义
+/// （进程驻留托盘、不退出）。
+///
+/// 通过 `app.state::<Arc<LastExternalApp>>()` 取托管状态——该状态在 setup 阶段必被托管
+/// （非 macOS 也托管空状态），故 `try_state` 正常恒为 Some；缺失时降级跳过激活，不 panic。
+pub fn return_focus_after_main_hide(app: &tauri::AppHandle) {
+    let target_pid = app
+        .try_state::<Arc<LastExternalApp>>()
+        .and_then(|state| state.get());
+    hide_app(app);
+    activate_target_app(app, target_pid);
 }
 
 /// 按 pid 显式激活目标 app（方案 B 核心，macOS）。

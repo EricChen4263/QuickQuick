@@ -8,7 +8,11 @@
 import "./translate.css";
 import { useEffect, useState, useCallback, useRef } from "react";
 import { listen } from "@tauri-apps/api/event";
-import { TRANSLATE_HISTORY_CHANGED_EVENT, PROVIDER_CONFIG_CHANGED_EVENT } from "../../ipc/events";
+import {
+  TRANSLATE_HISTORY_CHANGED_EVENT,
+  PROVIDER_CONFIG_CHANGED_EVENT,
+  SELECTED_PROVIDER_CHANGED_EVENT,
+} from "../../ipc/events";
 import {
   translateText,
   listTranslateHistory,
@@ -164,6 +168,37 @@ function TranslatePage({ seed }: TranslatePageProps) {
       unlisten?.();
     };
   }, [fetchConfiguredIds]);
+
+  // 订阅后端 selected-provider-changed 事件：设置页改默认翻译源后，翻译页据此刷新选中项。
+  // 采用相同的 cancelled+unlisten 范式，防卸载后泄漏；自发自收幂等（值相同），无需去抖。
+  useEffect(() => {
+    const cancelled = { current: false };
+    let unlisten: (() => void) | undefined;
+    listen(SELECTED_PROVIDER_CHANGED_EVENT, () => {
+      void getSelectedProvider()
+        .then((currentId) => {
+          if (cancelled.current) return;
+          setSelectedProviderId(currentId);
+        })
+        .catch((err: unknown) => {
+          console.error("[QuickQuick] selected-provider-changed 刷新失败:", err);
+        });
+    })
+      .then((fn) => {
+        if (cancelled.current) {
+          fn();
+        } else {
+          unlisten = fn;
+        }
+      })
+      .catch((err: unknown) => {
+        console.error("[QuickQuick] selected-provider-changed 监听注册失败:", err);
+      });
+    return () => {
+      cancelled.current = true;
+      unlisten?.();
+    };
+  }, []);
 
   /**
    * 执行翻译：调 IPC → 更新结果 → 刷新历史。

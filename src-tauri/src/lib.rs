@@ -159,6 +159,7 @@ pub fn run() {
             ipc::system::cleanup_history,
             ipc::system::open_accessibility_settings,
             ipc::system::paste_to_front,
+            ipc::system::hide_and_return_focus,
             ipc::update::check_for_updates,
         ])
         .setup(|app| {
@@ -518,6 +519,10 @@ fn setup_main_window_behavior(
         WindowEvent::CloseRequested { api, .. } if stay_in_tray.load(Ordering::Relaxed) => {
             api.prevent_close();
             let _ = win.hide();
+            // 关主窗也应把前台焦点显式还给上一个外部 app（方案 C）；仅 hide 窗口会把焦点
+            // 留在 QuickQuick 进程。app.hide() + 按 LastExternalApp 记录的 pid 激活，保留
+            // stay_in_tray 语义（进程驻留托盘不退出），拿不到 pid 时降级隐式还焦、不 panic。
+            ipc::system::return_focus_after_main_hide(win.app_handle());
         }
         _ => {}
     });

@@ -190,6 +190,20 @@ export async function setSelectedProvider(id: string): Promise<void> {
 }
 
 /**
+ * 隐藏当前窗口并把前台焦点还给上一个外部 app（方案 C）。
+ *
+ * 替代裸 getCurrentWindow().hide()：后者只隐藏窗口、不把焦点交还触发处的 app。
+ * 用于 popover 的 Esc 关闭路径，让用户关闭面板后焦点回到原应用。
+ */
+export async function hideAndReturnFocus(): Promise<void> {
+  try {
+    await invoke<void>("hide_and_return_focus");
+  } catch (err) {
+    throw toError(err);
+  }
+}
+
+/**
  * 获取图片剪贴板条目的原图（PNG）data URL。
  * 降级或无原图时返回 null。
  *

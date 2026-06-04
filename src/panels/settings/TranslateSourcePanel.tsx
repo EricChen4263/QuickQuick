@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback, useRef } from "react";
+import { listen } from "@tauri-apps/api/event";
 import {
   getTranslateProviders,
   getSelectedProvider,
@@ -9,6 +10,7 @@ import {
   type CredentialField,
   type CredentialValue,
 } from "../../ipc/ipc-client";
+import { SELECTED_PROVIDER_CHANGED_EVENT } from "../../ipc/events";
 import { isProviderConfigured } from "../../ipc/credential-utils";
 import PanelHeader from "./PanelHeader";
 import SettingGroup from "./SettingGroup";
@@ -193,6 +195,37 @@ function TranslateSourcePanel() {
       cancelled.current = true;
     };
   }, [fetchProviders]);
+
+  // 订阅后端 selected-provider-changed 事件：翻译页改默认源后，设置页据此刷新选中徽标。
+  // 采用相同的 cancelled+unlisten 范式，防卸载后泄漏；自发自收幂等（值相同），无需去抖。
+  useEffect(() => {
+    const cancelled = { current: false };
+    let unlisten: (() => void) | undefined;
+    listen(SELECTED_PROVIDER_CHANGED_EVENT, () => {
+      void getSelectedProvider()
+        .then((currentId) => {
+          if (cancelled.current) return;
+          setSelectedId(currentId);
+        })
+        .catch((err: unknown) => {
+          console.error("[TranslateSourcePanel] selected-provider-changed 刷新失败:", err);
+        });
+    })
+      .then((fn) => {
+        if (cancelled.current) {
+          fn();
+        } else {
+          unlisten = fn;
+        }
+      })
+      .catch((err: unknown) => {
+        console.error("[TranslateSourcePanel] selected-provider-changed 监听注册失败:", err);
+      });
+    return () => {
+      cancelled.current = true;
+      unlisten?.();
+    };
+  }, []);
 
   async function handleSelect(id: string) {
     try {

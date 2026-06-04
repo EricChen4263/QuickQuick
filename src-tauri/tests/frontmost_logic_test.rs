@@ -95,3 +95,39 @@ fn activation_decision_nonpositive_falls_back() {
         "pid=0 应降级而非激活无效目标"
     );
 }
+
+/// 方案 C 关窗还焦的复合契约：state 未记录 pid 时，命令读 state.get() 喂给 activation_decision，
+/// 应得 FallbackHide（退化为纯 app.hide 隐式还焦，不 panic、不尝试激活无效目标）。
+#[test]
+fn hide_and_return_focus_falls_back_when_no_pid_recorded() {
+    // Arrange：模拟新启动尚未记录到任何外部 app 的状态。
+    let state = LastExternalApp::new();
+
+    // Act：复现命令体内 last_external.get() → activation_decision 的取值链。
+    let decision = activation_decision(state.get());
+
+    // Assert
+    assert_eq!(
+        decision,
+        ActivationDecision::FallbackHide,
+        "未记录 pid 时关窗还焦应降级隐式路径"
+    );
+}
+
+/// 方案 C 关窗还焦的复合契约：state 已记录有效 pid 时，命令应据此显式激活该目标 app。
+#[test]
+fn hide_and_return_focus_activates_recorded_pid() {
+    // Arrange：模拟已观察到外部前台 app（pid=7788）的状态。
+    let state = LastExternalApp::new();
+    state.set(7788);
+
+    // Act
+    let decision = activation_decision(state.get());
+
+    // Assert
+    assert_eq!(
+        decision,
+        ActivationDecision::ActivatePid(7788),
+        "已记录 pid 时关窗还焦应显式激活该目标"
+    );
+}

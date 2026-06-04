@@ -5,6 +5,7 @@ import ClipPopoverApp from "./ClipPopoverApp";
 vi.mock("../ipc/ipc-client", () => ({
   listClipItems: vi.fn(),
   pasteToFront: vi.fn(),
+  hideAndReturnFocus: vi.fn(),
 }));
 
 vi.mock("../panels/translate/browser-api", () => ({
@@ -28,12 +29,13 @@ vi.mock("@tauri-apps/api/window", () => ({
   }),
 }));
 
-import { listClipItems, pasteToFront } from "../ipc/ipc-client";
+import { listClipItems, pasteToFront, hideAndReturnFocus } from "../ipc/ipc-client";
 import { writeToClipboard } from "../panels/translate/browser-api";
 
 const mockListClipItems = listClipItems as ReturnType<typeof vi.fn>;
 const mockPasteToFront = pasteToFront as ReturnType<typeof vi.fn>;
 const mockWriteToClipboard = writeToClipboard as ReturnType<typeof vi.fn>;
+const mockHideAndReturnFocus = hideAndReturnFocus as ReturnType<typeof vi.fn>;
 
 const ITEMS = [
   { id: "id1", content: "first item", kind: "text", isFavorite: false, lastModifiedUtc: Date.now() },
@@ -60,6 +62,7 @@ beforeEach(() => {
   mockPasteToFront.mockResolvedValue({ outcome: "write_back_only" });
   mockWriteToClipboard.mockResolvedValue(undefined);
   mockHide.mockResolvedValue(undefined);
+  mockHideAndReturnFocus.mockResolvedValue(undefined);
 });
 
 describe("ClipPopoverApp 键盘动作", () => {
@@ -155,7 +158,7 @@ describe("ClipPopoverApp 键盘动作", () => {
     expect(mockHide).not.toHaveBeenCalled();
   });
 
-  it("按 Esc 调 hide 关闭窗口", async () => {
+  it("按 Esc 调 hideAndReturnFocus 关闭窗口并还焦", async () => {
     render(<ClipPopoverApp />);
 
     await waitFor(() => {
@@ -165,9 +168,12 @@ describe("ClipPopoverApp 键盘动作", () => {
     const input = screen.getByRole("searchbox");
     fireEvent.keyDown(input, { key: "Escape" });
 
+    // 方案 C：Esc 关闭走 hideAndReturnFocus（隐藏窗口 + 把焦点还给上一个外部 app），
+    // 而非裸 getCurrentWindow().hide()（只隐藏、不还焦）。
     await waitFor(() => {
-      expect(mockHide).toHaveBeenCalled();
+      expect(mockHideAndReturnFocus).toHaveBeenCalled();
     });
+    expect(mockHide).not.toHaveBeenCalled();
   });
 
   it("pasteToFront 失败时不调 hide，控制台有 error", async () => {

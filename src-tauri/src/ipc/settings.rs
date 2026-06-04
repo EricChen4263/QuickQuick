@@ -68,6 +68,11 @@ pub struct ProviderDto {
 /// Tauri 事件名跨语言无法编译期共享，改动需两端同步。
 const PROVIDER_CONFIG_CHANGED_EVENT: &str = "provider-config-changed";
 
+/// 默认翻译源切换事件名。与前端 src/ipc/events.ts 的 SELECTED_PROVIDER_CHANGED_EVENT 必须一致。
+/// 设置页与翻译页各自缓存当前默认 provider，一方改动后 emit 此事件令另一方刷新；
+/// Tauri 事件名跨语言无法编译期共享，改动需两端同步。
+const SELECTED_PROVIDER_CHANGED_EVENT: &str = "selected-provider-changed";
+
 /// 将 `action` 字符串解析为 `HotkeyAction`。
 ///
 /// 只接受 "history" / "translate" 两个合法值，其余返回 Err。
@@ -351,10 +356,17 @@ pub fn get_selected_provider(app: AppHandle) -> Result<String, String> {
 }
 
 /// Tauri 命令：设置翻译 provider（校验 id 合法性）。
+///
+/// 写入成功后 emit `selected-provider-changed`，让设置页与翻译页双向同步当前默认源
+/// （任一页改动，另一页据事件重读刷新）。emit 失败仅记日志，不影响命令返回值。
 #[tauri::command]
 pub fn set_selected_provider(app: AppHandle, id: String) -> Result<(), String> {
     let path = resolve_config_path(&app, "settings.json")?;
-    set_selected_provider_impl(&id, &path)
+    set_selected_provider_impl(&id, &path)?;
+    if let Err(e) = app.emit(SELECTED_PROVIDER_CHANGED_EVENT, ()) {
+        eprintln!("[QuickQuick] selected-provider-changed emit 失败: {e}");
+    }
+    Ok(())
 }
 
 /// `get_pause_capture` 的纯函数实现：从 AtomicBool 读取当前暂停状态。
