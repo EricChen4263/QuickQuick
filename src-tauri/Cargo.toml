@@ -45,7 +45,22 @@ tempfile = "3"
 [target.'cfg(target_os = "macos")'.dependencies]
 core-graphics = "0.25"
 objc2 = "0.6"
-objc2-app-kit = { version = "0.3", features = ["NSPasteboard", "NSApplication", "NSResponder"] }
+objc2-app-kit = { version = "0.3", features = [
+    "NSPasteboard",
+    "NSApplication",
+    "NSResponder",
+    "NSWorkspace",
+    "NSRunningApplication",
+] }
+# NSWorkspace 通知中心走 block 形式注册观察者（addObserverForName:object:queue:usingBlock:），
+# 需 objc2-foundation 提供 NSNotification/NSDictionary/NSString，block2 提供 RcBlock。
+objc2-foundation = { version = "0.3", features = [
+    "NSNotification",
+    "NSDictionary",
+    "NSString",
+    "NSValue",
+] }
+block2 = "0.6"
 
 [features]
 default = ["custom-protocol"]

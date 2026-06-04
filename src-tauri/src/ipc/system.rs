@@ -22,8 +22,11 @@ use rusqlite::{Connection, OptionalExtension};
 use serde::Serialize;
 use tauri::{Manager, State};
 
+use std::sync::Arc;
+
 use crate::clipboard::CapturedItem;
 use crate::db::{self, DbError};
+use crate::frontmost::LastExternalApp;
 use crate::ipc::{with_db, AppDb};
 use crate::onboarding::{
     perform_paste_or_degrade, AccessibilityProbe, PasteOutcome, ACCESSIBILITY_DEEPLINK,
@@ -237,11 +240,64 @@ pub fn open_accessibility_settings() -> Result<(), String> {
 /// 固定等待是此约束下的务实选择，详见 FOCUS_YIELD_WAIT_MS 注释。
 ///
 /// hide 失败均不 panic，降级记录日志继续尝试粘贴。
-fn hide_and_restore_focus(app: &tauri::AppHandle) {
+///
+/// 方案 B 修复：在 hide 之后、等待之前插入"按 pid 显式激活目标 app"。
+/// 主窗口路径下 QuickQuick 长时间是前台，仅靠 `app.hide()` 隐式还焦给"上一个 app"
+/// 会把焦点交给陈旧/错误的 app 致 Cmd+V 落空；显式激活记录到的目标 app 修正此问题。
+/// `target_pid` 为 None（尚未记录到）或激活失败时降级走原隐式路径，不破坏 popover 流程。
+fn hide_and_restore_focus(app: &tauri::AppHandle, target_pid: Option<i32>) {
     hide_popover_window(app);
     hide_app(app);
+    // 激活放在 hide 之后、等待之前：让目标 app 在 Cmd+V 落键前成为 key app。
+    activate_target_app(app, target_pid);
     std::thread::sleep(std::time::Duration::from_millis(FOCUS_YIELD_WAIT_MS));
 }
+
+/// 按 pid 显式激活目标 app（方案 B 核心，macOS）。
+///
+/// 决策由纯函数 `activation_decision` 给出：
+/// - `ActivatePid(pid)`：在主线程调 NSRunningApplication.activateWithOptions 激活目标。
+/// - `FallbackHide`：无可用 pid，跳过显式激活，沿用 `app.hide()` 隐式还焦路径。
+///
+/// 线程模型：激活必须在主线程，故用 `run_on_main_thread` 派发（本函数在 paste 命令线程）。
+/// 二次降级：runningApplicationWithProcessIdentifier 返回 nil（目标已退出）时跳过，不 panic。
+#[cfg(target_os = "macos")]
+fn activate_target_app(app: &tauri::AppHandle, target_pid: Option<i32>) {
+    use crate::frontmost::{activation_decision, ActivationDecision};
+
+    let ActivationDecision::ActivatePid(pid) = activation_decision(target_pid) else {
+        return;
+    };
+
+    if let Err(e) = app.run_on_main_thread(move || activate_running_app_by_pid(pid)) {
+        eprintln!("[paste_to_front] run_on_main_thread 派发激活失败: {e}");
+    }
+}
+
+/// 在主线程按 pid 取回 NSRunningApplication 并激活（macOS）。
+///
+/// `activateWithOptions(empty)` 替代 objc2-app-kit 0.3 未暴露的无参 `activate()`，
+/// 语义等价（activateWithOptions 在 macOS14+ 标弃用但仍可用，无参 activate 此版本未生成）。
+/// app 已退出（runningApplication 返回 nil）时静默跳过，不 panic。
+#[cfg(target_os = "macos")]
+fn activate_running_app_by_pid(pid: i32) {
+    use objc2_app_kit::{NSApplicationActivationOptions, NSRunningApplication};
+
+    // runningApplicationWithProcessIdentifier 是安全 API；pid 已由纯函数确保 > 0。
+    let Some(running_app) = NSRunningApplication::runningApplicationWithProcessIdentifier(pid)
+    else {
+        // 目标 app 已退出：降级跳过，原 app.hide() 隐式路径已让出前台。
+        return;
+    };
+
+    // 空选项即"激活但不强制前置全部窗口"，配合先前 hide 已让出前台，
+    // 足以让目标成为 key app 接收 Cmd+V。
+    running_app.activateWithOptions(NSApplicationActivationOptions::empty());
+}
+
+/// 非 macOS：无 NSRunningApplication，显式激活为 no-op（降级隐式路径）。
+#[cfg(not(target_os = "macos"))]
+fn activate_target_app(_app: &tauri::AppHandle, _target_pid: Option<i32>) {}
 
 /// 优先 hide clip-popover，不存在则 hide main。
 fn hide_popover_window(app: &tauri::AppHandle) {
@@ -290,6 +346,7 @@ fn hide_app(_app: &tauri::AppHandle) {}
 #[tauri::command]
 pub fn paste_to_front(
     state: State<'_, AppDb>,
+    last_external: State<'_, Arc<LastExternalApp>>,
     app: tauri::AppHandle,
     id: String,
 ) -> Result<PasteResultDto, String> {
@@ -297,7 +354,9 @@ pub fn paste_to_front(
         fetch_paste_item(conn, &id).map_err(|e| e.to_string())
     })?;
 
-    let outcome = run_paste_with_backend(&app, &item);
+    // 读取观察者记录的"最近外部前台 app" pid（方案 B），供粘贴时显式激活目标。
+    let target_pid = last_external.get();
+    let outcome = run_paste_with_backend(&app, &item, target_pid);
 
     Ok(PasteResultDto { outcome })
 }
@@ -309,7 +368,11 @@ pub fn paste_to_front(
 /// trusted 分支：write_and_confirm 确认写入 → hide 窗口 → send_paste → "full_paste"。
 /// write_and_confirm 失败（Timeout）或未授权：write_with_marker → "write_back_only"。
 #[cfg(target_os = "macos")]
-fn run_paste_with_backend(app: &tauri::AppHandle, item: &CapturedItem) -> String {
+fn run_paste_with_backend(
+    app: &tauri::AppHandle,
+    item: &CapturedItem,
+    target_pid: Option<i32>,
+) -> String {
     use crate::macos_paste::{MacOsAccessibilityProbe, MacOsPasteBackend};
 
     let probe = MacOsAccessibilityProbe;
@@ -324,7 +387,7 @@ fn run_paste_with_backend(app: &tauri::AppHandle, item: &CapturedItem) -> String
     if probe.is_trusted() {
         match paste::write_and_confirm(&mut backend, item) {
             Ok(()) => {
-                hide_and_restore_focus(app);
+                hide_and_restore_focus(app, target_pid);
                 backend.send_paste();
                 "full_paste".to_string()
             }
@@ -337,7 +400,11 @@ fn run_paste_with_backend(app: &tauri::AppHandle, item: &CapturedItem) -> String
 }
 
 #[cfg(not(target_os = "macos"))]
-fn run_paste_with_backend(app: &tauri::AppHandle, item: &CapturedItem) -> String {
+fn run_paste_with_backend(
+    app: &tauri::AppHandle,
+    item: &CapturedItem,
+    _target_pid: Option<i32>,
+) -> String {
     use crate::macos_paste::FallbackAccessibilityProbe;
     use crate::macos_paste::FallbackPasteBackend;
 

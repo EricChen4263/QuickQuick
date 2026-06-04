@@ -15,6 +15,7 @@
 pub mod autostart;
 pub mod clipboard;
 pub mod db;
+pub mod frontmost;
 pub mod hotkey;
 pub mod image;
 pub mod ipc;
@@ -169,6 +170,7 @@ pub fn run() {
             let stay_in_tray = Arc::clone(&capture_state.stay_in_tray);
             let exclude_list = Arc::clone(&capture_state.exclude_list);
             app.manage(capture_state);
+            setup_frontmost_tracking(app);
             start_clipboard_poll(app.handle().clone(), paused, skip_sensitive, exclude_list);
             apply_autostart_preference(app);
             register_hotkeys(app.handle());
@@ -331,6 +333,89 @@ fn apply_autostart_preference(app: &mut tauri::App) {
     let pref = autostart::AutostartConfig::load_or_default(&config_path);
     autostart::apply_to_os(&app.handle().clone(), pref.enabled);
 }
+
+/// 注册"最近外部前台 app"追踪并把共享状态交给 Tauri 托管。
+///
+/// 托管 `Arc<LastExternalApp>`：观察者回调（主线程）与 paste_to_front 命令（命令线程）
+/// 共用同一实例——前者写 pid、后者读 pid。Arc 让两侧持有同一 `Mutex<Option<i32>>`。
+///
+/// macOS：装 NSWorkspace 应用激活通知观察者（见 `register_frontmost_observer`）。
+/// 非 macOS：仅托管空状态（观察者为 no-op），保证 `State<Arc<LastExternalApp>>` 始终可取。
+fn setup_frontmost_tracking(app: &tauri::App) {
+    let shared = Arc::new(frontmost::LastExternalApp::new());
+    register_frontmost_observer(Arc::clone(&shared));
+    app.manage(shared);
+}
+
+/// macOS：注册 NSWorkspace 应用激活通知观察者，记录最近一个非自身前台 app 的 pid。
+///
+/// 线程模型：观察者注册与回调均在主线程（setup 在主线程；通知投递到 mainQueue）。
+/// 因此 set pid 发生在主线程，paste_to_front 命令线程随后读取。
+///
+/// 用 block 形式（`addObserverForName:object:queue:usingBlock:` + block2::RcBlock）
+/// 而非 `define_class!` 自定义 NSObject：无需声明新类/管理 selector，最简且能编译。
+///
+/// 观察者 token 故意 `std::mem::forget`：观察者需存活至进程退出（与 app 同生命周期），
+/// 不在任何时点反注册；泄漏一个常驻 token 是此场景的正确选择，非疏漏。
+#[cfg(target_os = "macos")]
+fn register_frontmost_observer(shared: Arc<frontmost::LastExternalApp>) {
+    use std::ptr::NonNull;
+
+    use block2::RcBlock;
+    use objc2::rc::Retained;
+    use objc2_app_kit::{NSWorkspace, NSWorkspaceDidActivateApplicationNotification};
+    use objc2_foundation::NSNotification;
+
+    // self_pid 在闭包外取一次：用于过滤掉 QuickQuick 自身激活通知。
+    let self_pid = std::process::id() as i32;
+
+    let block = RcBlock::new(move |notification: NonNull<NSNotification>| {
+        // 通知对象由 AppKit 投递，引用在回调期间有效；转成安全引用读取 userInfo。
+        let notification: &NSNotification = unsafe { notification.as_ref() };
+        let Some(pid) = extract_activated_pid(notification) else {
+            return;
+        };
+        if frontmost::should_record_pid(pid, self_pid) {
+            shared.set(pid);
+        }
+    });
+
+    // sharedWorkspace / notificationCenter 是安全 API；addObserver 标 unsafe（block 须 sendable，
+    // 本 block 仅捕获 Arc 与 i32，满足要求），observer 对象唯一持有人是我们 forget 的 token。
+    let center = NSWorkspace::sharedWorkspace().notificationCenter();
+    let observer: Retained<_> = unsafe {
+        center.addObserverForName_object_queue_usingBlock(
+            Some(NSWorkspaceDidActivateApplicationNotification),
+            None,
+            None,
+            &block,
+        )
+    };
+
+    // 观察者须存活至进程退出；forget 防止 token 析构反注册。
+    std::mem::forget(observer);
+}
+
+/// macOS：从激活通知的 userInfo 取出被激活 app 的 pid（processIdentifier）。
+///
+/// 路径：notification.userInfo → objectForKey(NSWorkspaceApplicationKey)
+/// → downcast 为 NSRunningApplication → processIdentifier。
+/// 任一环节缺失（无 userInfo / 无该 key / 类型不符）返回 None，调用方据此跳过记录。
+#[cfg(target_os = "macos")]
+fn extract_activated_pid(notification: &objc2_foundation::NSNotification) -> Option<i32> {
+    use objc2::rc::Retained;
+    use objc2_app_kit::{NSRunningApplication, NSWorkspaceApplicationKey};
+
+    let user_info = notification.userInfo()?;
+    // userInfo 是无类型 NSDictionary；用 NSWorkspaceApplicationKey 取关联的 NSRunningApplication。
+    let value = user_info.objectForKey(unsafe { NSWorkspaceApplicationKey });
+    let running_app: Retained<NSRunningApplication> = value?.downcast().ok()?;
+    Some(running_app.processIdentifier())
+}
+
+/// 非 macOS：观察者为 no-op（无 NSWorkspace），仅保留签名让 setup 通用。
+#[cfg(not(target_os = "macos"))]
+fn register_frontmost_observer(_shared: Arc<frontmost::LastExternalApp>) {}
 
 /// 将 `HotkeyAction` 映射为对应 popover 窗口的标签字符串。
 ///
