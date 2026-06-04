@@ -763,6 +763,14 @@ fn ensure_schema(conn: &Connection) -> Result<(), DbError> {
             PRIMARY KEY (provider_id, field_key)
         );
 
+        -- secret 存在标记表：仅记录某 secret 是否已写入 keychain，绝不存值。
+        -- 用途：设置页判断「已配置」而不触发钥匙串弹窗（展示路径只读此表，不碰 keychain）。
+        CREATE TABLE IF NOT EXISTS secret_presence (
+            provider_id  TEXT NOT NULL,
+            field_key    TEXT NOT NULL,
+            PRIMARY KEY (provider_id, field_key)
+        );
+
         -- 翻译缓存表（§4.1#5 预埋，LRU 淘汰；键=四元组哈希）
         -- cache_key = hash(source_text + source_lang + target_lang + provider_id)
         -- last_used_utc 用于 LRU 淘汰排序（命中时刷新）

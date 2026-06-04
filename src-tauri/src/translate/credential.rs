@@ -113,6 +113,107 @@ impl CredStore for KeyringCredStore {
     }
 }
 
+/// 开发期文件凭据库（debug-only，release 构建用 KeyringCredStore）。
+///
+/// # 为什么需要它
+/// 与 FileKeyProvider 同因：dev 反复重编导致 macOS 钥匙串「始终允许」失效、反复弹密码。
+/// debug 构建改把翻译 secret 存本地 JSON 文件、完全绕开 OS 钥匙串。
+///
+/// # 安全约束
+/// - 仅 `#[cfg(debug_assertions)]` 编译，绝不进入 release 分发二进制。
+/// - JSON 文件权限设为 `0600`（仅属主可读写）。
+/// - 文件就是 dev 密钥库：secret 仍是 secret，只是后端从钥匙串换成受限文件。
+///
+/// # 存储格式
+/// `HashMap<account, value>` 序列化为 JSON，account 复用 `keychain_account`
+/// （`cred.<pid>.<key>`），与 KeyringCredStore 的 account 命名一致。
+#[cfg(debug_assertions)]
+pub struct FileCredStore {
+    /// 凭据 JSON 文件完整路径（config_dir/dev-credentials.json）
+    file_path: std::path::PathBuf,
+}
+
+#[cfg(debug_assertions)]
+impl FileCredStore {
+    /// dev 凭据文件名（落在 app_config_dir 下）
+    const CRED_FILE_NAME: &'static str = "dev-credentials.json";
+
+    /// 创建 FileCredStore，凭据文件落在 `config_dir/dev-credentials.json`。
+    pub fn new(config_dir: &std::path::Path) -> Self {
+        Self {
+            file_path: config_dir.join(Self::CRED_FILE_NAME),
+        }
+    }
+
+    /// 读取全部凭据表；文件不存在时返回空表（视为尚无凭据，非错误）。
+    fn read_all(&self) -> Result<std::collections::HashMap<String, String>, CredError> {
+        match std::fs::read(&self.file_path) {
+            Ok(bytes) => serde_json::from_slice(&bytes)
+                .map_err(|e| CredError::Keychain(format!("dev 凭据文件解析失败：{e}"))),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                Ok(std::collections::HashMap::new())
+            }
+            Err(e) => Err(CredError::Keychain(e.to_string())),
+        }
+    }
+
+    /// 写入全部凭据表并设权限 0600（unix）。非 unix 平台跳过权限设置。
+    fn write_all(&self, map: &std::collections::HashMap<String, String>) -> Result<(), CredError> {
+        let json = serde_json::to_vec_pretty(map)
+            .map_err(|e| CredError::Keychain(format!("dev 凭据序列化失败：{e}")))?;
+        std::fs::write(&self.file_path, json).map_err(|e| CredError::Keychain(e.to_string()))?;
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&self.file_path, std::fs::Permissions::from_mode(0o600))
+                .map_err(|e| CredError::Keychain(e.to_string()))?;
+        }
+
+        Ok(())
+    }
+}
+
+#[cfg(debug_assertions)]
+impl CredStore for FileCredStore {
+    fn set_secret(&self, provider_id: &str, field_key: &str, value: &str) -> Result<(), CredError> {
+        let mut map = self.read_all()?;
+        map.insert(keychain_account(provider_id, field_key), value.to_string());
+        self.write_all(&map)
+    }
+
+    fn get_secret(&self, provider_id: &str, field_key: &str) -> Result<Option<String>, CredError> {
+        let map = self.read_all()?;
+        Ok(map.get(&keychain_account(provider_id, field_key)).cloned())
+    }
+
+    fn delete_secret(&self, provider_id: &str, field_key: &str) -> Result<(), CredError> {
+        let mut map = self.read_all()?;
+        // 仅当确实删掉了键才重写文件：否则删不存在的键会凭空建出空 dev-credentials.json，
+        // 与「幂等 no-op」语义矛盾（也避免在文件本不存在时无谓落盘）。
+        let removed = map.remove(&keychain_account(provider_id, field_key));
+        if removed.is_some() {
+            self.write_all(&map)?;
+        }
+        Ok(())
+    }
+}
+
+/// 构造默认 CredStore：debug 用文件库、release 用钥匙串。
+///
+/// 把 cfg 选择逻辑收敛到单点，避免在 3 个命令调用点各写一遍 cfg。
+/// `config_dir` 仅 debug 分支需要（FileCredStore 的文件位置）；release 分支忽略。
+#[cfg(debug_assertions)]
+pub fn default_cred_store(config_dir: &std::path::Path) -> impl CredStore {
+    FileCredStore::new(config_dir)
+}
+
+/// 构造默认 CredStore（release：钥匙串）。`config_dir` 在此分支不使用。
+#[cfg(not(debug_assertions))]
+pub fn default_cred_store(_config_dir: &std::path::Path) -> impl CredStore {
+    KeyringCredStore
+}
+
 /// 返回指定 provider 的结构化凭据字段 schema。
 ///
 /// 框架通过此函数动态渲染表单，并在 save/load 时按 is_secret 路由存取。
@@ -195,6 +296,8 @@ pub fn save_credentials(
 
         if field.is_secret {
             store.set_secret(provider_id, field_key, field_value)?;
+            // 写存在标记，使设置页能只读 DB 判断"已配置"而不碰 keychain
+            write_secret_marker(conn, provider_id, field_key)?;
         } else {
             write_to_db(conn, provider_id, field_key, field_value)?;
         }
@@ -255,6 +358,9 @@ pub fn delete_credentials(
 
     for field in &schema {
         if field.is_secret {
+            // 先删标记、再删 keychain：若 keychain 删除半途失败，标记已先清，
+            // is_set 偏向保守的 false（未配置），而非谎报"已配置"且无自愈。
+            delete_secret_marker(conn, provider_id, field.key)?;
             store.delete_secret(provider_id, field.key)?;
         } else {
             delete_from_db(conn, provider_id, field.key)?;
@@ -262,6 +368,86 @@ pub fn delete_credentials(
     }
 
     Ok(())
+}
+
+/// 读取 provider 凭据用于设置页展示——只读 DB，绝不碰 keychain。
+///
+/// 与 `load_credentials` 的区别：本函数**不接受也不使用 store 参数**，从而
+/// 不会触发 keychain 弹密码。secret 字段靠 `secret_presence` 标记表判断是否已配置，
+/// 已配置则返回空串值（仅表示"已配置"，不回明文）；非密字段读加密 DB 取实际值。
+///
+/// # 迁移策略（不回填）
+/// 展示路径永不读 keychain。本改动落地前已存入 keychain、但无标记行的 secret，
+/// 会被显示为"待配置"，需重存一次以注册标记。预发布期、单用户，刻意为之。
+///
+/// # 返回
+/// `Vec<(field_key, value)>`：secret 字段 value 为空串，非密字段为实际值。
+/// 未配置的字段不出现在结果中。
+///
+/// # Errors
+/// - `CredError::Db`：SQL 执行失败
+pub fn load_credentials_for_display(
+    provider_id: &str,
+    conn: &Connection,
+) -> Result<Vec<(String, String)>, CredError> {
+    let schema = credential_schema(provider_id);
+
+    let mut result = Vec::new();
+
+    for field in &schema {
+        if field.is_secret {
+            if secret_marker_exists(conn, provider_id, field.key)? {
+                result.push((field.key.to_string(), String::new()));
+            }
+        } else if let Some(val) = read_from_db(conn, provider_id, field.key)? {
+            result.push((field.key.to_string(), val));
+        }
+    }
+
+    Ok(result)
+}
+
+/// 写入 secret 存在标记（INSERT OR REPLACE，幂等）。仅记录键，绝不存值。
+fn write_secret_marker(
+    conn: &Connection,
+    provider_id: &str,
+    field_key: &str,
+) -> Result<(), rusqlite::Error> {
+    conn.execute(
+        "INSERT OR REPLACE INTO secret_presence (provider_id, field_key) VALUES (?1, ?2)",
+        rusqlite::params![provider_id, field_key],
+    )?;
+    Ok(())
+}
+
+/// 删除 secret 存在标记（幂等，不存在时不报错）。
+fn delete_secret_marker(
+    conn: &Connection,
+    provider_id: &str,
+    field_key: &str,
+) -> Result<(), rusqlite::Error> {
+    conn.execute(
+        "DELETE FROM secret_presence WHERE provider_id = ?1 AND field_key = ?2",
+        rusqlite::params![provider_id, field_key],
+    )?;
+    Ok(())
+}
+
+/// 查询某 secret 是否有存在标记（已配置）。
+fn secret_marker_exists(
+    conn: &Connection,
+    provider_id: &str,
+    field_key: &str,
+) -> Result<bool, rusqlite::Error> {
+    use rusqlite::OptionalExtension;
+    let found: Option<i64> = conn
+        .query_row(
+            "SELECT 1 FROM secret_presence WHERE provider_id = ?1 AND field_key = ?2",
+            rusqlite::params![provider_id, field_key],
+            |row| row.get(0),
+        )
+        .optional()?;
+    Ok(found.is_some())
 }
 
 /// 将非密字段写入加密 DB（UPSERT 语义）。
@@ -332,22 +518,174 @@ impl MockCredStore {
 }
 
 #[cfg(test)]
+impl Default for MockCredStore {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg(test)]
 impl CredStore for MockCredStore {
     fn set_secret(&self, provider_id: &str, field_key: &str, value: &str) -> Result<(), CredError> {
-        let key = format!("{provider_id}.{field_key}");
+        let key = keychain_account(provider_id, field_key);
         self.store.lock().unwrap().insert(key, value.to_string());
         Ok(())
     }
 
     fn get_secret(&self, provider_id: &str, field_key: &str) -> Result<Option<String>, CredError> {
-        let key = format!("{provider_id}.{field_key}");
+        let key = keychain_account(provider_id, field_key);
         Ok(self.store.lock().unwrap().get(&key).cloned())
     }
 
     fn delete_secret(&self, provider_id: &str, field_key: &str) -> Result<(), CredError> {
-        let key = format!("{provider_id}.{field_key}");
+        let key = keychain_account(provider_id, field_key);
         self.store.lock().unwrap().remove(&key);
         Ok(())
+    }
+}
+
+// 测试模块本身也需 debug_assertions 门控：FileCredStore 是 debug-only 类型，
+// release 测试构建下不存在，若仅 #[cfg(test)] 会导致 cargo test --release 编译失败（E0433）。
+#[cfg(all(test, debug_assertions))]
+mod file_cred_store_tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    /// set 后 get 应取回同一值（往返）
+    #[test]
+    fn file_store_set_get_roundtrip() {
+        let dir = tempdir().unwrap();
+        let store = FileCredStore::new(dir.path());
+
+        store.set_secret("baidu", "secret_key", "sk1").unwrap();
+
+        assert_eq!(
+            store.get_secret("baidu", "secret_key").unwrap(),
+            Some("sk1".to_string()),
+            "set 后 get 应取回同一值"
+        );
+    }
+
+    /// get 未命中返回 None（不算错误）
+    #[test]
+    fn file_store_get_missing_returns_none() {
+        let dir = tempdir().unwrap();
+        let store = FileCredStore::new(dir.path());
+
+        assert_eq!(
+            store.get_secret("baidu", "secret_key").unwrap(),
+            None,
+            "未命中应返回 None"
+        );
+    }
+
+    /// delete 后 get 返回 None
+    #[test]
+    fn file_store_delete_removes_value() {
+        let dir = tempdir().unwrap();
+        let store = FileCredStore::new(dir.path());
+        store.set_secret("baidu", "secret_key", "sk1").unwrap();
+
+        store.delete_secret("baidu", "secret_key").unwrap();
+
+        assert_eq!(
+            store.get_secret("baidu", "secret_key").unwrap(),
+            None,
+            "delete 后应取不到值"
+        );
+    }
+
+    /// delete 不存在的键视为成功（幂等），且不应建立空的凭据文件
+    #[test]
+    fn file_store_delete_missing_is_ok_and_creates_no_file() {
+        let dir = tempdir().unwrap();
+        let store = FileCredStore::new(dir.path());
+
+        let result = store.delete_secret("baidu", "nonexistent");
+
+        assert!(result.is_ok(), "删除不存在的键应成功（幂等）: {result:?}");
+        assert!(
+            !dir.path().join("dev-credentials.json").exists(),
+            "删除不存在的键不应建立空凭据文件（真 no-op）"
+        );
+    }
+
+    /// 凭据文件内容损坏（非法 JSON）时 get_secret 返回 Err 而非 panic
+    #[test]
+    fn file_store_corrupt_json_returns_err() {
+        let dir = tempdir().unwrap();
+        std::fs::write(dir.path().join("dev-credentials.json"), b"{\"bad").unwrap();
+        let store = FileCredStore::new(dir.path());
+
+        let result = store.get_secret("baidu", "secret_key");
+
+        assert!(
+            result.is_err(),
+            "损坏 JSON 应优雅返回 Err，不 panic: {result:?}"
+        );
+    }
+
+    /// 0 字节空文件时 get_secret 返回 Err 而非 panic
+    #[test]
+    fn file_store_empty_file_returns_err() {
+        let dir = tempdir().unwrap();
+        std::fs::write(dir.path().join("dev-credentials.json"), b"").unwrap();
+        let store = FileCredStore::new(dir.path());
+
+        let result = store.get_secret("baidu", "secret_key");
+
+        assert!(
+            result.is_err(),
+            "0 字节空文件应优雅返回 Err，不 panic: {result:?}"
+        );
+    }
+
+    /// 新实例从文件读出此前持久化的值（跨实例持久化）
+    #[test]
+    fn file_store_persists_across_instances() {
+        let dir = tempdir().unwrap();
+        FileCredStore::new(dir.path())
+            .set_secret("deepl_free", "auth_key", "ak1")
+            .unwrap();
+
+        let reloaded = FileCredStore::new(dir.path())
+            .get_secret("deepl_free", "auth_key")
+            .unwrap();
+
+        assert_eq!(reloaded, Some("ak1".to_string()), "新实例应从文件读出旧值");
+    }
+
+    /// 同键二次 set 覆盖旧值
+    #[test]
+    fn file_store_overwrites_existing_value() {
+        let dir = tempdir().unwrap();
+        let store = FileCredStore::new(dir.path());
+        store.set_secret("google", "api_key", "old").unwrap();
+
+        store.set_secret("google", "api_key", "new").unwrap();
+
+        assert_eq!(
+            store.get_secret("google", "api_key").unwrap(),
+            Some("new".to_string()),
+            "二次 set 应覆盖为新值"
+        );
+    }
+
+    /// unix 下凭据文件权限应为 0600
+    #[cfg(unix)]
+    #[test]
+    fn file_store_sets_0600_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempdir().unwrap();
+        let store = FileCredStore::new(dir.path());
+
+        store.set_secret("baidu", "secret_key", "sk1").unwrap();
+
+        let mode = std::fs::metadata(dir.path().join("dev-credentials.json"))
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o600, "凭据文件权限应为 0600");
     }
 }
 
@@ -363,10 +701,111 @@ mod tests {
                 field_key    TEXT NOT NULL,
                 value        TEXT NOT NULL,
                 PRIMARY KEY (provider_id, field_key)
+            );
+            CREATE TABLE IF NOT EXISTS secret_presence (
+                provider_id  TEXT NOT NULL,
+                field_key    TEXT NOT NULL,
+                PRIMARY KEY (provider_id, field_key)
             );",
         )
         .unwrap();
         conn
+    }
+
+    #[test]
+    fn save_credentials_writes_secret_marker() {
+        let store = MockCredStore::new();
+        let conn = make_test_db();
+        let values = vec![("app_id", "id1"), ("secret_key", "sk1")];
+
+        save_credentials("baidu", &values, &store, &conn).unwrap();
+
+        assert!(
+            secret_marker_exists(&conn, "baidu", "secret_key").unwrap(),
+            "保存 secret 后应写入存在标记"
+        );
+        assert!(
+            !secret_marker_exists(&conn, "baidu", "app_id").unwrap(),
+            "非密字段不应写入 secret 标记"
+        );
+    }
+
+    #[test]
+    fn delete_credentials_removes_secret_marker() {
+        let store = MockCredStore::new();
+        let conn = make_test_db();
+        save_credentials("baidu", &[("secret_key", "sk1")], &store, &conn).unwrap();
+        assert!(secret_marker_exists(&conn, "baidu", "secret_key").unwrap());
+
+        delete_credentials("baidu", &store, &conn).unwrap();
+
+        assert!(
+            !secret_marker_exists(&conn, "baidu", "secret_key").unwrap(),
+            "删除后 secret 标记应消失"
+        );
+    }
+
+    #[test]
+    fn load_for_display_reports_secret_present() {
+        let store = MockCredStore::new();
+        let conn = make_test_db();
+        save_credentials(
+            "baidu",
+            &[("app_id", "id1"), ("secret_key", "sk1")],
+            &store,
+            &conn,
+        )
+        .unwrap();
+
+        // 展示路径不接受 store 参数，完全靠 secret_presence 标记表
+        let display = load_credentials_for_display("baidu", &conn).unwrap();
+
+        let secret = display.iter().find(|(k, _)| k == "secret_key");
+        assert!(secret.is_some(), "已配置的 secret 应出现在展示结果中");
+        assert_eq!(secret.unwrap().1, "", "secret 展示值应为空串（不回明文）");
+        let app_id = display.iter().find(|(k, _)| k == "app_id");
+        assert_eq!(
+            app_id.map(|(_, v)| v.as_str()),
+            Some("id1"),
+            "非密字段展示值应为实际值"
+        );
+    }
+
+    #[test]
+    fn load_for_display_reports_secret_absent_when_no_marker() {
+        let conn = make_test_db();
+        // 仅写非密字段，secret 无标记（模拟迁移前已存 keychain 但无标记的状态）
+        write_to_db(&conn, "baidu", "app_id", "id1").unwrap();
+
+        let display = load_credentials_for_display("baidu", &conn).unwrap();
+
+        assert!(
+            display.iter().all(|(k, _)| k != "secret_key"),
+            "无标记的 secret 不应出现在展示结果中"
+        );
+    }
+
+    #[test]
+    fn marker_helpers_roundtrip() {
+        let conn = make_test_db();
+        assert!(!secret_marker_exists(&conn, "google", "api_key").unwrap());
+
+        write_secret_marker(&conn, "google", "api_key").unwrap();
+        assert!(secret_marker_exists(&conn, "google", "api_key").unwrap());
+
+        // INSERT OR REPLACE：重复写不报错
+        write_secret_marker(&conn, "google", "api_key").unwrap();
+        assert!(secret_marker_exists(&conn, "google", "api_key").unwrap());
+
+        delete_secret_marker(&conn, "google", "api_key").unwrap();
+        assert!(!secret_marker_exists(&conn, "google", "api_key").unwrap());
+    }
+
+    #[test]
+    fn delete_secret_marker_is_idempotent() {
+        let conn = make_test_db();
+        let result = delete_secret_marker(&conn, "google", "api_key");
+        assert!(result.is_ok(), "删除不存在的标记应成功（幂等）: {result:?}");
     }
 
     #[test]
@@ -475,6 +914,11 @@ mod tests {
                 provider_id  TEXT NOT NULL,
                 field_key    TEXT NOT NULL,
                 value        TEXT NOT NULL,
+                PRIMARY KEY (provider_id, field_key)
+            );
+            CREATE TABLE IF NOT EXISTS secret_presence (
+                provider_id  TEXT NOT NULL,
+                field_key    TEXT NOT NULL,
                 PRIMARY KEY (provider_id, field_key)
             );",
         )

@@ -37,7 +37,8 @@ use crate::autostart::AutostartConfig;
 use crate::hotkey::{HotkeyAction, HotkeyConfig, HotkeyError, HotkeyRegistrar};
 use crate::settings::AppSettings;
 use crate::translate::credential::{
-    credential_schema, delete_credentials, load_credentials, save_credentials, KeyringCredStore,
+    credential_schema, default_cred_store, delete_credentials, load_credentials_for_display,
+    save_credentials,
 };
 use crate::translate::providers::registry;
 use crate::CaptureState;
@@ -223,6 +224,14 @@ pub(crate) fn resolve_config_path(
     app: &AppHandle,
     filename: &str,
 ) -> Result<std::path::PathBuf, String> {
+    Ok(resolve_config_dir(app)?.join(filename))
+}
+
+/// 返回 app_config_dir（必要时创建），用于构造 dev 文件密钥库等需要配置目录的对象。
+///
+/// 与 `resolve_config_path` 共享同一目录解析逻辑（后者在其基础上 join 文件名）。
+/// 此函数是不可单测的胶水层，仅供命令函数调用。
+pub(crate) fn resolve_config_dir(app: &AppHandle) -> Result<std::path::PathBuf, String> {
     let dir = app
         .path()
         .app_config_dir()
@@ -230,7 +239,7 @@ pub(crate) fn resolve_config_path(
 
     std::fs::create_dir_all(&dir).map_err(|e| format!("无法创建配置目录：{e}"))?;
 
-    Ok(dir.join(filename))
+    Ok(dir)
 }
 
 /// 系统热键注册器：通过 Tauri global shortcut API 向 OS 注册热键。
@@ -653,21 +662,23 @@ pub fn get_provider_credential_schema_impl(provider_id: &str) -> Vec<CredentialF
 
 /// `get_provider_credentials` 的纯函数实现，可在测试中直接调用。
 ///
-/// 遍历 schema 中每个字段，从 store/DB 加载已保存值，组装 DTO 列表：
-/// - secret 字段：value 永远为 None，is_set 表示是否在 store 中存在
-/// - 非密字段：value 为 Some(已存值) 或 None，is_set 与 value.is_some() 等价
+/// 走只读 DB 展示路径（`load_credentials_for_display`），绝不访问 keychain，
+/// 遍历 schema 中每个字段组装 DTO 列表：
+/// - secret 字段：value 永远为 None，is_set 表示 secret_presence 标记表中是否有该标记
+/// - 非密字段：value 为 Some(已存值) 或 None（读加密 DB），is_set 与 value.is_some() 等价
 ///
 /// # 安全
-/// secret 字段的实际值永不出现在返回结果中，调用方无法从响应中读取明文密钥。
+/// secret 字段的实际值永不出现在返回结果中；展示路径不读 keychain，故不触发钥匙串弹窗。
 ///
 /// # Errors
-/// store 读取失败或 DB 操作失败时返回错误字符串。
+/// DB 读取失败时返回错误字符串。
 pub fn get_provider_credentials_impl(
     provider_id: &str,
-    store: &dyn crate::translate::credential::CredStore,
     conn: &rusqlite::Connection,
 ) -> Result<Vec<CredentialValueDto>, String> {
-    let loaded = load_credentials(provider_id, store, conn).map_err(|e| e.to_string())?;
+    // 走只读 DB 展示路径：secret 字段靠 secret_presence 标记判断是否已配置，
+    // 绝不读 keychain（否则设置页一打开就触发反复弹密码）。
+    let loaded = load_credentials_for_display(provider_id, conn).map_err(|e| e.to_string())?;
 
     let result = credential_schema(provider_id)
         .into_iter()
@@ -736,9 +747,9 @@ pub fn get_provider_credentials(
     state: State<'_, super::AppDb>,
     provider_id: String,
 ) -> Result<Vec<CredentialValueDto>, String> {
-    let store = KeyringCredStore;
+    // 展示路径只读 DB（secret_presence 标记），不构造 store、不碰 keychain
     super::with_db(&state, |conn| {
-        get_provider_credentials_impl(&provider_id, &store, conn)
+        get_provider_credentials_impl(&provider_id, conn)
     })
 }
 
@@ -754,7 +765,8 @@ pub fn set_provider_credentials(
     provider_id: String,
     values: HashMap<String, String>,
 ) -> Result<(), String> {
-    let store = KeyringCredStore;
+    let config_dir = resolve_config_dir(&app)?;
+    let store = default_cred_store(&config_dir);
     super::with_db(&state, |conn| {
         set_provider_credentials_impl(&provider_id, values, &store, conn)
     })?;
@@ -791,7 +803,8 @@ pub fn delete_provider_credentials(
     state: State<'_, super::AppDb>,
     provider_id: String,
 ) -> Result<(), String> {
-    let store = KeyringCredStore;
+    let config_dir = resolve_config_dir(&app)?;
+    let store = default_cred_store(&config_dir);
     super::with_db(&state, |conn| {
         delete_provider_credentials_impl(&provider_id, &store, conn)
     })?;
@@ -1022,6 +1035,11 @@ mod tests {
                 field_key    TEXT NOT NULL,
                 value        TEXT NOT NULL,
                 PRIMARY KEY (provider_id, field_key)
+            );
+            CREATE TABLE IF NOT EXISTS secret_presence (
+                provider_id  TEXT NOT NULL,
+                field_key    TEXT NOT NULL,
+                PRIMARY KEY (provider_id, field_key)
             );",
         )
         .unwrap();
@@ -1045,11 +1063,9 @@ mod tests {
 
     #[test]
     fn get_provider_credentials_impl_unset_fields_are_not_set() {
-        use crate::translate::credential::MockCredStore;
-        let store = MockCredStore::new();
         let conn = make_cred_db();
 
-        let results = get_provider_credentials_impl("baidu", &store, &conn).unwrap();
+        let results = get_provider_credentials_impl("baidu", &conn).unwrap();
         assert_eq!(results.len(), 2, "百度凭据应返回 2 个字段");
         for item in &results {
             assert!(!item.is_set, "未保存时所有字段 is_set 应为 false");
@@ -1069,7 +1085,7 @@ mod tests {
         values.insert("secret_key".to_string(), "super_secret".to_string());
         set_provider_credentials_impl("baidu", values, &store, &conn).unwrap();
 
-        let results = get_provider_credentials_impl("baidu", &store, &conn).unwrap();
+        let results = get_provider_credentials_impl("baidu", &conn).unwrap();
         let secret_field = results.iter().find(|f| f.key == "secret_key").unwrap();
         assert!(
             secret_field.value.is_none(),
@@ -1099,7 +1115,7 @@ mod tests {
 
         set_provider_credentials_impl("baidu", values, &store, &conn).unwrap();
 
-        let results = get_provider_credentials_impl("baidu", &store, &conn).unwrap();
+        let results = get_provider_credentials_impl("baidu", &conn).unwrap();
         let app_id = results.iter().find(|f| f.key == "app_id").unwrap();
         assert_eq!(app_id.value, Some("test_id".to_string()));
         let secret_key = results.iter().find(|f| f.key == "secret_key").unwrap();
@@ -1135,7 +1151,7 @@ mod tests {
 
         delete_provider_credentials_impl("baidu", &store, &conn).unwrap();
 
-        let results = get_provider_credentials_impl("baidu", &store, &conn).unwrap();
+        let results = get_provider_credentials_impl("baidu", &conn).unwrap();
         for item in &results {
             assert!(
                 !item.is_set,

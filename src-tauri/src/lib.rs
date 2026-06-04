@@ -194,6 +194,11 @@ fn setup_app_db(app: &mut tauri::App) {
                 None
             } else {
                 let db_path = dir.join("quickquick.db");
+                // debug 构建用文件密钥库（绕开钥匙串，消除 dev 重编反复弹密码）；
+                // release 构建仍走 OS 钥匙串。两分支密钥来源不同，切换后旧 dev DB 无法解密、需删库重建。
+                #[cfg(debug_assertions)]
+                let provider = keyprovider::FileKeyProvider::new(&dir);
+                #[cfg(not(debug_assertions))]
                 let provider = keyprovider::KeychainKeyProvider::new();
                 match pipeline::open_app_db(&provider, &db_path) {
                     Ok(conn) => Some(conn),

@@ -247,9 +247,161 @@ impl Default for KeychainKeyProvider {
     }
 }
 
+/// 开发期文件密钥库（debug-only，release 构建用 KeychainKeyProvider）。
+///
+/// # 为什么需要它
+/// dev 反复重编 → macOS codesign 身份变动 → 钥匙串「始终允许」失效，反复弹密码。
+/// debug 构建改把 SQLCipher 主密钥存本地文件、完全绕开 OS 钥匙串，消除弹窗。
+///
+/// # 安全约束
+/// - 仅 `#[cfg(debug_assertions)]` 编译，绝不进入 release 分发二进制。
+/// - 密钥文件权限设为 `0600`（仅属主可读写），与钥匙串「ThisDeviceOnly」语义近似。
+/// - 文件存 32 字节原始密钥（非 hex），读时校验长度，与 KeychainKeyProvider 幂等语义一致。
+#[cfg(debug_assertions)]
+pub struct FileKeyProvider {
+    /// 密钥文件完整路径（config_dir/dev-master-key）
+    key_path: std::path::PathBuf,
+}
+
+#[cfg(debug_assertions)]
+impl FileKeyProvider {
+    /// dev 密钥文件名（落在 app_config_dir 下）
+    const KEY_FILE_NAME: &'static str = "dev-master-key";
+
+    /// 创建 FileKeyProvider，密钥文件落在 `config_dir/dev-master-key`。
+    pub fn new(config_dir: &std::path::Path) -> Self {
+        Self {
+            key_path: config_dir.join(Self::KEY_FILE_NAME),
+        }
+    }
+
+    /// 从文件读取密钥，或在文件不存在时生成随机密钥并落盘（幂等）。
+    fn load_or_generate(&self) -> Result<[u8; 32], KeyError> {
+        match std::fs::read(&self.key_path) {
+            Ok(bytes) => {
+                if bytes.len() != 32 {
+                    return Err(KeyError::InvalidKeyLength(bytes.len()));
+                }
+                let mut key = [0u8; 32];
+                key.copy_from_slice(&bytes);
+                Ok(key)
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                let key = generate_random_key();
+                self.write_key_file(&key)?;
+                Ok(key)
+            }
+            Err(e) => Err(KeyError::Backend(e.to_string())),
+        }
+    }
+
+    /// 写密钥文件并设权限 0600（unix）。非 unix 平台跳过权限设置。
+    fn write_key_file(&self, key: &[u8; 32]) -> Result<(), KeyError> {
+        std::fs::write(&self.key_path, key).map_err(|e| KeyError::Backend(e.to_string()))?;
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&self.key_path, std::fs::Permissions::from_mode(0o600))
+                .map_err(|e| KeyError::Backend(e.to_string()))?;
+        }
+
+        Ok(())
+    }
+}
+
+#[cfg(debug_assertions)]
+impl KeyProvider for FileKeyProvider {
+    fn get_or_create_key(&self) -> Result<[u8; 32], KeyError> {
+        self.load_or_generate()
+    }
+}
+
 impl KeyProvider for KeychainKeyProvider {
     fn get_or_create_key(&self) -> Result<[u8; 32], KeyError> {
         self.load_or_generate()
+    }
+}
+
+// 测试模块本身也需 debug_assertions 门控：FileKeyProvider 是 debug-only 类型，
+// release 测试构建下不存在，若仅 #[cfg(test)] 会导致 cargo test --release 编译失败（E0433）。
+#[cfg(all(test, debug_assertions))]
+mod file_provider_tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    /// 首次调用应生成密钥并把文件落盘
+    #[test]
+    fn file_provider_creates_key_file_on_first_call() {
+        let dir = tempdir().unwrap();
+        let provider = FileKeyProvider::new(dir.path());
+
+        let key = provider.get_or_create_key().unwrap();
+
+        assert_eq!(key.len(), 32, "首次生成的密钥应为 32 字节");
+        assert!(
+            dir.path().join("dev-master-key").exists(),
+            "首次调用后密钥文件应已落盘"
+        );
+    }
+
+    /// 同一实例二次调用应幂等返回同一密钥（不重新生成）
+    #[test]
+    fn file_provider_is_idempotent_within_same_instance() {
+        let dir = tempdir().unwrap();
+        let provider = FileKeyProvider::new(dir.path());
+
+        let first = provider.get_or_create_key().unwrap();
+        let second = provider.get_or_create_key().unwrap();
+
+        assert_eq!(first, second, "同一实例二次调用应返回同一密钥");
+    }
+
+    /// 新实例从已有文件读出与首个实例相同的密钥（跨实例持久化）
+    #[test]
+    fn file_provider_reads_same_key_from_new_instance() {
+        let dir = tempdir().unwrap();
+        let first_key = FileKeyProvider::new(dir.path())
+            .get_or_create_key()
+            .unwrap();
+
+        let second_key = FileKeyProvider::new(dir.path())
+            .get_or_create_key()
+            .unwrap();
+
+        assert_eq!(first_key, second_key, "新实例应从文件读出同一密钥");
+    }
+
+    /// 文件长度非 32 字节时报 InvalidKeyLength（损坏/篡改检测）
+    #[test]
+    fn file_provider_rejects_wrong_length() {
+        let dir = tempdir().unwrap();
+        std::fs::write(dir.path().join("dev-master-key"), b"too short").unwrap();
+        let provider = FileKeyProvider::new(dir.path());
+
+        let result = provider.get_or_create_key();
+
+        assert!(
+            matches!(result, Err(KeyError::InvalidKeyLength(9))),
+            "长度非 32 的密钥文件应报 InvalidKeyLength(9)，实际：{result:?}"
+        );
+    }
+
+    /// unix 下密钥文件权限应为 0600（仅属主可读写）
+    #[cfg(unix)]
+    #[test]
+    fn file_provider_sets_0600_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempdir().unwrap();
+        let provider = FileKeyProvider::new(dir.path());
+
+        provider.get_or_create_key().unwrap();
+
+        let mode = std::fs::metadata(dir.path().join("dev-master-key"))
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o600, "密钥文件权限应为 0600");
     }
 }
 
