@@ -4,7 +4,7 @@ type: review_record
 level: 小功能
 parent: V6-F2
 status: 通过
-commit: PENDING
+commit: 8646585
 acceptance_ids: [V6-F2-A09]
 author: code-reviewer
 created: 2026-06-05T00:00:00Z

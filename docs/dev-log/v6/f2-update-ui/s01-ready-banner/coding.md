@@ -5,7 +5,7 @@ level: 小功能
 parent: V6-F2
 children: []
 status: 通过
-commit: PENDING
+commit: 8646585
 acceptance_ids: [V6-F2-A08]
 evidence: [src/components/UpdateBanner.tsx, src/components/UpdateBanner.test.tsx, src/components/UpdateBanner.css, src/ipc/ipc-client.ts, src/ipc/restart-app.test.ts, src/App.tsx, docs/dev-log/v6/f2-update-ui/s01-ready-banner/artifacts/vitest-a08.log, docs/dev-log/v6/f2-update-ui/s01-ready-banner/artifacts/vitest-a08-names.log, docs/dev-log/v6/f2-update-ui/s01-ready-banner/artifacts/tsc.log]
 author: coder

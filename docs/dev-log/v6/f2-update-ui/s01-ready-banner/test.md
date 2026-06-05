@@ -4,7 +4,7 @@ type: test_report
 level: 小功能
 parent: V6-F2
 status: 通过
-commit: PENDING
+commit: 8646585
 acceptance_ids: [V6-F2-A08]
 ---
 

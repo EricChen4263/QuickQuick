@@ -5,7 +5,7 @@ level: 小功能
 parent: V6-F2
 children: []
 status: 通过
-commit: PENDING
+commit: 8646585
 acceptance_ids: [V6-F2-A09]
 evidence: [src/panels/settings/GeneralPanel.tsx, src/panels/settings/GeneralPanel.test.tsx, src/ipc/ipc-client.ts, src/panels/settings/check-update-button.test.tsx]
 author: coder
