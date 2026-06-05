@@ -102,7 +102,30 @@ pub(crate) fn show_and_focus_window(app: &tauri::AppHandle) {
         eprintln!("[QuickQuick] 托盘：显示窗口失败: {e}");
         return;
     }
+    // 顺序关键：必须先 activate 进程，再 set_focus。Accessory 策略下进程不在常规
+    // 激活序列里，仅靠 set_focus（底层是 macOS 14+ 已废弃的 activateIgnoringOtherApps:）
+    // 无法让窗口拿到 key 状态，键盘事件进不了 webview（搜索框打不了字）。
+    // 复用 popover 已验证的激活实现（见 popover.rs:83-89 与设计文档 4.2）。
+    #[cfg(target_os = "macos")]
+    crate::popover::activate_app_macos();
     if let Err(e) = window.set_focus() {
         eprintln!("[QuickQuick] 托盘：设置焦点失败: {e}");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    // 与 popover 模块的 FFI 测试边界一致：activate_app_macos 是纯 NSApplication 包装，
+    // headless 下不真正调用（sharedApplication 无 NSApp 时行为未定义）。此处只做
+    // 编译期/类型守卫——确认 tray 能把 popover 的激活函数当作 `fn()` 引用，
+    // 即 pub(crate) 提升成立、跨模块复用单一实现（DRY）。真实激活+键盘焦点行为
+    // 归真机 manual_confirm（见设计文档 M2）。
+
+    /// tray 可将 popover 的 activate_app_macos 作为 fn() 引用：守卫 pub(crate) 可见性，
+    /// 确保 show_and_focus_window 复用 popover 的单一激活实现而非另造 FFI。
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn popover_activate_fn_is_referenceable_by_tray() {
+        let _f: fn() = crate::popover::activate_app_macos;
     }
 }

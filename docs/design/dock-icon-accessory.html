@@ -1,0 +1,336 @@
+<!DOCTYPE html>
+<!--
+  QuickQuick 后台不占 Dock 图标方案（macOS Accessory）
+  Fjord / Nordic Serenity 设计系统 · fjord-nordic.css 已全文内联（自包含，可双击打开）
+  内容与 docs/design/dock-icon-accessory.md 逐字一致。
+-->
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>QuickQuick 后台不占 Dock 图标方案（macOS Accessory）</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg: #f8f9fa;
+  --card: #ffffff;
+  --card-2: #f3f4f5;
+  --mist: #e2e8f0;
+  --mist-hover: #f1f5f9;
+  --fjord: #05192d;
+  --ink: #191c1d;
+  --ink-2: #44474d;
+  --outline: #74777d;
+  --line: #c4c6cd;
+  --glacier: #d1d5db;
+  --accent: #3e54ac;
+  --accent-dim: #1a338b;
+  --accent-soft: #dde1ff;
+  --green-bg: #e6f0ea;
+  --green-tx: #2f6b4f;
+  --grey-bg: #ececef;
+  --grey-tx: #6b6f76;
+  --err: #ba1a1a;
+  --shadow: 0 12px 32px rgba(5,25,45,0.08);
+  --radius: 12px;
+}
+* { box-sizing: border-box; }
+html { -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility; scroll-behavior: smooth; }
+body {
+  margin: 0; background: var(--bg); color: var(--ink);
+  font-family: 'Inter', -apple-system, sans-serif;
+  font-size: 16px; font-weight: 400; line-height: 1.65; letter-spacing: -0.003em;
+}
+.mono { font-family: 'JetBrains Mono', monospace; }
+
+.topbar {
+  position: sticky; top: 0; z-index: 50; background: rgba(248,249,250,0.85);
+  backdrop-filter: blur(12px); border-bottom: 1px solid var(--line);
+}
+.topbar-in {
+  max-width: 1040px; margin: 0 auto; height: 60px; padding: 0 32px;
+  display: flex; align-items: center; justify-content: space-between;
+}
+.topbar .brand { font-size: 15px; font-weight: 600; color: var(--fjord); letter-spacing: -0.01em; }
+.topbar .tag {
+  font-family: 'JetBrains Mono', monospace; font-size: 10.5px; letter-spacing: 0.12em;
+  text-transform: uppercase; color: var(--accent); background: var(--mist);
+  padding: 4px 10px; border-radius: 999px;
+}
+
+.hero { background: linear-gradient(160deg, #05192d 0%, #0c2440 45%, #1c2f55 100%); color: #fff; position: relative; overflow: hidden; }
+.hero::after { content: ''; position: absolute; inset: 0; background: radial-gradient(120% 90% at 78% 8%, rgba(120,150,210,0.22), transparent 60%); pointer-events: none; }
+.hero-in { max-width: 1040px; margin: 0 auto; padding: 72px 32px 64px; position: relative; z-index: 1; }
+.hero .kicker { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 22px; }
+.hero .chip-hero { font-family: 'JetBrains Mono', monospace; font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; padding: 5px 12px; border-radius: 999px; }
+.chip-hero.solid { background: var(--accent); color: #fff; }
+.chip-hero.ghost { background: rgba(255,255,255,0.1); color: #c7d2ec; border: 1px solid rgba(255,255,255,0.18); }
+.hero h1 { font-size: clamp(32px, 5.2vw, 48px); font-weight: 700; line-height: 1.1; letter-spacing: -0.025em; margin: 0 0 24px; color: #fff; }
+.hero .lede { font-size: 17px; font-weight: 400; line-height: 1.7; color: #c7d2ec; max-width: 64ch; margin: 0; }
+.hero .meta { display: flex; flex-wrap: wrap; gap: 6px 28px; margin-top: 32px; padding-top: 22px; border-top: 1px solid rgba(255,255,255,0.14); font-family: 'JetBrains Mono', monospace; font-size: 12px; color: #9fb0d0; }
+.hero .meta b { color: #d7e0f2; font-weight: 500; }
+
+.wrap { max-width: 1040px; margin: 0 auto; padding: 64px 32px 120px; }
+section { margin-top: 72px; }
+section:first-child { margin-top: 0; }
+.sec-head { display: flex; align-items: baseline; gap: 14px; border-left: 4px solid var(--accent); padding-left: 16px; margin-bottom: 28px; }
+.sec-num { font-family: 'JetBrains Mono', monospace; font-size: 13px; font-weight: 500; color: var(--accent); flex: none; }
+h2 { font-size: 26px; font-weight: 600; color: var(--fjord); margin: 0; letter-spacing: -0.02em; line-height: 1.2; }
+.subhead { font-size: 18px; font-weight: 600; color: var(--fjord); margin: 40px 0 16px; letter-spacing: -0.01em; }
+p { margin: 0 0 16px; max-width: 70ch; color: var(--ink-2); }
+.intro { font-size: 17px; color: var(--ink-2); }
+code, .codeword { font-family: 'JetBrains Mono', monospace; font-size: 0.84em; background: var(--mist); color: var(--accent-dim); padding: 1.5px 6px; border-radius: 4px; word-break: break-word; }
+
+.tablecard { border: 1px solid var(--glacier); border-radius: var(--radius); overflow: hidden; background: var(--card); margin: 4px 0; }
+table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+thead { background: var(--mist); }
+thead th { text-align: left; padding: 13px 16px; font-size: 11px; font-weight: 600; letter-spacing: 0.02em; text-transform: uppercase; color: var(--accent); }
+tbody td { padding: 13px 16px; vertical-align: top; border-top: 1px solid var(--line); color: var(--ink-2); }
+tbody tr:first-child td { border-top: none; }
+tbody tr:hover { background: var(--mist-hover); }
+td code { font-size: 12px; }
+.scode { font-family: 'JetBrains Mono', monospace; font-weight: 600; color: var(--fjord); width: 48px; }
+td strong { color: var(--fjord); font-weight: 600; }
+
+.chip { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; font-size: 11.5px; font-weight: 500; padding: 3px 10px; border-radius: 999px; }
+.chip.done { background: var(--green-bg); color: var(--green-tx); }
+.chip.moot { background: var(--grey-bg); color: var(--grey-tx); }
+.chip.wait { background: #f3ecda; color: #8a6d2f; }
+.chip.new { background: var(--accent-soft); color: var(--accent-dim); }
+.chip.meta { background: var(--card-2); color: var(--outline); font-family: 'JetBrains Mono', monospace; font-size: 10.5px; letter-spacing: 0.02em; }
+.st-cell { width: 110px; }
+
+.ladder { background: var(--card); border: 1px solid var(--glacier); border-radius: var(--radius); padding: 22px 24px; margin: 20px 0; font-family: 'JetBrains Mono', monospace; font-size: 13px; line-height: 2; white-space: pre; overflow-x: auto; color: var(--ink-2); }
+.ladder .a { color: var(--accent); }
+.ladder b { color: var(--fjord); font-weight: 500; }
+
+.callout { background: rgba(255,255,255,0.7); backdrop-filter: blur(12px); border: 1px solid var(--glacier); border-radius: var(--radius); padding: 24px 28px; margin-top: 28px; box-shadow: var(--shadow); }
+.callout .label { font-family: 'JetBrains Mono', monospace; font-size: 10.5px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--accent); display: block; margin-bottom: 12px; }
+.callout p { margin: 0; color: var(--ink-2); font-size: 15px; max-width: none; }
+
+.batches { display: grid; gap: 16px; margin-top: 4px; }
+@media (min-width:680px){ .batches { grid-template-columns: 1fr 1fr; } }
+.batch { background: var(--card); border: 1px solid var(--glacier); border-radius: var(--radius); padding: 20px 22px; }
+.batch-head { font-family: 'JetBrains Mono', monospace; font-size: 11px; font-weight: 600; letter-spacing: 0.04em; color: var(--accent); margin-bottom: 14px; }
+.batch ul { list-style: none; margin: 0; padding: 0; }
+.batch li { font-size: 13.5px; color: var(--ink-2); padding: 6px 0 6px 18px; position: relative; border-top: 1px solid var(--line); }
+.batch li:first-child { border-top: none; }
+.batch li::before { content: '›'; position: absolute; left: 2px; color: var(--accent); font-weight: 700; }
+
+.pcard { background: var(--card); border: 1px solid var(--glacier); border-radius: var(--radius); padding: 6px 24px; }
+.principles { list-style: none; padding: 0; margin: 0; }
+.principles li { padding: 15px 0 15px 20px; position: relative; border-top: 1px solid var(--line); font-size: 14.5px; color: var(--ink-2); }
+.principles li:first-child { border-top: none; }
+.principles li::before { content: ''; position: absolute; left: 0; top: 22px; width: 8px; height: 2px; background: var(--accent); }
+.principles b { font-weight: 600; color: var(--fjord); }
+
+.note { font-size: 14.5px; color: var(--ink-2); }
+
+footer { background: var(--card-2); border-top: 1px solid var(--line); margin-top: 88px; }
+.footer-in { max-width: 1040px; margin: 0 auto; padding: 28px 32px; display: flex; justify-content: space-between; flex-wrap: wrap; gap: 10px; font-family: 'JetBrains Mono', monospace; font-size: 11.5px; color: var(--outline); }
+.footer-in b { color: var(--fjord); font-weight: 600; }
+
+strong { font-weight: 600; }
+@media (max-width:560px){
+  .topbar-in, .hero-in, .wrap, .footer-in { padding-left: 20px; padding-right: 20px; }
+  table { font-size: 12.5px; } thead th, tbody td { padding: 10px 12px; }
+}
+@media print { body { background: #fff; } .topbar { position: static; } section { break-inside: avoid; } }
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="topbar-in">
+    <span class="brand">QuickQuick · 设计</span>
+    <span class="tag">Nordic · v2026-06-05</span>
+  </div>
+</div>
+
+<header class="hero">
+  <div class="hero-in">
+    <div class="kicker">
+      <span class="chip-hero solid">设计方案</span>
+      <span class="chip-hero ghost">macOS · Accessory</span>
+    </div>
+    <h1>后台不占 Dock 图标方案<br>macOS Accessory</h1>
+    <p class="lede">让 QuickQuick 在 macOS 上始终不在 Dock 显示应用图标，纯靠系统托盘图标与全局热键存在/唤起，对标 Maccy / Paste 等剪贴板工具。</p>
+    <div class="meta">
+      <span><b>范围</b>　feature-dev 七阶段实现，本文为冻结设计源</span>
+      <span><b>日期</b>　2026-06-05</span>
+      <span><b>状态</b>　已实现 · 待真机采证</span>
+    </div>
+  </div>
+</header>
+
+<div class="wrap">
+
+  <section>
+    <div class="sec-head"><span class="sec-num">一</span><h2>背景与诉求</h2></div>
+    <p class="intro">QuickQuick 是常驻后台的剪贴板/翻译效率工具：开机自启、平时挂在后台，通过全局热键（<code>Cmd+Shift+V</code> / <code>Cmd+Shift+T</code>）或系统托盘图标唤起窗口。但当前它在 macOS Dock 里<strong>常驻一个应用图标</strong>，与「后台驻留工具」的定位不符——用户反馈其它剪贴板工具（Maccy、Paste 等）都不占 Dock 位。</p>
+    <div class="callout">
+      <span class="label">诉求</span>
+      <p>后台运行时不在 Dock 显示图标。</p>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-head"><span class="sec-num">二</span><h2>现状分析</h2></div>
+    <div class="tablecard">
+      <table>
+        <thead><tr><th>环节</th><th>现状</th><th>位置</th></tr></thead>
+        <tbody>
+          <tr><td>系统托盘图标 + 菜单（显示/退出）</td><td><span class="chip done">✓</span> 已就绪，左键/菜单均可唤起窗口</td><td><code>src-tauri/src/tray.rs</code></td></tr>
+          <tr><td>失焦/关窗隐藏到后台（<code>stay_in_tray</code>）</td><td><span class="chip done">✓</span> <code>stay_in_tray=true</code> 时 <code>hide()</code> 不退出</td><td><code>src-tauri/src/lib.rs:647</code></td></tr>
+          <tr><td>全局热键唤起</td><td><span class="chip done">✓</span> 已注册 history/translate</td><td><code>src-tauri/src/lib.rs:192</code></td></tr>
+          <tr><td>进程激活辅助 <code>activate_app_macos()</code></td><td><span class="chip done">✓</span> 已存在（popover 用），调 <code>NSApplication.activate()</code></td><td><code>src-tauri/src/popover.rs:94</code></td></tr>
+          <tr><td><strong>macOS activation policy</strong></td><td><span class="chip wait">❌ 未设置</span> 默认 <code>Regular</code>（Dock 常驻图标）</td><td>—</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="callout">
+      <span class="label">根因</span>
+      <p>Tauri 应用默认以 <code>Regular</code> 激活策略运行，macOS 据此在 Dock 显示图标。要去掉 Dock 图标，需把激活策略改为 <code>Accessory</code>（等同 <code>LSUIElement</code> 行为：进程存在但不占 Dock、不进 Cmd-Tab）。</p>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-head"><span class="sec-num">三</span><h2>产品决策（已确认）</h2></div>
+    <div class="tablecard">
+      <table>
+        <thead><tr><th>决策项</th><th>选定</th><th>含义</th></tr></thead>
+        <tbody>
+          <tr><td>隐藏策略</td><td><strong>始终不占 Dock（全程 Accessory）</strong></td><td>启动即设 <code>Accessory</code>，恒定不变；窗口打开时也无 Dock 图标，与 Maccy/Paste 一致。</td></tr>
+          <tr><td>唯一唤起入口</td><td><strong>托盘图标 + 全局热键</strong></td><td>无 Dock 图标后，托盘左键/菜单与热键是唤起主窗口的入口（均已具备）。</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="note" style="margin-top:18px;"><strong>为何不选「动态切换」</strong>（窗口可见时显示 Dock、隐藏时去掉）：动态切换需在每次显示/隐藏处切换 policy，macOS 上有焦点闪烁与时序竞态风险，且并非对标工具的做法；用户明确选择「始终不占」，更简单稳健。</p>
+  </section>
+
+  <section>
+    <div class="sec-head"><span class="sec-num">四</span><h2>技术方案</h2></div>
+
+    <h3 class="subhead">4.1　启动设置 Accessory 策略</h3>
+    <p>在 <code>lib.rs</code> 的 <code>setup()</code> 阶段（<code>tray::setup_tray</code> / <code>setup_main_window_behavior</code> 同段）调用：</p>
+    <div class="ladder"><span class="a">#[cfg(target_os = "macos")]</span>
+app.set_activation_policy(tauri::ActivationPolicy::<b>Accessory</b>);</div>
+    <div class="batches" style="grid-template-columns:1fr;">
+      <div class="batch">
+        <ul>
+          <li>用 <code>#[cfg(target_os = "macos")]</code> 守卫：该 API 与 Dock 概念仅 macOS 有意义，Windows/Linux 行为完全不变。</li>
+          <li>启动即恒定为 <code>Accessory</code>，全程不再切换。</li>
+        </ul>
+      </div>
+    </div>
+
+    <h3 class="subhead">4.2　关键坑：Accessory 下补足显示窗口的键盘焦点</h3>
+    <div class="callout" style="margin-top:8px;">
+      <span class="label">核心风险点</span>
+      <p>这是本方案的核心风险点，不可只设 policy 了事。</p>
+    </div>
+    <p style="margin-top:18px;"><code>popover.rs:83-89</code> 已记录并解决过同一问题：tauri/tao 的 <code>window.set_focus()</code> 底层用的是 macOS 14+ <strong>已废弃</strong>的 <code>activateIgnoringOtherApps:</code>，在新系统（含 macOS 26.5）上该方法被忽略，仅靠 <code>set_focus()</code> 无法让进程真正激活、窗口拿不到 key 状态——<strong>键盘事件永远进不了 webview</strong>（搜索框打不了字）。popover 的解法是先调 <code>activate_app_macos()</code>（<code>NSApplication.activate()</code>，macOS 14+ 正式接口）再 <code>set_focus()</code>。</p>
+    <p>当前 <code>tray.rs::show_and_focus_window</code> 只做 <code>show() + set_focus()</code>，<strong>没有 activate</strong>。它现在能用，是因为 <code>Regular</code> 策略下进程本就是前台可激活的普通 app。<strong>一旦切到 <code>Accessory</code>，进程不在常规激活序列里，不显式 activate 则窗口虽显示但键盘焦点拿不到。</strong></p>
+    <p><strong>解法</strong>：让 <code>show_and_focus_window</code> 在 <code>set_focus()</code> 前先激活进程，复用已有的 <code>activate_app_macos()</code>。为避免重复造 <code>NSApplication</code> FFI（DRY），把 <code>activate_app_macos</code> 从 <code>popover.rs</code> 私有提升为 <code>pub(crate)</code>（或抽到共享小模块），由 popover 与 tray 共用同一份实现。</p>
+    <div class="ladder"><span class="a">// tray.rs::show_and_focus_window（macOS：先激活进程，再聚焦窗口）</span>
+pub(crate) fn show_and_focus_window(app: &tauri::AppHandle) {
+    let Some(window) = app.get_webview_window("main") else { <span class="a">/* 记录返回 */</span> };
+    if let Err(e) = window.show() { <span class="a">/* 记录返回 */</span> }
+    <span class="a">#[cfg(target_os = "macos")]</span>
+    crate::popover::activate_app_macos();   <span class="a">// 顺序：先 activate 进程，后 set_focus</span>
+    if let Err(e) = window.set_focus() { <span class="a">/* 记录 */</span> }
+}</div>
+    <p class="note">顺序遵循 popover 已验证的约定：<strong>先 activate 进程，再 <code>makeKeyAndOrderFront</code>/<code>set_focus</code></strong>；反序则窗口前置但进程未激活，键盘焦点仍拿不到。</p>
+
+    <h3 class="subhead">4.3　控制流（改动后）</h3>
+    <div class="ladder"><b>[启动] setup</b>
+   ├─ setup_tray            <span class="a">（已有）</span>
+   ├─ setup_main_window_behavior<span class="a">（已有：失焦/关窗 → hide 到托盘）</span>
+   └─ set_activation_policy(Accessory)   <span class="a">★ 新增，仅 macOS → Dock 无图标</span>
+
+<b>[唤起] 托盘左键/菜单「显示」 or 全局热键 or 第二实例</b>
+   └─ show_and_focus_window
+        ├─ window.show()
+        ├─ activate_app_macos()   <span class="a">★ 新增，仅 macOS → 进程激活，键盘焦点可达</span>
+        └─ window.set_focus()</div>
+  </section>
+
+  <section>
+    <div class="sec-head"><span class="sec-num">五</span><h2>改造点（文件级）</h2></div>
+    <div class="tablecard">
+      <table>
+        <thead><tr><th class="scode">#</th><th>文件</th><th>改动</th></tr></thead>
+        <tbody>
+          <tr><td class="scode">1</td><td><code>src-tauri/src/lib.rs</code></td><td><code>setup()</code> 内新增 <code>#[cfg(target_os="macos")] app.set_activation_policy(ActivationPolicy::Accessory)</code>。</td></tr>
+          <tr><td class="scode">2</td><td><code>src-tauri/src/popover.rs</code></td><td><code>activate_app_macos</code> 由私有提为 <code>pub(crate)</code>（供 tray 复用，单一实现）。</td></tr>
+          <tr><td class="scode">3</td><td><code>src-tauri/src/tray.rs</code></td><td><code>show_and_focus_window</code> 在 <code>set_focus()</code> 前调 <code>activate_app_macos()</code>（macOS 守卫）。</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="batches" style="grid-template-columns:1fr; margin-top:18px;">
+      <div class="batch">
+        <div class="batch-head">不改动</div>
+        <ul>
+          <li><code>stay_in_tray</code> 语义、失焦/关窗隐藏逻辑（<code>setup_main_window_behavior</code>）。</li>
+          <li>托盘菜单项与图标（<code>tray.png</code>、显示/退出）。</li>
+          <li>窗口启动显隐策略（<code>visible:false</code>）、<code>tauri.conf.json</code>、前端代码。</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-head"><span class="sec-num">六</span><h2>测试与验收</h2></div>
+
+    <h3 class="subhead">客观项（tester 可自动跑）</h3>
+    <div class="tablecard">
+      <table>
+        <thead><tr><th class="scode">#</th><th>断言</th><th>验证手段</th></tr></thead>
+        <tbody>
+          <tr><td class="scode">O1</td><td>显示路径在 <code>set_focus()</code> 前调用进程激活（顺序回归守卫）</td><td>Rust 单测：对显示流程的可测逻辑/函数指针存在性断言；变异打乱顺序应失败</td></tr>
+          <tr><td class="scode">O2</td><td><code>activate_app_macos</code> 提为 <code>pub(crate)</code> 后仍可被 tray 引用且编译通过</td><td><code>cargo build</code> + fn-pointer 类型守卫</td></tr>
+          <tr><td class="scode">O3</td><td>激活策略决策点锚定为 <code>Accessory</code>（防误改回 <code>Regular</code>）</td><td>Rust 单测：具名常量/小函数返回 <code>Accessory</code> 的回归守卫</td></tr>
+          <tr><td class="scode">O4</td><td>全量 Rust 测试 + clippy 无新增错误（增量口径）</td><td><code>cargo test</code> + <code>cargo clippy</code></td></tr>
+          <tr><td class="scode">O5</td><td>前端测试不回归（本功能不改前端，纯防御）</td><td><code>pnpm test</code></td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3 class="subhead">真机手动确认（manual_confirm，headless 无法自动化）</h3>
+    <div class="tablecard">
+      <table>
+        <thead><tr><th class="scode">#</th><th>断言</th><th>采证方式</th></tr></thead>
+        <tbody>
+          <tr><td class="scode">M1</td><td>后台运行时 Dock 不显示 QuickQuick 图标</td><td><span class="chip wait">待采证</span> 真机目测 Dock</td></tr>
+          <tr><td class="scode">M2</td><td>托盘/热键唤起后，主窗口可见<strong>且搜索框能正常打字</strong>（键盘焦点到位）</td><td><span class="chip wait">待采证</span> 真机操作</td></tr>
+          <tr><td class="scode">M3</td><td>失焦/关窗仍隐藏到托盘、进程不退出（<code>stay_in_tray</code> 语义不变）</td><td><span class="chip wait">待采证</span> 真机操作</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="note" style="margin-top:18px;">O1/O3 是纯 GUI/全局状态行为，单测只能锚定「决策与调用顺序」这一可测层，真实的 Dock 隐藏与键盘焦点必须真机确认（M1–M3）。这与 popover 模块「FFI 包装在 headless 不真正调用 NSApplication」的既有测试边界一致。</p>
+  </section>
+
+  <section>
+    <div class="sec-head"><span class="sec-num">七</span><h2>风险与回滚</h2></div>
+    <div class="pcard">
+      <ul class="principles">
+        <li><b>键盘焦点回归（最高优先）</b>：若 4.2 的激活补足遗漏或顺序写反，表现为唤起后窗口可见但搜索框打不了字。M2 为必采证项；实现期以 popover 已验证顺序为准。</li>
+        <li><b><code>set_activation_policy</code> API 形态</b>：Tauri v2 <code>App</code> 上该方法的可用性与签名以编译期为准；若该版本未暴露，则回退用底层 <code>NSApplication.setActivationPolicy_</code>（objc2-app-kit，项目已依赖）。属实现期首要验证点。</li>
+        <li><b>回滚</b>：三处改动均为加法且 macOS 守卫，移除即恢复原 <code>Regular</code> 行为；不触碰持久化与跨平台路径，回滚零残留。</li>
+      </ul>
+    </div>
+  </section>
+
+</div>
+
+<footer>
+  <div class="footer-in">
+    <span><b>QuickQuick 后台不占 Dock 图标方案</b></span>
+    <span>2026-06-05 · 已实现 · 待真机采证 · Nordic Serenity</span>
+  </div>
+</footer>
+
+</body>
+</html>

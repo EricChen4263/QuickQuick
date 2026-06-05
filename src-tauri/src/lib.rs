@@ -192,6 +192,11 @@ pub fn run() {
             register_hotkeys(app.handle());
             tray::setup_tray(app)?;
             setup_main_window_behavior(app, stay_in_tray)?;
+            // 启动即设 Accessory：QuickQuick 常驻后台、靠托盘+全局热键唤起，
+            // 不在 Dock 显示图标（对标 Maccy/Paste）。配套 tray.rs 在显示窗口时
+            // 先 activate 进程，确保 Accessory 下键盘焦点仍可达。
+            #[cfg(target_os = "macos")]
+            app.set_activation_policy(macos_startup_activation_policy());
             spawn_update_watcher(app.handle().clone());
             Ok(())
         })
@@ -337,6 +342,16 @@ fn apply_autostart_preference(app: &mut tauri::App) {
 
     let pref = autostart::AutostartConfig::load_or_default(&config_path);
     autostart::apply_to_os(&app.handle().clone(), pref.enabled);
+}
+
+/// 启动时该用的 macOS 激活策略：恒为 `Accessory`（后台不占 Dock 图标）。
+///
+/// 抽成具名小函数是为了给回归测试一个可断言的决策锚：真实的 Dock 隐藏行为
+/// 是纯 GUI 状态、headless 无法验证，但「决策值是 Accessory 而非 Regular」可单测。
+/// 若有人误改回 Regular，回归测试失败——见 docs/design/dock-icon-accessory.md（O3）。
+#[cfg(target_os = "macos")]
+pub fn macos_startup_activation_policy() -> tauri::ActivationPolicy {
+    tauri::ActivationPolicy::Accessory
 }
 
 /// 启动后台更新 watcher：首检延迟后周期性检查更新。

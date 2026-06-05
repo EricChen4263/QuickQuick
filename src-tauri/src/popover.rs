@@ -90,8 +90,10 @@ pub fn trigger_popover(handle: &tauri::AppHandle, label: &str) {
 ///
 /// 拿不到 MainThreadMarker（理论上不应发生：热键回调在主线程）时优雅跳过，
 /// 不 panic，与本文件其他错误处理风格（eprintln 降级）一致。
+/// `pub(crate)`：tray 在 Accessory 策略下显示窗口时复用同一激活实现，
+/// 避免在 tray.rs 另造一份 NSApplication FFI（DRY，见设计文档改造点 #2）。
 #[cfg(target_os = "macos")]
-fn activate_app_macos() {
+pub(crate) fn activate_app_macos() {
     use objc2::MainThreadMarker;
     use objc2_app_kit::NSApplication;
 
@@ -110,7 +112,7 @@ fn activate_app_macos() {
 
 /// 非 macOS 平台：空实现，编译时零开销消除。
 #[cfg(not(target_os = "macos"))]
-fn activate_app_macos() {}
+pub(crate) fn activate_app_macos() {}
 
 /// 获取已存在的 popover 窗口，或在首次调用时按规格创建并注册失焦隐藏。
 fn get_or_create_popover(handle: &tauri::AppHandle, spec: &PopoverSpec) -> Option<WebviewWindow> {
