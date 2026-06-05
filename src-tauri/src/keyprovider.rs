@@ -1,123 +1,114 @@
-//! 密钥层抽象模块：KeyProvider trait + KeychainKeyProvider 实现
+//! 密钥层抽象模块：`KeyProvider` trait + 本地文件密钥库 `LocalKeyProvider`
 //!
-//! 设计要点（对齐设计文档§六）：
+//! 设计要点（对齐 docs/design/local-keystore-no-keychain.md）：
 //! - `KeyProvider` trait 是开库唯一依赖的抽象：调用方只需通过接口取 256-bit 密钥。
-//! - `KeychainKeyProvider` 是 v1 唯一真实实现，基于 OS 钥匙串（keyring crate）持久化。
-//! - 密钥访问性语义：`AfterFirstUnlockThisDeviceOnly`——锁屏后首次解锁可用、绝不同步/漫游。
-//! - 测试友好：keyring 3 支持 mock credential builder，测试全程 headless 不弹窗。
-//! - 随机密钥熵：uuid v4（内部用 getrandom/OS CSPRNG），两个 16 字节拼接得 32 字节。
-//! - Entry 字段持有：KeychainKeyProvider 持有 keyring::Entry 而非每次重建，保证
-//!   mock 模式（EntryOnly 持久化）与真实 Keychain 模式（OS 持久化）行为一致。
+//! - `LocalKeyProvider` 三平台统一实现：SQLCipher 主密钥落本地 `master.key` 文件（0600），
+//!   再用「机器绑定」KEK 二次加密，文件单拷到异机解不开（machine_id 不同 → GCM 验签失败）。
+//! - 不再依赖 OS 钥匙串：无 Apple Developer ID 时钥匙串 ACL 反复失效、反复弹密码，
+//!   本方案以「永不弹密码、永远能开库」为硬目标。
+//!
+//! ## 安全声明（诚实交代威胁模型）
+//! 相比 Keychain 方案，本地密钥库放弃了「OS 级访问控制 + 锁屏后台保护」——任何能读到
+//! 当前登录用户家目录的进程/人都能解开剪贴板库。**保住的是**：密钥永不明文落盘 + 密钥文件
+//! 单独被拷到别的机器也解不开。**防的是**设备丢失、目录被单独拷走、云同步盘/Time Machine
+//! 误带走、二手机未擦盘；**不防**本机其他进程、完整家目录被读。
+//! 注：钥匙串那层 ACL 在本项目无稳定签名下本就形同虚设，这层「损失」在真实威胁模型下有限。
 
+use std::path::{Path, PathBuf};
+
+use aes_gcm::{
+    aead::{Aead, KeyInit},
+    Aes256Gcm, Key, Nonce,
+};
+use argon2::{Algorithm, Argon2, Params, Version};
+use rand::RngCore;
 use thiserror::Error;
+use zeroize::Zeroizing;
 
-/// Keychain 中存储密钥的服务名（与 App bundle 一致）
-const KEYCHAIN_SERVICE: &str = "io.quickquick.app";
+/// 密钥文件名（落在 app_config_dir 根，非 dev 子目录）
+const KEY_FILE_NAME: &str = "master.key";
 
-/// Keychain 中存储密钥的账号名（固定：当前设备的 SQLCipher 主密钥）
-const KEYCHAIN_ACCOUNT: &str = "sqlcipher_master_key";
+/// 文件 magic 头（"QQMK" = QuickQuick Master Key，Little-Endian 排布）
+const MAGIC: [u8; 4] = [0x51, 0x51, 0x4D, 0x4B];
+
+/// 密钥文件格式版本
+const FORMAT_VERSION: u8 = 0x01;
+
+/// Argon2id KEK 派生盐长度（字节）
+const SALT_LEN: usize = 32;
+
+/// AES-GCM nonce 长度（字节）
+const NONCE_LEN: usize = 12;
+
+/// 主密钥长度（字节，AES-256 raw key）
+const KEY_LEN: usize = 32;
+
+/// 头部固定长度：magic(4) + version(1) + salt(32) + nonce(12)
+const HEADER_LEN: usize = 4 + 1 + SALT_LEN + NONCE_LEN;
+
+/// Argon2id 内存开销（KiB）：64 MB，符合 OWASP 2023 推荐下限（与 portable.rs 一致）
+const ARGON2_MEM_KIB: u32 = 65536;
+
+/// Argon2id 迭代次数：3 次
+const ARGON2_ITERATIONS: u32 = 3;
+
+/// Argon2id 并行度：4 线程
+const ARGON2_PARALLELISM: u32 = 4;
+
+/// 机器标识不可用时的降级回退常量盐。
+///
+/// 为什么是固定常量：当三平台 machine_id 子进程/文件全部取不到时，机器绑定增益失效，
+/// 退化为「纯 0600 文件」安全级——这是为保住「永不弹密码、永远能开库」硬目标刻意做的降级。
+/// 此值仅作 KEK 派生的 passphrase 占位，绝非密钥本身（真正机密是文件内随机盐 + 随机主密钥）。
+const FALLBACK_MACHINE_ID: &[u8] = b"quickquick-local-keystore-fallback-machine-id-v1";
 
 /// KeyProvider 操作错误枚举
 #[derive(Debug, Error)]
 pub enum KeyError {
-    /// 钥匙串后端操作失败（keyring 返回错误）
-    #[error("钥匙串后端操作失败：{0}")]
-    Backend(String),
+    /// 文件 I/O 失败（读写密钥文件、设权限等）
+    #[error("密钥文件 I/O 失败：{0}")]
+    Io(String),
 
-    /// 随机密钥生成失败（理论上不应发生）
+    /// 随机密钥生成/加密失败（理论上不应发生）
     #[error("随机密钥生成失败")]
     Generation,
 
-    /// 存储的密钥长度不符合预期（可能被损坏或外部篡改）
-    #[error("存储的密钥长度非法：期望 32 字节，实际 {0} 字节")]
-    InvalidKeyLength(usize),
-}
+    /// 密钥文件格式非法（magic/version 不符或长度不足）
+    #[error("密钥文件格式无效")]
+    Format,
 
-/// 密钥可访问性语义（对齐设计文档§六）
-///
-/// 仅定义 v1 所需的变体；未来可按需扩展。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum KeyAccessibility {
-    /// 锁屏后首次解锁方可访问，且仅限本设备（不漫游、不 iCloud 同步）。
+    /// KEK 解密主密钥失败——文件被拷到异机（machine_id 不同）或文件损坏/被篡改。
     ///
-    /// 对应 macOS Security framework kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly。
-    AfterFirstUnlockThisDeviceOnly,
-}
+    /// lib.rs 据此判定「需一次性重置」：备份旧 master.key 与旧库后重建。
+    #[error("密钥解密失败（文件损坏或来自其他机器）")]
+    Decrypt,
 
-/// 密钥在安全存储中的实际属性配置（可测纯数据，不持有 OS 句柄）。
-///
-/// 作用：提供一个可在单测中断言的"意图配置"值，表达 AfterFirstUnlock + ThisDeviceOnly
-/// + synchronizable=false 三项约束，解决 V0 中"枚举声明但 OS 属性未落地"的已知差距（V0-F3-A03-H01）。
-///
-/// 设计约束（见设计文档§六#2）：
-/// - `accessibility_identifier()` 返回 `"AfterFirstUnlockThisDeviceOnly"`，而非 keyring
-///   apple-native 默认的 `"WhenUnlocked"`，表达后台可读（AfterFirstUnlock）语义。
-/// - `synchronizable()` 返回 `false`，密钥不漫游 iCloud Keychain / 凭据（ThisDeviceOnly）。
-///
-/// # 平台说明
-/// - macOS：标识符字符串对应 `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`，
-///   `synchronizable=false` 对应 `kSecAttrSynchronizable = kCFBooleanFalse`。
-/// - Windows：凭据管理器本机不漫游，ThisDeviceOnly 语义天然满足；AfterFirstUnlock
-///   在 Windows 无精确对应项，注释标明「本机持久可读」语义等价。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct KeyStorageAttributes {
-    /// macOS kSecAttrAccessible 对应标识符；Windows 下语义等价描述。
-    accessibility_id: &'static str,
-    /// 是否允许跨设备同步（必须为 false）。
-    synchronizable: bool,
-}
-
-impl KeyStorageAttributes {
-    /// 返回 macOS kSecAttrAccessible 标识符字符串（平台无关的意图表达）。
-    ///
-    /// 返回 `"AfterFirstUnlockThisDeviceOnly"` 而非 `"WhenUnlocked"`，
-    /// 区分两种语义：AfterFirstUnlock 锁屏后台仍可读；WhenUnlocked 仅解锁状态可读。
-    pub fn accessibility_identifier(&self) -> &'static str {
-        self.accessibility_id
-    }
-
-    /// 是否允许漫游同步（iCloud Keychain / 凭据漫游）。
-    ///
-    /// 必须返回 `false`：密钥绝不得跨设备同步（ThisDeviceOnly 硬约束）。
-    pub fn synchronizable(&self) -> bool {
-        self.synchronizable
-    }
-}
-
-impl Default for KeyStorageAttributes {
-    /// 返回 QuickQuick v1 的预定属性配置：AfterFirstUnlockThisDeviceOnly + 不同步。
-    fn default() -> Self {
-        Self {
-            accessibility_id: "AfterFirstUnlockThisDeviceOnly",
-            synchronizable: false,
-        }
-    }
+    /// Argon2 KEK 派生失败（参数构建或 hash 失败）
+    #[error("密钥派生失败")]
+    Kdf,
 }
 
 /// 密钥层抽象接口——开库唯一依赖的密钥获取方式。
 ///
 /// # Contract
-/// - 首次调用：生成随机 32 字节密钥，持久化至安全存储，并返回该密钥。
-/// - 后续调用：从安全存储读取并返回同一密钥（幂等）。
-/// - 实现必须保证密钥不漫游（ThisDeviceOnly）。
+/// - 首次调用：生成随机 32 字节主密钥，机器绑定加密后持久化，并返回该密钥。
+/// - 后续调用：从密钥文件解密并返回同一密钥（幂等）。
 pub trait KeyProvider {
     /// 获取或生成 256-bit（32 字节）的 SQLCipher 主密钥。
     ///
     /// # Errors
-    /// - `KeyError::Backend`：钥匙串后端不可用
+    /// - `KeyError::Io`：密钥文件读写失败
     /// - `KeyError::Generation`：随机密钥生成失败
-    /// - `KeyError::InvalidKeyLength`：存储值长度异常
+    /// - `KeyError::Format`：密钥文件格式非法
+    /// - `KeyError::Decrypt`：机器绑定解密失败（异机/损坏）
+    /// - `KeyError::Kdf`：KEK 派生失败
     fn get_or_create_key(&self) -> Result<[u8; 32], KeyError>;
 }
 
 /// 生成 32 字节随机密钥。
 ///
 /// 实现：uuid v4 内部调用 getrandom/OS CSPRNG，两次各生成 16 字节拼接为 32 字节。
-/// 避免引入额外 crate，同时保证熵来源为 OS CSPRNG（不使用时间种子）。
-///
-/// # 为什么用 uuid 而非 rand
-/// Cargo.toml 已有 uuid = {features=["v4"]}，uuid::Uuid::new_v4() 内部调用
-/// getrandom，与 rand::thread_rng() 熵质量相同；无需增加依赖。
+/// Cargo.toml 已有 uuid = {features=["v4"]}，熵来源为 OS CSPRNG（不使用时间种子）。
 pub fn generate_random_key() -> [u8; 32] {
     let a = uuid::Uuid::new_v4();
     let b = uuid::Uuid::new_v4();
@@ -127,229 +118,268 @@ pub fn generate_random_key() -> [u8; 32] {
     key
 }
 
-/// v1 唯一真实实现：使用 OS 钥匙串（keyring crate）持久化 SQLCipher 主密钥。
+/// 读取本机机器标识（三平台分支），用作 KEK 派生的 passphrase。
 ///
-/// # Entry 字段持有策略
-/// 持有 `keyring::Entry` 实例而非每次重建，原因：
-/// - keyring mock（EntryOnly 持久化）仅在同一 Entry 实例内保留数据，若每次重建则
-///   丢失首次写入的密钥，幂等性断言会失败。
-/// - 真实 OS Keychain 不受此限制（跨进程/跨实例均可读），但字段持有对其无副作用。
+/// - macOS：`ioreg -rd1 -c IOPlatformExpertDevice` 解析 `IOPlatformUUID`
+/// - Linux：`/etc/machine-id`（回退 `/var/lib/dbus/machine-id`）
+/// - Windows：`reg query HKLM\SOFTWARE\Microsoft\Cryptography /v MachineGuid` 解析 `MachineGuid`
 ///
-/// # 可测性
-/// keyring 3 支持 `set_default_credential_builder(keyring::mock::default_credential_builder())`，
-/// 测试中激活 mock 后，此 provider 完全不触碰真实 OS 钥匙串。
-pub struct KeychainKeyProvider {
-    /// 持有 keyring Entry，确保 mock 与真实 Keychain 模式下幂等性一致
-    entry: keyring::Entry,
+/// # 降级回退（硬目标）
+/// 任一平台取不到机器标识（子进程失败、文件缺失、解析空）→ 返回 [`FALLBACK_MACHINE_ID`]，
+/// 退化为纯 0600 安全级而非 panic。子进程调用全程 `Result` 处理，绝不 panic。
+fn machine_id() -> Vec<u8> {
+    machine_id_with_reader(read_platform_machine_id)
 }
 
-impl KeychainKeyProvider {
-    /// 创建 KeychainKeyProvider 实例。
-    ///
-    /// # Errors
-    /// keyring::Entry::new 失败时 panic——属于不可恢复的初始化错误，
-    /// 说明服务名/账号名参数非法（静态常量，不应发生）。
-    ///
-    /// # Panics
-    /// 若 keyring 后端拒绝创建 Entry（极少见，仅静态名称非法时触发）
-    pub fn new() -> Self {
-        let entry = keyring::Entry::new(KEYCHAIN_SERVICE, KEYCHAIN_ACCOUNT)
-            .expect("keyring::Entry::new 不应因静态常量失败");
-        Self { entry }
-    }
-
-    /// 返回此 provider 的密钥可访问性语义。
-    ///
-    /// 返回 `AfterFirstUnlockThisDeviceOnly`，其保证边界如下：
-    ///
-    /// **已保证（由 keyring `apple-native` feature 提供）**：
-    /// - macOS 上启用 `apple-native` feature 后，keyring 以 `kSecAttrSynchronizable = false`
-    ///   存储密钥，密钥不漫游 iCloud Keychain，满足设计§六「ThisDeviceOnly 不同步」硬约束。
-    /// - Windows 上启用 `windows-native` feature，凭据管理器本机不漫游。
-    ///
-    /// **已知差距（归 pending-manual V0-F3-A03-H01）**：
-    /// - macOS `kSecAttrAccessible` 属性精确值未强制设为 `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`。
-    ///   keyring apple-native 默认使用 `kSecAttrAccessibleWhenUnlocked`（解锁可用），
-    ///   而非 AfterFirstUnlock（首次解锁后锁屏仍可用）。
-    /// - 若需后台访问密钥（锁屏期间），须通过 `security-framework` 直接设置
-    ///   `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`，该强化标记为已知差距。
-    pub fn accessibility(&self) -> KeyAccessibility {
-        KeyAccessibility::AfterFirstUnlockThisDeviceOnly
-    }
-
-    /// 密钥是否仅限本设备（不漫游）。
-    ///
-    /// 返回 `true`：keyring `apple-native` / `windows-native` feature 以
-    /// `kSecAttrSynchronizable = false` 存储密钥，满足设计§六「ThisDeviceOnly 不同步」
-    /// 硬约束。`KeyStorageAttributes::synchronizable()` 提供可单测的属性断言点。
-    pub fn is_device_only(&self) -> bool {
-        matches!(
-            self.accessibility(),
-            KeyAccessibility::AfterFirstUnlockThisDeviceOnly
-        )
-    }
-
-    /// 密钥是否在锁屏后台仍可读（AfterFirstUnlock 语义）。
-    ///
-    /// 返回 `true` 表示：本 provider 配置意图为 `AfterFirstUnlockThisDeviceOnly`，
-    /// 即设备首次解锁后，即使屏幕再次锁定，后台进程仍可访问密钥。
-    ///
-    /// 此方法解决 V0-F3-A03-H01 已知差距：V0 中枚举声明了 AfterFirstUnlock 语义
-    /// 但无显式方法暴露该断言点。`KeyStorageAttributes` 提供配置意图的可测纯值。
-    ///
-    /// # 平台说明
-    /// - macOS：意图配置为 `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`。
-    /// - Windows：凭据管理器本机持久可读，语义等价（无精确 AfterFirstUnlock 对应项）。
-    pub fn is_after_first_unlock(&self) -> bool {
-        matches!(
-            self.accessibility(),
-            KeyAccessibility::AfterFirstUnlockThisDeviceOnly
-        )
-    }
-
-    /// 返回此 provider 的实际存储属性配置（可测纯值，不触碰 OS 钥匙串）。
-    ///
-    /// 提供 `accessibility_identifier()` 与 `synchronizable()` 两个断言点，
-    /// 用于在单测中验证 AfterFirstUnlockThisDeviceOnly + synchronizable=false
-    /// 的配置意图，区分 WhenUnlocked 等其他 accessibility 值。
-    pub fn storage_attributes(&self) -> KeyStorageAttributes {
-        KeyStorageAttributes::default()
-    }
-
-    /// 从 Entry 读取已存储的密钥，或在首次调用时生成并存储。
-    fn load_or_generate(&self) -> Result<[u8; 32], KeyError> {
-        match self.entry.get_secret() {
-            Ok(bytes) => {
-                // 已存在密钥：校验长度后返回
-                if bytes.len() != 32 {
-                    return Err(KeyError::InvalidKeyLength(bytes.len()));
-                }
-                let mut key = [0u8; 32];
-                key.copy_from_slice(&bytes);
-                Ok(key)
-            }
-            Err(keyring::Error::NoEntry) => {
-                // 首次使用：生成随机密钥并持久化
-                let key = generate_random_key();
-                self.entry
-                    .set_secret(&key)
-                    .map_err(|e| KeyError::Backend(e.to_string()))?;
-                Ok(key)
-            }
-            Err(e) => Err(KeyError::Backend(e.to_string())),
-        }
-    }
-}
-
-impl Default for KeychainKeyProvider {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-/// 开发期文件密钥库（debug-only，release 构建用 KeychainKeyProvider）。
+/// 回退判定纯逻辑（reader 可注入，便于单测直击「读取失败→回退」分支）。
 ///
-/// # 为什么需要它
-/// dev 反复重编 → macOS codesign 身份变动 → 钥匙串「始终允许」失效，反复弹密码。
-/// debug 构建改把 SQLCipher 主密钥存本地文件、完全绕开 OS 钥匙串，消除弹窗。
-///
-/// # 安全约束
-/// - 仅 `#[cfg(debug_assertions)]` 编译，绝不进入 release 分发二进制。
-/// - 密钥文件权限设为 `0600`（仅属主可读写），与钥匙串「ThisDeviceOnly」语义近似。
-/// - 文件存 32 字节原始密钥（非 hex），读时校验长度，与 KeychainKeyProvider 幂等语义一致。
-#[cfg(debug_assertions)]
-pub struct FileKeyProvider {
-    /// 密钥文件完整路径（config_dir/dev-master-key）
-    key_path: std::path::PathBuf,
+/// 真实入口 `machine_id()` 传 `read_platform_machine_id`；测试注入返回 None/空 Vec 的
+/// reader 验证回退判别力——现有 `with_machine_id` 注入绕过真实读取，macOS ioreg 又总成功，
+/// 故回退分支本身缺判别力测试，此处补上。
+fn machine_id_with_reader(reader: impl Fn() -> Option<Vec<u8>>) -> Vec<u8> {
+    reader()
+        .filter(|id| !id.is_empty())
+        .unwrap_or_else(|| FALLBACK_MACHINE_ID.to_vec())
 }
 
-#[cfg(debug_assertions)]
-impl FileKeyProvider {
-    /// dev 密钥文件名（落在 app_config_dir 下）
-    const KEY_FILE_NAME: &'static str = "dev-master-key";
+/// 平台相关的机器标识读取（macOS）：ioreg 子进程解析 IOPlatformUUID。
+#[cfg(target_os = "macos")]
+fn read_platform_machine_id() -> Option<Vec<u8>> {
+    let output = std::process::Command::new("ioreg")
+        .args(["-rd1", "-c", "IOPlatformExpertDevice"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&output.stdout);
+    // 行形如：  "IOPlatformUUID" = "XXXXXXXX-XXXX-..."
+    let line = text.lines().find(|l| l.contains("IOPlatformUUID"))?;
+    extract_quoted_after_eq(line).map(String::into_bytes)
+}
 
-    /// 创建 FileKeyProvider，密钥文件落在 `config_dir/dev-master-key`。
-    pub fn new(config_dir: &std::path::Path) -> Self {
+/// 平台相关的机器标识读取（Linux）：读 machine-id 文件，回退 dbus 路径。
+#[cfg(target_os = "linux")]
+fn read_platform_machine_id() -> Option<Vec<u8>> {
+    let read_trimmed = |path: &str| {
+        std::fs::read_to_string(path)
+            .ok()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+    };
+    read_trimmed("/etc/machine-id")
+        .or_else(|| read_trimmed("/var/lib/dbus/machine-id"))
+        .map(String::into_bytes)
+}
+
+/// 平台相关的机器标识读取（Windows）：reg query 解析 MachineGuid（免 winreg 依赖）。
+#[cfg(target_os = "windows")]
+fn read_platform_machine_id() -> Option<Vec<u8>> {
+    let output = std::process::Command::new("reg")
+        .args([
+            "query",
+            r"HKLM\SOFTWARE\Microsoft\Cryptography",
+            "/v",
+            "MachineGuid",
+        ])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&output.stdout);
+    // 行形如：    MachineGuid    REG_SZ    xxxxxxxx-xxxx-...
+    let line = text.lines().find(|l| l.contains("MachineGuid"))?;
+    line.split_whitespace().last().map(|s| s.as_bytes().to_vec())
+}
+
+/// 其余平台（无已知机器标识来源）：直接走回退常量盐。
+#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+fn read_platform_machine_id() -> Option<Vec<u8>> {
+    None
+}
+
+/// 提取形如 `"Key" = "Value"` 行中等号后引号内的值（macOS ioreg 解析辅助）。
+#[cfg(target_os = "macos")]
+fn extract_quoted_after_eq(line: &str) -> Option<String> {
+    let after_eq = line.split('=').nth(1)?;
+    let start = after_eq.find('"')? + 1;
+    let rest = &after_eq[start..];
+    let end = rest.find('"')?;
+    Some(rest[..end].to_string())
+}
+
+/// 本地文件密钥库：三平台统一实现，机器绑定 KEK + 0600 文件。
+///
+/// 密钥文件落 `config_dir/master.key`，格式（参照 portable.rs 头部思路）：
+/// `magic(4) + version(1) + salt(32) + nonce(12) + aes-256-gcm(master_key)(48)`。
+/// KEK = `Argon2id(passphrase = machine_id, salt = 文件内随机盐)`。
+pub struct LocalKeyProvider {
+    /// 密钥文件完整路径（config_dir/master.key）
+    key_path: PathBuf,
+    /// KEK 派生用机器标识（生产由 `machine_id()` 填充；测试可注入以模拟异机）
+    machine_id: Vec<u8>,
+}
+
+impl LocalKeyProvider {
+    /// 创建 LocalKeyProvider：密钥文件落在 `config_dir/master.key`，机器标识由平台函数填充。
+    pub fn new(config_dir: &Path) -> Self {
         Self {
-            key_path: config_dir.join(Self::KEY_FILE_NAME),
+            key_path: config_dir.join(KEY_FILE_NAME),
+            machine_id: machine_id(),
         }
     }
 
-    /// 从文件读取密钥，或在文件不存在时生成随机密钥并落盘（幂等）。
+    /// 注入机器标识构造（测试专用）：用于模拟「同机复算」与「异机解密失败」。
+    ///
+    /// 真实入口走 `new`（machine_id 由平台函数填充）；本构造器让单测可控注入不同 id，
+    /// 验证「文件单拷到异机解不开」与「降级回退仍能开库」两条核心安全路径。
+    pub fn with_machine_id(config_dir: &Path, machine_id: &[u8]) -> Self {
+        Self {
+            key_path: config_dir.join(KEY_FILE_NAME),
+            machine_id: machine_id.to_vec(),
+        }
+    }
+
+    /// 从密钥文件解密主密钥，或在文件不存在时生成随机主密钥并机器绑定落盘（幂等）。
     fn load_or_generate(&self) -> Result<[u8; 32], KeyError> {
         match std::fs::read(&self.key_path) {
-            Ok(bytes) => {
-                if bytes.len() != 32 {
-                    return Err(KeyError::InvalidKeyLength(bytes.len()));
-                }
-                let mut key = [0u8; 32];
-                key.copy_from_slice(&bytes);
-                Ok(key)
-            }
+            Ok(blob) => self.decrypt_master_key(&blob),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                let key = generate_random_key();
+                // Zeroizing 包裹新生成的主密钥：写盘后中间变量 drop 时清零，不在内存残留。
+                let key = Zeroizing::new(generate_random_key());
                 self.write_key_file(&key)?;
-                Ok(key)
+                Ok(*key)
             }
-            Err(e) => Err(KeyError::Backend(e.to_string())),
+            Err(e) => Err(KeyError::Io(e.to_string())),
         }
     }
 
-    /// 写密钥文件并设权限 0600（unix）。非 unix 平台跳过权限设置。
-    fn write_key_file(&self, key: &[u8; 32]) -> Result<(), KeyError> {
-        std::fs::write(&self.key_path, key).map_err(|e| KeyError::Backend(e.to_string()))?;
+    /// 用机器绑定 KEK 加密主密钥并以 0600 落盘（首启路径）。
+    fn write_key_file(&self, master_key: &[u8; KEY_LEN]) -> Result<(), KeyError> {
+        let mut rng = rand::thread_rng();
+        let mut salt = [0u8; SALT_LEN];
+        rng.fill_bytes(&mut salt);
+        let mut nonce_bytes = [0u8; NONCE_LEN];
+        rng.fill_bytes(&mut nonce_bytes);
 
+        let kek = self.derive_kek(&salt)?;
+        let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(kek.as_ref()));
+        let ciphertext = cipher
+            .encrypt(Nonce::from_slice(&nonce_bytes), master_key.as_slice())
+            .map_err(|_| KeyError::Generation)?;
+
+        let mut blob = Vec::with_capacity(HEADER_LEN + ciphertext.len());
+        blob.extend_from_slice(&MAGIC);
+        blob.push(FORMAT_VERSION);
+        blob.extend_from_slice(&salt);
+        blob.extend_from_slice(&nonce_bytes);
+        blob.extend_from_slice(&ciphertext);
+
+        std::fs::write(&self.key_path, &blob).map_err(|e| KeyError::Io(e.to_string()))?;
+        self.harden_permissions()
+    }
+
+    /// 解析密钥文件，复算 KEK 解密出主密钥（后续启动路径）。
+    fn decrypt_master_key(&self, blob: &[u8]) -> Result<[u8; KEY_LEN], KeyError> {
+        if blob.len() < HEADER_LEN + 16 || blob[..4] != MAGIC || blob[4] != FORMAT_VERSION {
+            return Err(KeyError::Format);
+        }
+        let salt: &[u8; SALT_LEN] = blob[5..5 + SALT_LEN]
+            .try_into()
+            .map_err(|_| KeyError::Format)?;
+        let nonce_start = 5 + SALT_LEN;
+        let nonce_bytes = &blob[nonce_start..nonce_start + NONCE_LEN];
+        let ciphertext = &blob[HEADER_LEN..];
+
+        let kek = self.derive_kek(salt)?;
+        let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(kek.as_ref()));
+        // Zeroizing 包裹解密出的明文主密钥：try_into 后中间 Vec drop 时清零，不在内存残留。
+        let plaintext = Zeroizing::new(
+            cipher
+                .decrypt(Nonce::from_slice(nonce_bytes), ciphertext)
+                .map_err(|_| KeyError::Decrypt)?,
+        );
+
+        plaintext.as_slice().try_into().map_err(|_| KeyError::Decrypt)
+    }
+
+    /// 从机器标识 + 文件内随机盐派生 KEK（Argon2id），返回 Zeroizing 包装的 32 字节。
+    fn derive_kek(&self, salt: &[u8; SALT_LEN]) -> Result<Zeroizing<[u8; KEY_LEN]>, KeyError> {
+        let params = Params::new(
+            ARGON2_MEM_KIB,
+            ARGON2_ITERATIONS,
+            ARGON2_PARALLELISM,
+            Some(KEY_LEN),
+        )
+        .map_err(|_| KeyError::Kdf)?;
+        let argon2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
+
+        let mut kek = Zeroizing::new([0u8; KEY_LEN]);
+        argon2
+            .hash_password_into(&self.machine_id, salt, kek.as_mut())
+            .map_err(|_| KeyError::Kdf)?;
+        Ok(kek)
+    }
+
+    /// unix 下把密钥文件权限收紧为 0600（仅属主可读写）；非 unix 平台跳过。
+    fn harden_permissions(&self) -> Result<(), KeyError> {
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
             std::fs::set_permissions(&self.key_path, std::fs::Permissions::from_mode(0o600))
-                .map_err(|e| KeyError::Backend(e.to_string()))?;
+                .map_err(|e| KeyError::Io(e.to_string()))?;
         }
-
         Ok(())
     }
 }
 
-#[cfg(debug_assertions)]
-impl KeyProvider for FileKeyProvider {
+impl KeyProvider for LocalKeyProvider {
     fn get_or_create_key(&self) -> Result<[u8; 32], KeyError> {
         self.load_or_generate()
     }
 }
 
-impl KeyProvider for KeychainKeyProvider {
-    fn get_or_create_key(&self) -> Result<[u8; 32], KeyError> {
-        self.load_or_generate()
-    }
-}
-
-// 测试模块本身也需 debug_assertions 门控：FileKeyProvider 是 debug-only 类型，
-// release 测试构建下不存在，若仅 #[cfg(test)] 会导致 cargo test --release 编译失败（E0433）。
-#[cfg(all(test, debug_assertions))]
-mod file_provider_tests {
+#[cfg(test)]
+mod tests {
     use super::*;
     use tempfile::tempdir;
 
-    /// 首次调用应生成密钥并把文件落盘
+    /// 验证 generate_random_key 每次返回 32 字节
     #[test]
-    fn file_provider_creates_key_file_on_first_call() {
+    fn generate_random_key_returns_32_bytes() {
+        let key = generate_random_key();
+        assert_eq!(key.len(), 32, "generate_random_key 应返回恰好 32 字节");
+    }
+
+    /// 两次独立生成的随机密钥不应相等（随机源熵正常，非恒真断言）
+    #[test]
+    fn generate_random_key_is_not_constant() {
+        let a = generate_random_key();
+        let b = generate_random_key();
+        assert_ne!(a, b, "两次独立生成的随机密钥不应相等");
+    }
+
+    /// 首次调用应生成密钥并把 master.key 文件落盘
+    #[test]
+    fn first_call_creates_master_key_file() {
         let dir = tempdir().unwrap();
-        let provider = FileKeyProvider::new(dir.path());
+        let provider = LocalKeyProvider::new(dir.path());
 
         let key = provider.get_or_create_key().unwrap();
 
         assert_eq!(key.len(), 32, "首次生成的密钥应为 32 字节");
         assert!(
-            dir.path().join("dev-master-key").exists(),
-            "首次调用后密钥文件应已落盘"
+            dir.path().join("master.key").exists(),
+            "首次调用后 master.key 应已落盘"
         );
     }
 
     /// 同一实例二次调用应幂等返回同一密钥（不重新生成）
     #[test]
-    fn file_provider_is_idempotent_within_same_instance() {
+    fn same_instance_is_idempotent() {
         let dir = tempdir().unwrap();
-        let provider = FileKeyProvider::new(dir.path());
+        let provider = LocalKeyProvider::new(dir.path());
 
         let first = provider.get_or_create_key().unwrap();
         let second = provider.get_or_create_key().unwrap();
@@ -357,86 +387,139 @@ mod file_provider_tests {
         assert_eq!(first, second, "同一实例二次调用应返回同一密钥");
     }
 
-    /// 新实例从已有文件读出与首个实例相同的密钥（跨实例持久化）
+    /// 新实例从已有文件读出与首个实例相同的密钥（跨实例持久化 + 同机复算 KEK）
     #[test]
-    fn file_provider_reads_same_key_from_new_instance() {
+    fn new_instance_reads_same_key_with_same_machine_id() {
         let dir = tempdir().unwrap();
-        let first_key = FileKeyProvider::new(dir.path())
+        let id = b"machine-A";
+
+        let first = LocalKeyProvider::with_machine_id(dir.path(), id)
+            .get_or_create_key()
+            .unwrap();
+        let second = LocalKeyProvider::with_machine_id(dir.path(), id)
             .get_or_create_key()
             .unwrap();
 
-        let second_key = FileKeyProvider::new(dir.path())
-            .get_or_create_key()
-            .unwrap();
-
-        assert_eq!(first_key, second_key, "新实例应从文件读出同一密钥");
+        assert_eq!(first, second, "同机新实例应从文件解出同一密钥");
     }
 
-    /// 文件长度非 32 字节时报 InvalidKeyLength（损坏/篡改检测）
+    /// 异机模拟：用 machine-A 写盘后，machine-B 复算 KEK 解密应失败（文件单拷异机解不开）
     #[test]
-    fn file_provider_rejects_wrong_length() {
+    fn different_machine_id_fails_to_decrypt() {
         let dir = tempdir().unwrap();
-        std::fs::write(dir.path().join("dev-master-key"), b"too short").unwrap();
-        let provider = FileKeyProvider::new(dir.path());
+
+        LocalKeyProvider::with_machine_id(dir.path(), b"machine-A")
+            .get_or_create_key()
+            .expect("machine-A 首启应成功");
+
+        let result =
+            LocalKeyProvider::with_machine_id(dir.path(), b"machine-B").get_or_create_key();
+
+        assert!(
+            matches!(result, Err(KeyError::Decrypt)),
+            "异机 machine_id 解密应返回 Decrypt，实际：{result:?}"
+        );
+    }
+
+    /// 降级回退：machine_id 不可用时退化为固定回退盐，仍能首启 + 跨实例开库
+    #[test]
+    fn fallback_machine_id_still_opens_keystore() {
+        let dir = tempdir().unwrap();
+
+        let first = LocalKeyProvider::with_machine_id(dir.path(), FALLBACK_MACHINE_ID)
+            .get_or_create_key()
+            .expect("回退盐首启应成功（永不弹密码硬目标）");
+        let second = LocalKeyProvider::with_machine_id(dir.path(), FALLBACK_MACHINE_ID)
+            .get_or_create_key()
+            .expect("回退盐跨实例应能复算解密");
+
+        assert_eq!(first, second, "回退盐下应能稳定开库读出同一密钥");
+    }
+
+    /// 损坏文件（截断/乱码）应报错而非 panic
+    #[test]
+    fn corrupt_file_reports_error_not_panic() {
+        let dir = tempdir().unwrap();
+        std::fs::write(dir.path().join("master.key"), b"not a valid key file").unwrap();
+        let provider = LocalKeyProvider::new(dir.path());
 
         let result = provider.get_or_create_key();
 
         assert!(
-            matches!(result, Err(KeyError::InvalidKeyLength(9))),
-            "长度非 32 的密钥文件应报 InvalidKeyLength(9)，实际：{result:?}"
+            matches!(result, Err(KeyError::Format) | Err(KeyError::Decrypt)),
+            "损坏文件应报 Format/Decrypt 而非 panic，实际：{result:?}"
         );
     }
 
     /// unix 下密钥文件权限应为 0600（仅属主可读写）
     #[cfg(unix)]
     #[test]
-    fn file_provider_sets_0600_permissions() {
+    fn master_key_file_has_0600_permissions() {
         use std::os::unix::fs::PermissionsExt;
         let dir = tempdir().unwrap();
-        let provider = FileKeyProvider::new(dir.path());
+        let provider = LocalKeyProvider::new(dir.path());
 
         provider.get_or_create_key().unwrap();
 
-        let mode = std::fs::metadata(dir.path().join("dev-master-key"))
+        let mode = std::fs::metadata(dir.path().join("master.key"))
             .unwrap()
             .permissions()
             .mode();
-        assert_eq!(mode & 0o777, 0o600, "密钥文件权限应为 0600");
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// 验证 generate_random_key 每次返回 32 字节
-    #[test]
-    fn generate_random_key_returns_32_bytes() {
-        // Arrange & Act
-        let key = generate_random_key();
-
-        // Assert
-        assert_eq!(key.len(), 32, "generate_random_key 应返回恰好 32 字节");
+        assert_eq!(mode & 0o777, 0o600, "master.key 权限应为 0600");
     }
 
-    /// 验证 KeychainKeyProvider 默认标记为 ThisDeviceOnly
+    /// 真实 machine_id() 永不 panic 且非空（回退保证「永远能开库」）
     #[test]
-    fn keychain_provider_is_device_only_by_default() {
-        // Arrange：激活 mock 避免触碰真实 Keychain
-        keyring::set_default_credential_builder(keyring::mock::default_credential_builder());
-        let provider = KeychainKeyProvider::new();
+    fn machine_id_never_empty() {
+        let id = machine_id();
+        assert!(!id.is_empty(), "machine_id 应永不为空（取不到时回退常量盐）");
+    }
 
-        // Assert
-        assert!(
-            provider.is_device_only(),
-            "KeychainKeyProvider 必须标记为 ThisDeviceOnly"
+    /// 判别力测试：reader 返回 None（模拟平台读取失败）→ 必须回退到 FALLBACK_MACHINE_ID。
+    ///
+    /// 现有测试用 `with_machine_id` 注入绕过真实 `read_platform_machine_id`，
+    /// macOS ioreg 又总成功，故「回退逻辑被改成 panic/Err」的变异抓不到。
+    /// 本测试用可注入 reader 直击回退分支：若回退被改坏，断言立即失败。
+    #[test]
+    fn machine_id_falls_back_to_constant_when_reader_returns_none() {
+        let id = machine_id_with_reader(|| None);
+        assert_eq!(
+            id, FALLBACK_MACHINE_ID,
+            "reader 返回 None 时应回退到 FALLBACK_MACHINE_ID"
         );
-        assert!(
-            matches!(
-                provider.accessibility(),
-                KeyAccessibility::AfterFirstUnlockThisDeviceOnly
-            ),
-            "accessibility() 应返回 AfterFirstUnlockThisDeviceOnly"
+    }
+
+    /// 判别力测试：reader 返回空 Vec（解析到空串）→ 同样视为不可用、回退常量盐。
+    #[test]
+    fn machine_id_falls_back_to_constant_when_reader_returns_empty() {
+        let id = machine_id_with_reader(|| Some(Vec::new()));
+        assert_eq!(
+            id, FALLBACK_MACHINE_ID,
+            "reader 返回空 Vec 时应回退到 FALLBACK_MACHINE_ID"
         );
+    }
+
+    /// 判别力测试：reader 取到机器标识时应原样采用，不走回退（区分两条分支）。
+    #[test]
+    fn machine_id_uses_reader_value_when_available() {
+        let id = machine_id_with_reader(|| Some(b"real-machine-id".to_vec()));
+        assert_eq!(id, b"real-machine-id", "reader 取到值时应原样采用、不回退");
+    }
+
+    /// 判别力测试（端到端硬目标）：平台读取失败（reader=None）回退后，
+    /// LocalKeyProvider 仍能首启 + 跨实例开库（get_or_create_key 成功）——「永不弹密码、永远能开库」。
+    #[test]
+    fn local_provider_opens_with_fallback_when_reader_returns_none() {
+        let dir = tempdir().unwrap();
+        let fallback_id = machine_id_with_reader(|| None);
+
+        let first = LocalKeyProvider::with_machine_id(dir.path(), &fallback_id)
+            .get_or_create_key()
+            .expect("平台读取失败回退后首启仍应成功");
+        let second = LocalKeyProvider::with_machine_id(dir.path(), &fallback_id)
+            .get_or_create_key()
+            .expect("回退后跨实例仍应能复算解密");
+
+        assert_eq!(first, second, "回退后应能稳定开库读出同一密钥");
     }
 }

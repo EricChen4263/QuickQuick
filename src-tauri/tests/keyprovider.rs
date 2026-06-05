@@ -1,17 +1,17 @@
-//! KeyProvider 集成测试
+//! LocalKeyProvider 集成测试（本地文件密钥库，去 Keychain）
 //!
-//! 验收项 V0-F3-A03：KeyProvider 抽象接口存在，v1 仅 KeychainKeyProvider 实现；
-//! 密钥标记 ThisDeviceOnly 不漫游。
-//! 验收项 V3-F2-A05：密钥可访问性——AfterFirstUnlock + ThisDeviceOnly（不漫游）。
-//!
-//! 测试策略：
-//! - 用 keyring mock 后端替换真实 OS 钥匙串，测试全程 headless、不弹窗。
-//! - Fake 实现 FakeKeyProvider 证明 trait 是可用抽象。
-//! - 断言 KeychainKeyProvider 的 is_device_only 与 accessibility 语义。
+//! 对齐 docs/design/local-keystore-no-keychain.md §七测试策略：
+//! - `KeyProvider` trait 仍是开库唯一抽象（FakeKeyProvider 证明抽象可用）。
+//! - LocalKeyProvider 首启生成 + 幂等 + 跨实例读（同机复算 KEK）。
+//! - 异机模拟：注入不同 machine_id → 解密失败（文件单拷异机解不开）。
+//! - 降级回退：machine_id 不可用仍能开库（永不弹密码硬目标）。
+//! - 损坏文件报错不 panic。
+//! - 去掉 `#[cfg(debug_assertions)]` gate：release 测试构建同样能编译运行。
 
-use quickquick_lib::keyprovider::{KeyAccessibility, KeyProvider, KeychainKeyProvider};
+use quickquick_lib::keyprovider::{generate_random_key, KeyError, KeyProvider, LocalKeyProvider};
+use tempfile::tempdir;
 
-/// Fake KeyProvider 实现，用于证明 trait 是可用抽象（不依赖 Keychain）
+/// Fake KeyProvider 实现，用于证明 trait 是可用抽象（不依赖任何文件/平台）。
 struct FakeKeyProvider {
     key: [u8; 32],
 }
@@ -23,124 +23,79 @@ impl FakeKeyProvider {
 }
 
 impl KeyProvider for FakeKeyProvider {
-    fn get_or_create_key(&self) -> Result<[u8; 32], quickquick_lib::keyprovider::KeyError> {
+    fn get_or_create_key(&self) -> Result<[u8; 32], KeyError> {
         Ok(self.key)
     }
 }
 
-/// V0-F3-A03 主验收测试：
-/// a) 抽象可用：FakeKeyProvider 通过 &dyn KeyProvider 调用得到 32 字节。
-/// b) 设备绑定：KeychainKeyProvider::is_device_only()==true 且 accessibility() 为 ThisDeviceOnly。
-/// c) 幂等性：KeychainKeyProvider mock 模式下首次生成密钥、二次调用返回同一密钥。
+/// trait 抽象可用：FakeKeyProvider 通过 &dyn KeyProvider 调用得到预设的 32 字节。
 #[test]
-fn keyprovider_abstraction_and_device_only() {
-    // Arrange
+fn keyprovider_trait_abstraction_is_usable() {
     let fake: &dyn KeyProvider = &FakeKeyProvider::with_fixed_key(0xAB);
 
-    // Act
-    let key = fake
-        .get_or_create_key()
-        .expect("FakeKeyProvider 不应返回错误");
+    let key = fake.get_or_create_key().expect("FakeKeyProvider 不应返回错误");
 
-    // Assert：确实得到 32 字节，且值与预期一致（非恒真）
     assert_eq!(key.len(), 32, "密钥应为 32 字节");
     assert_eq!(key, [0xAB_u8; 32], "FakeKeyProvider 应返回预设的固定密钥");
-
-    // Arrange：激活 keyring mock，使 KeychainKeyProvider 不碰真实 OS 钥匙串
-    keyring::set_default_credential_builder(keyring::mock::default_credential_builder());
-    let provider = KeychainKeyProvider::new();
-
-    // Assert：is_device_only 必须为 true（密钥不漫游）
-    assert!(
-        provider.is_device_only(),
-        "KeychainKeyProvider 必须标记为 ThisDeviceOnly（不漫游）"
-    );
-
-    // Assert：accessibility() 返回 AfterFirstUnlockThisDeviceOnly 变体
-    assert!(
-        matches!(
-            provider.accessibility(),
-            KeyAccessibility::AfterFirstUnlockThisDeviceOnly
-        ),
-        "accessibility() 应返回 AfterFirstUnlockThisDeviceOnly"
-    );
-
-    let key1 = provider
-        .get_or_create_key()
-        .expect("首次 get_or_create_key 不应失败");
-    let key2 = provider
-        .get_or_create_key()
-        .expect("二次 get_or_create_key 不应失败");
-
-    assert_eq!(key1.len(), 32, "首次密钥应为 32 字节");
-    assert_eq!(key1, key2, "两次调用应返回同一密钥（幂等）");
 }
 
-/// V3-F2-A05 验收测试：key_accessibility_flags
-///
-/// 断言：
-/// a) accessibility() == AfterFirstUnlockThisDeviceOnly
-/// b) is_device_only() == true（不漫游）
-/// c) is_after_first_unlock() == true（锁屏后台仍可读）
-/// d) 实际存储属性标识为 AfterFirstUnlockThisDeviceOnly（非 WhenUnlocked）
-/// e) synchronizable == false（不漫游 iCloud/凭据）
+/// 首启生成 + 同机跨实例可复算解密：machine-A 写盘后新实例读出同一密钥。
 #[test]
-fn key_accessibility_flags() {
-    // Arrange：激活 keyring mock，全程 headless 不触碰真实钥匙串
-    keyring::set_default_credential_builder(keyring::mock::default_credential_builder());
-    let provider = KeychainKeyProvider::new();
+fn local_provider_persists_and_reads_back_same_machine() {
+    let dir = tempdir().unwrap();
+    let id = b"integration-machine-A";
 
-    // Assert a：accessibility 语义枚举
+    let first = LocalKeyProvider::with_machine_id(dir.path(), id)
+        .get_or_create_key()
+        .expect("首启应成功");
     assert!(
-        matches!(
-            provider.accessibility(),
-            KeyAccessibility::AfterFirstUnlockThisDeviceOnly
-        ),
-        "accessibility() 应返回 AfterFirstUnlockThisDeviceOnly"
+        dir.path().join("master.key").exists(),
+        "首启后 master.key 应落盘"
     );
 
-    // Assert b：设备绑定不漫游
-    assert!(
-        provider.is_device_only(),
-        "is_device_only() 应为 true（密钥不漫游）"
-    );
+    let second = LocalKeyProvider::with_machine_id(dir.path(), id)
+        .get_or_create_key()
+        .expect("同机新实例应能解密");
 
-    // Assert c：锁屏后台仍可读语义
-    assert!(
-        provider.is_after_first_unlock(),
-        "is_after_first_unlock() 应为 true（锁屏后台可读）"
-    );
+    assert_eq!(first, second, "同机跨实例应读出同一密钥");
+}
 
-    // Assert d：实际存储属性标识（区分 AfterFirstUnlock vs WhenUnlocked）
-    // 使用 provider.storage_attributes() 覆盖被测方法路径，而非旁路 Default impl
-    let attrs = provider.storage_attributes();
-    assert_eq!(
-        attrs.accessibility_identifier(),
-        "AfterFirstUnlockThisDeviceOnly",
-        "存储属性标识应为 AfterFirstUnlockThisDeviceOnly，而非 WhenUnlocked"
-    );
+/// 异机模拟：machine-A 写盘后，machine-B 复算 KEK 解密失败（核心安全约束）。
+#[test]
+fn local_provider_different_machine_fails_decrypt() {
+    let dir = tempdir().unwrap();
 
-    // Assert e：synchronizable=false（不漫游 iCloud/凭据，非恒真：若为 true 则失败）
+    LocalKeyProvider::with_machine_id(dir.path(), b"machine-A")
+        .get_or_create_key()
+        .expect("machine-A 首启应成功");
+
+    let result =
+        LocalKeyProvider::with_machine_id(dir.path(), b"machine-B-different").get_or_create_key();
+
     assert!(
-        !attrs.synchronizable(),
-        "synchronizable 应为 false，密钥不得漫游 iCloud Keychain"
+        matches!(result, Err(KeyError::Decrypt)),
+        "异机 machine_id 解密应返回 Decrypt，实际：{result:?}"
     );
 }
 
-/// 随机密钥生成单测：两次生成的 32 字节不相等（非恒真断言）
+/// 真实入口 new() 首启即可生成密钥（machine_id 由平台函数填充，取不到则回退，永不弹密码）。
+#[test]
+fn local_provider_new_first_start_succeeds() {
+    let dir = tempdir().unwrap();
+    let provider = LocalKeyProvider::new(dir.path());
+
+    let key = provider
+        .get_or_create_key()
+        .expect("new() 首启应成功（取不到 machine_id 也回退开库）");
+
+    assert_eq!(key.len(), 32, "首启密钥应为 32 字节");
+}
+
+/// 随机密钥生成两次不相等（随机源熵正常，非恒真断言）。
 #[test]
 fn random_key_generation_is_not_constant() {
-    use quickquick_lib::keyprovider::generate_random_key;
-
-    // Arrange & Act
-    let key_a = generate_random_key();
-    let key_b = generate_random_key();
-
-    // Assert：两次独立生成不应相同（若相同则随机源不可用）
-    assert_ne!(
-        key_a, key_b,
-        "两次独立生成的随机密钥不应相等（随机源熵正常）"
-    );
-    assert_eq!(key_a.len(), 32, "密钥应为 32 字节");
-    assert_eq!(key_b.len(), 32, "密钥应为 32 字节");
+    let a = generate_random_key();
+    let b = generate_random_key();
+    assert_ne!(a, b, "两次独立生成的随机密钥不应相等");
+    assert_eq!(a.len(), 32, "密钥应为 32 字节");
 }

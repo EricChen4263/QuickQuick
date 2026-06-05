@@ -37,8 +37,8 @@ use crate::autostart::AutostartConfig;
 use crate::hotkey::{HotkeyAction, HotkeyConfig, HotkeyError, HotkeyRegistrar};
 use crate::settings::AppSettings;
 use crate::translate::credential::{
-    credential_schema, default_cred_store, delete_credentials, load_credentials_for_display,
-    save_credentials,
+    credential_schema, delete_credentials, load_credentials_for_display, save_credentials,
+    DbCredStore,
 };
 use crate::ipc::translate::resolve_provider_or_fallback;
 use crate::translate::providers::registry;
@@ -251,30 +251,14 @@ pub(crate) fn resolve_config_path(
 /// 与 `resolve_config_path` 共享同一目录解析逻辑（后者在其基础上 join 文件名）。
 /// 此函数是不可单测的胶水层，仅供命令函数调用。
 pub(crate) fn resolve_config_dir(app: &AppHandle) -> Result<std::path::PathBuf, String> {
-    let base = app
+    let dir = app
         .path()
         .app_config_dir()
         .map_err(|e| format!("无法获取配置目录：{e}"))?;
 
-    let dir = apply_dev_subdir(&base, cfg!(debug_assertions));
-
     std::fs::create_dir_all(&dir).map_err(|e| format!("无法创建配置目录：{e}"))?;
 
     Ok(dir)
-}
-
-/// 按构建类型决定配置目录：debug 在 `base` 下追加 `dev` 子目录，release 用 `base`。
-///
-/// debug 构建落 dev 子目录，与 release（钥匙串密钥）的数据/密钥彻底隔离，
-/// 消除同机 dev↔release 切换时 SQLCipher 密钥不匹配（file is not a database）。
-/// release 路径不变（仍落 app_config_dir 根），已发布用户零迁移。
-/// 抽成纯函数以可单测；`is_debug` 由调用方传 `cfg!(debug_assertions)`。
-pub fn apply_dev_subdir(base: &std::path::Path, is_debug: bool) -> std::path::PathBuf {
-    if is_debug {
-        base.join("dev")
-    } else {
-        base.to_path_buf()
-    }
 }
 
 /// 系统热键注册器：通过 Tauri global shortcut API 向 OS 注册热键。
@@ -704,13 +688,13 @@ pub fn get_provider_credential_schema_impl(provider_id: &str) -> Vec<CredentialF
 
 /// `get_provider_credentials` 的纯函数实现，可在测试中直接调用。
 ///
-/// 走只读 DB 展示路径（`load_credentials_for_display`），绝不访问 keychain，
+/// 走只读 DB 展示路径（`load_credentials_for_display`），
 /// 遍历 schema 中每个字段组装 DTO 列表：
-/// - secret 字段：value 永远为 None，is_set 表示 secret_presence 标记表中是否有该标记
-/// - 非密字段：value 为 Some(已存值) 或 None（读加密 DB），is_set 与 value.is_some() 等价
+/// - secret 字段：value 永远为 None，is_set 表示 provider_secret 表中是否已存该 secret
+/// - 非密字段：value 为 Some(已存值) 或 None（读 provider_config），is_set 与 value.is_some() 等价
 ///
 /// # 安全
-/// secret 字段的实际值永不出现在返回结果中；展示路径不读 keychain，故不触发钥匙串弹窗。
+/// secret 字段的实际值永不出现在返回结果中；secret 存于整库加密 DB（不碰钥匙串），不触发弹窗。
 ///
 /// # Errors
 /// DB 读取失败时返回错误字符串。
@@ -718,8 +702,7 @@ pub fn get_provider_credentials_impl(
     provider_id: &str,
     conn: &rusqlite::Connection,
 ) -> Result<Vec<CredentialValueDto>, String> {
-    // 走只读 DB 展示路径：secret 字段靠 secret_presence 标记判断是否已配置，
-    // 绝不读 keychain（否则设置页一打开就触发反复弹密码）。
+    // 走只读 DB 展示路径：secret 字段靠 provider_secret 表存在性判断是否已配置，不回明文。
     let loaded = load_credentials_for_display(provider_id, conn).map_err(|e| e.to_string())?;
 
     let result = credential_schema(provider_id)
@@ -789,13 +772,13 @@ pub fn get_provider_credentials(
     state: State<'_, super::AppDb>,
     provider_id: String,
 ) -> Result<Vec<CredentialValueDto>, String> {
-    // 展示路径只读 DB（secret_presence 标记），不构造 store、不碰 keychain
+    // 展示路径只读 DB（provider_secret 表存在性），不构造 store、不回明文
     super::with_db(&state, |conn| {
         get_provider_credentials_impl(&provider_id, conn)
     })
 }
 
-/// Tauri 命令：保存指定 provider 的凭据（secret→keychain，非密→加密 DB）。
+/// Tauri 命令：保存指定 provider 的凭据（secret→provider_secret，非密→provider_config，同一加密库）。
 ///
 /// 保存成功后向前端 emit `provider-config-changed` 事件，
 /// 使翻译页实时刷新 configuredIds、解禁已配置的 keyed 源选项。
@@ -807,9 +790,8 @@ pub fn set_provider_credentials(
     provider_id: String,
     values: HashMap<String, String>,
 ) -> Result<(), String> {
-    let config_dir = resolve_config_dir(&app)?;
-    let store = default_cred_store(&config_dir);
     super::with_db(&state, |conn| {
+        let store = DbCredStore::new(conn);
         set_provider_credentials_impl(&provider_id, values, &store, conn)
     })?;
     if let Err(e) = app.emit(PROVIDER_CONFIG_CHANGED_EVENT, ()) {
@@ -834,7 +816,7 @@ pub fn delete_provider_credentials_impl(
     delete_credentials(provider_id, store, conn).map_err(|e| e.to_string())
 }
 
-/// Tauri 命令：清除指定 provider 的所有已保存凭据（keychain + DB 均清）。
+/// Tauri 命令：清除指定 provider 的所有已保存凭据（provider_secret + provider_config 均清）。
 ///
 /// 删除成功后向前端 emit `provider-config-changed` 事件，
 /// 使翻译页徽标从「已配置」变回「待配置」。
@@ -845,9 +827,8 @@ pub fn delete_provider_credentials(
     state: State<'_, super::AppDb>,
     provider_id: String,
 ) -> Result<(), String> {
-    let config_dir = resolve_config_dir(&app)?;
-    let store = default_cred_store(&config_dir);
     super::with_db(&state, |conn| {
+        let store = DbCredStore::new(conn);
         delete_provider_credentials_impl(&provider_id, &store, conn)
     })?;
     if let Err(e) = app.emit(PROVIDER_CONFIG_CHANGED_EVENT, ()) {
@@ -1078,9 +1059,10 @@ mod tests {
                 value        TEXT NOT NULL,
                 PRIMARY KEY (provider_id, field_key)
             );
-            CREATE TABLE IF NOT EXISTS secret_presence (
+            CREATE TABLE IF NOT EXISTS provider_secret (
                 provider_id  TEXT NOT NULL,
                 field_key    TEXT NOT NULL,
+                value        TEXT NOT NULL,
                 PRIMARY KEY (provider_id, field_key)
             );",
         )
@@ -1117,10 +1099,10 @@ mod tests {
 
     #[test]
     fn get_provider_credentials_impl_secret_field_value_is_always_none() {
-        use crate::translate::credential::MockCredStore;
+        use crate::translate::credential::DbCredStore;
         use std::collections::HashMap;
-        let store = MockCredStore::new();
         let conn = make_cred_db();
+        let store = DbCredStore::new(&conn);
 
         let mut values = HashMap::new();
         values.insert("app_id".to_string(), "my_app_id".to_string());
@@ -1146,10 +1128,10 @@ mod tests {
 
     #[test]
     fn set_provider_credentials_impl_persists_and_loadable() {
-        use crate::translate::credential::MockCredStore;
+        use crate::translate::credential::DbCredStore;
         use std::collections::HashMap;
-        let store = MockCredStore::new();
         let conn = make_cred_db();
+        let store = DbCredStore::new(&conn);
 
         let mut values = HashMap::new();
         values.insert("app_id".to_string(), "test_id".to_string());
@@ -1181,15 +1163,18 @@ mod tests {
 
     #[test]
     fn delete_provider_credentials_impl_clears_all_fields() {
-        use crate::translate::credential::MockCredStore;
+        use crate::translate::credential::DbCredStore;
         use std::collections::HashMap;
-        let store = MockCredStore::new();
         let conn = make_cred_db();
+        let store = DbCredStore::new(&conn);
 
         let mut values = HashMap::new();
         values.insert("app_id".to_string(), "test_id".to_string());
         values.insert("secret_key".to_string(), "test_secret".to_string());
         set_provider_credentials_impl("baidu", values, &store, &conn).unwrap();
+        // 前置断言：删除前 secret 与非密字段都确实已配置（避免删除后全 false 是假绿）
+        let before = get_provider_credentials_impl("baidu", &conn).unwrap();
+        assert!(before.iter().all(|item| item.is_set), "删除前所有字段应已配置");
 
         delete_provider_credentials_impl("baidu", &store, &conn).unwrap();
 

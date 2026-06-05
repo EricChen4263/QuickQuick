@@ -755,7 +755,7 @@ fn ensure_schema(conn: &Connection) -> Result<(), DbError> {
         );
 
         -- provider 非密凭据表（§十预埋铁律）
-        -- secret 字段绝不入库（路由到 keychain），此表只存 is_secret=false 的字段
+        -- 非密字段（is_secret=false）存此表；secret 字段存 provider_secret。
         CREATE TABLE IF NOT EXISTS provider_config (
             provider_id  TEXT NOT NULL,
             field_key    TEXT NOT NULL,
@@ -763,13 +763,18 @@ fn ensure_schema(conn: &Connection) -> Result<(), DbError> {
             PRIMARY KEY (provider_id, field_key)
         );
 
-        -- secret 存在标记表：仅记录某 secret 是否已写入 keychain，绝不存值。
-        -- 用途：设置页判断「已配置」而不触发钥匙串弹窗（展示路径只读此表，不碰 keychain）。
-        CREATE TABLE IF NOT EXISTS secret_presence (
+        -- provider secret 凭据表（本地密钥库改造，去 Keychain）。
+        -- secret 字段（is_secret=true）的值存进同一张 SQLCipher 整库加密的 DB，
+        -- 不再走 OS 钥匙串、连明文 JSON 都不留。展示路径用 SELECT 1 判断「已配置」不回明文。
+        CREATE TABLE IF NOT EXISTS provider_secret (
             provider_id  TEXT NOT NULL,
             field_key    TEXT NOT NULL,
+            value        TEXT NOT NULL,
             PRIMARY KEY (provider_id, field_key)
         );
+
+        -- 迁移：退役 secret_presence 标记表（secret 已进 provider_secret，标记表失去意义）。
+        DROP TABLE IF EXISTS secret_presence;
 
         -- 翻译缓存表（§4.1#5 预埋，LRU 淘汰；键=四元组哈希）
         -- cache_key = hash(source_text + source_lang + target_lang + provider_id)
@@ -805,7 +810,9 @@ fn ensure_schema(conn: &Connection) -> Result<(), DbError> {
 ///
 /// 备份格式：`<原路径>.corrupt-<utc_secs>`。
 /// 永不删除原内容，仅 rename（OS 层原子操作）。
-fn backup_corrupt_file(path: &Path) -> Result<std::path::PathBuf, DbError> {
+///
+/// `pub(crate)`：setup_app_db 的「一次性重置」分支复用此函数备份旧库 / 旧 master.key。
+pub(crate) fn backup_corrupt_file(path: &Path) -> Result<std::path::PathBuf, DbError> {
     let utc_secs = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()

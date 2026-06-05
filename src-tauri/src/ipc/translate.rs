@@ -17,9 +17,9 @@ use tauri::{AppHandle, Emitter, State};
 use std::path::Path;
 
 use crate::db::DbError;
-use crate::ipc::settings::{get_selected_provider_impl, resolve_config_dir, resolve_config_path};
+use crate::ipc::settings::{get_selected_provider_impl, resolve_config_path};
 use crate::ipc::{with_db, AppDb};
-use crate::translate::credential::{default_cred_store, load_credentials, CredStore};
+use crate::translate::credential::{load_credentials, CredStore, DbCredStore};
 use crate::translate::history::{
     add_translate_history, list_translate_history as db_list_translate_history, TranslateHistoryRow,
 };
@@ -254,10 +254,9 @@ pub fn translate_text(
     target: Option<String>,
 ) -> Result<TranslateResultDto, String> {
     let settings_path = resolve_config_path(&app, "settings.json")?;
-    // debug 用文件密钥库、release 用钥匙串（cfg 选择收敛在 default_cred_store）
-    let config_dir = resolve_config_dir(&app)?;
-    let cred_store = default_cred_store(&config_dir);
+    // secret 存进同一加密 DB 的 provider_secret 表（去 Keychain），故在 with_db 闭包内构造 DbCredStore。
     let result = with_db(&state, |conn| {
+        let cred_store = DbCredStore::new(conn);
         translate_text_impl(
             conn,
             &UreqExecutor,

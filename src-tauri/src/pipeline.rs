@@ -10,7 +10,7 @@
 //! 设计原则：
 //! open_app_db / capture_and_ingest 均为纯依赖注入风格，不持有任何全局状态，
 //! 便于单测在不触碰真实 OS 钥匙串、真实剪贴板的情况下驱动完整管道逻辑。
-//! 生产接线（ArboardBackend + KeychainKeyProvider + 轮询线程）在 lib.rs 完成。
+//! 生产接线（ArboardBackend + LocalKeyProvider + 轮询线程）在 lib.rs 完成。
 
 use std::path::Path;
 use std::sync::Mutex;
