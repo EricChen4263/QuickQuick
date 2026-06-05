@@ -6,6 +6,7 @@
 ## Procedure（怎么跑·怎么验）
 
 - **Rust 测试**：`cd src-tauri && cargo test`；提交前必跑 `cargo clippy --all-targets -- -D warnings`（`cargo test`/`check` 不报 dead_code，clippy 才拦）。
+- **命中校验取原始输出须绕 RTK 代理**（V6 复盘 V6-RETRO-FRICTION-1）：tester 命中校验 / producer 版本裁决需要原始 `test <名> ... ok` / `Tests N passed`（N≥1）逐行证据防假绿时，本机 cargo/pnpm 经 RTK hook 改写后输出被压成摘要、看不到逐测试名命中——须用 `rtk proxy cargo test …` / `rtk proxy pnpm test …`（或前端加 `--reporter=verbose`）绕过代理取原始证据。
 - **前端测试**：`pnpm test`（= `vitest run`）；组件测试用 `@testing-library/react` + `@testing-library/jest-dom`，样例见 `src/components/Select.test.tsx`、`src/shell/TitleBar.test.tsx`。
 - **启动守卫**：配置/启动类改动后留意 `src-tauri/tests/boot_smoke.rs`（配置反序列化守卫）；配置类 bug 编译不报、单测难抓，发布前需真跑一次应用。
 - **dev 数据隔离**：debug 构建用文件密钥库（绕钥匙串）、配置/DB 落 dev 子目录；切换密钥来源后旧 dev DB 无法解密需删库重建。

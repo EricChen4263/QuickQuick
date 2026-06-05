@@ -36,7 +36,7 @@ acceptance:
       expect: pass
     evidence_ref: docs/dev-log/v6/f1-update-engine/<小功能>/test.md
     level: 小功能
-    status: 待验
+    status: 通过
 
   - id: V6-F1-A02
     assertion: "auto_update=false 时，应检查判定函数返回 false（watcher 跳过检查/下载/提示）"
@@ -51,7 +51,7 @@ acceptance:
       expect: pass
     evidence_ref: docs/dev-log/v6/f1-update-engine/<小功能>/test.md
     level: 小功能
-    status: 待验
+    status: 通过
 
   - id: V6-F1-A03
     assertion: "就绪事件 payload 由新版本号构造，事件名为 update://ready 且携带 version 字段"
@@ -66,7 +66,7 @@ acceptance:
       expect: pass
     evidence_ref: docs/dev-log/v6/f1-update-engine/<小功能>/test.md
     level: 小功能
-    status: 待验
+    status: 通过
 
   - id: V6-F1-A04
     assertion: "一次就绪后去重：already_ready 置位后，应检查判定函数返回 false（不重复下载）"
@@ -81,7 +81,7 @@ acceptance:
       expect: pass
     evidence_ref: docs/dev-log/v6/f1-update-engine/<小功能>/test.md
     level: 小功能
-    status: 待验
+    status: 通过
 
   - id: V6-F1-A05
     assertion: "restart_app 命令已在 invoke_handler 注册，调用 Tauri 核心重启 API"
@@ -96,7 +96,7 @@ acceptance:
       expect: "exit 0（两处均命中）"
     evidence_ref: docs/dev-log/v6/f1-update-engine/<小功能>/review.md
     level: 小功能
-    status: 待验
+    status: 通过
 
   - id: V6-F1-A06
     assertion: "本版改动的 Rust 文件通过 clippy -D warnings，无新增告警（增量口径，既有 baseline 除外）"
@@ -111,7 +111,7 @@ acceptance:
       expect: "exit 0；若仓库存在既有 baseline 告警，按增量口径核对本版改动文件无新增"
     evidence_ref: docs/dev-log/v6/f1-update-engine/<小功能>/test.md
     level: 大功能
-    status: 待验
+    status: 通过
 
   - id: V6-F1-A07
     assertion: "更新包验签机制保持启用：tauri.conf.json 含 updater.pubkey，代码未旁路签名校验"
@@ -126,7 +126,7 @@ acceptance:
       expect: "exit 0（pubkey 存在且无 dangerous 旁路）"
     evidence_ref: docs/dev-log/v6/f1-update-engine/<小功能>/review.md
     level: 大功能
-    status: 待验
+    status: 通过
 
   # ── V6-F2 前端更新提示与手动入口 ──────────────────────────────────
   - id: V6-F2-A08
@@ -142,7 +142,7 @@ acceptance:
       expect: pass
     evidence_ref: docs/dev-log/v6/f2-update-ui/<小功能>/test.md
     level: 小功能
-    status: 待验
+    status: 通过
 
   - id: V6-F2-A09
     assertion: "手动检查发现新版后出现「下载并安装」入口，点击触发 downloadAndInstallUpdate"
@@ -157,7 +157,7 @@ acceptance:
       expect: pass
     evidence_ref: docs/dev-log/v6/f2-update-ui/<小功能>/test.md
     level: 小功能
-    status: 待验
+    status: 通过
 
   - id: V6-F2-A10
     assertion: "本版新增的前后端测试纳入各自套件且全绿（命中校验：test result ok N≥1 / Tests N passed N≥1）"
@@ -172,7 +172,7 @@ acceptance:
       expect: "两套件均命中 ok 且通过数 N≥1（防过滤空匹配假绿）"
     evidence_ref: docs/dev-log/v6/version-verdict.md
     level: 版本
-    status: 待验
+    status: 通过
 
   # ── 留痕产出 ───────────────────────────────────────────────────
   - id: V6-F1-A11
@@ -188,7 +188,7 @@ acceptance:
       expect: "三联齐全且无残留 PENDING"
     evidence_ref: docs/dev-log/v6/
     level: 版本
-    status: 待验
+    status: 通过
 
   # ── 人工确认点（不阻塞 done，挂全局未决清单）──────────────────────
   - id: V6-F2-A12

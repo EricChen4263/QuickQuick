@@ -154,3 +154,19 @@ pending:
     added_at: 2026-06-01T00:50:00Z
     status: 待确认
     note: "三页结构与交互已 objective 渲染测试覆盖（列表+预览双栏、翻译三栏、设置六子项、搜索/筛选/键盘/改键冲突/排除名单增删）；纯视觉还原度（配色/间距/圆角/明暗对照设计§9.1）属审美，AI/headless 判不准，需真机截图对照确认。窗口已从 400×600 弹窗改为 960×640 带边框主窗口。"
+
+  - acceptance_id: V6-F2-A12
+    version: V6
+    assertion: "真机端到端：静默下载体感顺滑、提示条动效自然、从 GitHub 拉 latest.json→下载→重启完成更新"
+    source_anchor: docs/design/auto-update.md§二.交互模式; §六(manual_confirm); §七.真机验收
+    collect_env: real_device
+    evidence_ref: docs/dev-log/v6/f2-update-ui/<小功能>/update-e2e.mov（待采）
+    added_at: 2026-06-05T00:00:00Z
+    status: 待采证
+    note: |
+      后端 watcher 判定/下载安装薄封装/就绪事件/restart 命令、前端提示条/手动安装入口
+      均已 objective 单测 + 组件测试覆盖（A01-A10 全绿）。真实下载（download_and_install）
+      与进程重启（app.restart()）按设计§七不可在 headless 构造/复现，需真机：发布一个更高
+      版本 Release tag → 真机运行旧版 → 等后台 watcher 静默拉取 latest.json 下载安装 →
+      提示条出现 → 点重启 → 确认替换为新版本。全程录屏 update-e2e.mov。属真机采证，
+      非 coder 实现遗漏，不打回 coder；不阻塞 V6 done。
