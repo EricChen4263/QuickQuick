@@ -170,3 +170,43 @@ pending:
       版本 Release tag → 真机运行旧版 → 等后台 watcher 静默拉取 latest.json 下载安装 →
       提示条出现 → 点重启 → 确认替换为新版本。全程录屏 update-e2e.mov。属真机采证，
       非 coder 实现遗漏，不打回 coder；不阻塞 V6 done。
+
+  - acceptance_id: TV1-F1-M01
+    version: TV1
+    assertion: "真机/真网下 Lingva 默认源返回正确译文（冰川→glacier、hello world→你好世界），应用默认开箱即用、无需填 key"
+    source_anchor: docs/design/translation-sources-pot.md§五.V1.验收 + §三.决策1
+    collect_env: real_device
+    evidence_ref: docs/dev-log/translate-v1/f1-lingva-default/manual-lingva.png（待采）
+    added_at: 2026-06-06T00:00:00Z
+    status: 待采证
+    note: "headless 不打真网（单测用 mock）；已 curl 预证 冰川→glacier / hello world→你好世界。需真机运行确认默认源开箱可用。不阻塞 TV1 done。"
+
+  - acceptance_id: TV1-F2-M01
+    version: TV1
+    assertion: "真网下 Google/Transmart/Yandex 各返回正确译文（如冰川→glacier）；DeepL-free 暂缓（端点限流）"
+    source_anchor: docs/design/translation-sources-pot.md§二.2.1 + §五.V1.验收
+    collect_env: real_device
+    evidence_ref: docs/dev-log/translate-v1/f2-free-sources/manual-free.png（待采）
+    added_at: 2026-06-06T00:00:00Z
+    status: 待采证
+    note: "三源 build/parse 已 objective 单测（录制样例）；真网端到端译质需真机。Google 已 curl 预证。不阻塞 TV1 done。"
+
+  - acceptance_id: TV1-F3-M01
+    version: TV1
+    assertion: "真网下 Bing 免 key 源（两步 token→翻译）返回正确译文"
+    source_anchor: docs/design/translation-sources-pot.md§二.2.1（Bing）+ §四
+    collect_env: real_device
+    evidence_ref: docs/dev-log/translate-v1/f3-bing-multistep/manual-bing.png（待采）
+    added_at: 2026-06-06T00:00:00Z
+    status: 待采证
+    note: "两步流程已用 FakeExecutor objective 单测；已 curl 预证 glacier→冰川（zh-Hans/zh-Hant）。真网端到端需真机。不阻塞 TV1 done。"
+
+  - acceptance_id: TV1-F4-M01
+    version: TV1
+    assertion: "真机目测：非官方源 UI 显示「⚠ 非官方」标注；翻译失败时降级提示清晰可区分；默认 Lingva 开箱可用"
+    source_anchor: docs/design/translation-sources-pot.md§三.决策3
+    collect_env: real_device
+    evidence_ref: docs/dev-log/translate-v1/f4-label-degrade/manual-label.png（待采）
+    added_at: 2026-06-06T00:00:00Z
+    status: 待采证
+    note: "标注/降级逻辑已 objective 渲染测试覆盖（含双向断言）；纯视觉呈现需真机目测。不阻塞 TV1 done。"

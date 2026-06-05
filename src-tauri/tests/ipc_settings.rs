@@ -4,7 +4,7 @@
 //! - 热键 set 后 get 读回新值一致；set 冲突键 → 返回 Err
 //! - 排除名单 set [a,b] 后 get 读回 [a,b]；空列表往返
 //! - selected_provider set 合法 id 读回一致；set 非法 id → Err
-//! - get_translate_providers 返回非空且含 "mymemory"
+//! - get_translate_providers 返回非空且含 "lingva"、不含已移除的 "mymemory"
 //!
 //! 测试约定：函数名含子串 `ipc_settings` 确保 verify 命中。
 
@@ -158,11 +158,11 @@ fn ipc_settings_exclude_list_empty_roundtrip() {
 fn ipc_settings_selected_provider_valid_id_roundtrip() {
     let settings_path = tmp_settings_path();
 
-    set_selected_provider_impl("mymemory", &settings_path).expect("合法 id 应成功");
+    set_selected_provider_impl("lingva", &settings_path).expect("合法 id 应成功");
 
     let loaded = get_selected_provider_impl(&settings_path).expect("get 应成功");
 
-    assert_eq!(loaded, "mymemory", "读回的 provider id 应一致");
+    assert_eq!(loaded, "lingva", "读回的 provider id 应一致");
 }
 
 /// V4-F1-A03：set_selected_provider 非法 id → Err
@@ -175,13 +175,30 @@ fn ipc_settings_selected_provider_invalid_id_rejected() {
     assert!(result.is_err(), "非法 provider id 应返回 Err");
 }
 
-/// V4-F1-A03：get_translate_providers 返回非空且含 "mymemory"
+/// TV1-F1-A03：get_translate_providers 返回非空、含 "lingva" 且不含已移除的 "mymemory"
 #[test]
-fn ipc_settings_get_translate_providers_contains_mymemory() {
+fn ipc_settings_get_translate_providers_contains_lingva_not_mymemory() {
     let providers = get_translate_providers_impl();
 
     assert!(!providers.is_empty(), "provider 列表不应为空");
+    assert!(
+        providers.iter().any(|p| p.id == "lingva"),
+        "provider 列表应含 lingva"
+    );
+    assert!(
+        !providers.iter().any(|p| p.id == "mymemory"),
+        "provider 列表不应再含 mymemory"
+    );
+}
 
-    let has_mymemory = providers.iter().any(|p| p.id == "mymemory");
-    assert!(has_mymemory, "provider 列表应含 mymemory");
+/// TV1-F1-A03：持久化的旧值 mymemory（已移除）被 get 迁移回退为 lingva（设计文档§六）
+#[test]
+fn ipc_settings_get_selected_provider_migrates_legacy_mymemory_to_lingva() {
+    let settings_path = tmp_settings_path();
+    std::fs::write(&settings_path, r#"{"selected_provider":"mymemory"}"#)
+        .expect("写入旧 settings 应成功");
+
+    let loaded = get_selected_provider_impl(&settings_path).expect("get 应成功");
+
+    assert_eq!(loaded, "lingva", "旧值 mymemory 应迁移回退为 lingva");
 }

@@ -18,6 +18,7 @@
 - **tester 变异还原禁用 git**：在带未提交改动的文件上做变异，还原只能"改前 `cp` 备份 → 改后从备份复原"，**禁 `git checkout`/`git restore`**（会冲掉未提交修复）；开工/结束 `git status` 快照逐行比对自证干净。
 - **coder 交付序**：多交付项任务，测试一过立即按序落地 ① 完成接入/wiring ② 写 coding.md 骨架 ③ 才润色。接入与留痕都是交付物，不是收尾——那正是被截断丢失的位置。
 - **回合预算有限**：单次任务切到预算内、尽早落痕（coding.md/test.md），撞顶也留可续状态；超大任务交付最小片段。
+- **移除/重命名 provider/源/实体时全仓清旧引用**（TV1 复盘 TV1-RETRO-1）：删或改名一个翻译源/实体后，全仓 `grep` 其旧名（id/display/字段），**同批清理注释、测试 fixture、doc 中的过时引用**，纳入交付清单逐条核销——否则会留下与实现矛盾的死注释/旧值断言（TV1 移除 MyMemory 后 ipc_settings.rs 头注释、translate.rs fixture、mod.rs:65 doc 三处复发，被 reviewer 逐个抓）。翻译源持续新增/演进期此坑高频。
 
 ### v6 自动更新本地约定
 

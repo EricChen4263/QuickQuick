@@ -4,16 +4,19 @@ import userEvent from "@testing-library/user-event";
 import DirBar from "./DirBar";
 import type { Provider } from "../../ipc/ipc-client";
 
+// 本组件级测试只验证「列出/禁用/选中」行为，与非官方标注无关，
+// 故 isUnofficial 统一置 false 避免标注后缀污染 option 的精确 name 匹配；
+// 标注渲染由 label-degrade.test.tsx 用独立夹具覆盖。
 const MOCK_PROVIDERS: Provider[] = [
-  { id: "mymemory", name: "MyMemory · 默认", needsKey: false },
-  { id: "baidu", name: "百度翻译", needsKey: true },
-  { id: "deepl", name: "DeepL Free", needsKey: false },
+  { id: "mymemory", name: "MyMemory · 默认", needsKey: false, isUnofficial: false },
+  { id: "baidu", name: "百度翻译", needsKey: true, isUnofficial: false },
+  { id: "deepl", name: "DeepL Free", needsKey: false, isUnofficial: false },
 ];
 
 const PROVIDERS_WITH_NEEDS_KEY: Provider[] = [
-  { id: "mymemory", name: "MyMemory · 默认", needsKey: false },
-  { id: "baidu", name: "百度翻译", needsKey: true },
-  { id: "deepl-free", name: "DeepL Free", needsKey: true },
+  { id: "mymemory", name: "MyMemory · 默认", needsKey: false, isUnofficial: false },
+  { id: "baidu", name: "百度翻译", needsKey: true, isUnofficial: false },
+  { id: "deepl-free", name: "DeepL Free", needsKey: true, isUnofficial: false },
 ];
 
 /** 默认 props 工厂：减少各用例重复装配 onXxx mock */

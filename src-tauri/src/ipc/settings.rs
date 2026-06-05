@@ -40,6 +40,7 @@ use crate::translate::credential::{
     credential_schema, default_cred_store, delete_credentials, load_credentials_for_display,
     save_credentials,
 };
+use crate::ipc::translate::resolve_provider_or_fallback;
 use crate::translate::providers::registry;
 use crate::CaptureState;
 
@@ -62,6 +63,9 @@ pub struct ProviderDto {
     pub id: String,
     pub name: String,
     pub needs_key: bool,
+    /// 是否为非官方/自建接口（序列化为 camelCase `isUnofficial`）。
+    /// 前端据此渲染「非官方」标注与失败降级提示（设计文档§三.决策3）。
+    pub is_unofficial: bool,
 }
 
 /// provider 凭据配置变化事件名。与前端 src/ipc/events.ts 的 PROVIDER_CONFIG_CHANGED_EVENT 必须一致。
@@ -184,21 +188,31 @@ pub fn get_translate_providers_impl() -> Vec<ProviderDto> {
             id: cap.id.to_string(),
             name: cap.name.to_string(),
             needs_key: cap.needs_key,
+            is_unofficial: cap.is_unofficial,
         })
         .collect()
 }
 
 /// `get_selected_provider` 的纯函数实现，可在测试中直接调用。
 ///
-/// 从 settings 文件读取当前选中的 provider id；文件不存在时返回默认值 "mymemory"。
+/// 从 settings 文件读取当前选中的 provider id；文件不存在时返回默认值（lingva）。
+/// 设置迁移（设计文档§六）：若持久化的 id 不在当前注册表内（含旧值 mymemory、
+/// 任意已删除源），回退默认源并在写路径持久化修正，使后续读取稳定。
 ///
 /// # Errors
-/// 此函数实际上永不返回 `Err`：`AppSettings::load_or_default` 在文件不存在或
-/// 内容损坏时均静默回退默认值，调用方可安全地 `unwrap_or_default`。
-/// 签名保留 `Result` 以与命令层 `?` 传播保持一致，便于未来升级为真正可失败路径。
+/// 读取永不失败（`load_or_default` 静默回退默认值）；但写路径持久化修正失败时返回 Err。
 pub fn get_selected_provider_impl(settings_path: &Path) -> Result<String, String> {
     let settings = AppSettings::load_or_default(settings_path);
-    Ok(settings.selected_provider)
+    let resolved = resolve_provider_or_fallback(&settings.selected_provider);
+
+    // 仅当发生回退（存储值非法）时才写回，避免每次读取都触发磁盘写。
+    if resolved != settings.selected_provider {
+        let mut migrated = settings;
+        migrated.selected_provider = resolved.clone();
+        migrated.save(settings_path).map_err(|e| e.to_string())?;
+    }
+
+    Ok(resolved)
 }
 
 /// `set_selected_provider` 的纯函数实现，可在测试中直接调用。
@@ -1206,5 +1220,21 @@ mod tests {
 
         let result = delete_provider_credentials_impl("baidu", &store, &conn);
         assert!(result.is_ok(), "空 provider 也应成功（幂等）: {result:?}");
+    }
+
+    // 对齐 acceptance TV1-F4-A01：DTO 透出 is_unofficial（前端据此渲染「非官方」标注）。
+    // 非官方免 key 源 true、官方 keyed 源 false，与 capability 一致。
+    #[test]
+    fn get_translate_providers_impl_exposes_is_unofficial() {
+        let dtos = get_translate_providers_impl();
+        let find = |id: &str| {
+            dtos.iter()
+                .find(|d| d.id == id)
+                .unwrap_or_else(|| panic!("DTO 列表应含 {id}"))
+        };
+        assert!(find("lingva").is_unofficial, "lingva 应标注非官方");
+        assert!(find("bing").is_unofficial, "bing 应标注非官方");
+        assert!(!find("baidu").is_unofficial, "baidu 为官方源");
+        assert!(!find("google").is_unofficial, "google 官方源");
     }
 }

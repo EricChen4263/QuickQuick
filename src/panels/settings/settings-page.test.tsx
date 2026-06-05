@@ -83,8 +83,8 @@ const mockSetImageThreshold = vi.mocked(setImageThreshold);
 
 const MOCK_HOTKEYS = { history: "CmdOrCtrl+Shift+H", translate: "CmdOrCtrl+Shift+T" };
 const MOCK_PROVIDERS = [
-  { id: "google", name: "Google 翻译", needsKey: false },
-  { id: "deepl", name: "DeepL", needsKey: true },
+  { id: "google", name: "Google 翻译", needsKey: false, isUnofficial: true },
+  { id: "deepl", name: "DeepL", needsKey: true, isUnofficial: false },
 ];
 const MOCK_EXCLUDE_LIST = ["Xcode", "Terminal"];
 

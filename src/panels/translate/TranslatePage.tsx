@@ -31,6 +31,15 @@ import { writeToClipboard, speakText } from "./browser-api";
 import TranslateWorkspace from "./TranslateWorkspace";
 import TranslateHistoryPanel from "./TranslateHistoryPanel";
 
+/**
+ * loading 态最小可见时长（毫秒）。
+ * 防止翻译源秒回（如 Google 免费接口 / MyMemory 命中缓存）时，
+ * setIsLoading(true)→翻译完成→setIsLoading(false) 在一两帧内走完，
+ * React 提交了 loading 帧但浏览器还没绘制就被译文覆盖，导致用户看不到「翻译中」反馈。
+ * 同时让翻译按钮在此时长内保持 disabled，天然抑制「频繁点击」重入。
+ */
+const MIN_LOADING_VISIBLE_MS = 400;
+
 interface TranslatePageProps {
   seed?: { text: string; nonce: number } | null;
 }
@@ -211,6 +220,7 @@ function TranslatePage({ seed }: TranslatePageProps) {
     if (text.trim().length === 0) return;
     setIsLoading(true);
     setError(null);
+    const startedAt = Date.now();
     try {
       const sourceParam = sourceLang === "auto" ? undefined : sourceLang;
       const res = await translateText(text, targetLang, sourceParam);
@@ -221,6 +231,11 @@ function TranslatePage({ seed }: TranslatePageProps) {
       setError(err instanceof Error ? err.message : "翻译失败，请稍后重试");
       setResult(null);
     } finally {
+      // 秒回时补足最小可见时长，确保 loading 帧能被浏览器绘制后再切到结果（见 MIN_LOADING_VISIBLE_MS）。
+      const remainingMs = MIN_LOADING_VISIBLE_MS - (Date.now() - startedAt);
+      if (remainingMs > 0) {
+        await new Promise((resolve) => setTimeout(resolve, remainingMs));
+      }
       setIsLoading(false);
     }
   }, [inputText, sourceLang, targetLang, fetchHistory]);

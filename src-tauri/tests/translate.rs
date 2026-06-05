@@ -7,7 +7,7 @@
 //! - V2-F1-A04 same_source_retry_no_cross_failover：错误降级，同源退避重试，绝不自动跨源
 //! - V2-F1-A05 credential_schema_keychain：provider 声明结构化字段 schema，secret→keychain，非密→加密 DB
 //! - V2-F1-A07 timeout_and_cancel_inflight：超时归 Network，连续选中只认最新请求
-//! - V2-F1-A08 static_registry_lists_four：静态注册表枚举 4 家 provider
+//! - V2-F1-A08 static_registry_lists：静态注册表枚举全部 provider（随免 key 源增长，现 8 家）
 
 use quickquick_lib::translate::cancel::InflightTracker;
 use quickquick_lib::translate::error::{classify_timeout, map_provider_error};
@@ -32,6 +32,7 @@ impl TranslateProvider for StubProvider {
             id: "stub",
             name: "Stub Provider",
             needs_key: false,
+            is_unofficial: false,
         }
     }
 
@@ -138,26 +139,30 @@ fn provider_contract_parse_response_returns_error_on_missing_field() {
     assert!(matches!(result.unwrap_err(), TranslateError::ParseError(_)));
 }
 
-// V2-F1-A08 static_registry_lists_four
+// V2-F1-A08 static_registry_lists_all
 
-/// A08：静态注册表枚举 4 家 provider。
+/// A08：静态注册表枚举全部 provider。
+///
+/// 现为 8 家：lingva / google_free / yandex / transmart / bing（免 key）+ baidu / deepl_free / google（需 key）。
+/// 后续每新增一个免 key 源（deepl_web…），此数随之增长，届时同步更新预期值。
 #[test]
-fn static_registry_lists_four_providers() {
+fn static_registry_lists_eight_providers() {
     // Arrange + Act
     let providers = registry();
 
     // Assert
-    assert_eq!(providers.len(), 4, "注册表应恰好包含 4 家 provider");
+    assert_eq!(providers.len(), 8, "注册表应恰好包含 8 家 provider");
 }
 
 #[test]
-fn static_registry_contains_mymemory() {
+fn static_registry_contains_lingva() {
     // Arrange + Act
     let providers = registry();
     let ids: Vec<&str> = providers.iter().map(|p| p.id).collect();
 
     // Assert
-    assert!(ids.contains(&"mymemory"), "注册表应包含 MyMemory");
+    assert!(ids.contains(&"lingva"), "注册表应包含 Lingva");
+    assert!(!ids.contains(&"mymemory"), "注册表不应再包含 MyMemory");
 }
 
 #[test]
@@ -191,24 +196,32 @@ fn static_registry_contains_google() {
 }
 
 #[test]
-fn static_registry_mymemory_does_not_need_key() {
+fn static_registry_lingva_does_not_need_key() {
     // Arrange + Act
     let providers = registry();
-    let mymemory = providers.iter().find(|p| p.id == "mymemory");
+    let lingva = providers.iter().find(|p| p.id == "lingva");
 
-    // Assert：MyMemory 是默认无需 key 的源
-    let cap = mymemory.expect("注册表中应有 MyMemory");
-    assert!(!cap.needs_key, "MyMemory 应为 needs_key=false（默认源）");
+    // Assert：Lingva 是默认无需 key 的源
+    let cap = lingva.expect("注册表中应有 Lingva");
+    assert!(!cap.needs_key, "Lingva 应为 needs_key=false（默认源）");
 }
 
 #[test]
 fn static_registry_keyed_providers_need_key() {
-    // Arrange + Act
+    // Arrange：免 key 源 id 集合。后续新增免 key 源（deepl_web…）
+    // 时往此集合补对应 id，避免把新免 key 源误判为需 key。
+    let keyless_ids = ["lingva", "google_free", "yandex", "transmart", "bing"];
+
+    // Act
     let providers = registry();
 
-    // Assert：百度/DeepL/Google 均需要 key
-    for cap in providers.iter().filter(|p| p.id != "mymemory") {
-        assert!(cap.needs_key, "provider '{}' 应为 needs_key=true", cap.id);
+    // Assert：在免 key 集合内的 needs_key=false，其余 needs_key=true。
+    for cap in providers.iter() {
+        if keyless_ids.contains(&cap.id) {
+            assert!(!cap.needs_key, "免 key 源 '{}' 应为 needs_key=false", cap.id);
+        } else {
+            assert!(cap.needs_key, "provider '{}' 应为 needs_key=true", cap.id);
+        }
     }
 }
 
@@ -331,14 +344,14 @@ fn lang_norm_deepl_maps_en_to_en_uppercase() {
 }
 
 #[test]
-fn lang_norm_mymemory_maps_zh_variants_to_zh_cn() {
-    // Arrange：MyMemory 期望 "zh-CN"
+fn lang_norm_lingva_maps_zh_variants_to_zh() {
+    // Arrange：Lingva 期望 "zh"（实测协议直传 zh/en/auto）
     let zh = Lang::new("zh");
     let zh_hans = Lang::new("zh-Hans");
 
     // Act + Assert
-    assert_eq!(map_lang_for_provider("mymemory", &zh), "zh-CN");
-    assert_eq!(map_lang_for_provider("mymemory", &zh_hans), "zh-CN");
+    assert_eq!(map_lang_for_provider("lingva", &zh), "zh");
+    assert_eq!(map_lang_for_provider("lingva", &zh_hans), "zh");
 }
 
 #[test]
@@ -615,7 +628,7 @@ fn retry_policy_same_source_retry_no_cross_failover_succeeds_on_third_attempt() 
     // Arrange：可编程 fake op，前 2 次返回 Network 错误，第 3 次成功
     let attempt_count = std::cell::Cell::new(0_u32);
     let provider_ids_seen = std::cell::RefCell::new(Vec::<&str>::new());
-    let fixed_provider_id = "mymemory";
+    let fixed_provider_id = "lingva";
 
     let sleep_calls = std::cell::RefCell::new(Vec::<u64>::new());
 
@@ -831,18 +844,14 @@ fn credential_schema_keychain_google_has_api_key() {
     assert!(api_key.required, "api_key 应为必填");
 }
 
-/// A05-d：MyMemory schema 含 email(非密可选)
+/// A05-d：Lingva 免 key，schema 为空（无凭据字段）。
 #[test]
-fn credential_schema_keychain_mymemory_has_optional_email() {
+fn credential_schema_keychain_lingva_has_no_fields() {
     // Arrange + Act
-    let fields = credential_schema("mymemory");
+    let fields = credential_schema("lingva");
 
-    // Assert
-    let email = fields.iter().find(|f| f.key == "email");
-    assert!(email.is_some(), "MyMemory schema 应含 email");
-    let email = email.unwrap();
-    assert!(!email.is_secret, "email 应为非密字段");
-    assert!(!email.required, "email 应为可选");
+    // Assert：Lingva 无需任何凭据
+    assert!(fields.is_empty(), "Lingva schema 应为空（免 key）");
 }
 
 /// A05-e：save 百度凭据后，secret_key 存 MockCredStore 可读回，app_id 存 DB 可读回；
@@ -1335,7 +1344,7 @@ fn translate_history_separate_clip_item_writes_to_history_not_clip_items() {
     .expect("插入 clip_item 应成功");
 
     // Act：一键翻译——剪贴板条目写入 translate_history
-    let history_id = translate_clip_item(&conn, &clip_id, "你好，世界！", "en", "zh", "mymemory")
+    let history_id = translate_clip_item(&conn, &clip_id, "你好，世界！", "en", "zh", "lingva")
         .expect("translate_clip_item 应成功");
 
     // Assert：translate_history 有该条
@@ -1368,7 +1377,7 @@ fn translate_history_separate_add_and_retrieve() {
     let conn = db::open_or_create(&db_path, &TEST_DB_KEY).expect("建库应成功");
 
     // Act
-    let id = add_translate_history(&conn, "Good morning", "早上好", "en", "zh", "mymemory")
+    let id = add_translate_history(&conn, "Good morning", "早上好", "en", "zh", "lingva")
         .expect("add_translate_history 应成功");
 
     // Assert：可查回该条记录

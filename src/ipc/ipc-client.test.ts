@@ -243,7 +243,7 @@ describe("setExcludeList", () => {
 describe("getTranslateProviders", () => {
   it("使用正确命令名调用 invoke 并透传 Provider 数组", async () => {
     const providers: Provider[] = [
-      { id: "mymemory", name: "MyMemory", needsKey: false },
+      { id: "mymemory", name: "MyMemory", needsKey: false, isUnofficial: true },
     ];
     mockInvoke.mockResolvedValueOnce(providers);
 

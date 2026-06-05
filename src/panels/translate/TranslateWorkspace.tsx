@@ -10,6 +10,13 @@ const ACTION_LABELS: Record<string, string> = {
   save_history: "刷新历史",
 };
 
+/**
+ * 非官方源失败时的降级提示文案（设计文档§三.决策3）。
+ * 与原始错误并列展示，引导用户切换其它源而非笼统报错。
+ */
+const UNOFFICIAL_DEGRADE_HINT =
+  "该源为非官方接口，可能已失效，可切换其它翻译源重试。";
+
 interface TranslateWorkspaceProps {
   inputText: string;
   result: TranslateResult | null;
@@ -53,6 +60,10 @@ function TranslateWorkspace({
   const actions = availableActions();
   const isTranslateDisabled = inputText.trim().length === 0 || isLoading;
   const charCount = inputText.length;
+  // 当前选中源是否为非官方接口：失败时据此追加降级提示（设计文档§三.决策3）。
+  const isSelectedUnofficial = providers.some(
+    (p) => p.id === selectedProviderId && p.isUnofficial
+  );
 
   return (
     <div className="tx-work">
@@ -100,11 +111,25 @@ function TranslateWorkspace({
               style={{ color: "var(--danger)" }}
             >
               {error}
+              {isSelectedUnofficial && (
+                <div className="tx-degrade-hint">{UNOFFICIAL_DEGRADE_HINT}</div>
+              )}
             </div>
           </div>
         )}
 
-        {error === null && result !== null && (
+        {error === null && isLoading && (
+          // 翻译进行中：在用户视线所在的结果区给出明确进度反馈，
+          // 并借三态优先级（isLoading 先于 result）盖掉上一次的旧译文，
+          // 避免用户误以为「点了没反应」。role=status 供无障碍朗读进度。
+          <div className="tx-result">
+            <div role="status" className="tx-loading">
+              翻译中…
+            </div>
+          </div>
+        )}
+
+        {error === null && !isLoading && result !== null && (
           <div className="tx-result">
             <div className="field-label">
               译文 · {result.sourceLang} → {result.targetLang}

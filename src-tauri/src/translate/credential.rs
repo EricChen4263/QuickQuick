@@ -220,12 +220,7 @@ pub fn default_cred_store(_config_dir: &std::path::Path) -> impl CredStore {
 /// 未知 provider_id 返回空 Vec（不 panic）。
 pub fn credential_schema(provider_id: &str) -> Vec<CredentialField> {
     match provider_id {
-        "mymemory" => vec![CredentialField {
-            key: "email",
-            label: "Email（可选，提高配额）",
-            is_secret: false,
-            required: false,
-        }],
+        // lingva 免 key，无凭据字段，落入 `_ => vec![]` 分支。
         "baidu" => vec![
             CredentialField {
                 key: "app_id",

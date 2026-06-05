@@ -119,6 +119,33 @@
   padding-top: 20px;
 }
 
+/* 翻译进行中的结果区加载态：用 muted 弱化色 + 脉冲呼吸，
+   既明确告知"正在翻译"，又不喧宾夺主、不需引入额外 spinner 资源 */
+.tx-loading {
+  color: var(--muted);
+  font-size: 16px;
+  animation: tx-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes tx-pulse {
+  0%,
+  100% {
+    opacity: 0.5;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+/* 尊重系统「减少动态效果」：眩晕/前庭敏感用户关闭脉冲动画，
+   仍保留弱化色的静态「翻译中…」提示，不丢失进度反馈。 */
+@media (prefers-reduced-motion: reduce) {
+  .tx-loading {
+    animation: none;
+    opacity: 0.7;
+  }
+}
+
 /* 译文大字展示，字间距略收 */
 .tx-out {
   font-size: 21px;

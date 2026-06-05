@@ -73,10 +73,10 @@ fn write_settings(dir: &tempfile::TempDir, provider_id: &str) -> std::path::Path
 #[test]
 fn ipc_translate_chinese_text_produces_zh_to_en_direction() {
     let (_dir, conn) = open_tmp_db();
-    let settings_path = write_settings(&_dir, "mymemory");
+    let settings_path = write_settings(&_dir, "lingva");
     let store = LocalMockCredStore::new();
     let fake =
-        FakeExecutor::new(r#"{"responseData":{"translatedText":"Hello"},"responseStatus":200}"#);
+        FakeExecutor::new(r#"{"translation":"Hello"}"#);
 
     let result = translate_text_impl(&conn, &fake, "你好", None, None, &settings_path, &store)
         .expect("翻译应成功");
@@ -90,10 +90,10 @@ fn ipc_translate_chinese_text_produces_zh_to_en_direction() {
 #[test]
 fn ipc_translate_english_text_produces_en_to_zh_direction() {
     let (_dir, conn) = open_tmp_db();
-    let settings_path = write_settings(&_dir, "mymemory");
+    let settings_path = write_settings(&_dir, "lingva");
     let store = LocalMockCredStore::new();
     let fake =
-        FakeExecutor::new(r#"{"responseData":{"translatedText":"你好"},"responseStatus":200}"#);
+        FakeExecutor::new(r#"{"translation":"你好"}"#);
 
     let result = translate_text_impl(&conn, &fake, "Hello", None, None, &settings_path, &store)
         .expect("翻译应成功");
@@ -107,10 +107,10 @@ fn ipc_translate_english_text_produces_en_to_zh_direction() {
 #[test]
 fn ipc_translate_writes_to_history_after_success() {
     let (_dir, conn) = open_tmp_db();
-    let settings_path = write_settings(&_dir, "mymemory");
+    let settings_path = write_settings(&_dir, "lingva");
     let store = LocalMockCredStore::new();
     let fake =
-        FakeExecutor::new(r#"{"responseData":{"translatedText":"World"},"responseStatus":200}"#);
+        FakeExecutor::new(r#"{"translation":"World"}"#);
 
     let count_before =
         quickquick_lib::translate::history::translate_history_count(&conn).expect("count 应成功");
@@ -128,7 +128,7 @@ fn ipc_translate_writes_to_history_after_success() {
 #[test]
 fn ipc_translate_empty_text_returns_error_without_calling_executor() {
     let (_dir, conn) = open_tmp_db();
-    let settings_path = write_settings(&_dir, "mymemory");
+    let settings_path = write_settings(&_dir, "lingva");
     let store = LocalMockCredStore::new();
     let fake = FakeExecutor::new("should not be called");
 
@@ -142,7 +142,7 @@ fn ipc_translate_empty_text_returns_error_without_calling_executor() {
 #[test]
 fn ipc_translate_whitespace_text_returns_error_without_calling_executor() {
     let (_dir, conn) = open_tmp_db();
-    let settings_path = write_settings(&_dir, "mymemory");
+    let settings_path = write_settings(&_dir, "lingva");
     let store = LocalMockCredStore::new();
     let fake = FakeExecutor::new("should not be called");
 
@@ -156,12 +156,12 @@ fn ipc_translate_whitespace_text_returns_error_without_calling_executor() {
 #[test]
 fn ipc_translate_list_history_returns_entries_in_desc_order() {
     let (_dir, conn) = open_tmp_db();
-    let settings_path = write_settings(&_dir, "mymemory");
+    let settings_path = write_settings(&_dir, "lingva");
     let store = LocalMockCredStore::new();
     let fake1 =
-        FakeExecutor::new(r#"{"responseData":{"translatedText":"Hello"},"responseStatus":200}"#);
+        FakeExecutor::new(r#"{"translation":"Hello"}"#);
     let fake2 =
-        FakeExecutor::new(r#"{"responseData":{"translatedText":"World"},"responseStatus":200}"#);
+        FakeExecutor::new(r#"{"translation":"World"}"#);
 
     translate_text_impl(&conn, &fake1, "你好", None, None, &settings_path, &store)
         .expect("第一次翻译应成功");

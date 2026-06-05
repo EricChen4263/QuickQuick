@@ -1,0 +1,826 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>QuickQuick 翻译源对齐 pot 设计方案</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+/*
+ * Fjord / Nordic Serenity — 全局文档设计系统（母版）
+ * 用法：把本文件内容内联进每个 HTML 文档的 <style>，保证文档自包含、可双击打开。
+ * 字体：在 <head> 加
+ *   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+ * 结构：.topbar(sticky) → header.hero(blue-hour 渐变带) → .wrap > section(.sec-head + 内容) → footer
+ * 规范见同目录 DESIGN.md。
+ */
+:root {
+  --bg: #f8f9fa;
+  --card: #ffffff;
+  --card-2: #f3f4f5;
+  --mist: #e2e8f0;
+  --mist-hover: #f1f5f9;
+  --fjord: #05192d;
+  --ink: #191c1d;
+  --ink-2: #44474d;
+  --outline: #74777d;
+  --line: #c4c6cd;
+  --glacier: #d1d5db;
+  --accent: #3e54ac;
+  --accent-dim: #1a338b;
+  --accent-soft: #dde1ff;
+  --green-bg: #e6f0ea;
+  --green-tx: #2f6b4f;
+  --grey-bg: #ececef;
+  --grey-tx: #6b6f76;
+  --err: #ba1a1a;
+  --shadow: 0 12px 32px rgba(5,25,45,0.08);
+  --radius: 12px;
+}
+* { box-sizing: border-box; }
+html { -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility; scroll-behavior: smooth; }
+body {
+  margin: 0; background: var(--bg); color: var(--ink);
+  font-family: 'Inter', -apple-system, sans-serif;
+  font-size: 16px; font-weight: 400; line-height: 1.65; letter-spacing: -0.003em;
+}
+.mono { font-family: 'JetBrains Mono', monospace; }
+
+/* top app bar */
+.topbar {
+  position: sticky; top: 0; z-index: 50; background: rgba(248,249,250,0.85);
+  backdrop-filter: blur(12px); border-bottom: 1px solid var(--line);
+}
+.topbar-in {
+  max-width: 1040px; margin: 0 auto; height: 60px; padding: 0 32px;
+  display: flex; align-items: center; justify-content: space-between;
+}
+.topbar .brand { font-size: 15px; font-weight: 600; color: var(--fjord); letter-spacing: -0.01em; }
+.topbar .tag {
+  font-family: 'JetBrains Mono', monospace; font-size: 10.5px; letter-spacing: 0.12em;
+  text-transform: uppercase; color: var(--accent); background: var(--mist);
+  padding: 4px 10px; border-radius: 999px;
+}
+
+/* hero — blue hour fjord band (用渐变还原氛围，禁贴库存风景照) */
+.hero { background: linear-gradient(160deg, #05192d 0%, #0c2440 45%, #1c2f55 100%); color: #fff; position: relative; overflow: hidden; }
+.hero::after { content: ''; position: absolute; inset: 0; background: radial-gradient(120% 90% at 78% 8%, rgba(120,150,210,0.22), transparent 60%); pointer-events: none; }
+.hero-in { max-width: 1040px; margin: 0 auto; padding: 72px 32px 64px; position: relative; z-index: 1; }
+.hero .kicker { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 22px; }
+.hero .chip-hero { font-family: 'JetBrains Mono', monospace; font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; padding: 5px 12px; border-radius: 999px; }
+.chip-hero.solid { background: var(--accent); color: #fff; }
+.chip-hero.ghost { background: rgba(255,255,255,0.1); color: #c7d2ec; border: 1px solid rgba(255,255,255,0.18); }
+.hero h1 { font-size: clamp(32px, 5.2vw, 48px); font-weight: 700; line-height: 1.1; letter-spacing: -0.025em; margin: 0 0 24px; color: #fff; }
+.hero .lede { font-size: 17px; font-weight: 400; line-height: 1.7; color: #c7d2ec; max-width: 64ch; margin: 0; }
+.hero .meta { display: flex; flex-wrap: wrap; gap: 6px 28px; margin-top: 32px; padding-top: 22px; border-top: 1px solid rgba(255,255,255,0.14); font-family: 'JetBrains Mono', monospace; font-size: 12px; color: #9fb0d0; }
+.hero .meta b { color: #d7e0f2; font-weight: 500; }
+.hero .meta a { color: #b5c8e3; text-decoration: none; border-bottom: 1px solid rgba(181,200,227,0.4); }
+
+/* layout */
+.wrap { max-width: 1040px; margin: 0 auto; padding: 64px 32px 120px; }
+section { margin-top: 72px; }
+section:first-child { margin-top: 0; }
+.sec-head { display: flex; align-items: baseline; gap: 14px; border-left: 4px solid var(--accent); padding-left: 16px; margin-bottom: 28px; }
+.sec-num { font-family: 'JetBrains Mono', monospace; font-size: 13px; font-weight: 500; color: var(--accent); flex: none; }
+h2 { font-size: 26px; font-weight: 600; color: var(--fjord); margin: 0; letter-spacing: -0.02em; line-height: 1.2; }
+.subhead { font-size: 18px; font-weight: 600; color: var(--fjord); margin: 40px 0 16px; letter-spacing: -0.01em; }
+p { margin: 0 0 16px; max-width: 70ch; color: var(--ink-2); }
+.intro { font-size: 17px; color: var(--ink-2); }
+code, .codeword { font-family: 'JetBrains Mono', monospace; font-size: 0.84em; background: var(--mist); color: var(--accent-dim); padding: 1.5px 6px; border-radius: 4px; word-break: break-word; }
+
+/* tables — bordered rounded container, mist header */
+.tablecard { border: 1px solid var(--glacier); border-radius: var(--radius); overflow: hidden; background: var(--card); margin: 4px 0; }
+table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+thead { background: var(--mist); }
+thead th { text-align: left; padding: 13px 16px; font-size: 11px; font-weight: 600; letter-spacing: 0.02em; text-transform: uppercase; color: var(--accent); }
+tbody td { padding: 13px 16px; vertical-align: top; border-top: 1px solid var(--line); color: var(--ink-2); }
+tbody tr:first-child td { border-top: none; }
+tbody tr:hover { background: var(--mist-hover); }
+td code { font-size: 12px; }
+.layer-cell { color: var(--accent); font-weight: 600; width: 38px; }
+.scode { font-family: 'JetBrains Mono', monospace; font-weight: 600; color: var(--fjord); width: 48px; }
+.pcode { font-family: 'JetBrains Mono', monospace; color: var(--outline); width: 48px; }
+.phase-num { font-family: 'JetBrains Mono', monospace; font-weight: 600; color: var(--accent); width: 34px; }
+td strong { color: var(--fjord); font-weight: 600; }
+
+/* chips / status */
+.chip { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; font-size: 11.5px; font-weight: 500; padding: 3px 10px; border-radius: 999px; }
+.chip.done { background: var(--green-bg); color: var(--green-tx); }
+.chip.moot { background: var(--grey-bg); color: var(--grey-tx); }
+.chip.wait { background: #f3ecda; color: #8a6d2f; }
+.chip.new { background: var(--accent-soft); color: var(--accent-dim); }
+.chip.meta { background: var(--card-2); color: var(--outline); font-family: 'JetBrains Mono', monospace; font-size: 10.5px; letter-spacing: 0.02em; }
+.chip.warn { background: #fff3e0; color: #b25a00; }
+.st-cell { width: 100px; }
+.model { font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--outline); white-space: nowrap; }
+.model.opus { color: var(--accent); font-weight: 500; }
+
+/* key figures */
+.figures { display: grid; grid-template-columns: repeat(2,1fr); gap: 16px; margin: 20px 0 8px; }
+@media (min-width:680px){ .figures { grid-template-columns: repeat(4,1fr); } }
+.figure { background: var(--card); border: 1px solid var(--glacier); border-radius: var(--radius); padding: 20px; }
+.figure .val { font-family: 'JetBrains Mono', monospace; font-size: 20px; font-weight: 500; color: var(--fjord); letter-spacing: -0.02em; }
+.figure .lab { font-size: 12px; color: var(--outline); margin-top: 6px; line-height: 1.4; }
+
+/* ladder / code block */
+.ladder { background: var(--card); border: 1px solid var(--glacier); border-radius: var(--radius); padding: 22px 24px; margin: 20px 0; font-family: 'JetBrains Mono', monospace; font-size: 13px; line-height: 2; white-space: pre; overflow-x: auto; color: var(--ink-2); }
+.ladder .a { color: var(--accent); }
+.ladder b { color: var(--fjord); font-weight: 500; }
+
+/* callout (glass) — 玻璃感克制使用，仅总评/重点 */
+.callout { background: rgba(255,255,255,0.7); backdrop-filter: blur(12px); border: 1px solid var(--glacier); border-radius: var(--radius); padding: 24px 28px; margin-top: 28px; box-shadow: var(--shadow); }
+.callout .label { font-family: 'JetBrains Mono', monospace; font-size: 10.5px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--accent); display: block; margin-bottom: 12px; }
+.callout p { margin: 0; color: var(--ink-2); font-size: 15px; max-width: none; }
+.callout p + p { margin-top: 10px; }
+
+/* card grids — 通用白卡（边框 + 8px 圆角，默认无阴影） */
+.probs { display: grid; gap: 14px; margin-top: 4px; }
+@media (min-width:760px){ .probs { grid-template-columns: 1fr 1fr; } }
+.prob { background: var(--card); border: 1px solid var(--glacier); border-radius: var(--radius); padding: 22px 24px; }
+.prob-top { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; }
+.prob-id { font-family: 'JetBrains Mono', monospace; font-size: 12px; font-weight: 600; color: #fff; background: var(--fjord); padding: 2px 9px; border-radius: 6px; }
+.prob h3 { font-size: 16px; font-weight: 600; color: var(--fjord); margin: 0; flex: 1; min-width: 160px; line-height: 1.3; letter-spacing: -0.01em; }
+.prob p { margin: 0; font-size: 14px; color: var(--ink-2); max-width: none; line-height: 1.6; }
+.prob .resolve { margin-top: 12px; }
+
+.batches { display: grid; gap: 16px; margin-top: 4px; }
+@media (min-width:680px){ .batches { grid-template-columns: 1fr 1fr; } }
+.batch { background: var(--card); border: 1px solid var(--glacier); border-radius: var(--radius); padding: 20px 22px; }
+.batch-head { font-family: 'JetBrains Mono', monospace; font-size: 11px; font-weight: 600; letter-spacing: 0.04em; color: var(--accent); margin-bottom: 14px; }
+.batch ul { list-style: none; margin: 0; padding: 0; }
+.batch li { font-size: 13.5px; color: var(--ink-2); padding: 6px 0 6px 18px; position: relative; border-top: 1px solid var(--line); }
+.batch li:first-child { border-top: none; }
+.batch li::before { content: '›'; position: absolute; left: 2px; color: var(--accent); font-weight: 700; }
+
+/* principles / generic card-wrapped lists */
+.pcard { background: var(--card); border: 1px solid var(--glacier); border-radius: var(--radius); padding: 6px 24px; }
+.principles { list-style: none; padding: 0; margin: 0; }
+.principles li { padding: 15px 0 15px 20px; position: relative; border-top: 1px solid var(--line); font-size: 14.5px; color: var(--ink-2); }
+.principles li:first-child { border-top: none; }
+.principles li::before { content: ''; position: absolute; left: 0; top: 22px; width: 8px; height: 2px; background: var(--accent); }
+.principles b { font-weight: 600; color: var(--fjord); }
+
+.note { font-size: 14.5px; color: var(--ink-2); }
+.note ul { padding-left: 20px; margin: 10px 0; }
+.note li { margin: 8px 0; max-width: 72ch; }
+
+.cmds { display: grid; gap: 16px; margin-top: 4px; }
+@media (min-width:680px){ .cmds { grid-template-columns: 1fr 1fr; } }
+.cmd-group { background: var(--card); border: 1px solid var(--glacier); border-radius: var(--radius); padding: 20px 22px; }
+.cmd-group h4 { font-family: 'JetBrains Mono', monospace; font-size: 10.5px; font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase; color: var(--accent); margin: 0 0 12px; }
+.cmd-group p { margin: 0; font-size: 13.5px; color: var(--ink-2); max-width: none; line-height: 2; }
+
+del { color: var(--outline); }
+
+footer { background: var(--card-2); border-top: 1px solid var(--line); margin-top: 88px; }
+.footer-in { max-width: 1040px; margin: 0 auto; padding: 28px 32px; display: flex; justify-content: space-between; flex-wrap: wrap; gap: 10px; font-family: 'JetBrains Mono', monospace; font-size: 11.5px; color: var(--outline); }
+.footer-in b { color: var(--fjord); font-weight: 600; }
+
+strong { font-weight: 600; }
+@media (max-width:560px){
+  .topbar-in, .hero-in, .wrap, .footer-in { padding-left: 20px; padding-right: 20px; }
+  table { font-size: 12.5px; } thead th, tbody td { padding: 10px 12px; }
+}
+@media print { body { background: #fff; } .topbar { position: static; } section { break-inside: avoid; } }
+
+/* 本文档补充样式 */
+.warn-inline {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-size: 11.5px; font-weight: 500; padding: 2px 8px;
+  border-radius: 999px; background: #fff3e0; color: #b25a00; white-space: nowrap;
+}
+.gpl-callout {
+  background: #fff8f6; border: 1.5px solid #f5c3b0; border-radius: var(--radius);
+  padding: 22px 26px; margin: 24px 0;
+}
+.gpl-callout .label {
+  font-family: 'JetBrains Mono', monospace; font-size: 10.5px; letter-spacing: 0.16em;
+  text-transform: uppercase; color: #b25a00; display: block; margin-bottom: 12px;
+}
+.gpl-callout p { margin: 0 0 10px; color: var(--ink-2); font-size: 14.5px; max-width: none; }
+.gpl-callout p:last-child { margin: 0; }
+.version-grid { display: grid; gap: 16px; margin-top: 16px; }
+@media (min-width:680px){ .version-grid { grid-template-columns: 1fr 1fr; } }
+.vcard { background: var(--card); border: 1px solid var(--glacier); border-radius: var(--radius); padding: 22px 24px; }
+.vcard .vtag { font-family: 'JetBrains Mono', monospace; font-size: 11px; font-weight: 600; letter-spacing: 0.08em; color: #fff; background: var(--accent); padding: 3px 10px; border-radius: 6px; display: inline-block; margin-bottom: 14px; }
+.vcard h3 { font-size: 15px; font-weight: 600; color: var(--fjord); margin: 0 0 12px; letter-spacing: -0.01em; }
+.vcard ul { list-style: none; margin: 0; padding: 0; }
+.vcard li { font-size: 13.5px; color: var(--ink-2); padding: 6px 0 6px 18px; position: relative; border-top: 1px solid var(--line); line-height: 1.55; }
+.vcard li:first-child { border-top: none; }
+.vcard li::before { content: '›'; position: absolute; left: 2px; color: var(--accent); font-weight: 700; }
+.vcard .vaccept { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line); font-size: 12.5px; color: var(--outline); }
+.source-a { color: var(--green-tx); font-weight: 600; font-size: 12px; }
+.source-b { color: #b25a00; font-weight: 600; font-size: 12px; }
+.stability-a { background: var(--green-bg); color: var(--green-tx); }
+.stability-b { background: #fff3e0; color: #b25a00; }
+.stability-chip { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 600; }
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="topbar-in">
+    <span class="brand">QuickQuick · 设计文档</span>
+    <span class="tag">已冻结 · 2026-06-06</span>
+  </div>
+</div>
+
+<header class="hero">
+  <div class="hero-in">
+    <div class="kicker">
+      <span class="chip-hero solid">冻结设计源</span>
+      <span class="chip-hero ghost">翻译引擎</span>
+      <span class="chip-hero ghost">V1 → V4</span>
+    </div>
+    <h1>翻译源对齐 pot<br>设计方案</h1>
+    <p class="lede">把 QuickQuick 的翻译源从现有 4 家整体重做，对齐开源翻译软件 pot 的全部内置翻译源；让用户不填 key 即可获得准确翻译，并提供丰富可选源。</p>
+    <div class="meta">
+      <span><b>范围</b>　翻译源全量重做（21 源）</span>
+      <span><b>制定</b>　2026-06-05</span>
+      <span><b>冻结</b>　2026-06-06</span>
+      <span><b>默认源</b>　Lingva（Google 备选兜底）</span>
+    </div>
+  </div>
+</header>
+
+<div class="wrap">
+
+  <!-- 〇 GPL 许可红线 -->
+  <section>
+    <div class="sec-head"><span class="sec-num">〇</span><h2>实现总原则：独立重写，不抄 pot 代码</h2></div>
+    <p class="intro">许可红线，最高优先级。pot-desktop 采用 <strong>GPL-3.0（强 copyleft）</strong>；QuickQuick 目前无 LICENSE 文件（默认「保留所有权利」/专有）。</p>
+
+    <div class="gpl-callout">
+      <span class="label">GPL 传染风险</span>
+      <p><strong>直接复制 pot 源代码会使 QuickQuick 被迫整体以 GPL-3.0 开源（传染）</strong>——故本项目绝不复制 pot 的任何源代码，也不近似改写其代码结构/表达。</p>
+      <p>法律依据：API 端点/参数/签名算法/响应字段 = 方法与事实，对接同一第三方服务属互操作，不受版权保护；而 pot 的<strong>源代码表达</strong>受版权保护并受 GPL 约束，故规避。本项目后续若要开源，许可由作者另行决定，不因翻译源实现被动绑定 GPL。</p>
+    </div>
+
+    <h3 class="subhead">合法做法（2026-06-06 用户已确认）</h3>
+    <div class="pcard">
+      <ul class="principles">
+        <li><b>支持与 pot 相同的全部翻译源，但用 Rust 完全独立实现。</b></li>
+        <li><b>需 key 的官方源</b>（百度/百度专业/腾讯云/阿里/火山/彩云/小牛/官方 DeepL/有道/OpenAI/ChatGLM/Gemini）→ 一律照<strong>各厂商官方 API 文档</strong>实现，完全不参考 pot 代码。</li>
+        <li><b>免 key 非官方接口</b>（Google gtx / Bing edge / DeepL-free / Yandex / Transmart / Lingva / Bing 词典 / 剑桥）→ 其 HTTP 端点、参数、签名算法属<strong>功能性事实 / 互操作信息</strong>，不受著作权保护；按这些公开事实独立编写原创 Rust，不照搬 pot 的具体实现表达。</li>
+        <li><b>溯源锚</b>：每个源在代码注释里标注其<strong>官方 API 文档 URL</strong>（而非 pot 源码 URL）。</li>
+        <li><b>pot 的角色</b>：仅作为「应支持哪些源」的功能清单参考，不作为代码来源；实现期不打开/不粘贴 pot 的 <code>index.jsx</code> 代码。</li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- 一 背景与诉求 -->
+  <section>
+    <div class="sec-head"><span class="sec-num">一</span><h2>背景与诉求</h2></div>
+    <h3 class="subhead">现状</h3>
+    <p class="intro">QuickQuick 当前有 4 个翻译源（<code>src-tauri/src/translate/providers.rs</code>）：</p>
+    <div class="tablecard">
+      <table>
+        <thead>
+          <tr>
+            <th>源</th>
+            <th>免 Key</th>
+            <th>质量</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>MyMemory</strong></td>
+            <td><span class="chip done">✓ 默认</span></td>
+            <td><span class="chip moot">差——众包 TM，常返垃圾</span></td>
+          </tr>
+          <tr>
+            <td><strong>百度 / DeepL / Google</strong></td>
+            <td><span class="chip wait">需 key</span></td>
+            <td>好，但要注册 key</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="callout" style="margin-top:24px;">
+      <span class="label">实测痛点（2026-06-05 真机）</span>
+      <p>默认源 MyMemory 把「冰川」翻成 <strong>"Bing Chuan"</strong>（拼音）。直接 curl MyMemory API 确认：其官方 <code>responseData.translatedText</code> 返回的就是一条 <code>quality=0</code> 的用户投稿垃圾，更好的 "Glaciate"（quality=80，Wikipedia）反被 <code>match</code> 相似度排序压在后面。<strong>这不是解析 bug，是免费众包源的数据本身脏。</strong></p>
+    </div>
+
+    <h3 class="subhead">诉求</h3>
+    <p>用户要求：<strong>「将应用里的翻译源全部统一为 pot 里的所有翻译源」</strong>，且期望<strong>不填 key 也能用</strong>。</p>
+
+    <h3 class="subhead">现实约束（必须先对齐认知）</h3>
+    <p>「不填 key 也能用」<strong>只对部分源成立</strong>。基于 pot 源码调研：</p>
+    <div class="pcard">
+      <ul class="principles">
+        <li><b>真正免 key</b>：用免费 / 自建 / 非官方网页接口，无需注册。</li>
+        <li><b>必须官方 key</b>：厂商官方 API（注册、限额 / 付费）。</li>
+        <li><b>免 key 但非官方</b>：靠抓 token / 伪装客户端 / 网页抓取，<strong>随对方改版即可能失效</strong>，须如实标注。</li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- 二 源清单 -->
+  <section>
+    <div class="sec-head"><span class="sec-num">二</span><h2>源清单（对齐 pot，共 21 个内置源）</h2></div>
+    <p class="intro">证据：pot-desktop <code>src/services/translate/</code> 各源 <code>index.jsx</code> / <code>Config.jsx</code> / <code>info.ts</code>。</p>
+
+    <div class="figures">
+      <div class="figure"><div class="val">6</div><div class="lab">机器翻译·免 key</div></div>
+      <div class="figure"><div class="val">9</div><div class="lab">机器翻译·需 key</div></div>
+      <div class="figure"><div class="val">4</div><div class="lab">LLM 对话翻译</div></div>
+      <div class="figure"><div class="val">4</div><div class="lab">词典</div></div>
+    </div>
+
+    <h3 class="subhead">2.1 机器翻译 · 免 key</h3>
+    <div class="tablecard">
+      <table>
+        <thead>
+          <tr>
+            <th>源</th>
+            <th>端点 / 机制</th>
+            <th>取译文字段</th>
+            <th>稳定性</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Lingva</strong></td>
+            <td><code>lingva.pot-app.com/api/v1/{from}/{to}/{text}</code> GET，无认证</td>
+            <td><code>data.translation</code></td>
+            <td><span class="stability-chip stability-a">A 级</span> pot 自建实例，最稳，不依赖第三方</td>
+          </tr>
+          <tr>
+            <td><strong>Google（免费）</strong></td>
+            <td><code>translate.google.com/translate_a/single?client=gtx</code> GET</td>
+            <td><code>result[0][*][0]</code> 拼接</td>
+            <td><span class="stability-chip stability-b">B 级</span> 非官方，准但有失效险（实测「冰川→glacier」✓）</td>
+          </tr>
+          <tr>
+            <td><strong>Bing（免费）</strong></td>
+            <td>两步：<code>edge.microsoft.com/translate/auth</code> 抓 token → <code>api-edge.cognitive.microsofttranslator.com/translate</code> POST</td>
+            <td><code>[0].translations[0].text</code></td>
+            <td><span class="stability-chip stability-b">B 级</span> 非官方 Edge 接口，需抓 token</td>
+          </tr>
+          <tr>
+            <td><strong>DeepL（free 模式）</strong></td>
+            <td><code>www2.deepl.com/jsonrpc</code> POST（JSON-RPC + 空格混淆）</td>
+            <td><code>result.texts[0].text</code></td>
+            <td><span class="stability-chip stability-b">B 级</span> 非官方，有频率限制</td>
+          </tr>
+          <tr>
+            <td><strong>Transmart（腾讯交互翻译·匿名）</strong></td>
+            <td><code>transmart.qq.com/api/imt</code> POST，匿名可用</td>
+            <td><code>auto_translation[*]</code> 拼接</td>
+            <td><span class="stability-chip stability-b">B 级</span> 非官方，可选填 user/token 提限额</td>
+          </tr>
+          <tr>
+            <td><strong>Yandex（免费）</strong></td>
+            <td><code>translate.yandex.net/api/v1/tr.json/translate</code> POST，伪装 Android</td>
+            <td><code>text[0]</code></td>
+            <td><span class="stability-chip stability-b">B 级</span> 非官方绕过，有封禁险</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3 class="subhead">2.2 机器翻译 · 需 key</h3>
+    <div class="tablecard">
+      <table>
+        <thead>
+          <tr>
+            <th>源</th>
+            <th>端点</th>
+            <th>鉴权</th>
+            <th>取译文</th>
+            <th>凭据字段</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>百度</strong></td>
+            <td><code>fanyi-api.baidu.com/.../translate</code> GET</td>
+            <td><code>MD5(appid+text+salt+secret)</code></td>
+            <td><code>trans_result[*].dst</code></td>
+            <td><code>appid</code>、<code>secret</code></td>
+          </tr>
+          <tr>
+            <td><strong>百度专业</strong></td>
+            <td><code>.../fieldtranslate</code> GET</td>
+            <td>MD5 串多加 <code>field</code></td>
+            <td><code>trans_result[*].dst</code></td>
+            <td><code>appid</code>、<code>secret</code>、<code>field</code></td>
+          </tr>
+          <tr>
+            <td><strong>腾讯云 TMT</strong></td>
+            <td><code>tmt.tencentcloudapi.com</code> POST</td>
+            <td>TC3-HMAC-SHA256</td>
+            <td><code>Response.TargetText</code></td>
+            <td><code>secret_id</code>、<code>secret_key</code></td>
+          </tr>
+          <tr>
+            <td><strong>阿里</strong></td>
+            <td><code>mt.cn-hangzhou.aliyuncs.com/...</code> GET</td>
+            <td>HMAC-SHA1 + Base64</td>
+            <td><code>Data.Translated</code></td>
+            <td><code>accesskey_id</code>、<code>accesskey_secret</code></td>
+          </tr>
+          <tr>
+            <td><strong>火山</strong></td>
+            <td><code>open.volcengineapi.com/?Action=TranslateText</code> POST</td>
+            <td>AWS SigV4 四层 HMAC-SHA256</td>
+            <td><code>TranslationList[*].Translation</code></td>
+            <td><code>appid</code>、<code>secret</code>、<code>region</code></td>
+          </tr>
+          <tr>
+            <td><strong>彩云</strong></td>
+            <td><code>api.interpreter.caiyunai.com/v1/translator</code> POST</td>
+            <td><code>x-authorization: token {token}</code></td>
+            <td><code>target[0]</code></td>
+            <td><code>token</code></td>
+          </tr>
+          <tr>
+            <td><strong>小牛</strong></td>
+            <td><code>api.niutrans.com/.../translation</code> POST</td>
+            <td>请求体内 <code>apikey</code></td>
+            <td><code>tgt_text</code></td>
+            <td><code>apikey</code></td>
+          </tr>
+          <tr>
+            <td><strong>DeepL（api 模式）</strong></td>
+            <td><code>api-free.deepl.com/v2/translate</code> 或 <code>api.deepl.com</code> POST</td>
+            <td><code>Authorization: DeepL-Auth-Key {key}</code></td>
+            <td><code>translations[0].text</code></td>
+            <td><code>authKey</code></td>
+          </tr>
+          <tr>
+            <td><strong>有道</strong></td>
+            <td><code>openapi.youdao.com/api</code> GET</td>
+            <td>SHA256 signType=v3</td>
+            <td><code>translation[*]</code>（兼词典 <code>basic</code>）</td>
+            <td><code>appkey</code>、<code>key</code></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3 class="subhead">2.3 LLM 对话翻译</h3>
+    <div class="tablecard">
+      <table>
+        <thead>
+          <tr>
+            <th>源</th>
+            <th>端点</th>
+            <th>鉴权</th>
+            <th>配置字段</th>
+            <th>免 Key</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>OpenAI</strong></td>
+            <td><code>api.openai.com/v1/chat/completions</code> POST（可配置）</td>
+            <td><code>Bearer {key}</code> / Azure <code>api-key</code></td>
+            <td><code>requestPath</code>、<code>apiKey</code>、<code>model</code>、<code>service</code>、<code>promptList</code>、<code>stream</code></td>
+            <td><span class="chip moot">需 key</span></td>
+          </tr>
+          <tr>
+            <td><strong>ChatGLM（智谱）</strong></td>
+            <td><code>open.bigmodel.cn/api/paas/v4/chat/completions</code> POST</td>
+            <td>JWT HS256（<code>{id}.{secret}</code> 拆分）</td>
+            <td><code>apiKey</code>、<code>model</code>、<code>promptList</code></td>
+            <td><span class="chip moot">需 key</span></td>
+          </tr>
+          <tr>
+            <td><strong>Gemini Pro</strong></td>
+            <td><code>generativelanguage.googleapis.com/.../gemini-pro:generateContent?key=</code> POST</td>
+            <td>key 作 URL 参数</td>
+            <td><code>apiKey</code>、<code>requestPath</code>、<code>promptList</code></td>
+            <td><span class="chip moot">需 key</span></td>
+          </tr>
+          <tr>
+            <td><strong>Ollama（本地）</strong></td>
+            <td><code>localhost:11434</code>（可配置）</td>
+            <td>无</td>
+            <td><code>requestPath</code>、<code>model</code>、<code>promptList</code></td>
+            <td><span class="chip done">✓ 本地，需自部署</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3 class="subhead">2.4 词典</h3>
+    <div class="tablecard">
+      <table>
+        <thead>
+          <tr>
+            <th>源</th>
+            <th>端点</th>
+            <th>返回形态</th>
+            <th>免 Key</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Bing 词典</strong></td>
+            <td><code>bing.com/api/v6/dictionarywords/search</code>（硬编码 appid）</td>
+            <td>音标 + 按词性分组释义 + 变形</td>
+            <td><span class="chip done">✓ 非官方</span></td>
+          </tr>
+          <tr>
+            <td><strong>剑桥词典</strong></td>
+            <td><code>dictionary.cambridge.org/search/...</code> GET</td>
+            <td>HTML 解析：音标 + 音频 + 释义；仅英文输入</td>
+            <td><span class="chip done">✓ 网页抓取，有反爬险</span></td>
+          </tr>
+          <tr>
+            <td><strong>ECDICT</strong></td>
+            <td><code>pot-app.com/api/dict</code> POST</td>
+            <td>英汉词条完整结构</td>
+            <td><span class="chip done">✓ pot 自建</span></td>
+          </tr>
+          <tr>
+            <td><strong>有道（词条模式）</strong></td>
+            <td>同有道翻译，<code>isWord===true</code> 时</td>
+            <td>音标 + explains + 词形</td>
+            <td><span class="chip moot">需 key（同有道 key）</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- 三 关键产品决策 -->
+  <section>
+    <div class="sec-head"><span class="sec-num">三</span><h2>关键产品决策</h2></div>
+    <p class="intro">以下四项决策已于 2026-06-06 全部确认冻结。</p>
+
+    <div class="probs">
+      <div class="prob">
+        <div class="prob-top"><span class="prob-id">决策 1</span><h3>默认源</h3></div>
+        <div class="tablecard" style="margin:0 0 14px;">
+          <table>
+            <thead><tr><th>方案</th><th>优点</th><th>缺点</th></tr></thead>
+            <tbody>
+              <tr>
+                <td><strong>Lingva</strong></td>
+                <td>最稳（pot 自建实例）、纯 GET 实现最简</td>
+                <td>依赖 pot-app 服务器可用性；译质 = Google 引擎</td>
+              </tr>
+              <tr>
+                <td><strong>Google 免费</strong></td>
+                <td>最准、覆盖语种最广</td>
+                <td>非官方 <code>gtx</code> 接口，Google 可随时封</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="resolve"><span class="chip done">✓ 默认 Lingva，Google 作并列首选/兜底</span></div>
+      </div>
+
+      <div class="prob">
+        <div class="prob-top"><span class="prob-id">决策 2</span><h3>纳入范围</h3></div>
+        <p>按全部 21 源规划并分批实现。分类：机翻免 key（6）+ 机翻需 key（9）= 15 个机器翻译源（核心必做）；LLM（4）：OpenAI / ChatGLM / Gemini / Ollama；词典（4）：Bing 词典 / 剑桥 / ECDICT / 有道词典。</p>
+        <div class="resolve"><span class="chip done">✓ 全 21 源，V1→V4 全做</span></div>
+      </div>
+
+      <div class="prob">
+        <div class="prob-top"><span class="prob-id">决策 3</span><h3>非官方接口呈现</h3></div>
+        <p>Google / Bing / DeepL-free / Yandex / Transmart / Bing 词典 / 剑桥都是非官方接口。UI 上对这些源标注「非官方接口，可能失效」小字；调用失败时给明确降级提示（而非笼统「翻译失败」）；文档/设置页声明使用风险（第三方 ToS）。</p>
+        <div class="resolve"><span class="chip done">✓ 接受纳入，UI 加标注 + 失败降级提示</span></div>
+      </div>
+
+      <div class="prob">
+        <div class="prob-top"><span class="prob-id">决策 4</span><h3>其他已确认项</h3></div>
+        <ul style="list-style:none;padding:0;margin:0;font-size:14px;color:var(--ink-2);">
+          <li style="padding:4px 0;">· 移除 MyMemory（用户明确要求）</li>
+          <li style="padding:4px 0;">· 需 key 源未配置则置灰（沿用现有 <code>isProviderConfigured</code> 行为）</li>
+          <li style="padding:4px 0;">· 凭据安全沿用现有 keychain / 文件密钥库机制，key 不入库、不入日志</li>
+        </ul>
+        <div class="resolve" style="margin-top:12px;"><span class="chip done">✓ 无需额外拍板</span></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 四 架构改造 -->
+  <section>
+    <div class="sec-head"><span class="sec-num">四</span><h2>架构改造</h2></div>
+    <p class="intro">当前 provider 抽象（<code>TranslateProvider</code> trait）= <code>capability()</code> + <code>build_request()</code>（单次 HTTP）+ <code>parse_response()</code>，由核心框架统一执行 HTTP / 重试 / 超时。pot 的源有几类突破单次-请求-即-解析的模型，必须先扩展抽象：</p>
+
+    <div class="tablecard">
+      <table>
+        <thead>
+          <tr>
+            <th>突破点</th>
+            <th>涉及源</th>
+            <th>抽象改造</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>多步请求</strong>（先握手再翻译）</td>
+            <td>Bing（抓 token）</td>
+            <td>trait 支持「provider 自行编排多次 HTTP」：把 HTTP 执行器（<code>HttpExecutor</code>）注入 provider，让其内部按需多次调用，而非只声明一个 request。</td>
+          </tr>
+          <tr>
+            <td><strong>非 JSON 解析</strong></td>
+            <td>剑桥（HTML）</td>
+            <td><code>parse_response</code> 不假定 JSON；HTML 解析用轻量选择器（如 <code>scraper</code> crate）。</td>
+          </tr>
+          <tr>
+            <td><strong>流式 / 不同响应体</strong></td>
+            <td>LLM 4 源</td>
+            <td>先做<strong>非流式</strong>（一次性取 <code>choices[0].message.content</code>），流式列入 YAGNI。</td>
+          </tr>
+          <tr>
+            <td><strong>结果形态非「单段译文」</strong></td>
+            <td>词典 4 源</td>
+            <td><code>TranslateResponse</code> 从「单一 translated 字符串」扩展为枚举：<code>Plain(String)</code> | <code>Dict(DictEntry{音标,释义[],例句[]...})</code>；前端按类型分别渲染。</td>
+          </tr>
+          <tr>
+            <td><strong>签名多样</strong></td>
+            <td>百度/腾讯/阿里/火山/有道/ChatGLM</td>
+            <td>各自实现签名（MD5 / HMAC-SHA1 / TC3 / SigV4 / SHA256 / JWT），复用现成 crate（已依赖 <code>md5</code>；HMAC/SHA 用 <code>hmac</code>+<code>sha1</code>/<code>sha2</code>，JWT 手搓 HS256）。</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="callout">
+      <span class="label">关键约束</span>
+      <p><strong>V1 必须先做抽象重构</strong>（含一个多步源 Bing 验证抽象够用），后续源才能平滑接入。重构要保证现有 4 源（迁移期）行为不回归——以现有 provider 测试为安全网。</p>
+    </div>
+  </section>
+
+  <!-- 五 版本规划 -->
+  <section>
+    <div class="sec-head"><span class="sec-num">五</span><h2>分批版本规划（goal-dev 版本边界）</h2></div>
+    <p class="intro">每个版本结束由独立 <code>producer</code> 裁决；验收标准从本文机械派生，冻结后不改。</p>
+
+    <div class="version-grid">
+      <div class="vcard">
+        <span class="vtag">V1</span>
+        <h3>架构铺垫 + 免 key 机翻核心</h3>
+        <ul>
+          <li>provider trait 扩展（多步请求 / HttpExecutor 注入 / 结果枚举骨架）</li>
+          <li>实现：Lingva、Google、Bing、DeepL-free、Transmart、Yandex（6 个免 key 机翻）</li>
+          <li>移除 MyMemory；默认源切到 Lingva；<code>settings.json</code> 旧 <code>selected_provider="mymemory"</code> 迁移到新默认</li>
+          <li>非官方源失效降级提示 + UI 标注</li>
+        </ul>
+        <div class="vaccept">验收：每源对固定样例（如「冰川→glacier / glacier→冰川」）返回正确；默认源开箱可用；迁移正确；现有翻译/历史不回归</div>
+      </div>
+
+      <div class="vcard">
+        <span class="vtag">V2</span>
+        <h3>需 key 机翻（9 源）</h3>
+        <ul>
+          <li>实现：百度、百度专业、腾讯 TMT、阿里、火山、彩云、小牛、官方 DeepL、有道</li>
+          <li>各源凭据 schema + 签名实现 + 设置页凭据表单（沿用现有凭据 UI）</li>
+          <li>未配置置灰；配置后端到端可译</li>
+        </ul>
+        <div class="vaccept">验收：每源签名正确（可用 mock/录制响应做单测，真实 key 走 manual_confirm）；凭据安全（不入库/日志）</div>
+      </div>
+
+      <div class="vcard">
+        <span class="vtag">V3</span>
+        <h3>LLM 对话翻译（4 源）</h3>
+        <ul>
+          <li>实现：OpenAI、ChatGLM、Gemini、Ollama（非流式）</li>
+          <li>配置：base_url / key / model / 可编辑 Prompt（默认翻译 Prompt）</li>
+        </ul>
+        <div class="vaccept">验收：可配置并返回翻译；Ollama 本地连通；Prompt 变量替换正确</div>
+      </div>
+
+      <div class="vcard">
+        <span class="vtag">V4</span>
+        <h3>词典（4 源）</h3>
+        <ul>
+          <li>实现：Bing 词典、剑桥、ECDICT、有道词典模式</li>
+          <li><code>DictEntry</code> 结果类型 + 前端词典展示组件（音标/释义/例句/发音）</li>
+        </ul>
+        <div class="vaccept">验收：词条结构正确解析与展示；非词输入回退普通翻译或提示</div>
+      </div>
+    </div>
+
+    <p style="margin-top:18px;font-size:14px;color:var(--outline);">V3 / V4 视决策 2 的勾选可整版砍掉。</p>
+  </section>
+
+  <!-- 六 迁移与兼容 -->
+  <section>
+    <div class="sec-head"><span class="sec-num">六</span><h2>迁移与兼容</h2></div>
+    <div class="pcard">
+      <ul class="principles">
+        <li><b>设置迁移：</b>读取 <code>selected_provider</code>，若为 <code>mymemory</code>（或任何已删除 id）→ 回退到新默认源，写回 settings。</li>
+        <li><b>历史兼容：</b><code>translate_history</code> 里旧的 <code>provider_id</code>（如 mymemory）只用于展示，不影响新翻译；展示未知 id 时降级显示原始字符串。</li>
+        <li><b>凭据兼容：</b>现有 baidu/deepl_free/google 凭据保留，对应到新清单（DeepL 旧 <code>deepl_free</code> → 新「DeepL·api 模式」；google 旧官方 key 源 → 保留为「Google 官方」或并入，待实现期定）。</li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- 七 风险与对策 -->
+  <section>
+    <div class="sec-head"><span class="sec-num">七</span><h2>风险与对策</h2></div>
+    <div class="tablecard">
+      <table>
+        <thead>
+          <tr>
+            <th>风险</th>
+            <th>对策</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>非官方接口失效（Google/Bing/DeepL-free/Yandex/Transmart/Bing 词典/剑桥）</td>
+            <td>多免 key 源互为兜底；失效给明确提示；默认源选最稳的 Lingva</td>
+          </tr>
+          <tr>
+            <td>复杂签名实现出错（火山 SigV4 / 腾讯 TC3 / 阿里 HMAC）</td>
+            <td>逐源以<strong>厂商官方 API 文档</strong>为权威参照 + 录制真实响应做解析单测；签名用成熟 crate</td>
+          </tr>
+          <tr>
+            <td>第三方 ToS / 法务</td>
+            <td>非官方接口在文档与设置页如实标注「非官方、使用风险自负」</td>
+          </tr>
+          <tr>
+            <td><strong>GPL 许可传染</strong></td>
+            <td><strong>绝不复制 pot（GPL-3.0）源代码</strong>；独立重写、仅参照官方文档与公开协议事实（见〇章）。保护 QuickQuick 许可自由</td>
+          </tr>
+          <tr>
+            <td>抽象重构波及现有源</td>
+            <td>V1 以现有 provider 测试为回归安全网；重构与新源分步提交</td>
+          </tr>
+          <tr>
+            <td>工作量大、跨会话</td>
+            <td>goal-dev 分版本 + dev-log 留痕续跑；每版可独立交付价值</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- 八 不做 -->
+  <section>
+    <div class="sec-head"><span class="sec-num">八</span><h2>不做（YAGNI / 边界）</h2></div>
+    <div class="pcard">
+      <ul class="principles">
+        <li>不做 pot 的<b>插件系统</b>（<code>.potext</code>）、<b>OCR</b>、<b>截图翻译</b>、<b>外部调用</b>。</li>
+        <li>LLM <b>流式输出</b>暂不做（一次性返回即可，除非你要）。</li>
+        <li>不做翻译源的<b>自动测速 / 自动切换</b>（pot 有，列为后续可选）。</li>
+        <li>不复刻 pot 的 UI，仅复刻<b>翻译源能力</b>，沿用 QuickQuick 现有翻译页交互。</li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- 九 确认结论 -->
+  <section>
+    <div class="sec-head"><span class="sec-num">九</span><h2>确认结论（2026-06-06 冻结）</h2></div>
+
+    <div class="tablecard">
+      <table>
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>决策</th>
+            <th>结论</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><span class="phase-num">1</span></td>
+            <td>默认源</td>
+            <td><strong>Lingva</strong>（Google 并列免 key 备选/兜底）</td>
+          </tr>
+          <tr>
+            <td><span class="phase-num">2</span></td>
+            <td>范围</td>
+            <td><strong>全 21 源</strong>，V1→V4 全做</td>
+          </tr>
+          <tr>
+            <td><span class="phase-num">3</span></td>
+            <td>非官方接口</td>
+            <td><strong>接受纳入</strong>，UI 加「非官方可能失效」标注 + 失败降级提示</td>
+          </tr>
+          <tr>
+            <td><span class="phase-num">4</span></td>
+            <td>实现方式</td>
+            <td><strong>独立重写、不抄 pot 代码</strong>（见〇章）：需 key 源照厂商官方文档、免 key 源按公开协议事实，注释官方文档 URL；pot 仅作功能清单参考</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="callout">
+      <span class="label">冻结声明</span>
+      <p>本文已冻结，按 V1→V4 走 goal-dev 分批实现。验收标准从本文机械派生，不再修改。</p>
+    </div>
+  </section>
+
+</div>
+
+<footer>
+  <div class="footer-in">
+    <span><b>QuickQuick 翻译源对齐 pot 设计方案</b></span>
+    <span>2026-06-06 · 已冻结 · Nordic Serenity</span>
+  </div>
+</footer>
+
+</body>
+</html>

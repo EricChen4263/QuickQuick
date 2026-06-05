@@ -23,7 +23,8 @@ pub enum SettingsError {
 }
 
 fn default_selected_provider() -> String {
-    "mymemory".to_string()
+    // 默认免 key 源（设计文档§三.决策1：移除 MyMemory 后默认切 Lingva）。
+    "lingva".to_string()
 }
 
 fn default_skip_sensitive() -> bool {
@@ -151,7 +152,7 @@ mod tests {
         let settings: AppSettings = serde_json::from_str("{}").expect("空对象反序列化应成功");
 
         assert!(settings.excluded_apps.is_empty());
-        assert_eq!(settings.selected_provider, "mymemory");
+        assert_eq!(settings.selected_provider, "lingva");
         assert!(!settings.pause_capture);
         assert!(settings.skip_sensitive);
         assert!(settings.stay_in_tray);
@@ -163,7 +164,7 @@ mod tests {
     #[test]
     fn default_impl_matches_serde_defaults() {
         let d = AppSettings::default();
-        assert_eq!(d.selected_provider, "mymemory");
+        assert_eq!(d.selected_provider, "lingva");
         assert!(!d.pause_capture);
         assert!(d.skip_sensitive);
         assert!(d.stay_in_tray);

@@ -62,8 +62,13 @@ pub struct ProviderCapability {
     pub id: &'static str,
     /// 显示名称（UI 展示用）。
     pub name: &'static str,
-    /// 是否需要用户提供 API Key。MyMemory 为 false（默认源）。
+    /// 是否需要用户提供 API Key。免 key 源（如 lingva）false、需 key 源（如 baidu）true。
     pub needs_key: bool,
+    /// 是否为非官方/自建接口（免 key 源均为非官方，随对方改版即可能失效）。
+    ///
+    /// 前端据此渲染「⚠ 非官方」标注并在失败时给降级提示（设计文档§三.决策3）。
+    /// lingva/google_free/yandex/transmart/bing 为 true；官方 keyed 源 baidu/deepl_free/google 为 false。
+    pub is_unofficial: bool,
 }
 
 /// Provider 的 HTTP 请求描述符。
@@ -125,10 +130,27 @@ pub enum TranslateError {
     ServerError(String),
 }
 
-/// 薄 provider 契约——恰好三件职责：
+/// 可注入 HTTP 执行器抽象（翻译核心框架层）。
+///
+/// 把真实网络调用抽象为 trait，使多步源（如 Bing）可在 `translate` 内自行编排
+/// 多次 HTTP，而单测可注入假执行器完全隔离网络。生产实现（基于 ureq）见
+/// `ipc::translate::UreqExecutor`。
+pub trait HttpExecutor: Send + Sync {
+    /// 按 provider 描述符发起 HTTP 请求，返回响应体原始字符串。
+    ///
+    /// # Errors
+    /// 网络层失败（超时、连接拒绝、DNS 等）映射为 `TranslateError::Network`。
+    fn execute(&self, req: &ProviderHttpRequest) -> Result<String, TranslateError>;
+}
+
+/// 薄 provider 契约——单步源恰好三件职责：
 /// 1. 声明能力（capability）
 /// 2. 把统一请求转为自家 HTTP 调用描述（build_request）
 /// 3. 把原始响应/错误解析回统一结果（parse_response）
+///
+/// 多步源（如 Bing 需先抓 token 再翻译）override 默认 `translate`，自行用注入的
+/// `HttpExecutor` 编排多次 HTTP。单步源沿用默认 `translate`（build→execute→parse），
+/// 无需改动任何代码即自动适配执行流，这是架构扩展不回归既有源的保证。
 ///
 /// 以下关注点**不在本 trait 上**，由核心框架横切实现：
 /// - 缓存（s05）
@@ -147,4 +169,22 @@ pub trait TranslateProvider: Send + Sync {
 
     /// 将 provider 原始响应体解析为统一结果或统一错误。
     fn parse_response(&self, raw: &str) -> Result<TranslateResponse, TranslateError>;
+
+    /// 执行完整翻译流程（默认实现 = 单步 build_request→execute→parse_response）。
+    ///
+    /// 多步源 override 此方法，在内部按需多次调用 `executor.execute`。
+    /// 默认实现与重构前 `ipc::translate` 的手动三步**逐字等价**，使既有单步源零改动适配。
+    ///
+    /// # Errors
+    /// - 执行器网络失败 → `TranslateError::Network`
+    /// - 响应解析失败 → `TranslateError::ParseError` 等
+    fn translate(
+        &self,
+        req: &TranslateRequest,
+        executor: &dyn HttpExecutor,
+    ) -> Result<TranslateResponse, TranslateError> {
+        let http_req = self.build_request(req);
+        let raw = executor.execute(&http_req)?;
+        self.parse_response(&raw)
+    }
 }

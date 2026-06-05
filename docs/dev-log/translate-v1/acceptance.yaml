@@ -1,0 +1,238 @@
+# 版本前置验收标准清单（开工前登记、冻结）
+# 来源：机械派生自已冻结设计文档 docs/design/translation-sources-pot.md 第五章 V1 节
+#       + 〇章（独立重写不抄 pot）+ 二章（源协议）+ 三章决策 + 六章（迁移）。
+# AI 只翻译不发明、不放宽；冻结后改标准走 change_log。制作人逐条核对，只有核对权。
+
+version: TV1
+title: 免 key 机翻核心 + 架构铺垫 + 移除 MyMemory（对应设计文档 V1）
+source_doc: docs/design/translation-sources-pot.md（§五 V1 / §〇 / §二 / §三 / §六）
+frozen_at: 2026-06-06T00:00:00Z
+criteria_freeze: TV1-criteria@2026-06-06
+
+# 无 docs/STRATEGY.md → 战略层不启用，不写 serves_goals / strategy_freeze（freeze-lint 单参跑）。
+
+# 分类覆盖检查：每个适用类别要么有验收项、要么显式 N/A+理由。
+coverage_check:
+  功能正确性:  covered
+  测试充分性:  covered
+  工程质量:    covered
+  性能:        N/A (本版仅替换/新增翻译源调用，无性能目标或基准；网络延迟取决于第三方接口)
+  UI还原度:    covered
+  资源规范:    N/A (本版不新增二进制资源/图标/字体，仅新增 Rust 源与前端逻辑)
+  安全:        covered
+  留痕产出:    covered
+  人工确认点:  covered
+
+acceptance:
+  # ── TV1-F1 Lingva 默认源替代 MyMemory（含默认切换 + 设置迁移）──────────
+  - id: TV1-F1-A01
+    assertion: "移除 MyMemory 后，provider 注册表不含 mymemory、含 lingva（needs_key=false）；build_provider('lingva') 成功构造、build_provider('mymemory') 返回未知源错误"
+    category: 功能正确性
+    source_anchor: 设计文档§五.V1（移除 MyMemory / 默认切 Lingva）+ §二.2.1（Lingva）
+    kind: objective
+    verify:
+      type: test_id
+      ref: providers_registry_has_lingva_no_mymemory
+      runner: cd src-tauri && cargo test
+      path: src-tauri/src/translate/providers.rs
+      expect: pass
+    evidence_ref: dev-log/translate-v1/f1-lingva-default/test.md
+    level: 大功能
+    status: 待验
+
+  - id: TV1-F1-A02
+    assertion: "LingvaProvider.build_request 生成 GET https://lingva.pot-app.com/api/v1/{src}/{tgt}/{urlencoded text}；parse_response 从 {\"translation\":\"X\"} 取出 X，缺字段返回 ParseError"
+    category: 功能正确性
+    source_anchor: 设计文档§二.2.1（Lingva 端点/取译文字段）+ §〇（按公开协议事实独立实现）
+    kind: objective
+    verify:
+      type: test_id
+      ref: lingva_build_request_url_and_parse_translation
+      runner: cd src-tauri && cargo test
+      path: src-tauri/src/translate/providers.rs
+      expect: pass
+    evidence_ref: dev-log/translate-v1/f1-lingva-default/test.md
+    level: 大功能
+    status: 待验
+
+  - id: TV1-F1-A03
+    assertion: "默认 selected_provider 为 lingva；当持久化的 selected_provider 不在当前注册表 id 集合内（含旧值 mymemory）时，解析回退为 lingva 并在写路径修正"
+    category: 功能正确性
+    source_anchor: 设计文档§六（设置迁移：mymemory/未知 id → 新默认）
+    kind: objective
+    verify:
+      type: test_id
+      ref: selected_provider_migrates_unknown_to_lingva
+      runner: cd src-tauri && cargo test
+      path: src-tauri/src/ipc/translate.rs
+      expect: pass
+    evidence_ref: dev-log/translate-v1/f1-lingva-default/test.md
+    level: 大功能
+    status: 待验
+
+  # ── TV1-F2 其余免 key 机翻源（Google / DeepL-free / Transmart / Yandex）──
+  - id: TV1-F2-A01
+    assertion: "Google/Transmart/Yandex 三源各自 build_request 端点/参数正确、parse_response 用各自字段路径从录制的真实响应样例正确取出译文，错误响应返回 TranslateError（DeepL-free 因端点实测被限流暂缓，见 change_log）"
+    category: 功能正确性
+    source_anchor: 设计文档§二.2.1（端点/取译文字段）+ §〇（独立实现）+ §七（非官方接口失效风险）
+    kind: objective
+    verify:
+      type: test_id
+      ref: "google_free_build_request_url, google_free_parse_concatenates_segments, yandex_build_request_endpoint_and_body, yandex_parse_extracts_text_array, transmart_build_request_endpoint_and_json_body, transmart_parse_concatenates_auto_translation"
+      runner: cd src-tauri && cargo test
+      path: src-tauri/src/translate/providers.rs
+      expect: pass
+    evidence_ref: dev-log/translate-v1/f2-free-sources/test.md
+    level: 大功能
+    status: 待验
+
+  # ── TV1-F3 Bing 免 key 源 + provider 多步请求架构扩展 ──────────────────
+  - id: TV1-F3-A01
+    assertion: "provider 抽象支持多步请求（注入 HTTP 执行器）；Bing 源先取 edge auth token、再 POST 翻译，对录制的 token+翻译响应样例正确解析出译文"
+    category: 功能正确性
+    source_anchor: 设计文档§四（多步请求 / HttpExecutor 注入）+ §二.2.1（Bing 两步机制）
+    kind: objective
+    verify:
+      type: test_id
+      ref: bing_two_step_translate_with_mock_executor
+      runner: cd src-tauri && cargo test
+      path: src-tauri/src/translate/providers.rs
+      expect: pass
+    evidence_ref: dev-log/translate-v1/f3-bing-multistep/test.md
+    level: 大功能
+    status: 待验
+
+  # ── TV1-F4 非官方源 UI 标注 + 失败降级提示 ────────────────────────────
+  - id: TV1-F4-A01
+    assertion: "非官方免 key 源（Google/Bing/DeepL-free/Yandex/Transmart/Lingva）在翻译源选择 UI 显示「非官方可能失效」标注；翻译失败时给出可区分的降级提示文案"
+    category: UI还原度
+    source_anchor: 设计文档§三.决策3（非官方接口加标注 + 失败降级提示）
+    kind: objective
+    verify:
+      type: test_id
+      ref: nonofficial_source_label_and_degrade_hint
+      runner: pnpm test
+      path: src/panels/translate/
+      expect: pass
+    evidence_ref: dev-log/translate-v1/f4-label-degrade/test.md
+    level: 大功能
+    status: 待验
+
+  # ── 测试充分性 ────────────────────────────────────────────────────
+  - id: TV1-A-TEST
+    assertion: "每个新增源（lingva/google/deepl_free_web/transmart/yandex/bing）均有 build_request + parse_response 的命中与错误分支单测；迁移逻辑有单测；全量 cargo test 与 pnpm test 全绿（连跑 ≥3 次无 flaky）"
+    category: 测试充分性
+    source_anchor: 设计文档§五.V1.验收（每源对样例返回正确）+ hints（抗 flaky 连跑）
+    kind: objective
+    verify:
+      type: command
+      ref: "cd src-tauri && cargo test 全绿 且 pnpm test 全绿；命中校验用 rtk proxy 取原始 'test … ok'/'Tests N passed' (N≥1)"
+      runner: cd src-tauri && cargo test; pnpm test
+      path: src-tauri/ + src/
+      expect: pass
+    evidence_ref: dev-log/translate-v1/*/test.md
+    level: 版本
+    status: 待验
+
+  # ── 工程质量（增量口径）────────────────────────────────────────────
+  - id: TV1-A-QUAL
+    assertion: "本版改动/新增文件无新增 clippy 警告（cargo clippy --all-targets -- -D warnings exit 0）、无新增 tsc 类型错（tsc --noEmit 增量）、无遗留 TODO/FIXME"
+    category: 工程质量
+    source_anchor: code-standards §工程质量 + 项目 hints（clippy 才拦 dead_code）
+    kind: objective
+    verify:
+      type: command
+      ref: "cd src-tauri && cargo clippy --all-targets -- -D warnings (exit 0) 且 npx tsc --noEmit 无新增错 且 grep 新增文件无 TODO/FIXME"
+      runner: cd src-tauri && cargo clippy --all-targets -- -D warnings
+      path: src-tauri/ + src/
+      expect: pass
+    evidence_ref: dev-log/translate-v1/*/coding.md
+    level: 版本
+    status: 待验
+
+  # ── 安全 ──────────────────────────────────────────────────────────
+  - id: TV1-A-SEC
+    assertion: "免 key 源 needs_key=false 且 build_provider 对其不读取凭据存储；新增源的错误处理与日志不打印用户待译文本/译文等内容（eprintln 仅打印错误类别/状态）"
+    category: 安全
+    source_anchor: 设计文档§三.决策4（凭据安全）+ code-standards §安全（日志不泄敏感信息）
+    kind: objective
+    verify:
+      type: command
+      ref: "grep 确认新增 provider 代码无将待译 text/译文写入 eprintln/log；免key源单测断言不触发凭据读取"
+      runner: cd src-tauri && cargo test; grep -rn "eprintln" src/translate/providers.rs
+      path: src-tauri/src/translate/providers.rs
+      expect: pass
+    evidence_ref: dev-log/translate-v1/*/review.md
+    level: 版本
+    status: 待验
+
+  # ── 留痕产出 ──────────────────────────────────────────────────────
+  - id: TV1-A-LOG
+    assertion: "本版每个小功能三联留痕齐（coding.md/test.md/review.md），每个大功能有 feature-report.md，版本有 version-verdict.md；三联 frontmatter commit 提交后回填真 hash"
+    category: 留痕产出
+    source_anchor: goal-dev 规范§五（留痕体系）+ 目录约定
+    kind: objective
+    verify:
+      type: command
+      ref: "每个 dev-log/translate-v1/f*/s*/ 目录下 coding.md+test.md+review.md 三件齐；f* 下有 feature-report.md；版本根有 version-verdict.md"
+      runner: find docs/dev-log/translate-v1 -type f
+      path: docs/dev-log/translate-v1/
+      expect: pass
+    evidence_ref: dev-log/translate-v1/
+    level: 版本
+    status: 待验
+
+  # ── 人工确认点（真机/真网，headless 不打真网，归 manual_confirm）──────
+  - id: TV1-F1-M01
+    assertion: "真机/真网下 Lingva 默认源返回正确译文（冰川→glacier、hello world→你好世界），应用默认开箱即用、无需填 key"
+    category: 人工确认点
+    source_anchor: 设计文档§五.V1.验收（默认源开箱可用）+ §三.决策1
+    kind: manual_confirm
+    verify: null
+    collect_env: real_device
+    evidence_ref: dev-log/translate-v1/f1-lingva-default/manual-lingva.png
+    level: 大功能
+    status: 待采证
+
+  - id: TV1-F2-M01
+    assertion: "真网下 Google/DeepL-free/Transmart/Yandex 各返回正确译文（如冰川→glacier）"
+    category: 人工确认点
+    source_anchor: 设计文档§二.2.1 + §五.V1.验收
+    kind: manual_confirm
+    verify: null
+    collect_env: real_device
+    evidence_ref: dev-log/translate-v1/f2-free-sources/manual-free.png
+    level: 大功能
+    status: 待采证
+
+  - id: TV1-F3-M01
+    assertion: "真网下 Bing 免 key 源（两步 token）返回正确译文"
+    category: 人工确认点
+    source_anchor: 设计文档§二.2.1（Bing）+ §四
+    kind: manual_confirm
+    verify: null
+    collect_env: real_device
+    evidence_ref: dev-log/translate-v1/f3-bing-multistep/manual-bing.png
+    level: 大功能
+    status: 待采证
+
+  - id: TV1-F4-M01
+    assertion: "真机目测：非官方源 UI 标注可见；切换源、翻译失败时降级提示清晰；默认 Lingva 开箱可用"
+    category: 人工确认点
+    source_anchor: 设计文档§三.决策3
+    kind: manual_confirm
+    verify: null
+    collect_env: real_device
+    evidence_ref: dev-log/translate-v1/f4-label-degrade/manual-label.png
+    level: 大功能
+    status: 待采证
+
+change_log:
+  - at: 2026-06-06
+    reason: "DeepL free web 端点（www2.deepl.com/jsonrpc, LMT_handle_jobs）对本环境匿名访问稳定返回 HTTP 429 限流（多策略退避/Cookie 预热/多 UA 实测全失败，证据 f2-free-sources/artifacts/deepl-web-probe.log）——属外部端点不可用、非代码缺陷。设计文档§七已接受非官方接口可能失效。"
+    diff: "TV1-F2-A01 范围由 4 源（含 DeepL-free）收敛为 3 源（Google/Transmart/Yandex）；DeepL-free 源暂缓，DeepL 能力由既有官方 keyed `deepl_free` 源兜底。若后续在其它网络/IP 端点恢复可用，按 coding.md 记录的协议事实独立实现重启。"
+    source_anchor: 设计文档§七（风险：非官方接口失效→多源兜底）
+  - at: 2026-06-06
+    reason: "裁决前命中校验对齐：TV1-F2-A01 的 verify.ref 在冻结时（TDD 红阶段，测试尚未写）填的是占位名 free_mt_sources_build_and_parse；实现后实际测试按分源命名。规范允许 ref↔测试名一致性留到裁决前回填。"
+    diff: "TV1-F2-A01 verify.ref 由占位名回填为实际 6 个测试名（google_free/yandex/transmart 各 build+parse）。断言与覆盖范围不变。"
+    source_anchor: goal-dev 规范§四（test_id 命中校验留裁决前）

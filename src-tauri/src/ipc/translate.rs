@@ -24,24 +24,32 @@ use crate::translate::history::{
     add_translate_history, list_translate_history as db_list_translate_history, TranslateHistoryRow,
 };
 use crate::translate::lang::resolve_direction_with_source;
-use crate::translate::providers::build_provider;
-use crate::translate::{Lang, ProviderHttpRequest, TranslateError, TranslateRequest};
+use crate::translate::providers::{build_provider, registry};
+use crate::translate::{HttpExecutor, Lang, ProviderHttpRequest, TranslateError, TranslateRequest};
+
+/// 默认翻译源 id（免 key，开箱可用）。
+///
+/// 设计文档§三.决策1：移除 MyMemory 后默认切 Lingva（pot 自建实例最稳）。
+pub const DEFAULT_PROVIDER_ID: &str = "lingva";
+
+/// 把持久化的 selected_provider 解析为当前注册表内的有效 id。
+///
+/// 以「是否在注册表」为判定（而非硬编码判 mymemory），将来删任何源都安全：
+/// 若 `stored` 仍在 `registry()` 的 id 集合内则原样返回；否则（含旧值 mymemory、
+/// 任意未知 id）回退到 `DEFAULT_PROVIDER_ID`。抽为纯函数以便单测，
+/// 调用方负责在写路径持久化修正后的值。
+pub fn resolve_provider_or_fallback(stored: &str) -> String {
+    let is_known = registry().iter().any(|cap| cap.id == stored);
+    if is_known {
+        stored.to_string()
+    } else {
+        DEFAULT_PROVIDER_ID.to_string()
+    }
+}
 
 /// 翻译历史变化事件名。与前端 src/ipc/events.ts 的 TRANSLATE_HISTORY_CHANGED_EVENT 必须一致。
 /// Tauri 事件名跨语言无法编译期共享，改动需两端同步。
 const TRANSLATE_HISTORY_CHANGED_EVENT: &str = "translate-history-changed";
-
-/// 可注入 HTTP 执行器抽象。
-///
-/// 把真实网络调用抽象为 trait，使 impl 函数可在测试中注入 FakeExecutor，
-/// 完全隔离网络，无需启动真实 HTTP 服务器。
-pub trait HttpExecutor: Send + Sync {
-    /// 按 provider 描述符发起 HTTP 请求，返回响应体原始字符串。
-    ///
-    /// # Errors
-    /// 网络层失败（超时、连接拒绝、DNS 等）映射为 `TranslateError::Network`。
-    fn execute(&self, req: &ProviderHttpRequest) -> Result<String, TranslateError>;
-}
 
 /// 基于 `ureq` 的同步 HTTP 执行器（生产用）。
 ///
@@ -164,7 +172,7 @@ impl From<TranslateHistoryRow> for TranslateHistoryDto {
 /// 3. load_credentials(provider_id, cred_store, conn) 加载凭据
 /// 4. build_provider(provider_id, &creds) 动态构造 provider（缺必填凭据 → Err）
 /// 5. 定方向（resolve_direction_with_source）
-/// 6. build_request → exec.execute → parse_response
+/// 6. provider.translate(req, exec)（单步源默认 build/execute/parse；多步源自行编排）
 /// 7. 写入翻译历史（provider_id 为真实选中的 id）
 /// 8. 返回 TranslateResultDto
 ///
@@ -200,9 +208,8 @@ pub fn translate_text_impl(
         target_lang: target.clone(),
     };
 
-    let http_req = provider.build_request(&req);
-    let raw = exec.execute(&http_req).map_err(|e| e.to_string())?;
-    let resp = provider.parse_response(&raw).map_err(|e| e.to_string())?;
+    // 改调 provider.translate（默认实现 = 单步 build/execute/parse；多步源如 Bing override）。
+    let resp = provider.translate(&req, exec).map_err(|e| e.to_string())?;
 
     add_translate_history(
         conn,
@@ -284,6 +291,23 @@ mod tests {
 
     use crate::translate::credential::MockCredStore;
 
+    // 对齐 acceptance TV1-F1-A03：持久化的 selected_provider 不在注册表内
+    // （含旧值 mymemory、任意未知 id）时，解析回退为默认源 lingva；
+    // 注册表内的合法 id 原样保留。
+    #[test]
+    fn selected_provider_migrates_unknown_to_lingva() {
+        // 旧值 mymemory（已删除）→ 回退 lingva
+        assert_eq!(resolve_provider_or_fallback("mymemory"), "lingva");
+        // 任意未知 id → 回退 lingva
+        assert_eq!(resolve_provider_or_fallback("totally_unknown"), "lingva");
+        // 空串 → 回退 lingva
+        assert_eq!(resolve_provider_or_fallback(""), "lingva");
+        // 注册表内合法 id 原样保留（不被误改）
+        assert_eq!(resolve_provider_or_fallback("lingva"), "lingva");
+        assert_eq!(resolve_provider_or_fallback("baidu"), "baidu");
+        assert_eq!(resolve_provider_or_fallback("google"), "google");
+    }
+
     /// 创建内存 SQLite 并初始化所需表，供测试隔离使用。
     ///
     /// 包含 translate_history 和 provider_config，
@@ -317,19 +341,19 @@ mod tests {
         std::fs::write(path, content).expect("写 settings 失败");
     }
 
-    /// MyMemory 成功响应的最小合法 JSON 模板（provider 能解析的格式）。
-    fn mymemory_ok_response(translated: &str) -> String {
-        format!(r#"{{"responseStatus":200,"responseData":{{"translatedText":"{translated}"}}}}"#)
+    /// Lingva 成功响应的最小合法 JSON 模板（provider 能解析的格式）。
+    fn lingva_ok_response(translated: &str) -> String {
+        format!(r#"{{"translation":"{translated}"}}"#)
     }
 
     #[test]
     fn translate_text_impl_with_none_source_uses_auto_detection() {
         // Arrange
         let conn = setup_test_db();
-        let fake = FakeExecutor::new(&mymemory_ok_response("你好世界"));
+        let fake = FakeExecutor::new(&lingva_ok_response("你好世界"));
         let store = MockCredStore::new();
         let settings_file = tempfile::NamedTempFile::new().unwrap();
-        write_settings_with_provider(settings_file.path(), "mymemory");
+        write_settings_with_provider(settings_file.path(), "lingva");
         // Act
         let result = translate_text_impl(
             &conn,
@@ -351,10 +375,10 @@ mod tests {
     fn translate_text_impl_explicit_source_and_target_reach_dto() {
         // Arrange
         let conn = setup_test_db();
-        let fake = FakeExecutor::new(&mymemory_ok_response("안녕하세요"));
+        let fake = FakeExecutor::new(&lingva_ok_response("안녕하세요"));
         let store = MockCredStore::new();
         let settings_file = tempfile::NamedTempFile::new().unwrap();
-        write_settings_with_provider(settings_file.path(), "mymemory");
+        write_settings_with_provider(settings_file.path(), "lingva");
         // Act
         let result = translate_text_impl(
             &conn,
@@ -378,7 +402,7 @@ mod tests {
         let fake = FakeExecutor::new("{}");
         let store = MockCredStore::new();
         let settings_file = tempfile::NamedTempFile::new().unwrap();
-        write_settings_with_provider(settings_file.path(), "mymemory");
+        write_settings_with_provider(settings_file.path(), "lingva");
         // Act
         let result = translate_text_impl(
             &conn,
@@ -395,13 +419,13 @@ mod tests {
     }
 
     #[test]
-    fn translate_text_impl_selected_mymemory_writes_provider_id_in_history() {
+    fn translate_text_impl_selected_lingva_writes_provider_id_in_history() {
         // Arrange
         let conn = setup_test_db();
-        let fake = FakeExecutor::new(&mymemory_ok_response("世界你好"));
+        let fake = FakeExecutor::new(&lingva_ok_response("世界你好"));
         let store = MockCredStore::new();
         let settings_file = tempfile::NamedTempFile::new().unwrap();
-        write_settings_with_provider(settings_file.path(), "mymemory");
+        write_settings_with_provider(settings_file.path(), "lingva");
         // Act
         translate_text_impl(
             &conn,
@@ -413,10 +437,10 @@ mod tests {
             &store,
         )
         .expect("应成功");
-        // Assert：历史记录中 provider_id 应为 "mymemory"，不应是硬编码字符串
+        // Assert：历史记录中 provider_id 应为 "lingva"，不应是硬编码字符串
         let rows = crate::translate::history::list_translate_history(&conn).expect("查历史失败");
         assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].provider_id, "mymemory");
+        assert_eq!(rows[0].provider_id, "lingva");
     }
 
     /// DeepL Free 成功响应的最小合法 JSON（provider 能解析的格式）。

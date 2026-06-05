@@ -1,0 +1,2 @@
+eyJhbGciOiJFUzI1NiIsImtpZCI6ImtleTEiLCJ0eXAiOiJKV1QifQ.eyJyZ
+...(JWT 截断，完整 788 字节，HTTP 200)

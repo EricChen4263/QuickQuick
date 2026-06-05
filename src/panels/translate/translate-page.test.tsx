@@ -87,10 +87,10 @@ describe("translate-page", () => {
     mockListTranslateHistory.mockResolvedValue(MOCK_HISTORY);
     // provider fetch 必须返回有效值，否则 TranslatePage 挂载时 reject 会写 console.error 干扰断言
     mockGetTranslateProviders.mockResolvedValue([
-      { id: "mymemory", name: "MyMemory · 默认", needsKey: false },
-      { id: "baidu", name: "百度翻译", needsKey: true },
+      { id: "lingva", name: "Lingva · 默认", needsKey: false, isUnofficial: true },
+      { id: "baidu", name: "百度翻译", needsKey: true, isUnofficial: false },
     ]);
-    mockGetSelectedProvider.mockResolvedValue("mymemory");
+    mockGetSelectedProvider.mockResolvedValue("lingva");
     mockSetSelectedProvider.mockResolvedValue(undefined);
     // 凭据相关 mock 默认返回空（未配置）
     mockGetProviderCredentialSchema.mockResolvedValue([
@@ -622,5 +622,107 @@ describe("translate-page", () => {
     await waitFor(() => {
       expect(mockListTranslateHistory).toHaveBeenCalledTimes(2);
     });
+  });
+
+  it("Bug3: 翻译 pending 期间结果区出现 role=status 的「翻译中…」加载态", async () => {
+    // Arrange：用可控 pending promise，使翻译停留在加载态不 resolve
+    let resolveFn: ((value: typeof MOCK_RESULT) => void) | undefined;
+    mockTranslateText.mockReturnValue(
+      new Promise((resolve) => {
+        resolveFn = resolve;
+      })
+    );
+    const user = userEvent.setup();
+    const { container } = render(<TranslatePage />);
+
+    // Act：输入文本并点击翻译（promise 不 resolve，停留在 pending）
+    const textarea = screen.getByRole("textbox");
+    await user.type(textarea, "Hello World");
+    await user.click(screen.getByRole("button", { name: "翻译" }));
+
+    // Assert：结果区出现 role=status 的加载指示，含「翻译中…」文案
+    await waitFor(() => {
+      const status = screen.getByRole("status");
+      expect(status).toBeInTheDocument();
+      expect(status.textContent).toMatch(/翻译中/);
+    });
+    // Assert：加载态渲染在结果区（.tx-result）内
+    const status = screen.getByRole("status");
+    expect(container.querySelector(".tx-result")?.contains(status)).toBe(true);
+
+    // 收尾：resolve 防止未处理的 pending promise 泄漏
+    resolveFn?.(MOCK_RESULT);
+  });
+
+  it("Bug3 残留: translateText 秒回（立即 resolve）时 loading 态仍可见至少最小时长", async () => {
+    // Arrange：translateText 立即 resolve，模拟真机「秒回」（Google 免费接口 / Lingva 命中缓存）。
+    // 用 real timers 完成挂载与输入（userEvent 在 fake timers 下会因内部 delay 挂死），
+    // 点击前再切到 fake timers，以便精确卡在「最小可见时长」中途断言 loading 仍在。
+    mockTranslateText.mockResolvedValue(MOCK_RESULT);
+    const user = userEvent.setup();
+    render(<TranslatePage />);
+
+    const textarea = screen.getByRole("textbox");
+    await user.type(textarea, "Hello World");
+
+    vi.useFakeTimers();
+    try {
+      // Act：点击翻译（translateText 立即 resolve，无最小时长保障时会瞬间切到译文）
+      const translateBtn = screen.getByRole("button", { name: "翻译" });
+      translateBtn.click();
+
+      // 让点击产生的微任务链（await translateText / fetchHistory）跑完，
+      // 但尚未推进定时器越过最小可见时长。
+      await vi.advanceTimersByTimeAsync(0);
+
+      // Assert：loading 态仍可见（role=status「翻译中…」），译文尚未出现。
+      // 未实现最小时长时，此处 status 已被清掉、译文已出现 → 断言失败（红）。
+      const status = screen.getByRole("status");
+      expect(status.textContent).toMatch(/翻译中/);
+      expect(screen.queryByText("你好世界")).toBeNull();
+
+      // Act：推进假时钟越过最小可见时长
+      await vi.advanceTimersByTimeAsync(400);
+
+      // Assert：loading 消失、译文出现
+      expect(screen.getByText("你好世界")).toBeInTheDocument();
+      expect(screen.queryByRole("status")).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("Bug3: 重复翻译 pending 期间旧译文被加载态盖掉（查不到上次译文）", async () => {
+    // Arrange：第一次成功返回「第一次译文」，第二次返回可控 pending promise
+    let resolveSecond: ((value: typeof MOCK_RESULT) => void) | undefined;
+    mockTranslateText
+      .mockResolvedValueOnce({ translated: "第一次译文", sourceLang: "en", targetLang: "zh" })
+      .mockReturnValueOnce(
+        new Promise((resolve) => {
+          resolveSecond = resolve;
+        })
+      );
+    const user = userEvent.setup();
+    render(<TranslatePage />);
+
+    // 第一次翻译成功，渲染出「第一次译文」
+    const textarea = screen.getByRole("textbox");
+    await user.type(textarea, "Hello");
+    await user.click(screen.getByRole("button", { name: "翻译" }));
+    await waitFor(() => {
+      expect(screen.getByText("第一次译文")).toBeInTheDocument();
+    });
+
+    // Act：再次点击翻译（第二次 pending 不 resolve）
+    await user.click(screen.getByRole("button", { name: "翻译" }));
+
+    // Assert：旧译文「第一次译文」被加载态盖掉，结果区查不到
+    await waitFor(() => {
+      expect(screen.getByRole("status")).toBeInTheDocument();
+    });
+    expect(screen.queryByText("第一次译文")).toBeNull();
+
+    // 收尾：resolve 防止未处理的 pending promise 泄漏
+    resolveSecond?.(MOCK_RESULT);
   });
 });

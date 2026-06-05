@@ -139,7 +139,7 @@ fn is_explicit_source(configured_source: Option<&str>) -> bool {
 /// 把内部 BCP-47 语言代码映射为指定 provider 期望的格式。
 ///
 /// 各 provider 的中文代码差异（zh 变体归一）：
-/// - `mymemory`：期望 "zh-CN"（MyMemory API 文档约定）
+/// - `lingva`：期望 "zh"（实测 Lingva 协议直传 auto/zh/en，其余沿用 Google 式码）
 /// - `baidu`：期望 "zh"（百度翻译 API 文档约定）
 /// - `deepl_free`：期望大写 "ZH"（DeepL API v2 约定，语言代码全大写）
 /// - `google`：期望 "zh-CN"（Google Cloud Translation API 约定）
@@ -148,10 +148,14 @@ fn is_explicit_source(configured_source: Option<&str>) -> bool {
 pub fn map_lang_for_provider(provider_id: &str, lang: &Lang) -> String {
     let normalized = normalize_zh_variant(lang.as_str());
     match provider_id {
-        "mymemory" => map_for_mymemory(normalized),
+        "lingva" => map_for_lingva(normalized),
         "baidu" => map_for_baidu(normalized),
         "deepl_free" => map_for_deepl(normalized),
         "google" => map_for_google(normalized),
+        "google_free" => map_for_google_free(normalized),
+        "yandex" => map_for_yandex(normalized),
+        "transmart" => map_for_transmart(normalized),
+        "bing" => map_for_bing(normalized),
         _ => lang.as_str().to_string(),
     }
 }
@@ -167,11 +171,16 @@ fn normalize_zh_variant(tag: &str) -> &str {
     }
 }
 
-fn map_for_mymemory(normalized: &str) -> String {
+/// Lingva 语言码映射。
+///
+/// 按实测协议（`/zh/en/冰川`→glacier、`/en/zh/...`→你好世界）：auto/zh/en 直传；
+/// zh-TW 映射为 Lingva 的繁中码 zh_HANT；其余语言沿用 Google 式直传码。
+fn map_for_lingva(normalized: &str) -> String {
     match normalized {
-        "zh" => "zh-CN".to_string(),
-        "zh-TW" => "zh-TW".to_string(),
+        "zh" => "zh".to_string(),
+        "zh-TW" => "zh_HANT".to_string(),
         "en" => "en".to_string(),
+        "auto" => "auto".to_string(),
         other => other.to_string(),
     }
 }
@@ -201,6 +210,63 @@ fn map_for_google(normalized: &str) -> String {
     }
 }
 
+/// Google 免费接口（translate_a/single 公开接口协议）语言码映射。
+///
+/// 该接口与官方 Cloud Translation 用同一套 Google 式语言码（auto/zh-CN/zh-TW/en…），
+/// 故映射规则与 `map_for_google` 一致；独立成函数以便两源各自演进、互不影响
+/// （免费接口若未来需特殊码不会污染官方源）。zh 归一为简中 zh-CN，zh-TW 保留繁中，
+/// auto 与其余语言原样透传作源语自动检测。
+fn map_for_google_free(normalized: &str) -> String {
+    match normalized {
+        "zh" => "zh-CN".to_string(),
+        "zh-TW" => "zh-TW".to_string(),
+        "en" => "en".to_string(),
+        other => other.to_string(),
+    }
+}
+
+/// Yandex 免费接口（伪装 Android 客户端公开协议）语言码映射。
+///
+/// 实测协议用单参 `lang=src-tgt`（连字符对，如 `en-zh`）。Yandex 的中文**不分简繁**，
+/// 简中/繁中变体一律归为 `zh`；其余语言原样透传作 lang 对的一端。
+/// 注释来源：Yandex translate v1 tr.json 公开互操作协议事实（非 pot 源码）。
+fn map_for_yandex(normalized: &str) -> String {
+    match normalized {
+        // normalize_zh_variant 已把 zh-CN/zh-Hans 归为 "zh"、繁中归为 "zh-TW"；
+        // 两者在 Yandex 都用 "zh"（不分简繁）。
+        "zh" | "zh-TW" => "zh".to_string(),
+        "en" => "en".to_string(),
+        other => other.to_string(),
+    }
+}
+
+/// Transmart（腾讯交互翻译·匿名接口公开协议）语言码映射。
+///
+/// 实测协议用 `source.lang`/`target.lang`，**区分简繁**：简中 `zh`、繁中 `zh-TW`；
+/// 其余语言原样透传。注释来源：transmart.qq.com/api/imt 公开互操作协议事实（非 pot 源码）。
+fn map_for_transmart(normalized: &str) -> String {
+    match normalized {
+        "zh" => "zh".to_string(),
+        "zh-TW" => "zh-TW".to_string(),
+        "en" => "en".to_string(),
+        other => other.to_string(),
+    }
+}
+
+/// Bing edge 翻译接口（公开互操作协议事实，非 pot 源码）语言码映射。
+///
+/// 实测 curl（artifacts/bing-translate-sample.json）：Bing **区分简繁**，
+/// 简中用 `zh-Hans`、繁中用 `zh-Hant`；其余语言原样透传（auto 作源语自动检测）。
+/// normalize_zh_variant 已把 zh-CN/zh-Hans 归为 "zh"、zh-TW/zh-Hant 归为 "zh-TW"。
+fn map_for_bing(normalized: &str) -> String {
+    match normalized {
+        "zh" => "zh-Hans".to_string(),
+        "zh-TW" => "zh-Hant".to_string(),
+        "en" => "en".to_string(),
+        other => other.to_string(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -217,6 +283,28 @@ mod tests {
         assert_eq!(normalize_zh_variant("en"), "en");
         assert_eq!(normalize_zh_variant("ja"), "ja");
         assert_eq!(normalize_zh_variant("fr"), "fr");
+    }
+
+    // Bing edge 接口区分简繁：简中 zh-Hans、繁中 zh-Hant（实测 curl 返回繁/简各异）。
+    #[test]
+    fn map_lang_for_bing_uses_zh_hans_and_hant() {
+        assert_eq!(map_lang_for_provider("bing", &Lang::new("zh")), "zh-Hans");
+        assert_eq!(map_lang_for_provider("bing", &Lang::new("zh-CN")), "zh-Hans");
+        assert_eq!(
+            map_lang_for_provider("bing", &Lang::new("zh-Hans")),
+            "zh-Hans"
+        );
+        assert_eq!(
+            map_lang_for_provider("bing", &Lang::new("zh-TW")),
+            "zh-Hant"
+        );
+        assert_eq!(
+            map_lang_for_provider("bing", &Lang::new("zh-Hant")),
+            "zh-Hant"
+        );
+        assert_eq!(map_lang_for_provider("bing", &Lang::new("en")), "en");
+        // auto 透传作源语自动检测（Bing from 留空亦可，但本实现走显式透传）。
+        assert_eq!(map_lang_for_provider("bing", &Lang::new("auto")), "auto");
     }
 
     #[test]
@@ -333,13 +421,73 @@ mod tests {
     // 多语言直通 sanity 测试
 
     #[test]
-    fn map_lang_for_provider_mymemory_passes_through_non_zh_langs() {
-        // 验证 mymemory provider 对 ja/ko/fr/de/es/ru 原样透传
-        // 这保证这些语言的 langpair 能拼出正确的 API 参数
+    fn map_lang_for_provider_lingva_passes_through_non_zh_langs() {
+        // 验证 lingva provider 对 ja/ko/fr/de/es/ru 原样透传
+        // 这保证这些语言能拼出正确的 Lingva 路径段
         for lang_code in &["ja", "ko", "fr", "de", "es", "ru"] {
             let lang = Lang::new(*lang_code);
-            let mapped = map_lang_for_provider("mymemory", &lang);
-            assert_eq!(mapped, *lang_code, "mymemory 应原样透传语言码 {lang_code}");
+            let mapped = map_lang_for_provider("lingva", &lang);
+            assert_eq!(mapped, *lang_code, "lingva 应原样透传语言码 {lang_code}");
         }
+    }
+
+    #[test]
+    fn map_lang_for_provider_lingva_maps_core_langs_per_protocol() {
+        // 实测 Lingva 协议：auto/zh/en 直传；zh-CN 归一后为 zh
+        assert_eq!(map_lang_for_provider("lingva", &Lang::new("zh")), "zh");
+        assert_eq!(map_lang_for_provider("lingva", &Lang::new("zh-CN")), "zh");
+        assert_eq!(map_lang_for_provider("lingva", &Lang::new("en")), "en");
+        assert_eq!(map_lang_for_provider("lingva", &Lang::new("auto")), "auto");
+        assert_eq!(
+            map_lang_for_provider("lingva", &Lang::new("zh-TW")),
+            "zh_HANT"
+        );
+    }
+
+    #[test]
+    fn map_lang_for_provider_yandex_zh_not_split_traditional() {
+        // 实测 Yandex 协议用 lang=en-zh（连字符对）；其 zh 不分简繁，zh/zh-CN/zh-TW 一律 "zh"。
+        assert_eq!(map_lang_for_provider("yandex", &Lang::new("zh")), "zh");
+        assert_eq!(map_lang_for_provider("yandex", &Lang::new("zh-CN")), "zh");
+        assert_eq!(map_lang_for_provider("yandex", &Lang::new("zh-TW")), "zh");
+        assert_eq!(map_lang_for_provider("yandex", &Lang::new("en")), "en");
+        // 其余语言原样透传，作 lang 对的一端。
+        assert_eq!(map_lang_for_provider("yandex", &Lang::new("ja")), "ja");
+    }
+
+    #[test]
+    fn map_lang_for_provider_transmart_distinguishes_traditional() {
+        // 实测 Transmart 用 source.lang/target.lang；区分简繁：zh 简中、zh-TW 繁中。
+        assert_eq!(map_lang_for_provider("transmart", &Lang::new("zh")), "zh");
+        assert_eq!(map_lang_for_provider("transmart", &Lang::new("zh-CN")), "zh");
+        assert_eq!(
+            map_lang_for_provider("transmart", &Lang::new("zh-TW")),
+            "zh-TW"
+        );
+        assert_eq!(map_lang_for_provider("transmart", &Lang::new("en")), "en");
+        assert_eq!(map_lang_for_provider("transmart", &Lang::new("ja")), "ja");
+    }
+
+    #[test]
+    fn map_lang_for_provider_google_free_uses_google_style_codes() {
+        // Google 免费接口（translate_a/single）用 Google 式码：zh→zh-CN、zh-TW 繁中、en、auto/其余透传。
+        assert_eq!(
+            map_lang_for_provider("google_free", &Lang::new("zh")),
+            "zh-CN"
+        );
+        assert_eq!(
+            map_lang_for_provider("google_free", &Lang::new("zh-CN")),
+            "zh-CN"
+        );
+        assert_eq!(
+            map_lang_for_provider("google_free", &Lang::new("zh-TW")),
+            "zh-TW"
+        );
+        assert_eq!(map_lang_for_provider("google_free", &Lang::new("en")), "en");
+        assert_eq!(
+            map_lang_for_provider("google_free", &Lang::new("auto")),
+            "auto"
+        );
+        assert_eq!(map_lang_for_provider("google_free", &Lang::new("ja")), "ja");
     }
 }

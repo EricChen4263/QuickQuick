@@ -32,8 +32,8 @@ const mockGetProviderCredentials = vi.mocked(getProviderCredentials);
 const mockSetProviderCredentials = vi.mocked(setProviderCredentials);
 
 const PROVIDERS: Provider[] = [
-  { id: "mymemory", name: "MyMemory", needsKey: false },
-  { id: "baidu", name: "百度翻译", needsKey: true },
+  { id: "mymemory", name: "MyMemory", needsKey: false, isUnofficial: true },
+  { id: "baidu", name: "百度翻译", needsKey: true, isUnofficial: false },
 ];
 
 const BAIDU_SCHEMA: CredentialField[] = [

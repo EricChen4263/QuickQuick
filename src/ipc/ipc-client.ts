@@ -36,6 +36,8 @@ export interface Provider {
   id: string;
   name: string;
   needsKey: boolean;
+  /** 是否为非官方/自建接口；前端据此渲染「非官方」标注与失败降级提示（设计文档§三.决策3）。 */
+  isUnofficial: boolean;
 }
 
 /** 热键配置，与 Rust HotkeyDto（camelCase）对齐。 */
