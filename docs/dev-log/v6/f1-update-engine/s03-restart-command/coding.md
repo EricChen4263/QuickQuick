@@ -5,7 +5,7 @@ level: 小功能
 parent: V6-F1
 children: []
 status: 通过
-commit: PENDING
+commit: 0db9178
 acceptance_ids: [V6-F1-A05]
 evidence: [src-tauri/src/ipc/update.rs, src-tauri/src/lib.rs, src-tauri/tests/update_watcher.rs, docs/dev-log/v6/f1-update-engine/s03-restart-command/artifacts/cargo-build.log, docs/dev-log/v6/f1-update-engine/s03-restart-command/artifacts/cargo-clippy.log, docs/dev-log/v6/f1-update-engine/s03-restart-command/artifacts/a05-grep.log, docs/dev-log/v6/f1-update-engine/s03-restart-command/artifacts/cargo-test.log]
 author: coder
