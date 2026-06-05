@@ -6,7 +6,7 @@ parent: V6-F1
 children: []
 created: 2026-06-05T00:00:00Z
 status: 通过
-commit: PENDING
+commit: 32c2806
 acceptance_ids: [V6-F1-A01, V6-F1-A02, V6-F1-A04]
 evidence:
   - src-tauri/src/ipc/update.rs

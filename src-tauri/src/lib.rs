@@ -174,6 +174,8 @@ pub fn run() {
             ipc::system::paste_to_front,
             ipc::system::hide_and_return_focus,
             ipc::update::check_for_updates,
+            ipc::update::download_and_install_update,
+            ipc::update::restart_app,
         ])
         .setup(|app| {
             setup_app_db(app);
@@ -343,7 +345,8 @@ fn apply_autostart_preference(app: &mut tauri::App) {
 /// updater 的异步检查。`already_ready` 用 `Arc<AtomicBool>` 跨循环保持去重状态：
 /// 一旦某一轮发现可用更新即置位，后续轮次 `should_check` 返回 false，不再重复检查。
 ///
-/// 本小功能（S01）只判定 + 记录 + 置位；真实下载/`update://ready` emit 留给 S02。
+/// 判定为应检查时调用 `run_one_update_check`：经 S02 已实现真实下载安装，
+/// 并在就绪后 emit `update://ready` 通知前端（首检延迟 + 长间隔轮询）。
 fn spawn_update_watcher(app: tauri::AppHandle) {
     use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -376,10 +379,10 @@ fn read_auto_update_enabled(app: &tauri::AppHandle) -> bool {
     }
 }
 
-/// 执行一轮更新检查；发现可用更新则记录并置位 already_ready 去重。
+/// 执行一轮更新检查；发现可用更新则静默下载安装、广播就绪事件并置位去重。
 ///
 /// updater 初始化或检查出错时仅 `eprintln!` 记录、不 panic，等下一轮重试。
-/// 真实下载与 `update://ready` 事件由 S02 接入（此处仅探测就绪状态）。
+/// 下载安装与 `update://ready` 事件复用 `ipc::update` 的薄封装（与手动命令共享）。
 async fn run_one_update_check(
     app: &tauri::AppHandle,
     already_ready: &Arc<std::sync::atomic::AtomicBool>,
@@ -393,8 +396,9 @@ async fn run_one_update_check(
     };
     match updater.check().await {
         Ok(Some(update)) => {
-            eprintln!("update_watcher: 发现可用更新 {}（S02 将接入下载）", update.version);
-            already_ready.store(true, std::sync::atomic::Ordering::Relaxed);
+            eprintln!("update_watcher: 发现可用更新 {}，开始静默下载", update.version);
+            // 复用 update 域的下载安装薄封装；成功后内部 emit update://ready 并置位去重。
+            ipc::update::download_install_for_watcher(app, update, already_ready).await;
         }
         Ok(None) => {}
         Err(e) => eprintln!("update_watcher: 检查更新失败：{e}"),
