@@ -1,0 +1,205 @@
+# 版本前置验收标准清单（开工前登记、冻结）
+# 来源：从已冻结的设计文档 docs/design/auto-update.md 机械派生——只翻译不发明、不放宽，每项带溯源锚。
+# 冻结后改标准须走 change_log 显式留痕。制作人逐条核对，只有核对权、没有裁量权。
+# 本项目无 docs/STRATEGY.md，战略层不启用（故无 serves_goals / strategy_freeze）。
+
+version: V6
+title: 自动更新闭环（后台检查·静默下载安装·提示重启）
+source_doc: docs/design/auto-update.md
+frozen_at: 2026-06-05T00:00:00Z
+criteria_freeze: V6-criteria@2026-06-05
+
+# 分类覆盖检查：每个适用类别要么有验收项、要么显式 N/A+理由（防漏整类盲区）。
+coverage_check:
+  功能正确性: covered
+  测试充分性: covered
+  工程质量: covered
+  性能: N/A (后台轮询间隔 6h、首检延迟 8s，无性能敏感热路径，无基准对比需求)
+  UI还原度: N/A (本版无冻结视觉设计稿可像素比对；提示条手感归人工确认点)
+  资源规范: N/A (本版不新增图标/字体/二进制等资源)
+  安全: covered
+  留痕产出: covered
+  人工确认点: covered
+
+acceptance:
+  # ── V6-F1 后端自动更新引擎 ──────────────────────────────────────
+  - id: V6-F1-A01
+    assertion: "auto_update=true 且尚未就绪时，应检查判定函数返回 true（watcher 会触发 updater.check）"
+    category: 功能正确性
+    source_anchor: auto-update.md§三.数据/控制流; §六#1
+    kind: objective
+    verify:
+      type: test_id
+      ref: update_watcher_should_check_when_enabled
+      runner: cargo test
+      path: src-tauri/src/ipc/update.rs
+      expect: pass
+    evidence_ref: docs/dev-log/v6/f1-update-engine/<小功能>/test.md
+    level: 小功能
+    status: 待验
+
+  - id: V6-F1-A02
+    assertion: "auto_update=false 时，应检查判定函数返回 false（watcher 跳过检查/下载/提示）"
+    category: 功能正确性
+    source_anchor: auto-update.md§二.开关语义; §六#2
+    kind: objective
+    verify:
+      type: test_id
+      ref: update_watcher_should_skip_when_disabled
+      runner: cargo test
+      path: src-tauri/src/ipc/update.rs
+      expect: pass
+    evidence_ref: docs/dev-log/v6/f1-update-engine/<小功能>/test.md
+    level: 小功能
+    status: 待验
+
+  - id: V6-F1-A03
+    assertion: "就绪事件 payload 由新版本号构造，事件名为 update://ready 且携带 version 字段"
+    category: 功能正确性
+    source_anchor: auto-update.md§三.数据/控制流; §六#3
+    kind: objective
+    verify:
+      type: test_id
+      ref: update_ready_payload_carries_version
+      runner: cargo test
+      path: src-tauri/src/ipc/update.rs
+      expect: pass
+    evidence_ref: docs/dev-log/v6/f1-update-engine/<小功能>/test.md
+    level: 小功能
+    status: 待验
+
+  - id: V6-F1-A04
+    assertion: "一次就绪后去重：already_ready 置位后，应检查判定函数返回 false（不重复下载）"
+    category: 功能正确性
+    source_anchor: auto-update.md§三.并发/状态约束; §六#4
+    kind: objective
+    verify:
+      type: test_id
+      ref: update_watcher_dedupes_after_ready
+      runner: cargo test
+      path: src-tauri/src/ipc/update.rs
+      expect: pass
+    evidence_ref: docs/dev-log/v6/f1-update-engine/<小功能>/test.md
+    level: 小功能
+    status: 待验
+
+  - id: V6-F1-A05
+    assertion: "restart_app 命令已在 invoke_handler 注册，调用 Tauri 核心重启 API"
+    category: 功能正确性
+    source_anchor: auto-update.md§四.后端Rust#1#2; §六#5
+    kind: objective
+    verify:
+      type: command
+      ref: "grep -q 'ipc::update::restart_app' src-tauri/src/lib.rs && grep -q 'fn restart_app' src-tauri/src/ipc/update.rs"
+      runner: bash -c
+      path: src-tauri/src/lib.rs
+      expect: "exit 0（两处均命中）"
+    evidence_ref: docs/dev-log/v6/f1-update-engine/<小功能>/review.md
+    level: 小功能
+    status: 待验
+
+  - id: V6-F1-A06
+    assertion: "本版改动的 Rust 文件通过 clippy -D warnings，无新增告警（增量口径，既有 baseline 除外）"
+    category: 工程质量
+    source_anchor: auto-update.md§六#8
+    kind: objective
+    verify:
+      type: command
+      ref: "cd src-tauri && cargo clippy --all-targets -- -D warnings"
+      runner: bash -c
+      path: src-tauri
+      expect: "exit 0；若仓库存在既有 baseline 告警，按增量口径核对本版改动文件无新增"
+    evidence_ref: docs/dev-log/v6/f1-update-engine/<小功能>/test.md
+    level: 大功能
+    status: 待验
+
+  - id: V6-F1-A07
+    assertion: "更新包验签机制保持启用：tauri.conf.json 含 updater.pubkey，代码未旁路签名校验"
+    category: 安全
+    source_anchor: auto-update.md§一.现状(endpoint/签名); §七.静默失败策略
+    kind: objective
+    verify:
+      type: command
+      ref: "grep -q '\"pubkey\"' src-tauri/tauri.conf.json && ! grep -rni 'dangerous' src-tauri/src/ipc/update.rs"
+      runner: bash -c
+      path: src-tauri/tauri.conf.json
+      expect: "exit 0（pubkey 存在且无 dangerous 旁路）"
+    evidence_ref: docs/dev-log/v6/f1-update-engine/<小功能>/review.md
+    level: 大功能
+    status: 待验
+
+  # ── V6-F2 前端更新提示与手动入口 ──────────────────────────────────
+  - id: V6-F2-A08
+    assertion: "收到 update://ready 事件时渲染更新提示条（含版本号），点击「重启更新」调用 restart_app"
+    category: 功能正确性
+    source_anchor: auto-update.md§四.前端#5; §六#6
+    kind: objective
+    verify:
+      type: test_id
+      ref: update_banner_shows_on_ready_and_restart_invokes_command
+      runner: pnpm test
+      path: src/components/UpdateBanner.test.tsx
+      expect: pass
+    evidence_ref: docs/dev-log/v6/f2-update-ui/<小功能>/test.md
+    level: 小功能
+    status: 待验
+
+  - id: V6-F2-A09
+    assertion: "手动检查发现新版后出现「下载并安装」入口，点击触发 downloadAndInstallUpdate"
+    category: 功能正确性
+    source_anchor: auto-update.md§四.前端#6; §六#7
+    kind: objective
+    verify:
+      type: test_id
+      ref: general_panel_offers_install_after_update_found
+      runner: pnpm test
+      path: src/panels/settings/GeneralPanel.test.tsx
+      expect: pass
+    evidence_ref: docs/dev-log/v6/f2-update-ui/<小功能>/test.md
+    level: 小功能
+    status: 待验
+
+  - id: V6-F2-A10
+    assertion: "本版新增的前后端测试纳入各自套件且全绿（命中校验：test result ok N≥1 / Tests N passed N≥1）"
+    category: 测试充分性
+    source_anchor: auto-update.md§六.验收要点
+    kind: objective
+    verify:
+      type: command
+      ref: "cd src-tauri && cargo test update 2>&1 | grep -E 'test result: ok' ; pnpm test 2>&1 | grep -E 'Tests .* passed'"
+      runner: bash -c
+      path: docs/dev-log/v6
+      expect: "两套件均命中 ok 且通过数 N≥1（防过滤空匹配假绿）"
+    evidence_ref: docs/dev-log/v6/version-verdict.md
+    level: 版本
+    status: 待验
+
+  # ── 留痕产出 ───────────────────────────────────────────────────
+  - id: V6-F1-A11
+    assertion: "V6 各小功能三联留痕齐（coding/test/review），frontmatter commit 已回填真 hash（非 PENDING）"
+    category: 留痕产出
+    source_anchor: auto-update.md§五.大功能拆分; 规范§五.commit回填
+    kind: objective
+    verify:
+      type: script
+      ref: "find docs/dev-log/v6 -name '*.md' -path '*f*' | xargs grep -L 'PENDING' >/dev/null; 各小功能目录均含 coding.md/test.md/review.md 且无 commit: PENDING"
+      runner: bash -c
+      path: docs/dev-log/v6
+      expect: "三联齐全且无残留 PENDING"
+    evidence_ref: docs/dev-log/v6/
+    level: 版本
+    status: 待验
+
+  # ── 人工确认点（不阻塞 done，挂全局未决清单）──────────────────────
+  - id: V6-F2-A12
+    assertion: "真机端到端：静默下载体感顺滑、提示条动效自然、从 GitHub 拉 latest.json→下载→重启完成更新"
+    category: 人工确认点
+    source_anchor: auto-update.md§二.交互模式; §六(manual_confirm); §七.真机验收
+    kind: manual_confirm
+    verify: null
+    collect_env: real_device
+    evidence_ref: docs/dev-log/v6/f2-update-ui/<小功能>/update-e2e.mov
+    level: 大功能
+    status: 待采证
+
+change_log: []

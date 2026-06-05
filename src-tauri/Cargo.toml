@@ -18,6 +18,9 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 tauri = { version = "2", features = ["tray-icon", "image-png", "macos-private-api"] }
+# tokio time 仅用于后台 update_watcher 的异步 sleep（轮询间隔/首检延迟）；
+# tokio 已随 tauri 运行时传递依赖进来，此处仅显式启用 time 特性，不新增下载。
+tokio = { version = "1", features = ["time"] }
 tauri-plugin-autostart = "2"
 tauri-plugin-global-shortcut = "2"
 tauri-plugin-single-instance = "2"

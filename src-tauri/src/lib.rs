@@ -39,10 +39,23 @@ use std::sync::{
 
 use tauri::{Emitter, Manager, Runtime, WindowEvent};
 use tauri_plugin_global_shortcut::GlobalShortcutExt;
+use tauri_plugin_updater::UpdaterExt;
 
 /// 剪贴板变化事件名。与前端 src/ipc/events.ts 的 CLIPBOARD_CHANGED_EVENT 必须一致。
 /// Tauri 事件名跨语言无法编译期共享，改动需两端同步。
 const CLIPBOARD_CHANGED_EVENT: &str = "clipboard-changed";
+
+/// 后台更新检查的首检延迟（秒）。
+///
+/// 启动后不立即查更新：先让开库、剪贴板轮询、托盘/窗口等启动 I/O 沉淀，
+/// 避免与首屏抢网络/CPU；8s 足够覆盖冷启动且用户几乎无感。
+pub const UPDATE_FIRST_CHECK_DELAY_SECS: u64 = 8;
+
+/// 后台更新检查的轮询间隔（秒）= 6 小时。
+///
+/// 桌面端发版频率低，6h 轮询既能在合理时间内发现新版，又把网络/服务端压力降到极低；
+/// 用户也可随时通过设置页手动检查，无需高频后台轮询。
+pub const UPDATE_POLL_INTERVAL_SECS: u64 = 21600;
 
 /// 判定本轮入库结果是否需要通知前端刷新列表。
 ///
@@ -177,6 +190,7 @@ pub fn run() {
             register_hotkeys(app.handle());
             tray::setup_tray(app)?;
             setup_main_window_behavior(app, stay_in_tray)?;
+            spawn_update_watcher(app.handle().clone());
             Ok(())
         })
         .run(tauri::generate_context!())
@@ -321,6 +335,70 @@ fn apply_autostart_preference(app: &mut tauri::App) {
 
     let pref = autostart::AutostartConfig::load_or_default(&config_path);
     autostart::apply_to_os(&app.handle().clone(), pref.enabled);
+}
+
+/// 启动后台更新 watcher：首检延迟后周期性检查更新。
+///
+/// 用 `async_runtime::spawn`（Tauri 的 tokio 运行时）而非系统线程，便于 `await`
+/// updater 的异步检查。`already_ready` 用 `Arc<AtomicBool>` 跨循环保持去重状态：
+/// 一旦某一轮发现可用更新即置位，后续轮次 `should_check` 返回 false，不再重复检查。
+///
+/// 本小功能（S01）只判定 + 记录 + 置位；真实下载/`update://ready` emit 留给 S02。
+fn spawn_update_watcher(app: tauri::AppHandle) {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    let already_ready = Arc::new(AtomicBool::new(false));
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_secs(UPDATE_FIRST_CHECK_DELAY_SECS)).await;
+        loop {
+            let enabled = read_auto_update_enabled(&app);
+            if ipc::update::should_check(enabled, already_ready.load(Ordering::Relaxed)) {
+                run_one_update_check(&app, &already_ready).await;
+            }
+            tokio::time::sleep(std::time::Duration::from_secs(UPDATE_POLL_INTERVAL_SECS)).await;
+        }
+    });
+}
+
+/// 读取 auto_update 开关；读失败时按"关闭"保守处理，并记录原因。
+///
+/// 复用 settings 域既有读法（resolve_config_path + get_auto_update_impl），不另造解析。
+/// 读失败（如配置目录暂不可用）时返回 false，避免在状态未知时贸然发起网络检查。
+fn read_auto_update_enabled(app: &tauri::AppHandle) -> bool {
+    match ipc::settings::resolve_config_path(app, "settings.json")
+        .and_then(|p| ipc::settings::get_auto_update_impl(&p))
+    {
+        Ok(enabled) => enabled,
+        Err(e) => {
+            eprintln!("update_watcher: 读取 auto_update 开关失败，本轮跳过：{e}");
+            false
+        }
+    }
+}
+
+/// 执行一轮更新检查；发现可用更新则记录并置位 already_ready 去重。
+///
+/// updater 初始化或检查出错时仅 `eprintln!` 记录、不 panic，等下一轮重试。
+/// 真实下载与 `update://ready` 事件由 S02 接入（此处仅探测就绪状态）。
+async fn run_one_update_check(
+    app: &tauri::AppHandle,
+    already_ready: &Arc<std::sync::atomic::AtomicBool>,
+) {
+    let updater = match app.updater() {
+        Ok(updater) => updater,
+        Err(e) => {
+            eprintln!("update_watcher: updater 初始化失败：{e}");
+            return;
+        }
+    };
+    match updater.check().await {
+        Ok(Some(update)) => {
+            eprintln!("update_watcher: 发现可用更新 {}（S02 将接入下载）", update.version);
+            already_ready.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+        Ok(None) => {}
+        Err(e) => eprintln!("update_watcher: 检查更新失败：{e}"),
+    }
 }
 
 /// 注册"最近外部前台 app"追踪并把共享状态交给 Tauri 托管。

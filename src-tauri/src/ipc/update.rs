@@ -4,9 +4,11 @@
 //! - `check_for_updates` — 手动检查是否有新版本（返回有无 + 版本号）
 //!
 //! 设计说明：
-//! - 不在 setup 阶段自动调用，原因：当前 tauri.conf.json 使用占位 endpoint，
-//!   自动检查会在每次启动时产生网络错误噪音，待真实 infra 就绪前仅供 UI 手动触发。
-//! - updater() 返回 Err 时友好映射为中文错误，前端可直接展示给用户。
+//! - endpoint 为真实地址（github.com/EricChen4263/QuickQuick/…，CI 已产签名 latest.json），
+//!   除前端手动触发 `check_for_updates` 外，启动后由 lib.rs setup 中的 `update_watcher`
+//!   后台任务定期自动检查（首检延迟 + 长间隔轮询）；本轮是否真正发起检查由纯函数
+//!   `should_check` 判定。
+//! - updater() 返回 Err 时友好映射为中文错误，前端可直接展示给用户；后台任务遇错仅记录、不 panic。
 
 use serde::Serialize;
 use tauri_plugin_updater::UpdaterExt;
@@ -52,5 +54,38 @@ pub async fn check_for_updates(app: tauri::AppHandle) -> Result<CheckUpdateResul
             })
         }
         Err(e) => Err(format!("检查更新失败：{e}")),
+    }
+}
+
+/// 判定后台 watcher 本轮是否应发起更新检查。
+///
+/// 语义：`auto_update_enabled && !already_ready`。
+/// - `auto_update_enabled`：用户的自动更新开关；false 时 watcher 完全跳过检查/下载/提示。
+/// - `already_ready`：本进程内是否已有一次更新就绪。置位后不再重复检查，去重避免同一
+///   可用版本被反复发现与下载。
+///
+/// 抽成纯函数以便单测——真实的 `updater().check()` 无法在单测构造 `Update`。
+pub fn should_check(auto_update_enabled: bool, already_ready: bool) -> bool {
+    auto_update_enabled && !already_ready
+}
+
+#[cfg(test)]
+mod tests {
+    use super::should_check;
+
+    #[test]
+    fn update_watcher_should_check_when_enabled() {
+        assert!(should_check(true, false));
+    }
+
+    #[test]
+    fn update_watcher_should_skip_when_disabled() {
+        assert!(!should_check(false, false));
+        assert!(!should_check(false, true));
+    }
+
+    #[test]
+    fn update_watcher_dedupes_after_ready() {
+        assert!(!should_check(true, true));
     }
 }
