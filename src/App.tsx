@@ -7,6 +7,7 @@ import { AppShell } from "./shell/AppShell";
 import ClipboardPage from "./panels/clipboard/ClipboardPage";
 import TranslatePage from "./panels/translate/TranslatePage";
 import SettingsPage from "./panels/settings/SettingsPage";
+import UpdateBanner from "./components/UpdateBanner";
 import "./theme/theme.css";
 
 /** 热键路由 payload 类型（与后端 emit 的字符串对应） */
@@ -99,6 +100,7 @@ function App() {
       >
         <SettingsPage />
       </section>
+      <UpdateBanner />
     </AppShell>
   );
 }

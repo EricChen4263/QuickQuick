@@ -18,31 +18,26 @@ import {
   getStayInTray,
   getAutoUpdate,
   checkForUpdates,
+  downloadAndInstallUpdate,
 } from "../../ipc/ipc-client";
 import GeneralPanel from "./GeneralPanel";
 
 const mockCheckForUpdates = vi.mocked(checkForUpdates);
+const mockDownloadAndInstall = vi.mocked(downloadAndInstallUpdate);
 
 beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(getLaunchOnLogin).mockResolvedValue(true);
   vi.mocked(getStayInTray).mockResolvedValue(true);
   vi.mocked(getAutoUpdate).mockResolvedValue(true);
+  mockDownloadAndInstall.mockResolvedValue(undefined);
 });
 
-describe("GeneralPanel 立即检查更新按钮", () => {
-  it("渲染「检查」按钮且初始未 disabled", async () => {
-    render(<GeneralPanel />);
-
-    const btn = await screen.findByRole("button", { name: "检查" });
-    expect(btn).toBeInTheDocument();
-    expect(btn).not.toBeDisabled();
-  });
-
-  it("available=true 时显示「发现新版本」文案", async () => {
+describe("GeneralPanel 手动检查后下载安装", () => {
+  it("general_panel_offers_install_after_update_found", async () => {
     mockCheckForUpdates.mockResolvedValueOnce({
       available: true,
-      version: "1.2.0",
+      version: "1.3.0",
       currentVersion: "1.0.0",
     });
 
@@ -51,13 +46,21 @@ describe("GeneralPanel 立即检查更新按钮", () => {
 
     await user.click(await screen.findByRole("button", { name: "检查" }));
 
+    const installBtn = await screen.findByRole("button", {
+      name: "下载并安装",
+    });
+    expect(installBtn).toBeInTheDocument();
+    expect(screen.getByText(/发现新版本/)).toBeInTheDocument();
+    expect(screen.getByText(/1\.3\.0/)).toBeInTheDocument();
+
+    await user.click(installBtn);
+
     await waitFor(() => {
-      expect(screen.getByText(/发现新版本/)).toBeInTheDocument();
-      expect(screen.getByText(/1\.2\.0/)).toBeInTheDocument();
+      expect(mockDownloadAndInstall).toHaveBeenCalledTimes(1);
     });
   });
 
-  it("available=false 时显示「已是最新版本」文案", async () => {
+  it("available=false 时不出现「下载并安装」按钮", async () => {
     mockCheckForUpdates.mockResolvedValueOnce({
       available: false,
       version: "",
@@ -72,49 +75,30 @@ describe("GeneralPanel 立即检查更新按钮", () => {
     await waitFor(() => {
       expect(screen.getByText("已是最新版本")).toBeInTheDocument();
     });
+    expect(
+      screen.queryByRole("button", { name: "下载并安装" })
+    ).not.toBeInTheDocument();
   });
 
-  it("checkForUpdates reject 时渲染 role=alert 失败文案", async () => {
-    mockCheckForUpdates.mockRejectedValueOnce(
-      new Error("检查更新失败：网络错误")
-    );
+  it("下载安装失败时渲染 role=alert 失败文案", async () => {
+    mockCheckForUpdates.mockResolvedValueOnce({
+      available: true,
+      version: "1.3.0",
+      currentVersion: "1.0.0",
+    });
+    mockDownloadAndInstall.mockRejectedValueOnce(new Error("下载失败：网络错误"));
 
     const user = userEvent.setup();
     render(<GeneralPanel />);
 
     await user.click(await screen.findByRole("button", { name: "检查" }));
+    await user.click(
+      await screen.findByRole("button", { name: "下载并安装" })
+    );
 
     await waitFor(() => {
       const alert = screen.getByRole("alert");
-      expect(alert).toBeInTheDocument();
-      expect(alert).toHaveTextContent(/检查更新失败/);
-    });
-  });
-
-  it("点击中按钮变为 disabled 且文案为「检查中…」", async () => {
-    let resolveCheck!: (v: {
-      available: boolean;
-      version: string;
-      currentVersion: string;
-    }) => void;
-    mockCheckForUpdates.mockReturnValueOnce(
-      new Promise((res) => {
-        resolveCheck = res;
-      })
-    );
-
-    const user = userEvent.setup();
-    render(<GeneralPanel />);
-
-    await user.click(await screen.findByRole("button", { name: "检查" }));
-
-    expect(
-      await screen.findByRole("button", { name: "检查中…" })
-    ).toBeDisabled();
-
-    resolveCheck({ available: false, version: "", currentVersion: "1.0.0" });
-    await waitFor(() => {
-      expect(screen.getByRole("button", { name: "检查" })).not.toBeDisabled();
+      expect(alert).toHaveTextContent(/下载.*失败|安装失败/);
     });
   });
 });

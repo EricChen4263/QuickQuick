@@ -498,11 +498,39 @@ export interface CheckUpdateResult {
 /**
  * 手动检查是否有可用的应用更新。
  *
- * endpoint 为占位地址时会 reject，调用方应以友好文案展示错误。
+ * endpoint 已是真实地址；网络/清单异常时会 reject，调用方应以友好文案展示错误。
  */
 export async function checkForUpdates(): Promise<CheckUpdateResult> {
   try {
     return await invoke<CheckUpdateResult>("check_for_updates");
+  } catch (err) {
+    throw toError(err);
+  }
+}
+
+/**
+ * 下载并安装可用更新（不重启）。
+ *
+ * 调用 Rust 侧 `download_and_install_update`。下载/安装失败时 reject，
+ * 调用方应以友好文案展示错误；成功后需经 `restartApp` 重启使更新生效。
+ */
+export async function downloadAndInstallUpdate(): Promise<void> {
+  try {
+    await invoke<void>("download_and_install_update");
+  } catch (err) {
+    throw toError(err);
+  }
+}
+
+/**
+ * 重启应用以应用已下载安装的更新。
+ *
+ * 调用 Rust 侧 `restart_app`（内部 `app.restart()`，进程替换重启）。
+ * 正常路径下进程随即终止，Promise 通常不会 resolve。
+ */
+export async function restartApp(): Promise<void> {
+  try {
+    await invoke<void>("restart_app");
   } catch (err) {
     throw toError(err);
   }

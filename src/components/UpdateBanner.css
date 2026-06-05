@@ -1,0 +1,26 @@
+/* 更新就绪提示条：浮于内容上层右下角，非打扰式。
+   定位与配色复用既有 token，不新造视觉系统。 */
+.update-banner {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 12px 16px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  box-shadow: var(--shadow-pop);
+}
+
+.update-banner-text {
+  font-size: 13px;
+  color: var(--fg);
+}
+
+.update-banner-actions {
+  display: flex;
+  gap: 8px;
+}
