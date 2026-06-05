@@ -17,3 +17,9 @@ export const PROVIDER_CONFIG_CHANGED_EVENT = "provider-config-changed" as const;
 // 注意：与后端 src-tauri/src/ipc/settings.rs 的 SELECTED_PROVIDER_CHANGED_EVENT 常量必须保持一致。
 // 设置页与翻译页据此双向同步当前默认 provider；Tauri 事件名跨语言无法编译期共享，改动需两端同步。
 export const SELECTED_PROVIDER_CHANGED_EVENT = "selected-provider-changed" as const;
+
+// trans-popover 待译文本推送事件名。
+// 注意：与后端 src-tauri/src/popover.rs 的 TRANS_SOURCE_EVENT 常量必须保持一致。
+// 触发热键时 Rust 就地取词后推给 trans-popover 窗口，免去前端 listClipItems 往返；
+// Tauri 事件名跨语言无法编译期共享，改动需两端同步。
+export const TRANS_SOURCE_EVENT = "trans-source" as const;

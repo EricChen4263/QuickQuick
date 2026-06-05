@@ -67,6 +67,29 @@ pub fn list_clip_items_impl(conn: &Connection) -> Result<Vec<ClipItemDto>, DbErr
     Ok(dtos)
 }
 
+/// 取「当前应翻译的剪贴板文本」：复用 list_clip_items_impl 的排序与口径，
+/// 取首条（收藏优先、组内最近），仅 text/richtext 且 trim 非空才返回 Some。
+///
+/// 与前端 src/trans-popover/source-text.ts 的 pickLatestText 同语义（跨语言镜像，
+/// 故意复用同一取数函数保证排序口径一致，避免两边漂移）。
+///
+/// # Errors
+/// 数据库查询失败时返回 `DbError`。
+pub fn pick_latest_translate_text_impl(conn: &Connection) -> Result<Option<String>, DbError> {
+    let items = list_clip_items_impl(conn)?;
+    let Some(item) = items.first() else {
+        return Ok(None);
+    };
+    if item.kind != "text" && item.kind != "richtext" {
+        return Ok(None);
+    }
+    let trimmed = item.content.trim();
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(trimmed.to_string()))
+}
+
 /// delete_clip_item 的纯函数实现，可在测试中直接调用。
 ///
 /// 对 id 做前置校验：空串或全空白直接返回 Err，不执行 SQL。
@@ -328,5 +351,63 @@ mod tests {
             result.is_none(),
             "降级图（空 BLOB）应返回 None，实际返回：{result:?}"
         );
+    }
+
+    /// T5：pick_latest_translate_text_impl — 文本条目返回 Some(trim 后的内容)。
+    #[test]
+    fn pick_latest_translate_text_impl_returns_trimmed_text_for_text_item() {
+        let conn = make_test_conn();
+        let clip_item = crate::clipboard::CapturedItem {
+            text: "  hello world  ".to_string(),
+            html: None,
+        };
+        ingest(&conn, &clip_item).expect("文本条目入库失败");
+
+        let result =
+            pick_latest_translate_text_impl(&conn).expect("pick_latest_translate_text_impl 不应失败");
+        assert_eq!(
+            result,
+            Some("hello world".to_string()),
+            "文本条目应返回 trim 后的内容"
+        );
+    }
+
+    /// T6：pick_latest_translate_text_impl — 图片条目返回 None（图片不可译）。
+    #[test]
+    fn pick_latest_translate_text_impl_returns_none_for_image_item() {
+        let conn = make_test_conn();
+        let png = make_test_png(2, 2);
+        ingest_image_as_clip(&conn, 2, 2, &png, 20 * 1024 * 1024).expect("图片条目入库失败");
+
+        let result =
+            pick_latest_translate_text_impl(&conn).expect("pick_latest_translate_text_impl 不应失败");
+        assert!(result.is_none(), "图片条目应返回 None");
+    }
+
+    /// T7：pick_latest_translate_text_impl — 空库返回 None。
+    #[test]
+    fn pick_latest_translate_text_impl_returns_none_for_empty_db() {
+        let conn = make_test_conn();
+
+        let result =
+            pick_latest_translate_text_impl(&conn).expect("pick_latest_translate_text_impl 不应失败");
+        assert!(result.is_none(), "空库应返回 None");
+    }
+
+    /// T8：pick_latest_translate_text_impl — 纯空白 content 返回 None。
+    #[test]
+    fn pick_latest_translate_text_impl_returns_none_for_whitespace_only() {
+        let conn = make_test_conn();
+        // 手动插入纯空白文本条目（ingest 可能拒收空白，故直接 INSERT 保证用例独立）
+        conn.execute(
+            "INSERT INTO clip_items (id, content, kind, created_utc, last_modified_utc)
+             VALUES ('item-ws', '   ', 'text', 1000, 1000)",
+            [],
+        )
+        .expect("clip_items 插入失败");
+
+        let result =
+            pick_latest_translate_text_impl(&conn).expect("pick_latest_translate_text_impl 不应失败");
+        assert!(result.is_none(), "纯空白 content 应返回 None");
     }
 }

@@ -7,9 +7,19 @@
 //! 窗口不写进 tauri.conf.json，首次触发时按需创建，复用时直接定位并显示。
 //! 所有可失败操作均用 eprintln 记录并优雅降级，不 panic、不向上抛错。
 
-use tauri::{Manager, WebviewWindow, WindowEvent};
+use tauri::{Emitter, Manager, WebviewWindow, WindowEvent};
 
+use crate::ipc::clipboard::pick_latest_translate_text_impl;
+use crate::ipc::{with_db, AppDb};
 use crate::window_pos::compute_window_position_for_width;
+
+/// trans-popover 待译文本推送事件名。
+/// 与前端 src/ipc/events.ts 的 TRANS_SOURCE_EVENT 必须一致；
+/// Tauri 事件名跨语言无法编译期共享，改动需两端同步。
+const TRANS_SOURCE_EVENT: &str = "trans-source";
+
+/// trans-popover 窗口 label，用于区分仅对翻译 popover 推送待译文本。
+const TRANS_POPOVER_LABEL: &str = "trans-popover";
 
 /// clip-popover 窗口宽度（物理像素）
 const CLIP_WIDTH: i32 = 720;
@@ -67,6 +77,11 @@ pub fn trigger_popover(handle: &tauri::AppHandle, label: &str) {
         eprintln!("[QuickQuick] {label} show 失败: {e}");
         return;
     }
+    // show 后立即就地取词并推给 trans-popover：让前端无需再 listClipItems()
+    // 往返查加密 DB（去掉可见延迟），并由 Rust 主动推送驱动重译（消除旧译文残影）。
+    if label == TRANS_POPOVER_LABEL {
+        push_translate_source(handle, &window);
+    }
     // 先激活 app，再聚焦窗口。
     // 顺序说明：macOS 要求进程本身处于"活跃"(active)状态后，
     // 窗口的 makeKeyAndOrderFront 才能拿到 key 状态。
@@ -75,6 +90,28 @@ pub fn trigger_popover(handle: &tauri::AppHandle, label: &str) {
     activate_app_macos();
     if let Err(e) = window.set_focus() {
         eprintln!("[QuickQuick] {label} set_focus 失败: {e}");
+    }
+}
+
+/// 就地查 DB 取待译文本并推给 trans-popover 窗口。
+///
+/// payload 为 `Option<String>`（None 序列化为 null）：前端据此直接重译，
+/// 不再 listClipItems() 往返。取 state / 查 DB / emit 任一失败都 eprintln
+/// 降级、不 panic、不向上抛，与本文件其他可失败操作的错误处理风格一致。
+fn push_translate_source(handle: &tauri::AppHandle, window: &WebviewWindow) {
+    let state = handle.state::<AppDb>();
+    let text = match with_db(&state, |conn| {
+        pick_latest_translate_text_impl(conn).map_err(|e| e.to_string())
+    }) {
+        Ok(text) => text,
+        Err(e) => {
+            eprintln!("[QuickQuick] trans-popover 取待译文本失败: {e}");
+            return;
+        }
+    };
+
+    if let Err(e) = window.emit(TRANS_SOURCE_EVENT, text) {
+        eprintln!("[QuickQuick] trans-popover emit {TRANS_SOURCE_EVENT} 失败: {e}");
     }
 }
 
