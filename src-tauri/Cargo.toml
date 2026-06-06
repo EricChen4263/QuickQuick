@@ -42,9 +42,6 @@ sha2 = "0.10"
 # hmac 提供通用 HMAC，配合 sha2(SHA256)/sha1(SHA1) 摘要算法。sha1 为阿里 HMAC-SHA1 所需。
 hmac = "0.12"
 sha1 = "0.10"
-# 剑桥词典返回 HTML 页面（非 JSON），用 scraper 以 CSS 选择器提取音标/音频/释义文本。
-# scraper 仅做 HTML 解析（基于 html5ever），不执行 JavaScript，仅取文本/属性，无注入风险。
-scraper = "0.27"
 arboard = "3"
 ureq = { version = "2", features = ["tls"] }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }

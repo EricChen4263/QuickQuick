@@ -333,6 +333,9 @@ mod tests {
         assert_eq!(resolve_provider_or_fallback("mymemory"), "lingva");
         // 任意未知 id → 回退 lingva
         assert_eq!(resolve_provider_or_fallback("totally_unknown"), "lingva");
+        // 已下架的 bing_dict / cambridge（Commit 1）→ 回退默认源
+        assert_eq!(resolve_provider_or_fallback("bing_dict"), "lingva");
+        assert_eq!(resolve_provider_or_fallback("cambridge"), "lingva");
         // 空串 → 回退 lingva
         assert_eq!(resolve_provider_or_fallback(""), "lingva");
         // 注册表内合法 id 原样保留（不被误改）
