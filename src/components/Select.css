@@ -15,10 +15,10 @@
   align-items: center;
   justify-content: space-between;
   gap: 6px;
-  border: 1px solid var(--border);
-  background: var(--surface);
+  border: 1px solid color-mix(in oklch, var(--border) 78%, transparent);
+  background: var(--surface-2);
   border-radius: var(--r-sm);
-  padding: 5px 8px 5px 10px;
+  padding: 7px 10px 7px 12px;
   font-size: 12.5px;
   font-family: var(--font);
   color: var(--fg);
@@ -56,7 +56,7 @@
   max-height: 260px;
   overflow-y: auto;
   background: var(--surface);
-  border: 1px solid var(--border);
+  border: 1px solid color-mix(in oklch, var(--border) 82%, transparent);
   border-radius: var(--r-sm);
   box-shadow: var(--shadow-pop);
 }
@@ -71,7 +71,7 @@
 }
 
 .qq-select-option.is-active {
-  background: var(--hover);
+  background: var(--surface-2);
 }
 
 .qq-select-option[aria-selected="true"] {

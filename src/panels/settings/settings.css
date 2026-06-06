@@ -8,19 +8,21 @@
 /* 设置页根布局：左侧 184px 子项导航 + 右侧内容区 */
 .set-page {
   display: grid;
-  grid-template-columns: 184px 1fr;
+  grid-template-columns: 210px minmax(0, 1fr);
+  gap: 18px;
   height: 100%;
   min-height: 0;
+  padding: 18px 18px 16px 0;
 }
 
 /* 左侧子项导航列：纵向排列，右边框分隔
    min-height:0 + overflow:hidden 防止导航内容撑大 grid 行高 */
 .set-nav {
-  border-right: 1px solid var(--border);
-  padding: 12px 10px;
+  border-right: 0;
+  padding: 4px 0;
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 4px;
   min-height: 0;
   overflow: hidden;
 }
@@ -34,9 +36,9 @@
   display: flex;
   align-items: center;
   gap: 9px;
-  padding: 8px 11px;
-  border-radius: var(--r-sm);
-  color: var(--fg);
+  padding: 9px 12px;
+  border-radius: var(--r);
+  color: var(--muted);
   font-size: 13px;
   transition: background-color 110ms ease, color 110ms ease;
 }
@@ -50,6 +52,7 @@
 
 .set-nav-item:hover {
   background: var(--hover);
+  color: var(--fg);
 }
 
 /* 选中项：accent 背景 + accent 文字/图标色 */
@@ -67,14 +70,16 @@
 .set-body {
   overflow-y: auto;
   min-height: 0;
-  padding: 24px 28px;
+  padding: 28px 36px;
+  background: var(--surface);
+  border: 1px solid color-mix(in oklch, var(--border) 72%, transparent);
+  border-radius: var(--r-lg);
 }
 
 /* 面板大标题：字号偏大、字重粗，字间距收紧 */
 .set-h {
   font-size: 19px;
   font-weight: 600;
-  letter-spacing: -0.015em;
   margin: 0 0 4px;
 }
 
@@ -82,16 +87,16 @@
 .set-sub {
   color: var(--muted);
   font-size: 13px;
-  margin: 0 0 22px;
+  margin: 0 0 26px;
 }
 
-/* 设置分组容器：带边框圆角卡片，包裹若干 SettingRow，溢出裁切保证圆角 */
+/* 设置分组容器：轻量行组，不再使用厚重卡片边框 */
 .set-group {
-  border: 1px solid var(--border);
-  border-radius: var(--r);
-  background: var(--surface);
-  overflow: hidden;
-  margin-bottom: 18px;
+  border: 0;
+  border-top: 1px solid color-mix(in oklch, var(--border) 58%, transparent);
+  background: transparent;
+  overflow: visible;
+  margin-bottom: 26px;
 }
 
 /* 设置行：左侧文字区 + 右侧控件，带底边框分隔（最后一行无底边框） */
@@ -99,8 +104,8 @@
   display: flex;
   align-items: center;
   gap: 14px;
-  padding: 13px 16px;
-  border-bottom: 1px solid var(--border);
+  padding: 15px 2px;
+  border-bottom: 1px solid color-mix(in oklch, var(--border) 46%, transparent);
 }
 
 .set-row:last-child {
@@ -149,10 +154,10 @@
 /* 设置输入框：统一宽度与外观，隐私/热键等面板复用 */
 .set-input {
   width: 180px;
-  padding: 4px 8px;
+  padding: 6px 9px;
   border-radius: var(--r-sm);
-  border: 1px solid var(--border);
-  background: var(--surface);
+  border: 1px solid color-mix(in oklch, var(--border) 76%, transparent);
+  background: var(--surface-2);
   color: var(--fg);
 }
 
@@ -166,7 +171,7 @@
 
 .kbd-combo kbd {
   background: var(--surface-2);
-  border: 1px solid var(--border);
+  border: 1px solid color-mix(in oklch, var(--border) 76%, transparent);
   border-radius: 5px;
   padding: 2px 7px;
   min-width: 24px;
@@ -178,7 +183,7 @@
   height: 7px;
   border-radius: 999px;
   background: var(--surface-2);
-  border: 1px solid var(--border);
+  border: 1px solid color-mix(in oklch, var(--border) 76%, transparent);
   overflow: hidden;
   margin: 10px 0 6px;
 }
@@ -250,8 +255,8 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 10px 16px;
-  border-bottom: 1px solid var(--border);
+  padding: 12px 2px;
+  border-bottom: 1px solid color-mix(in oklch, var(--border) 46%, transparent);
 }
 
 .src-card:last-child {
@@ -304,8 +309,8 @@
 /* 配置按钮：边框风格，与 .btn 协调；展开态 accent 高亮 */
 .src-cfg-btn {
   appearance: none;
-  border: 1px solid var(--border);
-  background: transparent;
+  border: 1px solid color-mix(in oklch, var(--border) 76%, transparent);
+  background: var(--surface-2);
   color: var(--muted);
   font-size: 12.5px;
   font-family: inherit;
@@ -343,7 +348,7 @@
   font-size: 13px;
   font-weight: 600;
   background: var(--surface-2);
-  border: 1px solid var(--border);
+  border: 1px solid color-mix(in oklch, var(--border) 76%, transparent);
   color: var(--fg);
   flex: none;
 }
@@ -353,7 +358,7 @@
   display: flex;
   flex-direction: column;
   gap: 12px;
-  padding: 14px 16px;
+  padding: 14px 2px;
 }
 
 /* 凭据字段：label 在上、input 在下，间距协调 */
@@ -403,8 +408,8 @@
 
 /* 清除已存密钥：默认克制（次要边框态），hover 才显 danger */
 .btn-clear-cred {
-  border: 1px solid var(--border);
-  background: transparent;
+  border: 1px solid color-mix(in oklch, var(--border) 76%, transparent);
+  background: var(--surface-2);
   color: var(--muted);
   transition: background-color 120ms ease, border-color 120ms ease, color 120ms ease;
 }
@@ -420,7 +425,7 @@
   display: flex;
   flex-wrap: wrap;
   gap: 7px;
-  padding: 14px 16px;
+  padding: 14px 2px;
 }
 
 /* App 排除名单芯片：圆角胶囊，右侧关闭按钮 */
@@ -430,7 +435,7 @@
   gap: 6px;
   font-size: 12.5px;
   background: var(--surface-2);
-  border: 1px solid var(--border);
+  border: 1px solid color-mix(in oklch, var(--border) 76%, transparent);
   border-radius: 999px;
   padding: 4px 6px 4px 11px;
 }

@@ -9,8 +9,8 @@
   align-items: center;
   gap: 14px;
   padding: 12px 16px;
-  background: var(--surface-2);
-  border: 1px solid var(--border);
+  background: var(--surface);
+  border: 1px solid color-mix(in oklch, var(--border) 76%, transparent);
   border-radius: var(--r);
   box-shadow: var(--shadow-pop);
 }

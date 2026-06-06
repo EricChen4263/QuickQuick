@@ -14,10 +14,10 @@
   font-family: var(--font);
 }
 
-/* 主体区：横向两列 grid（92px 侧栏 + 1fr 内容），min-height:0 防撑破外层 */
+/* 主体区：横向两列 grid（112px 入口区 + 1fr 内容），min-height:0 防撑破外层 */
 .qq-shell-body {
   display: grid;
-  grid-template-columns: 92px 1fr;
+  grid-template-columns: 112px 1fr;
   min-height: 0;
 }
 
@@ -25,15 +25,14 @@
    左侧 padding-left 96px 为系统红绿灯留出空间并在其右侧留清晰间隙
    （76px 时绿灯紧贴「QuickQuick」），整条可拖拽移窗 */
 .qq-titlebar {
-  height: 38px;
+  height: 44px;
   display: flex;
   align-items: center;
-  padding: 0 16px 0 96px;
-  border-bottom: 1px solid var(--border);
-  background: var(--surface);
+  padding: 0 18px 0 106px;
+  border-bottom: 1px solid color-mix(in oklch, var(--border) 58%, transparent);
+  background: var(--bg);
   font-size: 15px;
   font-weight: 600;
-  letter-spacing: -0.01em;
   color: var(--fg);
   -webkit-user-select: none;
   user-select: none;
@@ -48,25 +47,26 @@
 .qq-sidebar {
   display: flex;
   flex-direction: column;
-  gap: 2px;
-  padding: 10px 8px;
-  border-right: 1px solid var(--border);
+  gap: 8px;
+  padding: 18px 12px 14px;
+  border-right: 0;
   background: var(--bg);
 }
 
-/* 导航项：图标+文字纵向排列，激活态用 accent-soft 背景 */
+/* 导航项：图标+文字横向排列，激活态只靠 soft pill，不再区分侧栏底色 */
 .qq-nav-item {
   appearance: none;
   border: 0;
   background: transparent;
   display: flex;
-  flex-direction: column;
   align-items: center;
-  gap: 5px;
-  padding: 9px 4px;
+  justify-content: flex-start;
+  gap: 9px;
+  min-height: 38px;
+  padding: 8px 10px;
   border-radius: var(--r);
   color: var(--muted);
-  font-size: 11.5px;
+  font-size: 13px;
   font-weight: 500;
   transition: background-color 120ms ease, color 120ms ease;
 }
@@ -94,21 +94,23 @@
 /* 主题切换三档按钮组 */
 .theme-seg {
   display: flex;
-  gap: 2px;
-  padding: 3px;
-  background: var(--surface);
-  border: 1px solid var(--border);
+  gap: 4px;
+  padding: 0;
+  background: transparent;
+  border: 0;
   border-radius: var(--r);
 }
 
 .theme-seg button {
-  flex: 1;
+  flex: none;
+  width: 27px;
+  height: 27px;
   border: 0;
   background: transparent;
   border-radius: var(--r-sm);
   display: grid;
   place-items: center;
-  padding: 5px 0;
+  padding: 0;
   color: var(--muted);
   transition: background-color 120ms ease, color 120ms ease;
 }
@@ -130,10 +132,10 @@
 /* 图标按钮：小方块，带边框，用于工具栏操作 */
 .icon-btn {
   appearance: none;
-  border: 1px solid var(--border);
-  background: var(--surface);
-  width: 30px;
-  height: 30px;
+  border: 1px solid color-mix(in oklch, var(--border) 78%, transparent);
+  background: var(--surface-2);
+  width: 34px;
+  height: 34px;
   border-radius: var(--r-sm);
   display: grid;
   place-items: center;
@@ -148,13 +150,15 @@
 
 .icon-btn:hover {
   color: var(--fg);
-  border-color: color-mix(in oklch, var(--fg) 30%, var(--border));
+  background: var(--hover);
+  border-color: color-mix(in oklch, var(--fg) 24%, var(--border));
 }
 
 /* on 态：accent 高亮，表示功能已开启 */
 .icon-btn.on {
   color: var(--accent);
-  border-color: var(--accent-line);
+  border-color: color-mix(in oklch, var(--accent-line) 78%, transparent);
+  background: var(--accent-soft);
 }
 
 /* danger 态：hover 时变红，用于破坏性操作确认 */
@@ -166,10 +170,10 @@
 /* 通用按钮 */
 .btn {
   appearance: none;
-  border: 1px solid var(--border);
-  background: var(--surface);
+  border: 1px solid color-mix(in oklch, var(--border) 80%, transparent);
+  background: var(--surface-2);
   border-radius: var(--r-sm);
-  padding: 7px 13px;
+  padding: 8px 14px;
   font-size: 13px;
   font-weight: 500;
   display: inline-flex;
@@ -186,6 +190,7 @@
 
 .btn:hover:not(:disabled) {
   background: var(--hover);
+  border-color: color-mix(in oklch, var(--fg) 22%, var(--border));
 }
 
 .btn:active:not(:disabled) {
@@ -229,7 +234,7 @@
   height: 22px;
   border-radius: 999px;
   background: var(--fg-soft);
-  border: 1px solid var(--border);
+  border: 1px solid color-mix(in oklch, var(--border) 76%, transparent);
   position: relative;
   transition: background-color 140ms ease, border-color 140ms ease;
   flex: none;
@@ -266,7 +271,7 @@
   font-size: 11px;
   font-weight: 500;
   background: var(--surface-2);
-  border: 1px solid var(--border);
+  border: 1px solid color-mix(in oklch, var(--border) 76%, transparent);
   color: var(--muted);
 }
 
@@ -290,25 +295,24 @@
   font-size: 11px;
   color: var(--muted);
   background: var(--surface-2);
-  border: 1px solid var(--border);
+  border: 1px solid color-mix(in oklch, var(--border) 76%, transparent);
   border-radius: 999px;
   padding: 1px 8px;
 }
 
-/* 面板头部：标题行，带底边框分隔 */
+/* 面板头部：标题行，用留白和弱边界分隔 */
 .pane-head {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 13px 16px;
-  border-bottom: 1px solid var(--border);
+  padding: 16px 18px 10px;
+  border-bottom: 1px solid color-mix(in oklch, var(--border) 46%, transparent);
 }
 
 /* 面板标题文字：稍大稍粗，字间距收紧 */
 .pane-title {
   font-size: 15px;
   font-weight: 600;
-  letter-spacing: -0.01em;
 }
 
 /* 空态展示：居中 grid，图标+标题+说明，供剪贴板/翻译历史等多处复用 */
@@ -327,11 +331,11 @@
   width: 46px;
   height: 46px;
   border-radius: 12px;
-  border: 1px solid var(--border);
+  border: 1px solid color-mix(in oklch, var(--border) 76%, transparent);
   display: grid;
   place-items: center;
   color: var(--muted);
-  background: var(--surface);
+  background: var(--surface-2);
 }
 
 .empty .mark svg {

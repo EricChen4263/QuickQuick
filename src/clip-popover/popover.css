@@ -12,8 +12,8 @@ body {
   height: 100vh;
   overflow: hidden;
   backdrop-filter: blur(28px) saturate(1.8);
-  background: var(--glass);
-  border: 1px solid var(--glass-border);
+  background: color-mix(in oklch, var(--glass) 78%, var(--bg));
+  border: 1px solid color-mix(in oklch, var(--glass-border) 72%, transparent);
   border-radius: 14px;
   box-sizing: border-box;
 }
@@ -31,7 +31,7 @@ body {
 .popover-search-row {
   flex: none;
   padding: 12px 14px 10px;
-  border-bottom: 1px solid var(--glass-border);
+  border-bottom: 1px solid color-mix(in oklch, var(--glass-border) 44%, transparent);
 }
 
 .popover-search-input {
@@ -62,7 +62,7 @@ body {
 .popover-list {
   flex: 0 0 42%;
   overflow-y: auto;
-  border-right: 1px solid var(--glass-border);
+  border-right: 1px solid color-mix(in oklch, var(--glass-border) 38%, transparent);
   padding: 6px 0;
   min-width: 0;
 }
@@ -93,7 +93,8 @@ body {
   gap: 8px;
   padding: 7px 12px;
   cursor: default;
-  border-radius: 6px;
+  border-left: 3px solid transparent;
+  border-radius: var(--r-sm);
   margin: 0 4px;
   transition: background-color 90ms ease;
 }
@@ -104,8 +105,7 @@ body {
 
 .popover-row[aria-selected="true"] {
   background: var(--accent-soft);
-  outline: 1px solid var(--accent-line);
-  outline-offset: -1px;
+  border-left-color: var(--accent);
 }
 
 .popover-row-icon {
@@ -145,7 +145,7 @@ body {
   height: 24px;
   border-radius: 4px;
   object-fit: cover;
-  border: 1px solid var(--border);
+  border: 1px solid color-mix(in oklch, var(--border) 72%, transparent);
   display: block;
 }
 
@@ -218,7 +218,7 @@ body {
   font-family: var(--mono);
   font-size: 12px;
   background: var(--surface-2);
-  border: 1px solid var(--border);
+  border: 1px solid color-mix(in oklch, var(--border) 76%, transparent);
   border-radius: var(--r-sm);
   padding: 10px 12px;
   line-height: 1.55;
@@ -229,7 +229,7 @@ body {
 .popover-preview-img {
   max-width: 100%;
   border-radius: var(--r-sm);
-  border: 1px solid var(--border);
+  border: 1px solid color-mix(in oklch, var(--border) 72%, transparent);
   display: block;
   object-fit: contain;
 }
@@ -253,7 +253,7 @@ body {
   align-items: center;
   gap: 18px;
   padding: 7px 14px;
-  border-top: 1px solid var(--glass-border);
+  border-top: 1px solid color-mix(in oklch, var(--glass-border) 44%, transparent);
 }
 
 .popover-footer-hint {
@@ -270,7 +270,7 @@ body {
   justify-content: center;
   padding: 1px 5px;
   border-radius: 4px;
-  border: 1px solid var(--border);
+  border: 1px solid color-mix(in oklch, var(--border) 76%, transparent);
   background: var(--surface-2);
   font-family: var(--font);
   font-size: 10.5px;

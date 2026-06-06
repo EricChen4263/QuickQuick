@@ -7,9 +7,11 @@
 /* 翻译页根：工作区 1fr + 历史栏 280px */
 .view-translate {
   display: grid;
-  grid-template-columns: 1fr 280px;
+  grid-template-columns: minmax(0, 1fr) 300px;
+  gap: 18px;
   height: 100%;
   min-height: 0;
+  padding: 18px 18px 16px 0;
 }
 
 /* 工作区主列：头部固定 + 内容可滚动
@@ -20,7 +22,10 @@
   min-height: 0;
   min-width: 0;
   overflow: hidden;
-  border-right: 1px solid var(--border);
+  border-right: 0;
+  background: var(--surface);
+  border: 1px solid color-mix(in oklch, var(--border) 72%, transparent);
+  border-radius: var(--r-lg);
 }
 
 /* 可滚动内容区，包裹 DirBar / 输入 / 译文
@@ -28,7 +33,7 @@
 .tx-scroll {
   overflow-y: auto;
   min-height: 0;
-  padding: 18px 22px 24px;
+  padding: 22px 28px 30px;
 }
 
 /* 语言方向栏：lang-selects 左对齐 + src-select 推到右侧 */
@@ -81,10 +86,10 @@
   width: 100%;
   min-height: 96px;
   resize: vertical;
-  padding: 13px 15px;
-  border: 1px solid var(--border);
+  padding: 14px 16px;
+  border: 1px solid color-mix(in oklch, var(--border) 76%, transparent);
   border-radius: var(--r);
-  background: var(--surface);
+  background: var(--surface-2);
   outline: none;
   font-size: 15px;
   line-height: 1.55;
@@ -115,8 +120,10 @@
 /* 译文区：顶部分隔线，与输入区视觉分层 */
 .tx-result {
   margin-top: 22px;
-  border-top: 1px solid var(--border);
-  padding-top: 20px;
+  border-top: 0;
+  padding: 20px;
+  background: var(--surface-2);
+  border-radius: var(--r);
 }
 
 /* 翻译进行中的结果区加载态：用 muted 弱化色 + 脉冲呼吸，
@@ -150,7 +157,6 @@
 .tx-out {
   font-size: 21px;
   line-height: 1.4;
-  letter-spacing: -0.01em;
 }
 
 /* 词典词条展示：音标 / 按词性分组释义 / 例句 / 变形 / 发音 */
@@ -184,7 +190,7 @@
   font-size: 11px;
   color: var(--muted);
   background: var(--surface-2);
-  border: 1px solid var(--border);
+  border: 1px solid color-mix(in oklch, var(--border) 76%, transparent);
   border-radius: 4px;
   padding: 1px 6px;
   margin-bottom: 5px;
@@ -228,7 +234,7 @@
   line-height: 1.5;
   color: var(--muted);
   padding-left: 10px;
-  border-left: 2px solid var(--accent-line);
+  border-left: 2px solid color-mix(in oklch, var(--accent-line) 82%, transparent);
 }
 
 /* 变形：标签 + 词形并排 */
@@ -267,6 +273,9 @@
   min-height: 0;
   min-width: 0;
   overflow: hidden;
+  background: var(--surface);
+  border: 1px solid color-mix(in oklch, var(--border) 72%, transparent);
+  border-radius: var(--r-lg);
 }
 
 /* 历史列表可滚区
@@ -274,10 +283,10 @@
 .tx-hist-list {
   overflow-y: auto;
   min-height: 0;
-  padding: 8px;
+  padding: 10px 12px 16px;
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 2px;
 }
 
 /* 历史条目按钮：全宽，左对齐，hover/selected 高亮 */
@@ -285,10 +294,11 @@
   width: 100%;
   text-align: left;
   appearance: none;
-  border: 1px solid transparent;
+  border: 0;
+  border-left: 3px solid transparent;
   background: transparent;
   border-radius: var(--r);
-  padding: 9px 11px;
+  padding: 10px 12px 10px 9px;
   cursor: pointer;
   transition: background-color 110ms ease, border-color 110ms ease;
 }
@@ -299,7 +309,7 @@
 
 .hist-row[aria-selected="true"] {
   background: var(--accent-soft);
-  border-color: var(--accent-line);
+  border-left-color: var(--accent);
 }
 
 /* 历史条目原文：标准字号 */
@@ -331,7 +341,7 @@
 /* 标签内的语言对小徽章 */
 .hist-tag .lp {
   background: var(--surface-2);
-  border: 1px solid var(--border);
+  border: 1px solid color-mix(in oklch, var(--border) 76%, transparent);
   border-radius: 4px;
   padding: 0 5px;
 }
@@ -341,6 +351,6 @@
   padding: 8px 16px;
   color: var(--danger);
   background: color-mix(in oklch, var(--danger) 8%, var(--bg));
-  border-bottom: 1px solid color-mix(in oklch, var(--danger) 24%, var(--border));
+  border-bottom: 1px solid color-mix(in oklch, var(--danger) 18%, var(--border));
   font-size: 13px;
 }
