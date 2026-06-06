@@ -7,6 +7,34 @@
 
 ---
 
+## 修订记录 · Post-freeze 变更（2026-06-07）
+
+> 本文 2026-06-06 冻结并驱动了 TV1–TV4 实现。下列变更发生在冻结之后，针对真机采证暴露的问题与一次 license 复核，已在分支 `feat/translate-sources-cleanup`（commits 85375b8 / 83aded5 / ca573b1 / 3d7990f / 4f1c5f0）实现并通过 feature-dev Phase 6 验证（make verify 全绿 + release 518 passed + 5 变异体全杀 + 审查无阻塞）。**本节为当前实现的权威说明，其下冻结正文保留为历史设计记录。**
+
+### A. GPL 衍生排查结论（实证复核 〇章原则）
+
+实拉 pot-desktop 源码，逐个比对全部 23 个 provider 的端点/常量/算法/响应字段，**结论：23 源全部独立实现，无 GPL copyleft 传染风险**。最硬证据：Bing 词典 appid 两边取值不同（我方 `8F6F50E7…` vs pot `371E7B2A…`）、百度/有道等 HTTP 方法不同（我方 POST vs pot GET）、实现语言不同（Rust vs JS）。〇章「独立重写、不抄 pot 代码」原则经实证成立。pot-desktop 及其翻译插件均为 GPL-3.0。
+
+### B. 去 pot 服务器化（白嫖治理，非 license 问题）
+
+真机采证发现两处端点直连 pot 私人服务器——著作权不保护 URL，这属「用别人的服务器」而非代码侵权，但不可持续（pot 可随时切断，ECDICT 已 405）：
+
+1. **ECDICT**：原 `POST pot-app.com/api/dict`（真机 405 已失效）→ **改本地内置离线 SQLite**。词库取 skywind3000/ECDICT（**MIT 协议，可自由分发**），精简 76 万词条、只保留 word/phonetic/translation/exchange 四列（≈40–60MB）。实现：新增 `EcdictDb` DAO + `EcdictProvider` override `translate()` 走本地只读查询、零网络；`is_unofficial` 改为 false。生成器 `src-tauri/tools/gen_ecdict_db.py` 入 git；真库与源 csv 不入 git（gitignore）；CI 拉固定 commit（SHA `bc015ed`）的 csv 生成 db 后打包。
+2. **默认源 Lingva**：端点 `lingva.pot-app.com`（pot 自建实例）→ **默认源改为 `google_free`**（直连 Google gtx 接口，不依赖任何第三方志愿实例）；Lingva 保留为可选源，端点迁至公共实例 `lingva.ml`。
+
+### C. 下架失效且违 ToS 的词典源
+
+真机采证：**Bing 词典 401**（硬编码 appid 被微软拒）、**剑桥 403**（HTML 抓取被反爬封）。两者既违各自 ToS 又已失效，**直接下架移除**（连带删除 `scraper` 依赖）。存量用户若选中已删源，由 `resolve_provider_or_fallback` 自动回退默认源。
+
+### 变更后的当前状态（覆盖下方冻结正文的对应处）
+
+- **内置源数量：21**（原 23 实现 − 下架 bing_dict / cambridge 共 2 个）。
+- **默认源：`google_free`**（不再是 Lingva）。
+- **词典源：ECDICT（本地离线）+ 有道词典（需 key）** 两个；Bing 词典 / 剑桥已移除。
+- **遗留真机采证**（headless 不可验）：真库生成 + bundle 随包 + e2e 查词命中。
+
+---
+
 ## 〇、实现总原则：独立重写，不抄 pot 代码（许可红线，最高优先级）
 
 pot-desktop 采用 **GPL-3.0（强 copyleft）**；QuickQuick 目前无 LICENSE 文件（默认「保留所有权利」/专有）。**直接复制 pot 源代码会使 QuickQuick 被迫整体以 GPL-3.0 开源（传染）**——故本项目**绝不复制 pot 的任何源代码**，也不近似改写其代码结构/表达。

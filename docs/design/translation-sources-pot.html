@@ -247,6 +247,63 @@ strong { font-weight: 600; }
 
 <div class="wrap">
 
+  <!-- 修订记录 Post-freeze -->
+  <section>
+    <div class="sec-head"><span class="sec-num">△</span><h2>修订记录 · Post-freeze 变更（2026-06-07）</h2></div>
+
+    <div class="callout" style="margin-bottom:28px;">
+      <span class="label">当前权威说明</span>
+      <p>本文 2026-06-06 冻结并驱动了 TV1–TV4 实现。下列变更发生在冻结之后，针对真机采证暴露的问题与一次 license 复核，已在分支 <code>feat/translate-sources-cleanup</code>（commits <code>85375b8</code> / <code>83aded5</code> / <code>ca573b1</code> / <code>3d7990f</code> / <code>4f1c5f0</code>）实现并通过 feature-dev Phase 6 验证（make verify 全绿 + release 518 passed + 5 变异体全杀 + 审查无阻塞）。<strong>本节为当前实现的权威说明，其下冻结正文保留为历史设计记录。</strong></p>
+    </div>
+
+    <div class="version-grid" style="grid-template-columns:1fr 1fr 1fr;">
+      <!-- A -->
+      <div class="vcard">
+        <div class="vtag">A</div>
+        <h3>GPL 衍生排查结论（实证复核 〇章原则）</h3>
+        <ul>
+          <li>实拉 pot-desktop 源码，逐个比对全部 23 个 provider 的端点/常量/算法/响应字段，<strong>结论：23 源全部独立实现，无 GPL copyleft 传染风险</strong>。</li>
+          <li>最硬证据：Bing 词典 appid 两边取值不同（我方 <code>8F6F50E7…</code> vs pot <code>371E7B2A…</code>）、百度/有道等 HTTP 方法不同（我方 POST vs pot GET）、实现语言不同（Rust vs JS）。</li>
+          <li>〇章「独立重写、不抄 pot 代码」原则经实证成立。pot-desktop 及其翻译插件均为 GPL-3.0。</li>
+        </ul>
+      </div>
+
+      <!-- B -->
+      <div class="vcard">
+        <div class="vtag">B</div>
+        <h3>去 pot 服务器化（白嫖治理，非 license 问题）</h3>
+        <ul>
+          <li>真机采证发现两处端点直连 pot 私人服务器——著作权不保护 URL，属「用别人的服务器」而非代码侵权，但不可持续（pot 可随时切断，ECDICT 已 405）。</li>
+          <li><strong>ECDICT</strong>：原 <code>POST pot-app.com/api/dict</code>（真机 405 已失效）→ 改本地内置离线 SQLite。词库取 skywind3000/ECDICT（<strong>MIT 协议</strong>），精简 76 万词条、只保留 word/phonetic/translation/exchange 四列（≈40–60MB）。新增 <code>EcdictDb</code> DAO + <code>EcdictProvider</code>；生成器 <code>src-tauri/tools/gen_ecdict_db.py</code> 入 git；CI 拉固定 commit（SHA <code>bc015ed</code>）的 csv 生成 db 后打包。</li>
+          <li><strong>默认源 Lingva</strong>：端点 <code>lingva.pot-app.com</code>（pot 自建实例）→ 默认源改为 <code>google_free</code>（直连 Google gtx，不依赖任何第三方实例）；Lingva 保留为可选源，端点迁至公共实例 <code>lingva.ml</code>。</li>
+        </ul>
+      </div>
+
+      <!-- C -->
+      <div class="vcard">
+        <div class="vtag">C</div>
+        <h3>下架失效且违 ToS 的词典源</h3>
+        <ul>
+          <li>真机采证：<strong>Bing 词典 401</strong>（硬编码 appid 被微软拒）、<strong>剑桥 403</strong>（HTML 抓取被反爬封）。</li>
+          <li>两者既违各自 ToS 又已失效，<strong>直接下架移除</strong>（连带删除 <code>scraper</code> 依赖）。</li>
+          <li>存量用户若选中已删源，由 <code>resolve_provider_or_fallback</code> 自动回退默认源。</li>
+        </ul>
+      </div>
+    </div>
+
+    <h3 class="subhead" style="margin-top:32px;">变更后的当前状态（覆盖下方冻结正文的对应处）</h3>
+    <div class="pcard">
+      <ul class="principles">
+        <li><b>内置源数量：21</b>（原 23 实现 − 下架 <code>bing_dict</code> / <code>cambridge</code> 共 2 个）。</li>
+        <li><b>默认源：<code>google_free</code></b>（不再是 Lingva）。</li>
+        <li><b>词典源：ECDICT（本地离线）+ 有道词典（需 key）</b> 两个；Bing 词典 / 剑桥已移除。</li>
+        <li><b>遗留真机采证</b>（headless 不可验）：真库生成 + bundle 随包 + e2e 查词命中。</li>
+      </ul>
+    </div>
+
+    <hr style="border:none;border-top:1px solid var(--line);margin:48px 0 0;">
+  </section>
+
   <!-- 〇 GPL 许可红线 -->
   <section>
     <div class="sec-head"><span class="sec-num">〇</span><h2>实现总原则：独立重写，不抄 pot 代码</h2></div>
