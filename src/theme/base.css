@@ -38,6 +38,14 @@ input, textarea, select {
   color: inherit;
 }
 
+button:focus-visible,
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible {
+  outline: 2px solid var(--accent-line);
+  outline-offset: 2px;
+}
+
 /* 选中态用 accent 淡色，与品牌色保持一致 */
 ::selection {
   background: var(--accent-soft);

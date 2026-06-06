@@ -4,11 +4,11 @@
  * auto 模式由 themeStore.ts 写 data-theme，不用 @media prefers-color-scheme 驱动主题切换。
  */
 :root {
-  --bg:      oklch(97% 0.004 250);
-  --surface: oklch(100% 0 0);
+  --bg:      oklch(96.5% 0.004 250);
+  --surface: oklch(99% 0.002 250);
   --fg:      oklch(24% 0.015 250);
   --muted:   oklch(50% 0.012 250);
-  --border:  oklch(91% 0.005 250);
+  --border:  oklch(89% 0.006 250);
   --accent:  oklch(54% 0.092 242);
 
   --accent-soft: color-mix(in oklch, var(--accent) 12%, transparent);
@@ -34,16 +34,16 @@
 }
 
 [data-theme="dark"] {
-  --bg:      oklch(20% 0.012 250);
-  --surface: oklch(23.5% 0.013 250);
+  --bg:      oklch(17.5% 0.006 250);
+  --surface: oklch(21.5% 0.008 250);
   --fg:      oklch(95% 0.004 250);
-  --muted:   oklch(66% 0.012 250);
-  --border:  oklch(30% 0.012 250);
+  --muted:   oklch(67% 0.01 250);
+  --border:  oklch(28% 0.008 250);
   --accent:  oklch(67% 0.10 242);
 
   --accent-soft: color-mix(in oklch, var(--accent) 16%, transparent);
-  --accent-line: color-mix(in oklch, var(--accent) 42%, transparent);
-  --surface-2:   color-mix(in oklch, white 4%, var(--surface));
+  --accent-line: color-mix(in oklch, var(--accent) 34%, transparent);
+  --surface-2:   color-mix(in oklch, white 5%, var(--surface));
   --hover:       color-mix(in oklch, white 6%, transparent);
   --fg-soft:     color-mix(in oklch, white 6%, transparent);
   --shadow-pop:  0 16px 48px -8px color-mix(in oklch, black 60%, transparent);

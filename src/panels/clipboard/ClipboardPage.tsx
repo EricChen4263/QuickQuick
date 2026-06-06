@@ -1,5 +1,5 @@
 /**
- * 剪贴板历史页（双栏布局：左侧 340px 列表栏 + 右侧预览区）。
+ * 剪贴板历史页（双栏布局：左侧列表栏 + 右侧预览区）。
  * 挂载时通过 IPC 取数，支持搜索过滤、类型筛选、键盘流、收藏/删除管理。
  * 对应验收项 V1-F2-A07。
  */
@@ -213,7 +213,7 @@ function ClipboardPage({ onTranslateItem }: ClipboardPageProps) {
   }
 
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "340px 1fr", height: "100%", minHeight: 0, overflow: "hidden", fontFamily: "var(--font)" }}>
+    <div className="clip-page">
       {opError !== null && (
         <div
           role="alert"

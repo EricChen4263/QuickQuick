@@ -4,23 +4,37 @@
  * 类名与设计稿 index.html 保持对应，方便逐项比对。
  */
 
-/* 列表栏：左侧 340px 固定宽，内部 grid rows：搜索栏(auto) + 列表(1fr)
+/* 页面根：左侧主列表 + 右侧轻量详情工作区 */
+.clip-page {
+  display: grid;
+  grid-template-columns: minmax(380px, 430px) minmax(0, 1fr);
+  gap: 18px;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  padding: 18px 18px 16px 0;
+  font-family: var(--font);
+}
+
+/* 列表栏：内部 grid rows：搜索栏(auto) + 列表(1fr)
    min-width:0 防 grid 列方向横向溢出；overflow:hidden 隔离内容撑高 */
 .clip-list-col {
-  border-right: 1px solid var(--border);
   display: grid;
   grid-template-rows: auto auto 1fr;
   min-height: 0;
   min-width: 0;
   overflow: hidden;
+  background: var(--surface);
+  border: 1px solid color-mix(in oklch, var(--border) 72%, transparent);
+  border-radius: var(--r-lg);
 }
 
 /* 搜索栏容器：搜索框 + 筛选器横排 */
 .searchbar {
   display: flex;
   gap: 8px;
-  padding: 11px 12px;
-  border-bottom: 1px solid var(--border);
+  padding: 18px 18px 12px;
+  border-bottom: 0;
 }
 
 /* 搜索框外层：相对定位容器，内嵌 SVG 图标 */
@@ -42,12 +56,12 @@
 
 .search-field input {
   width: 100%;
-  padding: 7px 10px 7px 30px;
-  border: 1px solid var(--border);
+  padding: 9px 12px 9px 34px;
+  border: 1px solid color-mix(in oklch, var(--border) 72%, transparent);
   border-radius: var(--r-sm);
-  background: var(--surface);
+  background: var(--surface-2);
   outline: none;
-  font-size: 13px;
+  font-size: 14px;
   font-family: var(--font);
   color: var(--fg);
 }
@@ -62,10 +76,10 @@
 .clip-list {
   overflow-y: auto;
   min-height: 0;
-  padding: 8px;
+  padding: 8px 12px 16px;
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 2px;
 }
 
 /* 单行条目：三列 grid（类型图标 | 主内容 | 右侧操作） */
@@ -73,16 +87,17 @@
   text-align: left;
   width: 100%;
   appearance: none;
-  border: 1px solid transparent;
+  border: 0;
+  border-left: 3px solid transparent;
   background: transparent;
   border-radius: var(--r);
-  padding: 10px 11px;
+  padding: 11px 12px 11px 10px;
   display: grid;
-  grid-template-columns: 22px 1fr auto;
-  gap: 10px;
-  align-items: start;
+  grid-template-columns: 24px 1fr auto;
+  gap: 12px;
+  align-items: center;
   cursor: default;
-  transition: background-color 110ms ease, border-color 110ms ease;
+  transition: background-color 110ms ease, border-color 110ms ease, color 110ms ease;
 }
 
 .clip-row:hover {
@@ -92,24 +107,28 @@
 /* 高亮态用 CSS 属性选择器驱动，不需 inline style */
 .clip-row[aria-selected="true"] {
   background: var(--accent-soft);
-  border-color: var(--accent-line);
+  border-left-color: var(--accent);
 }
 
 /* 类型图标容器：小方块，灰色图标 */
 .clip-kind {
-  width: 22px;
-  height: 22px;
-  border-radius: var(--r-sm);
+  width: 24px;
+  height: 24px;
+  border-radius: 0;
   display: grid;
   place-items: center;
   color: var(--muted);
-  background: var(--surface-2);
+  background: transparent;
   flex: none;
 }
 
 .clip-kind svg {
-  width: 14px;
-  height: 14px;
+  width: 18px;
+  height: 18px;
+}
+
+.clip-row[aria-selected="true"] .clip-kind {
+  color: var(--accent);
 }
 
 /* 主内容区：文本摘要 + 元信息 */
@@ -119,7 +138,7 @@
 
 /* 内容摘要：两行截断 */
 .clip-text {
-  font-size: 13px;
+  font-size: 13.5px;
   line-height: 1.4;
   max-height: 2.8em;
   overflow: hidden;
@@ -148,8 +167,8 @@
   color: var(--muted);
   display: grid;
   place-items: center;
-  width: 20px;
-  height: 20px;
+  width: 24px;
+  height: 24px;
   background: none;
   border: none;
   padding: 0;
@@ -173,7 +192,7 @@
   width: 44px;
   height: 32px;
   border-radius: 6px;
-  border: 1px solid var(--border);
+  border: 1px solid color-mix(in oklch, var(--border) 70%, transparent);
   object-fit: cover;
   background: linear-gradient(135deg, var(--accent-soft), var(--fg-soft));
 }
@@ -191,6 +210,9 @@
   grid-template-rows: 1fr auto;
   min-height: 0;
   overflow: hidden;
+  background: var(--surface);
+  border: 1px solid color-mix(in oklch, var(--border) 72%, transparent);
+  border-radius: var(--r-lg);
 }
 
 /* 预览正文滚动区
@@ -198,7 +220,7 @@
 .preview-body {
   overflow-y: auto;
   min-height: 0;
-  padding: 22px 24px;
+  padding: 30px 42px;
 }
 
 /* 预览 kicker：类型·来源·时间 小字元信息行 */
@@ -208,7 +230,7 @@
   gap: 8px;
   color: var(--muted);
   font-size: 12px;
-  margin-bottom: 14px;
+  margin-bottom: 20px;
 }
 
 .preview-kicker .dot {
@@ -221,19 +243,20 @@
 
 /* 文本内容区 */
 .preview-content {
-  font-size: 14px;
-  line-height: 1.6;
+  font-size: 18px;
+  line-height: 1.55;
   word-break: break-word;
   white-space: pre-wrap;
   color: var(--fg);
+  max-width: 70ch;
 }
 
 /* code 类型：等宽 + 代码块背景 */
 .preview-content.code {
   font-family: var(--mono);
-  font-size: 12.5px;
-  background: var(--surface);
-  border: 1px solid var(--border);
+  font-size: 13px;
+  background: var(--surface-2);
+  border: 1px solid color-mix(in oklch, var(--border) 76%, transparent);
   border-radius: var(--r);
   padding: 14px 16px;
   line-height: 1.65;
@@ -244,7 +267,7 @@
 .preview-img {
   width: 100%;
   border-radius: var(--r);
-  border: 1px solid var(--border);
+  border: 1px solid color-mix(in oklch, var(--border) 72%, transparent);
   display: block;
   max-height: 360px;
   object-fit: contain;
@@ -254,20 +277,23 @@
 .preview-actions {
   display: flex;
   gap: 8px;
-  padding: 13px 16px;
-  border-top: 1px solid var(--border);
+  padding: 16px 20px;
+  border-top: 1px solid color-mix(in oklch, var(--border) 48%, transparent);
+  background: color-mix(in oklch, var(--surface-2) 62%, var(--surface));
   flex-wrap: wrap;
 }
 
 /* 元数据网格：两列（dt=灰色标签 | dd=等宽值） */
 .meta-grid {
-  margin-top: 22px;
-  border-top: 1px solid var(--border);
-  padding-top: 16px;
+  margin-top: 28px;
+  padding: 16px 18px;
   display: grid;
   grid-template-columns: auto 1fr;
-  gap: 8px 18px;
+  gap: 9px 22px;
   font-size: 12.5px;
+  background: var(--surface-2);
+  border-radius: var(--r);
+  max-width: 420px;
 }
 
 .meta-grid dt {
@@ -283,7 +309,7 @@
 .onboard {
   margin: 12px;
   padding: 14px 16px;
-  border: 1px solid var(--accent-line);
+  border: 1px solid color-mix(in oklch, var(--accent-line) 72%, transparent);
   background: var(--accent-soft);
   border-radius: var(--r);
   display: flex;
