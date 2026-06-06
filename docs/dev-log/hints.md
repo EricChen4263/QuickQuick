@@ -19,6 +19,7 @@
 - **coder 交付序**：多交付项任务，测试一过立即按序落地 ① 完成接入/wiring ② 写 coding.md 骨架 ③ 才润色。接入与留痕都是交付物，不是收尾——那正是被截断丢失的位置。
 - **coder 声明完成前必须实跑全量测试，cargo check 不够**（TV3 复盘 TV3-RETRO-1）：最后一次编辑之后必须实跑全量 `cargo test`（前端 `pnpm test`），**不能以 `cargo check`/单测子集/记忆代替**；自报的 `N passed` 必须来自本次实跑、贴真实 `test result: ok. N passed` 行。TV3-F2 coder polish 后只 cargo check 就自报 487 passed，实树 GeminiProvider URL `format!` 漏占位符编译失败（exit 101），被 tester 命中校验首步抓到打回。〔全局晋升到 coder 契约/code-standards 待用户批准自修改 skill〕
 - **回合预算有限**：单次任务切到预算内、尽早落痕（coding.md/test.md），撞顶也留可续状态；超大任务交付最小片段。
+- **续跑撞顶无进展 ≥2 次改派 fresh agent**（TV4 复盘 TV4-RETRO-1）：同一 subagent 续跑（SendMessage resume）若连续 ≥2 次撞 maxTurns 且无实质进展（工具调用数≈0 或无文件变更），判定其累积上下文已饱和——resume 只续任务不缩上下文，越续越死。此时**改派全新 subagent**，带『已落地状态摘要 + 精确剩余步骤（可含批量 sed/perl 指令）』接力，而非继续 resume 老 agent。TV4-F1 枚举大重构实测：老 coder 反复 0 进展，改派 fresh coder 后两轮收口完成。
 - **移除/重命名 provider/源/实体时全仓清旧引用**（TV1 复盘 TV1-RETRO-1）：删或改名一个翻译源/实体后，全仓 `grep` 其旧名（id/display/字段），**同批清理注释、测试 fixture、doc 中的过时引用**，纳入交付清单逐条核销——否则会留下与实现矛盾的死注释/旧值断言（TV1 移除 MyMemory 后 ipc_settings.rs 头注释、translate.rs fixture、mod.rs:65 doc 三处复发，被 reviewer 逐个抓）。翻译源持续新增/演进期此坑高频。
 - **证否「密钥不泄露」必须用非空 sentinel 脏值**（TV2 复盘 TV2-RETRO-1）：断言密钥/token/apikey 不出现在请求/输出/日志/错误消息时，凭据字段要填入**可识别的非空脏值**（如 `"SENTINEL_DEADBEEF"`）再断言 `!contains(sentinel)`；用空值/空串占位是**恒真假绿**（空值本就不会出现在任何输出里）。F2 缺字段测试曾用空凭据被 reviewer 抓。TV3 LLM apiKey、TV4 词典 key 同理。〔全局晋升到 code-standards §8 待用户批准自修改 skill〕
 - **复杂签名确定性测试须独立复算锚定**（TV2 [仅观察]）：TC3/HMAC-SHA1/SigV4 等签名源，别只「本实现算一次断言等于自己」（循环论证，写错也绿）——用独立工具（Python 按厂商官方文档手算）算出参照向量，断言锚定**具体 hex/Base64 常量**。TV2 三源已照此做并经 codex 异构裁判复核。
