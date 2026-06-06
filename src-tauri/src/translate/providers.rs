@@ -209,9 +209,9 @@ pub fn registry() -> Vec<ProviderCapability> {
 ///
 /// Lingva 是开源 Google 翻译前端，提供无认证的纯 GET HTTP 接口。
 /// 端点（按公开互操作协议事实独立实现，不参考任何第三方源码）：
-/// `GET https://lingva.pot-app.com/api/v1/{source}/{target}/{url-encoded text}`
+/// `GET https://lingva.ml/api/v1/{source}/{target}/{url-encoded text}`
 /// 响应体形如 `{"translation":"..."}`，译文取 `translation` 字段。
-/// 选用 pot-app 托管实例：稳定优先、译质等同 Google 引擎；
+/// 选用 lingva.ml 公共实例（实测返回正常 JSON）：译质等同 Google 引擎；
 /// 运营依赖第三方实例可用性的风险已记入设计文档§七。
 pub struct LingvaProvider;
 
@@ -244,7 +244,7 @@ impl TranslateProvider for LingvaProvider {
 
         // 路径段：src/tgt 为 ASCII 语言码无需编码；text 走 RFC 3986 percent-encode。
         let url = format!(
-            "https://lingva.pot-app.com/api/v1/{}/{}/{}",
+            "https://lingva.ml/api/v1/{}/{}/{}",
             src,
             tgt,
             percent_encode(&req.text),
@@ -3131,7 +3131,7 @@ mod tests {
         assert!(
             http_req
                 .url
-                .starts_with("https://lingva.pot-app.com/api/v1/"),
+                .starts_with("https://lingva.ml/api/v1/"),
             "URL 应为 Lingva 端点，实际：{}",
             http_req.url
         );

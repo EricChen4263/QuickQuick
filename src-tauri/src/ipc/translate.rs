@@ -33,7 +33,7 @@ use crate::translate::{
 /// 默认翻译源 id（免 key，开箱可用）。
 ///
 /// 设计文档§三.决策1：移除 MyMemory 后默认切 Lingva（pot 自建实例最稳）。
-pub const DEFAULT_PROVIDER_ID: &str = "lingva";
+pub const DEFAULT_PROVIDER_ID: &str = "google_free";
 
 /// 把持久化的 selected_provider 解析为当前注册表内的有效 id。
 ///
@@ -325,19 +325,19 @@ mod tests {
     use crate::translate::credential::MockCredStore;
 
     // 对齐 acceptance TV1-F1-A03：持久化的 selected_provider 不在注册表内
-    // （含旧值 mymemory、任意未知 id）时，解析回退为默认源 lingva；
+    // （含旧值 mymemory、已下架 id、任意未知 id）时，解析回退为默认源 google_free；
     // 注册表内的合法 id 原样保留。
     #[test]
-    fn selected_provider_migrates_unknown_to_lingva() {
-        // 旧值 mymemory（已删除）→ 回退 lingva
-        assert_eq!(resolve_provider_or_fallback("mymemory"), "lingva");
-        // 任意未知 id → 回退 lingva
-        assert_eq!(resolve_provider_or_fallback("totally_unknown"), "lingva");
+    fn selected_provider_migrates_unknown_to_default() {
+        // 旧值 mymemory（已删除）→ 回退默认源 google_free
+        assert_eq!(resolve_provider_or_fallback("mymemory"), "google_free");
+        // 任意未知 id → 回退 google_free
+        assert_eq!(resolve_provider_or_fallback("totally_unknown"), "google_free");
         // 已下架的 bing_dict / cambridge（Commit 1）→ 回退默认源
-        assert_eq!(resolve_provider_or_fallback("bing_dict"), "lingva");
-        assert_eq!(resolve_provider_or_fallback("cambridge"), "lingva");
-        // 空串 → 回退 lingva
-        assert_eq!(resolve_provider_or_fallback(""), "lingva");
+        assert_eq!(resolve_provider_or_fallback("bing_dict"), "google_free");
+        assert_eq!(resolve_provider_or_fallback("cambridge"), "google_free");
+        // 空串 → 回退 google_free
+        assert_eq!(resolve_provider_or_fallback(""), "google_free");
         // 注册表内合法 id 原样保留（不被误改）
         assert_eq!(resolve_provider_or_fallback("lingva"), "lingva");
         assert_eq!(resolve_provider_or_fallback("baidu"), "baidu");
