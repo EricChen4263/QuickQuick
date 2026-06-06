@@ -4,7 +4,7 @@ type: coding_record
 level: 小功能
 parent: TV2-F4
 status: done
-commit: PENDING
+commit: 29bae0c
 acceptance_ids: [TV2-F4-A01, TV2-F5-A01]
 ---
 

@@ -6,7 +6,7 @@ parent: TV2-F3
 children: []
 created: 2026-06-06T03:30:00Z
 status: 通过
-commit: PENDING
+commit: 29bae0c
 acceptance_ids: [TV2-F3-A01, TV2-F5-A01]
 evidence: []
 author: code-reviewer
