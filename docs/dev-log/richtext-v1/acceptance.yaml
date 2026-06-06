@@ -1,0 +1,200 @@
+# 版本前置验收标准清单（开工前登记、冻结）
+# 来源：机械派生自已批准设计文档 docs/design/quickquick-richtext-fidelity.md
+#       §一（4 项冻结决策：只HTML / 粘贴+复制都带 / 渲染+DOMPurify清洗 / 纯文本相同即去重）
+#       §四（5 个 TDD 任务）+ §五（XSS 红线）+ §六（测试策略）。
+# 关键事实：arboard 3.6.1 三平台原生支持 HTML 读写，跨平台零新依赖、零 cfg 分支。
+# AI 只翻译不发明、不放宽；改标准走 change_log。
+
+version: RT1
+title: 剪贴板富文本（HTML）保真（对应设计文档 quickquick-richtext-fidelity §四/§五）
+source_doc: docs/design/quickquick-richtext-fidelity.md（§一 决策 / §四 任务 / §五 安全）
+frozen_at: 2026-06-07T00:00:00Z
+criteria_freeze: RT1-criteria@2026-06-07
+
+# 无 docs/STRATEGY.md → 战略层不启用。
+# 本环境无 scripts/freeze-lint.sh（历史版本亦无）→ 织三网由编排器手工核对：
+#   coverage_check 每 covered 类别有匹配 category 验收项、无空洞；每 objective 项有可执行 verify；
+#   每项有 source_anchor；arboard GUI 读写 / CGEvent 粘贴 headless 不可验项归 manual_confirm 并标 collect_env。
+# hints 注入：sentinel 脏值证否(TV2)、交付前实跑全量(TV3)、排序确定性、rtk proxy 取原始证据(V6)、防截断交付序。
+
+coverage_check:
+  功能正确性:  covered
+  测试充分性:  covered
+  工程质量:    covered
+  性能:        N/A (html 读取/清洗开销可忽略，本版无性能目标)
+  UI还原度:    covered  # 富文本预览渲染（ClipPreview/PopoverPreview）
+  资源规范:    N/A (新增 dompurify 为 npm 依赖、非二进制资源；html_content 为 DB 列、随整库 SQLCipher 加密)
+  安全:        covered  # dangerouslySetInnerHTML + DOMPurify，XSS 红线
+  留痕产出:    covered
+  人工确认点:  covered
+
+acceptance:
+  # ── RT1-F1 后端富文本链路（捕获·存储·取数·还原）──────────────────
+  - id: RT1-F1-A01
+    assertion: "db 存储层支持 html：clip_items 新增 html_content TEXT 列；存量库（无列）经 PRAGMA table_info 守卫 + ALTER TABLE ADD COLUMN 幂等迁移后可写读；ingest 写入 item.html，kind = html.is_some() ? 'richtext' : 'text'；去重仍按 text_hash（纯文本）——纯文本相同即命中；命中且旧行 html_content IS NULL 而新 item.html.is_some() 时 UPDATE 补写 html_content + 升 kind='richtext' 再 bump（决策4），text_hash 计算不变"
+    category: 功能正确性
+    source_anchor: 设计文档§四.任务1 + §一.决策4（纯文本相同即去重 + 补写升级）
+    kind: objective
+    verify:
+      type: test_id
+      ref: "ingest_richtext_roundtrip_persists_html_and_kind, html_column_migration_idempotent_on_existing_db, dedup_by_plaintext_unchanged, ingest_backfills_html_and_upgrades_kind_on_hit"
+      runner: cd src-tauri && cargo test
+      path: src-tauri/src/db.rs
+      expect: pass
+    evidence_ref: dev-log/richtext-v1/f1-backend-richtext/test.md
+    level: 大功能
+    status: 待验
+
+  - id: RT1-F1-A02
+    assertion: "捕获层读 HTML：ArboardBackend::read() 用 clipboard.get().html().ok() 填 snapshot.html（不再硬编码 None）；compute_composite_hash 把 html 字节以独立分隔符、固定顺序拼入哈希，使「同纯文本但新增/变更了 html」能触发 change_count 递增 → 进而走 ingest 补写。snapshot_to_clips 透传 html 不变。纯逻辑可测：html 不同 → composite hash 不同；text 相同 html 不同不再被判为无变化"
+    category: 功能正确性
+    source_anchor: 设计文档§四.任务2 + §二（arboard get().html 跨平台）
+    kind: objective
+    verify:
+      type: test_id
+      ref: "composite_hash_differs_when_html_differs, snapshot_to_clips_propagates_html"
+      runner: cd src-tauri && cargo test
+      path: src-tauri/src/pipeline.rs
+      expect: pass
+    evidence_ref: dev-log/richtext-v1/f1-backend-richtext/test.md
+    level: 大功能
+    status: 待验
+
+  - id: RT1-F1-A03
+    assertion: "IPC 取数透出 html：ClipItemDto 加 html_content: Option<String>（结构体 rename_all=camelCase → 前端 htmlContent）；list_clip_items_impl 从查询行映射 html_content——富文本行返回 html 字符串、纯文本/图片行为 null；TS ClipItem 接口加 htmlContent?: string，既有字段不回归"
+    category: 功能正确性
+    source_anchor: 设计文档§四.任务3
+    kind: objective
+    verify:
+      type: test_id
+      ref: "list_clip_items_exposes_html_content_for_richtext, list_clip_items_html_null_for_plaintext"
+      runner: cd src-tauri && cargo test
+      path: src-tauri/src/ipc/clipboard.rs
+      expect: pass
+    evidence_ref: dev-log/richtext-v1/f1-backend-richtext/test.md
+    level: 大功能
+    status: 待验
+
+  - id: RT1-F1-A04
+    assertion: "还原（粘贴+复制）带 html：fetch_paste_item SELECT html_content 并构造 CapturedItem{text, html}（不再 html:None）；write_with_marker（macos_impl 与 fallback_impl 两处）在 item.html.is_some() 时走 clipboard.set().html(html, Some(text))、否则 set_text，PasteBackend trait 签名不变；新增 IPC 命令 copy_clip_to_clipboard(id) 取 text+html 并用 arboard set().html 写系统剪贴板（在 lib.rs invoke_handler 注册、ipc-client.ts 加封装），其取数+组装纯逻辑可测"
+    category: 功能正确性
+    source_anchor: 设计文档§四.任务4 + §一.决策2（粘贴+复制都带）
+    kind: objective
+    verify:
+      type: test_id
+      ref: "fetch_paste_item_includes_html, copy_clip_assembles_text_and_html"
+      runner: cd src-tauri && cargo test
+      path: src-tauri/src/ipc/system.rs
+      expect: pass
+    evidence_ref: dev-log/richtext-v1/f1-backend-richtext/test.md
+    level: 大功能
+    status: 待验
+
+  # ── RT1-F2 前端富文本（渲染清洗 + 复制按钮）────────────────────────
+  - id: RT1-F2-A01
+    assertion: "富文本预览渲染 + 清洗：ClipPreview 与 PopoverPreview 在 kind==='richtext' && htmlContent 时用 dangerouslySetInnerHTML 渲染 DOMPurify.sanitize(htmlContent)（引入 dompurify 依赖），否则维持纯文本 {content}；列表行 ClipItemRow 不变（仍纯文本摘要）。组件测试覆盖：正常富文本（加粗/表格/链接）清洗后保留可见；纯文本条目走原渲染不受影响"
+    category: UI还原度
+    source_anchor: 设计文档§四.任务5 + §一.决策3（渲染真富文本+清洗）
+    kind: objective
+    verify:
+      type: test_id
+      ref: "clip_preview_renders_sanitized_richtext, clip_preview_plaintext_unchanged, popover_preview_renders_sanitized_richtext"
+      runner: pnpm test
+      path: src/panels/clipboard/
+      expect: pass
+    evidence_ref: dev-log/richtext-v1/f2-frontend-render/test.md
+    level: 大功能
+    status: 待验
+
+  - id: RT1-F2-A02
+    assertion: "复制按钮带 html：主窗口 ClipPreview 与 popover 的「复制」改调 copy_clip_to_clipboard(id) IPC（替代 browser-api.ts 的 navigator.clipboard.writeText），使复制也携带富文本格式；纯文本条目复制行为不回归"
+    category: 功能正确性
+    source_anchor: 设计文档§四.任务4-复制 + §一.决策2
+    kind: objective
+    verify:
+      type: test_id
+      ref: "copy_button_invokes_copy_clip_to_clipboard, plaintext_copy_not_regressed"
+      runner: pnpm test
+      path: src/panels/clipboard/
+      expect: pass
+    evidence_ref: dev-log/richtext-v1/f2-frontend-render/test.md
+    level: 大功能
+    status: 待验
+
+  # ── 测试充分性 ────────────────────────────────────────────────────
+  - id: RT1-A-TEST
+    assertion: "html 链路各环节有命中与分支单测：迁移幂等 / ingest roundtrip / 去重不变 / 补写升级 / hash 区分 html / DTO 透出 / fetch 取 html / 复制组装；前端有 sanitize 渲染 + 恶意剥离 + 纯文本回退测试；全量 cd src-tauri && cargo test + cargo test --release + pnpm test 全绿，排序/并发/共享资源类连跑 ≥3 次无 flaky（hints 抗flaky）。取原始 'test … ok'/'N passed'(N≥1) 用 rtk proxy 绕代理（hints V6）"
+    category: 测试充分性
+    source_anchor: 设计文档§六 + hints（抗flaky / rtk proxy 取证 / 交付前实跑全量）
+    kind: objective
+    verify:
+      type: command
+      ref: "cd src-tauri && cargo test 全绿 且 cargo test --release 全绿；根目录 pnpm test 全绿；rtk proxy 取原始 'test … ok'/'N passed'(N≥1)"
+      runner: cd src-tauri && cargo test; cargo test --release
+      path: src-tauri/
+      expect: pass
+    evidence_ref: dev-log/richtext-v1/*/test.md
+    level: 版本
+    status: 待验
+
+  # ── 工程质量 ──────────────────────────────────────────────────────
+  - id: RT1-A-QUAL
+    assertion: "本版改动无新增 clippy 警告（cd src-tauri && cargo clippy --all-targets -- -D warnings exit 0）、前端 tsc --noEmit 无错、无遗留 TODO/FIXME；新增 dompurify 依赖合理（仅用于富文本预览 XSS 清洗，含 @types）"
+    category: 工程质量
+    source_anchor: code-standards §工程质量 + 设计文档§四.任务5
+    kind: objective
+    verify:
+      type: command
+      ref: "cd src-tauri && cargo clippy --all-targets -- -D warnings (exit 0)；前端 tsc --noEmit；grep 新增无 TODO/FIXME"
+      runner: cd src-tauri && cargo clippy --all-targets -- -D warnings
+      path: src-tauri/
+      expect: pass
+    evidence_ref: dev-log/richtext-v1/*/coding.md
+    level: 版本
+    status: 待验
+
+  # ── 安全（XSS 红线，设计文档§五）─────────────────────────────────
+  - id: RT1-A-SEC
+    assertion: "富文本渲染前必经 DOMPurify.sanitize（无信任来源豁免）；证否测试用真实恶意 payload（<script>、onerror=、javascript: URL、<iframe>，非空可识别脏值精神 hints TV2）断言被剥离、不进 DOM/不执行；后端 ingest 原样保存未清洗 html（保真，清洗只在渲染层）；CSP 不因富文本渲染放开 script-src"
+    category: 安全
+    source_anchor: 设计文档§五（XSS 红线 4 条）+ hints TV2-RETRO-1（非空 sentinel 脏值）
+    kind: objective
+    verify:
+      type: command
+      ref: "前端测试断言 DOMPurify 剥离 <script>/on*/javascript:/<iframe>（用真实 payload）；grep 确认渲染路径无 sanitize 缺口、后端无对 html 的清洗改写；CSP 配置未放开 script-src"
+      runner: pnpm test
+      path: src/panels/clipboard/
+      expect: pass
+    evidence_ref: dev-log/richtext-v1/f2-frontend-render/review.md
+    level: 版本
+    status: 待验
+
+  # ── 留痕产出 ──────────────────────────────────────────────────────
+  - id: RT1-A-LOG
+    assertion: "本版每个小功能三联留痕齐（coding/test/review），每个大功能 feature-report.md，版本 version-verdict.md + retrospective.md；commit 提交后回填真 hash"
+    category: 留痕产出
+    source_anchor: goal-dev 规范§五 + 目录约定
+    kind: objective
+    verify:
+      type: command
+      ref: "find dev-log/richtext-v1 确认各大功能三联 + feature-report + 版本 verdict"
+      runner: find docs/dev-log/richtext-v1 -type f
+      path: docs/dev-log/richtext-v1/
+      expect: pass
+    evidence_ref: dev-log/richtext-v1/
+    level: 版本
+    status: 待验
+
+  # ── 人工确认点（arboard GUI 读写 + CGEvent 粘贴，headless 采不了）──
+  - id: RT1-M01
+    assertion: "真机：从浏览器复制带格式内容 → 历史条目保存为 richtext 且预览区显示加粗/颜色/表格等格式；点「粘贴到前台」到富文本编辑器（Word/备忘录/邮件）格式还原；点「复制」后到富文本编辑器粘贴带格式；粘到纯文本编辑器自动退纯文本（兜底）；纯 RTF 源（如 macOS TextEdit）按设计退纯文本"
+    category: 人工确认点
+    source_anchor: 设计文档§一.决策1-3 + §七（粘贴兜底）
+    kind: manual_confirm
+    verify: null
+    collect_env: real_device
+    evidence_ref: dev-log/richtext-v1/manual-richtext-roundtrip.png
+    level: 版本
+    status: 待采证
+
+change_log: []

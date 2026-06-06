@@ -1,0 +1,349 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>QuickQuick 剪贴板富文本保真 · 实现方案</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg: #f8f9fa; --card: #ffffff; --card-2: #f3f4f5; --mist: #e2e8f0; --mist-hover: #f1f5f9;
+  --fjord: #05192d; --ink: #191c1d; --ink-2: #44474d; --outline: #74777d; --line: #c4c6cd; --glacier: #d1d5db;
+  --accent: #3e54ac; --accent-dim: #1a338b; --accent-soft: #dde1ff;
+  --green-bg: #e6f0ea; --green-tx: #2f6b4f; --grey-bg: #ececef; --grey-tx: #6b6f76; --err: #ba1a1a;
+  --shadow: 0 12px 32px rgba(5,25,45,0.08); --radius: 12px;
+}
+* { box-sizing: border-box; }
+html { -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility; scroll-behavior: smooth; }
+body { margin: 0; background: var(--bg); color: var(--ink); font-family: 'Inter', -apple-system, sans-serif; font-size: 16px; font-weight: 400; line-height: 1.65; letter-spacing: -0.003em; }
+.mono { font-family: 'JetBrains Mono', monospace; }
+.topbar { position: sticky; top: 0; z-index: 50; background: rgba(248,249,250,0.85); backdrop-filter: blur(12px); border-bottom: 1px solid var(--line); }
+.topbar-in { max-width: 1040px; margin: 0 auto; height: 60px; padding: 0 32px; display: flex; align-items: center; justify-content: space-between; }
+.topbar .brand { font-size: 15px; font-weight: 600; color: var(--fjord); letter-spacing: -0.01em; }
+.topbar .tag { font-family: 'JetBrains Mono', monospace; font-size: 10.5px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--accent); background: var(--mist); padding: 4px 10px; border-radius: 999px; }
+.hero { background: linear-gradient(160deg, #05192d 0%, #0c2440 45%, #1c2f55 100%); color: #fff; position: relative; overflow: hidden; }
+.hero::after { content: ''; position: absolute; inset: 0; background: radial-gradient(120% 90% at 78% 8%, rgba(120,150,210,0.22), transparent 60%); pointer-events: none; }
+.hero-in { max-width: 1040px; margin: 0 auto; padding: 72px 32px 64px; position: relative; z-index: 1; }
+.hero .kicker { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 22px; }
+.hero .chip-hero { font-family: 'JetBrains Mono', monospace; font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; padding: 5px 12px; border-radius: 999px; }
+.chip-hero.solid { background: var(--accent); color: #fff; }
+.chip-hero.ghost { background: rgba(255,255,255,0.1); color: #c7d2ec; border: 1px solid rgba(255,255,255,0.18); }
+.hero h1 { font-size: clamp(32px, 5.2vw, 48px); font-weight: 700; line-height: 1.1; letter-spacing: -0.025em; margin: 0 0 24px; color: #fff; }
+.hero .lede { font-size: 17px; font-weight: 400; line-height: 1.7; color: #c7d2ec; max-width: 64ch; margin: 0; }
+.hero .meta { display: flex; flex-wrap: wrap; gap: 6px 28px; margin-top: 32px; padding-top: 22px; border-top: 1px solid rgba(255,255,255,0.14); font-family: 'JetBrains Mono', monospace; font-size: 12px; color: #9fb0d0; }
+.hero .meta b { color: #d7e0f2; font-weight: 500; }
+.wrap { max-width: 1040px; margin: 0 auto; padding: 64px 32px 120px; }
+section { margin-top: 72px; }
+section:first-child { margin-top: 0; }
+.sec-head { display: flex; align-items: baseline; gap: 14px; border-left: 4px solid var(--accent); padding-left: 16px; margin-bottom: 28px; }
+.sec-num { font-family: 'JetBrains Mono', monospace; font-size: 13px; font-weight: 500; color: var(--accent); flex: none; }
+h2 { font-size: 26px; font-weight: 600; color: var(--fjord); margin: 0; letter-spacing: -0.02em; line-height: 1.2; }
+.subhead { font-size: 18px; font-weight: 600; color: var(--fjord); margin: 40px 0 16px; letter-spacing: -0.01em; }
+p { margin: 0 0 16px; max-width: 70ch; color: var(--ink-2); }
+.intro { font-size: 17px; color: var(--ink-2); }
+code, .codeword { font-family: 'JetBrains Mono', monospace; font-size: 0.84em; background: var(--mist); color: var(--accent-dim); padding: 1.5px 6px; border-radius: 4px; word-break: break-word; }
+.tablecard { border: 1px solid var(--glacier); border-radius: var(--radius); overflow: hidden; background: var(--card); margin: 4px 0; }
+table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+thead { background: var(--mist); }
+thead th { text-align: left; padding: 13px 16px; font-size: 11px; font-weight: 600; letter-spacing: 0.02em; text-transform: uppercase; color: var(--accent); }
+tbody td { padding: 13px 16px; vertical-align: top; border-top: 1px solid var(--line); color: var(--ink-2); }
+tbody tr:first-child td { border-top: none; }
+tbody tr:hover { background: var(--mist-hover); }
+td code { font-size: 12px; }
+td strong { color: var(--fjord); font-weight: 600; }
+.num-cell { font-family: 'JetBrains Mono', monospace; font-weight: 600; color: var(--accent); width: 34px; }
+.chip { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; font-size: 11.5px; font-weight: 500; padding: 3px 10px; border-radius: 999px; }
+.chip.done { background: var(--green-bg); color: var(--green-tx); }
+.chip.moot { background: var(--grey-bg); color: var(--grey-tx); }
+.chip.wait { background: #f3ecda; color: #8a6d2f; }
+.chip.new { background: var(--accent-soft); color: var(--accent-dim); }
+.chip.meta { background: var(--card-2); color: var(--outline); font-family: 'JetBrains Mono', monospace; font-size: 10.5px; letter-spacing: 0.02em; }
+.st-cell { width: 110px; }
+.figures { display: grid; grid-template-columns: repeat(2,1fr); gap: 16px; margin: 20px 0 8px; }
+@media (min-width:680px){ .figures { grid-template-columns: repeat(4,1fr); } }
+.figure { background: var(--card); border: 1px solid var(--glacier); border-radius: var(--radius); padding: 20px; }
+.figure .val { font-family: 'JetBrains Mono', monospace; font-size: 18px; font-weight: 500; color: var(--fjord); letter-spacing: -0.02em; }
+.figure .lab { font-size: 12px; color: var(--outline); margin-top: 6px; line-height: 1.4; }
+.ladder { background: var(--card); border: 1px solid var(--glacier); border-radius: var(--radius); padding: 22px 24px; margin: 20px 0; font-family: 'JetBrains Mono', monospace; font-size: 12.5px; line-height: 1.9; white-space: pre; overflow-x: auto; color: var(--ink-2); }
+.ladder .a { color: var(--accent); }
+.ladder b { color: var(--fjord); font-weight: 500; }
+.callout { background: rgba(255,255,255,0.7); backdrop-filter: blur(12px); border: 1px solid var(--glacier); border-radius: var(--radius); padding: 24px 28px; margin-top: 28px; box-shadow: var(--shadow); }
+.callout .label { font-family: 'JetBrains Mono', monospace; font-size: 10.5px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--accent); display: block; margin-bottom: 12px; }
+.callout p { margin: 0 0 10px; color: var(--ink-2); font-size: 15px; max-width: none; }
+.callout p:last-child { margin: 0; }
+.probs { display: grid; gap: 14px; margin-top: 4px; }
+@media (min-width:760px){ .probs { grid-template-columns: 1fr 1fr; } }
+.prob { background: var(--card); border: 1px solid var(--glacier); border-radius: var(--radius); padding: 22px 24px; }
+.prob-top { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; }
+.prob-id { font-family: 'JetBrains Mono', monospace; font-size: 12px; font-weight: 600; color: #fff; background: var(--fjord); padding: 2px 9px; border-radius: 6px; }
+.prob h3 { font-size: 16px; font-weight: 600; color: var(--fjord); margin: 0; flex: 1; min-width: 160px; line-height: 1.3; letter-spacing: -0.01em; }
+.prob p { margin: 0 0 8px; font-size: 14px; color: var(--ink-2); max-width: none; line-height: 1.6; }
+.prob p:last-child { margin: 0; }
+.prob .resolve { margin-top: 12px; }
+.prob ul { margin: 4px 0 0; padding-left: 18px; }
+.prob li { font-size: 13.5px; color: var(--ink-2); margin: 5px 0; }
+.pcard { background: var(--card); border: 1px solid var(--glacier); border-radius: var(--radius); padding: 6px 24px; }
+.principles { list-style: none; padding: 0; margin: 0; }
+.principles li { padding: 15px 0 15px 20px; position: relative; border-top: 1px solid var(--line); font-size: 14.5px; color: var(--ink-2); }
+.principles li:first-child { border-top: none; }
+.principles li::before { content: ''; position: absolute; left: 0; top: 22px; width: 8px; height: 2px; background: var(--accent); }
+.principles b { font-weight: 600; color: var(--fjord); }
+del { color: var(--outline); }
+footer { background: var(--card-2); border-top: 1px solid var(--line); margin-top: 88px; }
+.footer-in { max-width: 1040px; margin: 0 auto; padding: 28px 32px; display: flex; justify-content: space-between; flex-wrap: wrap; gap: 10px; font-family: 'JetBrains Mono', monospace; font-size: 11.5px; color: var(--outline); }
+.footer-in b { color: var(--fjord); font-weight: 600; }
+strong { font-weight: 600; }
+@media (max-width:560px){ .topbar-in, .hero-in, .wrap, .footer-in { padding-left: 20px; padding-right: 20px; } table { font-size: 12.5px; } thead th, tbody td { padding: 10px 12px; } }
+@media print { body { background: #fff; } .topbar { position: static; } section { break-inside: avoid; } }
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="topbar-in">
+    <span class="brand">QuickQuick · 剪贴板富文本保真</span>
+    <span class="tag">Nordic · v2026-06-07</span>
+  </div>
+</div>
+
+<header class="hero">
+  <div class="hero-in">
+    <div class="kicker">
+      <span class="chip-hero solid">feature-dev · Phase 4 架构方案</span>
+      <span class="chip-hero ghost">待批准</span>
+    </div>
+    <h1>剪贴板富文本保真<br>实现方案</h1>
+    <p class="lede">让 QuickQuick 复制带格式内容时捕获并保存 HTML，预览区可视化呈现，粘贴 / 复制回系统时还原格式。核心发现：arboard 3.6.1 三平台已原生支持 HTML 读写，跨平台几乎免费。</p>
+    <div class="meta">
+      <span><b>分支建议</b>　feat/clipboard-richtext-fidelity</span>
+      <span><b>制定</b>　2026-06-07</span>
+      <span><b>状态</b>　待用户批准后进入 Phase 5</span>
+    </div>
+  </div>
+</header>
+
+<div class="wrap">
+
+  <section>
+    <div class="sec-head"><span class="sec-num">一</span><h2>目标与范围</h2></div>
+    <p class="intro">让剪贴板历史<strong>保真富文本</strong>：复制带格式内容（加粗 / 颜色 / 列表 / 表格 / 链接等）时捕获并保存其 HTML，预览可视化呈现，粘贴 / 复制回系统时还原格式。</p>
+
+    <h3 class="subhead">已冻结的范围决策（用户拍板）</h3>
+    <div class="tablecard">
+      <table>
+        <thead><tr><th class="num-cell">#</th><th>决策点</th><th>选定</th></tr></thead>
+        <tbody>
+          <tr><td class="num-cell">1</td><td><strong>格式范围</strong></td><td><strong>只 HTML</strong>（不做 RTF）。覆盖浏览器 / Office / 多数富文本源；纯 RTF 源退纯文本</td></tr>
+          <tr><td class="num-cell">2</td><td><strong>还原范围</strong></td><td><strong>「粘贴到前台」与「复制」按钮都带富文本</strong></td></tr>
+          <tr><td class="num-cell">3</td><td><strong>预览渲染</strong></td><td><strong>预览区渲染真富文本 + DOMPurify 清洗</strong>；列表行仍纯文本摘要</td></tr>
+          <tr><td class="num-cell">4</td><td><strong>去重语义</strong></td><td><strong>纯文本相同即去重</strong>；命中旧行但新来的带 html 而旧行没有，则补写 html 并升为 richtext</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3 class="subhead">明确不做（YAGNI）</h3>
+    <div class="pcard">
+      <ul class="principles">
+        <li><b>RTF 捕获 / 还原</b>　arboard 不支持，需各平台原生 + cfg 分支，成本高</li>
+        <li><b>HTML 内联远程图片的下载 / 内嵌、完整 CSS 保真</b>　取决于目标 app 渲染能力</li>
+        <li><b>列表行的富文本缩略渲染</b>　保持纯文本摘要，性能与可读性更好</li>
+      </ul>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-head"><span class="sec-num">二</span><h2>关键发现（决定复杂度）</h2></div>
+    <p class="intro"><strong>arboard 3.6.1 三平台均已原生实现 HTML 的「读」和「写」</strong>——无需平台原生代码、无需新增依赖、无需 <code>#[cfg(target_os)]</code> 分支。</p>
+    <div class="tablecard">
+      <table>
+        <thead><tr><th>平台</th><th>读 HTML</th><th>写 HTML</th><th>arboard 源码位置</th></tr></thead>
+        <tbody>
+          <tr><td><strong>macOS</strong></td><td><code>string_from_type(NSPasteboardTypeHTML)</code></td><td><code>setString_forType</code></td><td><code>platform/osx.rs:212 / 301</code></td></tr>
+          <tr><td><strong>Windows</strong></td><td><code>clipboard_win::raw::get_html</code></td><td><code>wrap_html</code> + set（自动处理 CF_HTML 偏移头）</td><td><code>platform/windows.rs:611 / 688</code></td></tr>
+          <tr><td><strong>Linux</strong></td><td>X11 <code>text/html</code> atom / Wayland mime</td><td>同左</td><td><code>platform/linux/{x11,wayland}.rs</code></td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="callout">
+      <span class="label">调用方式</span>
+      <p>读：<code>clipboard.get().html().ok()</code>　|　写：<code>clipboard.set().html(html, Some(plain_text_alt))</code>（同时写 HTML 与纯文本兜底）。</p>
+      <p>这推翻了"跨平台需手撸 NSPasteboard / CF_HTML / Wayland"的预设——<strong>跨平台 HTML 几乎免费</strong>。</p>
+    </div>
+
+    <h3 class="subhead">现状根因（富文本为何丢失）</h3>
+    <p>数据模型早已预留 <code>html</code> 字段，但三处把它截断：</p>
+    <div class="probs">
+      <div class="prob">
+        <div class="prob-top"><span class="prob-id">捕获</span><h3>pipeline.rs:155</h3></div>
+        <p><code>ArboardBackend::read()</code> 中 <code>html: None</code> 硬编码；便捷方法 <code>get_text()</code> 只读纯文本。</p>
+      </div>
+      <div class="prob">
+        <div class="prob-top"><span class="prob-id">存储</span><h3>db.rs:471</h3></div>
+        <p><code>clip_items</code> 表无 html 列；<code>ingest()</code> 的 INSERT 只写 6 字段、<code>kind</code> 写死 <code>'text'</code>。</p>
+      </div>
+      <div class="prob">
+        <div class="prob-top"><span class="prob-id">还原</span><h3>system.rs:141 / macos_paste.rs:91</h3></div>
+        <p><code>fetch_paste_item</code> 构造 <code>html:None</code>；<code>write_with_marker</code> 只 <code>set_text</code>。</p>
+      </div>
+      <div class="prob">
+        <div class="prob-top"><span class="prob-id">前端</span><h3>已为 richtext 预留</h3></div>
+        <p><code>kind: "text" | "richtext" | "image"</code> 贯穿搜索 / 过滤 / 历史，连"富文本"筛选 tab 都在——本方案是接通已铺好的轨道。</p>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-head"><span class="sec-num">三</span><h2>端到端架构（数据流）</h2></div>
+    <div class="ladder">复制带格式内容
+  │
+  ▼  <b>[捕获]</b> pipeline.rs ArboardBackend
+     change_count(): compute_composite_hash <span class="a">纳入 html</span>（使"同文本但新增了格式"能被检测）
+     read(): html = clipboard.get().html().ok()
+  │
+  ▼  snapshot_to_clips（clipboard.rs，已正确透传 html，<span class="a">无需改</span>）
+  │
+  ▼  <b>[存储]</b> db.rs ingest
+     新增列 html_content TEXT；kind = html ? 'richtext' : 'text'
+     去重：text_hash 仍只对纯文本（决策 4）
+       命中且旧行无 html、新行有 html → UPDATE 补写 html + 升 kind，再 bump
+  │
+  ▼  <b>[取数]</b> ipc/clipboard.rs ClipItemDto + db 查询
+     DTO 加 html_content（serde camelCase → 前端 htmlContent）
+  │
+  ├──▼ <b>[预览]</b> ClipPreview.tsx / PopoverPreview.tsx
+  │     kind==='richtext' && htmlContent → <span class="a">DOMPurify.sanitize</span> → dangerouslySetInnerHTML
+  │     列表行：仍渲染纯文本 content 摘要
+  │
+  ├──▼ <b>[粘贴到前台]</b> system.rs fetch_paste_item 取 html
+  │     → macos_paste.rs / fallback write_with_marker
+  │       item.html ? clipboard.set().html(html, Some(text)) : set_text
+  │
+  └──▼ <b>[复制按钮]</b> 新增 IPC 命令 copy_clip_to_clipboard(id)
+        取 text+html → arboard set().html（替代 navigator.clipboard.writeText）</div>
+  </section>
+
+  <section>
+    <div class="sec-head"><span class="sec-num">四</span><h2>改动清单（按 TDD 任务顺序）</h2></div>
+    <p class="intro">每个任务红-绿-重构。后端 Rust 用 <code>coder</code>(Opus)，测试 <code>tester</code>(Sonnet) 动态证伪，规范审查 <code>code-reviewer</code>(Sonnet)。<strong>每个任务测试通过方进下一个</strong>。</p>
+
+    <div class="probs">
+      <div class="prob">
+        <div class="prob-top"><span class="prob-id">任务 1</span><h3>存储层：html 列 + ingest + 查询</h3><span class="chip meta">db.rs</span></div>
+        <ul>
+          <li><code>ensure_schema</code> 建表加 <code>html_content TEXT</code>；存量库用 <code>PRAGMA table_info</code> 守卫 + <code>ALTER TABLE ADD COLUMN</code> 幂等迁移</li>
+          <li><code>ingest</code>：INSERT 增 <code>html_content</code>，<code>kind</code> = html 有则 <code>'richtext'</code>；去重命中且旧行无 html、新行有 → UPDATE 补写再 bump；<code>text_hash</code> 不变</li>
+          <li>查询行结构 + SELECT 补 <code>html_content</code></li>
+        </ul>
+        <div class="resolve"><span class="chip new">测试：roundtrip / 迁移 / 补写 / 去重不变</span></div>
+      </div>
+
+      <div class="prob">
+        <div class="prob-top"><span class="prob-id">任务 2</span><h3>捕获层：读 HTML + 变化检测</h3><span class="chip meta">pipeline.rs</span></div>
+        <ul>
+          <li><code>read()</code>：<code>html: cb.get().html().ok()</code></li>
+          <li><code>compute_composite_hash</code> 把 html 字节拼入（独立分隔符、顺序固定），使"同纯文本但新增 / 变更 html"触发 change_count → 走 ingest 补写</li>
+        </ul>
+        <div class="resolve"><span class="chip new">测试：html 不同 → hash 不同</span></div>
+      </div>
+
+      <div class="prob">
+        <div class="prob-top"><span class="prob-id">任务 3</span><h3>IPC 取数：DTO + 前端类型</h3><span class="chip meta">ipc/clipboard.rs · ipc-client.ts</span></div>
+        <ul>
+          <li><code>ClipItemDto</code> 加 <code>html_content: Option&lt;String&gt;</code>（camelCase → <code>htmlContent</code>）</li>
+          <li>TS <code>ClipItem</code> 加 <code>htmlContent?: string</code></li>
+        </ul>
+        <div class="resolve"><span class="chip new">测试：富文本行返回 html_content，纯文本 null</span></div>
+      </div>
+
+      <div class="prob">
+        <div class="prob-top"><span class="prob-id">任务 4</span><h3>还原：粘贴 + 复制</h3><span class="chip meta">system.rs · macos_paste.rs</span></div>
+        <ul>
+          <li><code>fetch_paste_item</code> SELECT + 构造 <code>CapturedItem{text,html}</code></li>
+          <li><code>write_with_marker</code>（macos_impl + fallback_impl）：有 html 走 <code>set().html(h, Some(text))</code>，否则 <code>set_text</code>；trait 签名不变</li>
+          <li>新增 IPC <code>copy_clip_to_clipboard(id)</code> 走 arboard set().html，前端"复制"改调它</li>
+        </ul>
+        <div class="resolve"><span class="chip new">测试：fetch 取出 html；复制命令取数 + 组装</span></div>
+      </div>
+
+      <div class="prob">
+        <div class="prob-top"><span class="prob-id">任务 5</span><h3>前端渲染 + 安全清洗</h3><span class="chip meta">ClipPreview · PopoverPreview</span></div>
+        <ul>
+          <li>新增 <code>dompurify</code>（+ types）</li>
+          <li><code>kind==='richtext' && htmlContent</code> → <code>dangerouslySetInnerHTML={{__html: DOMPurify.sanitize(htmlContent)}}</code>；否则纯文本</li>
+          <li>popover 预览同步；列表行不变</li>
+        </ul>
+        <div class="resolve"><span class="chip new">测试：&lt;script&gt;/onerror 被剥离，正常格式保留</span></div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-head"><span class="sec-num">五</span><h2>安全（XSS 红线）</h2></div>
+    <p class="intro">引入 <code>dangerouslySetInnerHTML</code> 是本方案唯一显著风险面。硬约束：</p>
+    <div class="pcard">
+      <ul class="principles">
+        <li><b>任何 html 入 DOM 前必须 <code>DOMPurify.sanitize</code></b>　无例外、无"信任来源"豁免（剪贴板来源不可信）</li>
+        <li><b>白名单只放安全展示标签 / 属性</b>　剥离 <code>&lt;script&gt;</code>、事件处理器、<code>javascript:</code> URL、<code>&lt;iframe&gt;</code>/<code>&lt;object&gt;</code> 等</li>
+        <li><b>后端原样保存未清洗 html（保真）</b>　清洗只在渲染层——保证粘贴 / 复制回去拿到的是用户原始格式</li>
+        <li><b>CSP 复核</b>　预览渲染富文本不得放开 <code>script-src</code></li>
+      </ul>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-head"><span class="sec-num">六</span><h2>测试策略（动态证伪 · 硬门禁）</h2></div>
+    <div class="pcard">
+      <ul class="principles">
+        <li><b>Rust 单测</b>　迁移幂等、ingest / 补写 / 去重、fetch_paste_item、hash 区分 html</li>
+        <li><b>前端单测</b>　DOMPurify 剥离恶意标签、保留正常格式、纯文本回退</li>
+        <li><b>tester 变异 sanity</b>　注释掉 sanitize 应令安全测试失败；把 html 读取改常量应令 roundtrip 失败</li>
+        <li><b>真机视觉</b>　受屏幕录制权限限制，交用户截图确认（见记忆 quickquick-gui-verify-env）</li>
+        <li><b>完成定义</b>　lint / tsc / cargo check 通过、无遗留 TODO、符合 code-standards 与项目规范</li>
+      </ul>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-head"><span class="sec-num">七</span><h2>风险与回退</h2></div>
+    <div class="tablecard">
+      <table>
+        <thead><tr><th>风险</th><th>应对</th></tr></thead>
+        <tbody>
+          <tr><td>存量加密库加列失败</td><td><code>PRAGMA table_info</code> 守卫 + <code>ADD COLUMN</code>（NULL 默认）低风险；失败仅记录日志、退纯文本，不阻断启动</td></tr>
+          <tr><td>某些源 HTML 含大量内联样式 / 碎片（如 Word CF_HTML 片段）</td><td>保真保存；预览靠 DOMPurify 容错渲染；不追求像素级还原</td></tr>
+          <tr><td>粘贴到不支持 HTML 的目标 app</td><td><code>set().html(h, Some(text))</code> 已带纯文本兜底，目标 app 自动取纯文本</td></tr>
+          <tr><td>前端 XSS</td><td>见第五节硬约束</td></tr>
+          <tr><td>与并发后端工作冲突</td><td>对侧 ECDICT 重构已收尾、链路不重叠；开工前 git pull / rebase 同步</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-head"><span class="sec-num">八</span><h2>落地顺序与交付物</h2></div>
+    <div class="pcard">
+      <ul class="principles">
+        <li><b>顺序</b>　任务 1（存储）→ 2（捕获）→ 3（IPC）→ 4（还原）→ 5（前端渲染），逐个 TDD 闭环，测试通过方进下一个</li>
+        <li><b>同步文档</b>　完成后若实现与设计有偏差，更新本方案</li>
+        <li><b>双份一致</b>　本 <code>.md</code> 为权威，<code>.html</code> 为可视化</li>
+      </ul>
+    </div>
+    <div class="callout">
+      <span class="label">待批准</span>
+      <p>本方案待用户批准。批准后按 feature-dev Phase 5 让 <code>coder</code> 开始任务 1（存储层）。</p>
+    </div>
+  </section>
+
+</div>
+
+<footer>
+  <div class="footer-in">
+    <span><b>QuickQuick 剪贴板富文本保真 · 实现方案</b></span>
+    <span>2026-06-07 · Nordic Serenity</span>
+  </div>
+</footer>
+
+</body>
+</html>
