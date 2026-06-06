@@ -5,7 +5,7 @@ level: 小功能
 parent: TV4-F3
 created: 2026-06-06T00:00:00Z
 status: 通过
-commit: PENDING
+commit: 554abad
 acceptance_ids: [TV4-F3-A01]
 author: code-reviewer
 ---
