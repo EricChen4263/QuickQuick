@@ -2,7 +2,7 @@
 id: TV3-F3-S01
 type: coding
 parent: TV3-F3
-commit: PENDING
+commit: 06f3c50
 acceptance_ids: [TV3-F3-A01]
 ---
 
