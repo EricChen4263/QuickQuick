@@ -4783,6 +4783,55 @@ Signature=dac06f9e1be8667102fc1dfe025834cc9da68f2359b28084891b8e03ee332a61";
         }
     }
 
+    // 对齐 acceptance TV3-F3-A01（缺必填字段错误路径）：
+    // 4 个 LLM 源缺必填字段时 build_provider 返回明确错误，且错误消息不含任何字段值。
+    //
+    // 防泄露用非空 sentinel 脏值（hints TV2-RETRO-1）：仅填部分字段、留一必填项缺失，
+    // 已填字段用可识别脏值，断言错误消息 !contains 该脏值（空值占位是恒真假绿）。
+    #[test]
+    fn build_provider_llm_missing_field_errors() {
+        const DIRTY: &str = "SENTINEL_DEADBEEF";
+
+        // build_provider 返回的 Ok 内层 Box<dyn TranslateProvider> 不实现 Debug，
+        // 故不能用 unwrap_err；提取错误字符串（应为 Err）。
+        let err_of = |provider_id: &str, creds: &[(String, String)]| -> String {
+            match build_provider(provider_id, creds) {
+                Ok(_) => panic!("{provider_id} 缺必填字段应返回 Err，却得到 Ok"),
+                Err(e) => e,
+            }
+        };
+
+        // 用例表：(源, 已填字段)。每例只缺一个必填字段，其余填脏值。
+        let cases: &[(&str, Vec<(String, String)>)] = &[
+            // OpenAI：缺 apiKey（model/base_url 填脏值）。
+            (
+                "openai",
+                vec![
+                    ("model".to_string(), DIRTY.to_string()),
+                    ("base_url".to_string(), DIRTY.to_string()),
+                ],
+            ),
+            // Ollama：本地无 key，唯一必填是 model；缺 model（仅填 base_url）。
+            ("ollama", vec![("base_url".to_string(), DIRTY.to_string())]),
+            // ChatGLM：缺 apiKey（model 填脏值）。
+            ("chatglm", vec![("model".to_string(), DIRTY.to_string())]),
+            // Gemini：缺 model（apiKey 填脏值——apiKey 是 secret，尤须不泄露）。
+            ("gemini", vec![("apiKey".to_string(), DIRTY.to_string())]),
+        ];
+
+        for (provider_id, creds) in cases {
+            let err = err_of(provider_id, creds);
+            assert!(
+                err.contains("未配置"),
+                "{provider_id} 缺必填字段错误应提示未配置：{err}"
+            );
+            assert!(
+                !err.contains(DIRTY),
+                "{provider_id} 错误不应含任何字段值（防 secret 泄露）：{err}"
+            );
+        }
+    }
+
     #[test]
     fn build_provider_ollama_with_model_succeeds() {
         let creds = vec![("model".to_string(), "llama3".to_string())];

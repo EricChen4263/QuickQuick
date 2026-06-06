@@ -977,4 +977,77 @@ mod tests {
             "region 应为选填（有默认 cn-north-1）"
         );
     }
+
+    /// 断言一个 LLM 源的标准 4 字段 schema：apiKey（密、必填）、model（非密、必填）、
+    /// base_url（非密、选填）、prompt（非密、选填）。OpenAI/ChatGLM/Gemini 同构。
+    fn assert_llm_keyed_schema(provider_id: &str) {
+        let s = credential_schema(provider_id);
+        assert_eq!(s.len(), 4, "{provider_id} schema 应有 4 个字段");
+        assert!(
+            field(&s, "apiKey").is_secret,
+            "{provider_id} apiKey 应为 secret"
+        );
+        assert!(
+            field(&s, "apiKey").required,
+            "{provider_id} apiKey 应为必填"
+        );
+        assert!(
+            !field(&s, "model").is_secret,
+            "{provider_id} model 应为非密"
+        );
+        assert!(field(&s, "model").required, "{provider_id} model 应为必填");
+        assert!(
+            !field(&s, "base_url").is_secret,
+            "{provider_id} base_url 应为非密"
+        );
+        assert!(
+            !field(&s, "base_url").required,
+            "{provider_id} base_url 应为选填"
+        );
+        assert!(
+            !field(&s, "prompt").is_secret,
+            "{provider_id} prompt 应为非密"
+        );
+        assert!(
+            !field(&s, "prompt").required,
+            "{provider_id} prompt 应为选填"
+        );
+    }
+
+    // 对齐 acceptance TV3-F3-A01（凭据 schema 部分）：
+    // 4 个 LLM 源 openai/ollama/chatglm/gemini 的 schema 字段与 is_secret 标记正确。
+    #[test]
+    fn credential_schema_for_v3_llm_sources() {
+        // OpenAI：apiKey（密）/ model（非密）/ base_url（非密选填）/ prompt（非密选填）。
+        assert_llm_keyed_schema("openai");
+
+        // ChatGLM（智谱）：与 OpenAI 同构 4 字段。
+        assert_llm_keyed_schema("chatglm");
+
+        // Gemini：与 OpenAI 同构 4 字段。
+        assert_llm_keyed_schema("gemini");
+
+        // Ollama 本地无鉴权：无 apiKey，仅 model（非密必填）/ base_url（非密选填）/ prompt（非密选填）。
+        let ol = credential_schema("ollama");
+        assert_eq!(ol.len(), 3, "ollama schema 应有 3 个字段（无 apiKey）");
+        assert!(
+            ol.iter().all(|f| f.key != "apiKey"),
+            "ollama 本地无鉴权，不应含 apiKey 字段"
+        );
+        assert!(!field(&ol, "model").is_secret, "ollama model 应为非密");
+        assert!(field(&ol, "model").required, "ollama model 应为必填");
+        assert!(
+            !field(&ol, "base_url").is_secret,
+            "ollama base_url 应为非密"
+        );
+        assert!(
+            !field(&ol, "base_url").required,
+            "ollama base_url 应为选填"
+        );
+        assert!(!field(&ol, "prompt").is_secret, "ollama prompt 应为非密");
+        assert!(
+            !field(&ol, "prompt").required,
+            "ollama prompt 应为选填"
+        );
+    }
 }
