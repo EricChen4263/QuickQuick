@@ -172,6 +172,7 @@ pub fn run() {
             ipc::system::cleanup_history,
             ipc::system::open_accessibility_settings,
             ipc::system::paste_to_front,
+            ipc::system::copy_clip_to_clipboard,
             ipc::system::hide_and_return_focus,
             ipc::update::check_for_updates,
             ipc::update::download_and_install_update,

@@ -5,6 +5,7 @@
 //! - `cleanup_history`             — 清理历史（容量裁剪 + GC 物理删除）
 //! - `open_accessibility_settings` — 打开 macOS 辅助功能系统设置深链
 //! - `paste_to_front`              — 将指定条目写回系统剪贴板，trusted 时走完整粘贴路径
+//! - `copy_clip_to_clipboard`      — 按 id 把条目（富文本带 html）写入系统剪贴板（仅写回，不注入粘贴）
 //!
 //! paste_to_front 行为（V5-F4-S04-9b）：
 //! - trusted=true：写回剪贴板 → 隐藏 clip-popover/main 窗口 → hide app 让出前台
@@ -123,16 +124,23 @@ pub fn fetch_paste_item(conn: &Connection, id: &str) -> Result<CapturedItem, DbE
         return Err(DbError::Other("id 不能为空".to_string()));
     }
 
-    let row: Option<(String, String)> = conn
+    let row: Option<(String, String, Option<String>)> = conn
         .query_row(
-            "SELECT content, kind FROM clip_items WHERE id = ?1 AND is_deleted = 0",
+            "SELECT content, kind, html_content FROM clip_items WHERE id = ?1 AND is_deleted = 0",
             rusqlite::params![id],
-            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                ))
+            },
         )
         .optional()
         .map_err(DbError::Sqlite)?;
 
-    let (content, kind) = row.ok_or_else(|| DbError::Other("条目不存在或已删除".to_string()))?;
+    let (content, kind, html) =
+        row.ok_or_else(|| DbError::Other("条目不存在或已删除".to_string()))?;
 
     if kind == "image" {
         return Err(DbError::Other("图片条目暂不支持写回剪贴板".to_string()));
@@ -140,8 +148,22 @@ pub fn fetch_paste_item(conn: &Connection, id: &str) -> Result<CapturedItem, DbE
 
     Ok(CapturedItem {
         text: content,
-        html: None,
+        html,
     })
+}
+
+/// 复制命令取数：按 id 取 text + html_content，组装 CapturedItem（纯函数，可测）。
+///
+/// 与 `fetch_paste_item` 取数逻辑等价（共用同一 SELECT），但语义独立于复制域：
+/// 复制只需内容、不涉及粘贴的 trusted/焦点编排。两者保持独立函数便于各自演进。
+/// 图片条目（kind="image"）返回错误；id 为空或条目不存在时返回错误。
+///
+/// # Errors
+/// - id 为空
+/// - 条目不存在或已软删
+/// - 条目类型为 "image"
+pub fn fetch_clip_for_copy(conn: &Connection, id: &str) -> Result<CapturedItem, DbError> {
+    fetch_paste_item(conn, id)
 }
 
 /// 将 PasteOutcome 映射为前端 outcome 字符串（纯函数，可测）。
@@ -406,6 +428,33 @@ pub fn paste_to_front(
     let outcome = run_paste_with_backend(&app, &item, target_pid);
 
     Ok(PasteResultDto { outcome })
+}
+
+/// 薄封装：新建 arboard 剪贴板并把条目写入系统剪贴板（含富文本分支）。
+///
+/// arboard 实写属 GUI 副作用、不进自动化（归 RT1-M01 manual_confirm）；
+/// 取数+组装的可测逻辑在 `fetch_clip_for_copy`，本函数只做系统写入。
+/// 复用 `macos_paste::write_item_to_clipboard` 保证复制与粘贴的写入行为一致。
+///
+/// # Errors
+/// arboard 初始化或写入失败时返回错误字符串。
+fn write_clip_to_system_clipboard(item: &CapturedItem) -> Result<(), String> {
+    let mut clipboard =
+        arboard::Clipboard::new().map_err(|e| format!("剪贴板初始化失败: {e}"))?;
+    crate::macos_paste::write_item_to_clipboard(&mut clipboard, item)
+}
+
+/// Tauri 命令：按 id 把条目（富文本带 html）写入系统剪贴板（RT1-F1-S04）。
+///
+/// 与 `paste_to_front` 的区别：仅写回剪贴板，不做 trusted 探测 / 焦点编排 / Cmd+V 注入，
+/// 供前端"复制"按钮调用（F2 改前端接入此命令替代 navigator.clipboard.writeText）。
+/// 有非空 html 时写富文本（HTML + 纯文本兜底），否则写纯文本。图片条目返回 Err。
+#[tauri::command]
+pub fn copy_clip_to_clipboard(state: State<'_, AppDb>, id: String) -> Result<(), String> {
+    let item = with_db(&state, |conn| {
+        fetch_clip_for_copy(conn, &id).map_err(|e| e.to_string())
+    })?;
+    write_clip_to_system_clipboard(&item)
 }
 
 /// 构造平台后端/probe，执行粘贴编排（含 trusted 分支的窗口 hide）。

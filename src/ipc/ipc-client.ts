@@ -240,6 +240,22 @@ export async function hideAndReturnFocus(): Promise<void> {
 }
 
 /**
+ * 按 id 把条目写入系统剪贴板（富文本条目带 HTML，纯文本兜底）。
+ *
+ * 后端命令 copy_clip_to_clipboard 仅写回剪贴板、不触发粘贴注入，
+ * 供"复制"按钮调用以保真富文本格式（替代 navigator.clipboard.writeText）。
+ *
+ * @param id - 剪贴板条目 ID
+ */
+export async function copyClipToClipboard(id: string): Promise<void> {
+  try {
+    await invoke<void>("copy_clip_to_clipboard", { id });
+  } catch (err) {
+    throw toError(err);
+  }
+}
+
+/**
  * 获取图片剪贴板条目的原图（PNG）data URL。
  * 降级或无原图时返回 null。
  *

@@ -19,10 +19,30 @@ use crate::clipboard::CapturedItem;
 use crate::onboarding::AccessibilityProbe;
 use crate::paste::PasteBackend;
 
+/// 把条目写入 arboard 剪贴板：有非空 html 写富文本（HTML + 纯文本 alt 兜底），否则写纯文本。
+///
+/// 抽出供 macOS / fallback 两个后端复用，避免富文本写入分支重复。
+/// 纯文本兜底用 `item.text`：不支持富文本的目标 app 粘贴时仍能拿到纯文本（设计§四任务4 决策2）。
+///
+/// # Errors
+/// arboard 写入失败时返回错误字符串（由调用方降级记录日志，不 panic）。
+pub(crate) fn write_item_to_clipboard(
+    clipboard: &mut arboard::Clipboard,
+    item: &CapturedItem,
+) -> Result<(), String> {
+    match &item.html {
+        Some(html) if !html.is_empty() => clipboard
+            .set()
+            .html(html.clone(), Some(item.text.clone()))
+            .map_err(|e| e.to_string()),
+        _ => clipboard.set_text(item.text.clone()).map_err(|e| e.to_string()),
+    }
+}
+
 // macOS 平台实现
 #[cfg(target_os = "macos")]
 mod macos_impl {
-    use super::{AccessibilityProbe, CapturedItem, PasteBackend};
+    use super::{write_item_to_clipboard, AccessibilityProbe, CapturedItem, PasteBackend};
 
     // AXIsProcessTrusted 声明：链接 ApplicationServices 框架，最小化依赖
     // 依据：https://developer.apple.com/documentation/applicationservices/axisprocesstrusted
@@ -87,9 +107,12 @@ mod macos_impl {
             read_nspasteboard_change_count()
         }
 
-        /// 将条目文本写入剪贴板（arboard），写入会使 NSPasteboard.changeCount 递增。
+        /// 将条目写入剪贴板（arboard），写入会使 NSPasteboard.changeCount 递增。
+        ///
+        /// 有非空 html 时写富文本（HTML + 纯文本兜底 alt），否则写纯文本，
+        /// 让粘贴还原保真格式（设计§四任务4 决策2：粘贴带富文本）。
         fn write_with_marker(&mut self, item: &CapturedItem) {
-            if let Err(e) = self.clipboard.set_text(item.text.clone()) {
+            if let Err(e) = write_item_to_clipboard(&mut self.clipboard, item) {
                 eprintln!("[MacOsPasteBackend] write_with_marker 失败: {e}");
             }
         }
@@ -155,7 +178,7 @@ mod macos_impl {
 // 非 macOS 降级实现
 #[cfg(not(target_os = "macos"))]
 mod fallback_impl {
-    use super::{AccessibilityProbe, CapturedItem, PasteBackend};
+    use super::{write_item_to_clipboard, AccessibilityProbe, CapturedItem, PasteBackend};
 
     /// 非 macOS 平台降级探针：is_trusted() 永远返回 false。
     ///
@@ -201,7 +224,7 @@ mod fallback_impl {
         }
 
         fn write_with_marker(&mut self, item: &CapturedItem) {
-            if let Err(e) = self.clipboard.set_text(item.text.clone()) {
+            if let Err(e) = write_item_to_clipboard(&mut self.clipboard, item) {
                 eprintln!("[FallbackPasteBackend] write_with_marker 失败: {e}");
             }
             self.text = Some(item.text.clone());
