@@ -123,6 +123,24 @@ pub fn build_provider(
                 .ok_or_else(|| "google 未配置 api_key，请前往设置填入 API Key".to_string())?;
             Ok(Box::new(GoogleProvider::new(api_key)))
         }
+        "openai" => {
+            let api_key = find("apiKey")
+                .ok_or_else(|| "openai 未配置 apiKey，请前往设置填入 API Key".to_string())?;
+            let model = find("model")
+                .ok_or_else(|| "openai 未配置 model，请前往设置填入模型名".to_string())?;
+            // base_url/prompt 选填：base_url 留空回退官方端点，prompt 留空回退内置默认。
+            let base_url = find("base_url").unwrap_or("");
+            let prompt = find("prompt").unwrap_or("");
+            Ok(Box::new(OpenAiProvider::new(api_key, model, base_url, prompt)))
+        }
+        "ollama" => {
+            let model = find("model")
+                .ok_or_else(|| "ollama 未配置 model，请前往设置填入模型名".to_string())?;
+            // base_url/prompt 选填：base_url 留空回退本地默认，prompt 留空回退内置默认。
+            let base_url = find("base_url").unwrap_or("");
+            let prompt = find("prompt").unwrap_or("");
+            Ok(Box::new(OllamaProvider::new(model, base_url, prompt)))
+        }
         other => Err(format!("未知翻译 provider：{other}")),
     }
 }
@@ -148,6 +166,8 @@ pub fn registry() -> Vec<ProviderCapability> {
         VolcengineProvider::new("", "", "").capability(),
         DeepLFreeProvider::new("").capability(),
         GoogleProvider::new("").capability(),
+        OpenAiProvider::new("", "", "", "").capability(),
+        OllamaProvider::new("", "", "").capability(),
     ]
 }
 
@@ -2136,6 +2156,277 @@ fn hex_upper(nibble: u8) -> char {
     }
 }
 
+// LLM 对话翻译（chat/completions 形态）：OpenAI + Ollama 共用 Prompt 模板引擎与 messages 构造
+
+/// chat-completion 协议的一条对话消息。
+///
+/// `role` 取 "system" / "user" / "assistant"；`content` 为消息正文。
+/// OpenAI 与 Ollama 的请求体均用 `messages: [{role, content}, ...]` 数组承载，
+/// 故抽为共用结构体，由 `render_prompt` 产出、各 provider 拼进自家 body。
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct ChatMessage {
+    /// 消息角色（"system" / "user" / "assistant"）。
+    pub role: String,
+    /// 消息正文。
+    pub content: String,
+}
+
+impl ChatMessage {
+    /// 构造一条对话消息。
+    fn new(role: &str, content: impl Into<String>) -> Self {
+        Self {
+            role: role.to_string(),
+            content: content.into(),
+        }
+    }
+}
+
+/// 内置默认翻译 Prompt 的 system 指示模板。
+///
+/// `$from`/`$to` 占位在 `render_prompt` 中替换为请求的源/目标语言。
+/// 措辞约束模型「只输出译文」以避免寒暄/解释污染译文（设计文档§五.V3）。
+const DEFAULT_TRANSLATE_PROMPT: &str =
+    "你是专业翻译引擎。把用户消息中的文本从 $from 翻译到 $to，只输出译文本身，不要任何解释、前后缀或引号。";
+
+/// 把可编辑 Prompt 模板渲染为 chat-completion 的 messages 数组（纯函数，可单测）。
+///
+/// 变量替换：`$text`→原文、`$from`→源语言、`$to`→目标语言。
+/// - `template` 为 `Some(t)`：t 作为单条模板渲染后作为 **user** 消息内容（用户自定义形态），
+///   不再附带默认 system，使「可编辑 Prompt」对最终请求有完全控制权。
+/// - `template` 为 `None`：回退内置默认翻译 Prompt——system 用 `DEFAULT_TRANSLATE_PROMPT`
+///   （替换 $from/$to），user 为原文（$text）。
+///
+/// 两分支均产出含 user 消息的非空数组，供 OpenAI/Ollama 直接拼进请求体。
+pub fn render_prompt(template: Option<&str>, req: &TranslateRequest) -> Vec<ChatMessage> {
+    let substitute = |s: &str| -> String {
+        s.replace("$text", &req.text)
+            .replace("$from", req.source_lang.as_str())
+            .replace("$to", req.target_lang.as_str())
+    };
+
+    match template {
+        Some(t) if !t.trim().is_empty() => vec![ChatMessage::new("user", substitute(t))],
+        _ => vec![
+            ChatMessage::new("system", substitute(DEFAULT_TRANSLATE_PROMPT)),
+            ChatMessage::new("user", req.text.clone()),
+        ],
+    }
+}
+
+/// 构造 chat-completion 非流式请求体（OpenAI 与 Ollama 字段同构）。
+///
+/// body 形如 `{"model":..,"messages":[..],"stream":false}`；用 serde_json 构造自动正确转义文本。
+/// 仅做非流式（`stream=false`，一次性解析），流式为 YAGNI（设计文档§四）。
+fn build_chat_body(model: &str, messages: &[ChatMessage]) -> String {
+    serde_json::json!({
+        "model": model,
+        "messages": messages,
+        "stream": false,
+    })
+    .to_string()
+}
+
+/// OpenAI chat-completions provider（需要 apiKey；兼容自定义 base_url 网关）。
+///
+/// 端点（OpenAI 官方 API 文档，按协议事实独立实现，不参考任何第三方源码）：
+/// `POST {base_url}/v1/chat/completions`，base_url 默认 `https://api.openai.com`。
+/// 鉴权：`Authorization: Bearer {apiKey}`。
+/// body：`{"model":..,"messages":[{role,content}..],"stream":false}`。
+/// 响应取 `choices[0].message.content`；错误体 `{"error":{type,code,message}}` → TranslateError。
+pub struct OpenAiProvider {
+    api_key: String,
+    model: String,
+    base_url: String,
+    prompt: String,
+}
+
+impl OpenAiProvider {
+    /// 构造 OpenAI provider。
+    ///
+    /// `base_url` 为空回退官方 `https://api.openai.com`；`prompt` 为空回退内置默认 Prompt。
+    pub fn new(api_key: &str, model: &str, base_url: &str, prompt: &str) -> Self {
+        Self {
+            api_key: api_key.to_string(),
+            model: model.to_string(),
+            base_url: base_url.to_string(),
+            prompt: prompt.to_string(),
+        }
+    }
+
+    /// 解析 base_url：空则回退官方端点，去尾部斜杠避免拼出双斜杠。
+    fn resolved_base(&self) -> &str {
+        let b = self.base_url.trim().trim_end_matches('/');
+        if b.is_empty() {
+            "https://api.openai.com"
+        } else {
+            b
+        }
+    }
+}
+
+impl TranslateProvider for OpenAiProvider {
+    fn capability(&self) -> ProviderCapability {
+        ProviderCapability {
+            id: "openai",
+            name: "OpenAI",
+            needs_key: true,
+            is_unofficial: false,
+        }
+    }
+
+    fn build_request(&self, req: &TranslateRequest) -> ProviderHttpRequest {
+        let prompt = optional_prompt(&self.prompt);
+        let messages = render_prompt(prompt, req);
+        let body = build_chat_body(&self.model, &messages);
+
+        ProviderHttpRequest {
+            method: "POST",
+            url: format!("{}/v1/chat/completions", self.resolved_base()),
+            body: Some(body),
+            headers: vec![
+                (
+                    "Authorization".to_string(),
+                    format!("Bearer {}", self.api_key),
+                ),
+                ("Content-Type".to_string(), "application/json".to_string()),
+            ],
+        }
+    }
+
+    fn parse_response(&self, raw: &str) -> Result<TranslateResponse, TranslateError> {
+        let v: serde_json::Value =
+            serde_json::from_str(raw).map_err(|e| TranslateError::ParseError(e.to_string()))?;
+
+        // 错误体 {"error":{type,code,message}}：按 type/code 归类，错误消息不回显 apiKey。
+        let error = &v["error"];
+        if !error.is_null() {
+            let code = error["code"].as_str().unwrap_or("");
+            let typ = error["type"].as_str().unwrap_or("");
+            let msg = error["message"].as_str().unwrap_or("unknown");
+            return Err(map_openai_error(typ, code, msg));
+        }
+
+        let translated = v["choices"][0]["message"]["content"]
+            .as_str()
+            .ok_or_else(|| {
+                TranslateError::ParseError("missing choices[0].message.content".to_string())
+            })?
+            .trim()
+            .to_string();
+
+        Ok(TranslateResponse { translated })
+    }
+}
+
+/// 将 OpenAI 错误体的 type/code 归一为 `TranslateError`。
+///
+/// 分类参照 OpenAI 官方错误码（platform.openai.com/docs/guides/error-codes）：
+/// 鉴权（invalid_api_key / 401）、限流（rate_limit_exceeded / 429）、配额（insufficient_quota）、
+/// 上下文过长（context_length_exceeded）；其余归服务端错误。msg 不含 apiKey。
+fn map_openai_error(typ: &str, code: &str, msg: &str) -> TranslateError {
+    match (typ, code) {
+        (_, "invalid_api_key" | "invalid_authentication") => {
+            TranslateError::Auth(format!("OpenAI 鉴权失败: {msg}"))
+        }
+        (_, "rate_limit_exceeded") => TranslateError::RateLimit(format!("OpenAI 频率超限: {msg}")),
+        (_, "insufficient_quota") => TranslateError::Quota(format!("OpenAI 配额不足: {msg}")),
+        (_, "context_length_exceeded") => {
+            TranslateError::TooLong(format!("OpenAI 上下文过长: {msg}"))
+        }
+        ("authentication_error", _) => TranslateError::Auth(format!("OpenAI 鉴权失败: {msg}")),
+        _ => TranslateError::ServerError(format!("OpenAI 错误: {msg}")),
+    }
+}
+
+/// Ollama 本地 chat provider（本地自部署，无鉴权）。
+///
+/// 端点（Ollama 官方 API 文档 github.com/ollama/ollama/blob/main/docs/api.md，独立实现不抄源码）：
+/// `POST {base_url}/api/chat`，base_url 默认 `http://localhost:11434`。
+/// 本地自部署无鉴权——绝不发 Authorization 头。
+/// body：`{"model":..,"messages":[{role,content}..],"stream":false}`。
+/// 响应取 `message.content`（非流式一次性返回整段）。
+pub struct OllamaProvider {
+    model: String,
+    base_url: String,
+    prompt: String,
+}
+
+impl OllamaProvider {
+    /// 构造 Ollama provider。
+    ///
+    /// `base_url` 为空回退本地 `http://localhost:11434`；`prompt` 为空回退内置默认 Prompt。
+    pub fn new(model: &str, base_url: &str, prompt: &str) -> Self {
+        Self {
+            model: model.to_string(),
+            base_url: base_url.to_string(),
+            prompt: prompt.to_string(),
+        }
+    }
+
+    /// 解析 base_url：空则回退本地端点，去尾部斜杠避免拼出双斜杠。
+    fn resolved_base(&self) -> &str {
+        let b = self.base_url.trim().trim_end_matches('/');
+        if b.is_empty() {
+            "http://localhost:11434"
+        } else {
+            b
+        }
+    }
+}
+
+impl TranslateProvider for OllamaProvider {
+    fn capability(&self) -> ProviderCapability {
+        ProviderCapability {
+            id: "ollama",
+            name: "Ollama（本地）",
+            needs_key: false,
+            is_unofficial: false,
+        }
+    }
+
+    fn build_request(&self, req: &TranslateRequest) -> ProviderHttpRequest {
+        let prompt = optional_prompt(&self.prompt);
+        let messages = render_prompt(prompt, req);
+        let body = build_chat_body(&self.model, &messages);
+
+        // 本地自部署无鉴权：只发 Content-Type，绝不发 Authorization 头。
+        ProviderHttpRequest {
+            method: "POST",
+            url: format!("{}/api/chat", self.resolved_base()),
+            body: Some(body),
+            headers: vec![("Content-Type".to_string(), "application/json".to_string())],
+        }
+    }
+
+    fn parse_response(&self, raw: &str) -> Result<TranslateResponse, TranslateError> {
+        let v: serde_json::Value =
+            serde_json::from_str(raw).map_err(|e| TranslateError::ParseError(e.to_string()))?;
+
+        // Ollama 出错时返回 {"error":"..."}（无 message 字段）。
+        if let Some(err) = v["error"].as_str() {
+            return Err(TranslateError::ServerError(format!("Ollama 错误: {err}")));
+        }
+
+        let translated = v["message"]["content"]
+            .as_str()
+            .ok_or_else(|| TranslateError::ParseError("missing message.content".to_string()))?
+            .trim()
+            .to_string();
+
+        Ok(TranslateResponse { translated })
+    }
+}
+
+/// 把可编辑 Prompt 字段（可能为空串）转为 `render_prompt` 的 `Option`：空串视同未配置。
+fn optional_prompt(prompt: &str) -> Option<&str> {
+    let trimmed = prompt.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(prompt)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::Lang;
@@ -3943,5 +4234,223 @@ Signature=dac06f9e1be8667102fc1dfe025834cc9da68f2359b28084891b8e03ee332a61";
             !v.is_unofficial,
             "volcengine 为官方 API，is_unofficial 应为 false"
         );
+    }
+
+    // TV3-F1 OpenAI + Ollama（chat/completions）+ Prompt 模板引擎
+
+    fn llm_req() -> TranslateRequest {
+        TranslateRequest {
+            text: "hello".to_string(),
+            source_lang: Lang::new("en"),
+            target_lang: Lang::new("zh"),
+        }
+    }
+
+    // 对齐 acceptance TV3-F1-A01 / TV3-F3-A01（Prompt 部分）：
+    // 自定义模板下 render_prompt 的 $text/$from/$to 占位被替换为实际请求值。
+    #[test]
+    fn prompt_template_substitutes_text_from_to() {
+        let template = "translate from $from to $to: $text";
+        let messages = render_prompt(Some(template), &llm_req());
+
+        let user = messages
+            .iter()
+            .find(|m| m.role == "user")
+            .expect("应含 user 消息");
+        assert_eq!(
+            user.content, "translate from en to zh: hello",
+            "$from/$to/$text 应分别替换为 en/zh/hello，实际：{}",
+            user.content
+        );
+    }
+
+    // 对齐 acceptance TV3-F3-A01（Prompt 缺省回退）：
+    // 模板为 None 时回退内置默认翻译 Prompt，仍产出含目标语言与原文的 system+user。
+    #[test]
+    fn prompt_template_falls_back_to_default() {
+        let messages = render_prompt(None, &llm_req());
+
+        let system = messages
+            .iter()
+            .find(|m| m.role == "system")
+            .expect("默认 Prompt 应含 system 指示");
+        assert!(
+            system.content.contains("zh"),
+            "默认 system 应含目标语言 zh，实际：{}",
+            system.content
+        );
+        let user = messages
+            .iter()
+            .find(|m| m.role == "user")
+            .expect("默认 Prompt 应含 user 消息");
+        assert_eq!(user.content, "hello", "默认 user 消息应为原文 hello");
+    }
+
+    // 对齐 acceptance TV3-F1-A01：OpenAI build_request 端点/Bearer 头/messages，
+    // parse_response 取 choices[0].message.content。
+    #[test]
+    fn openai_build_request_and_parse() {
+        let provider = OpenAiProvider::new("SENTINEL_DEADBEEF", "gpt-4o-mini", "", "");
+        let http_req = provider.build_request(&llm_req());
+
+        assert_eq!(http_req.method, "POST");
+        assert_eq!(
+            http_req.url, "https://api.openai.com/v1/chat/completions",
+            "URL 应为 OpenAI chat/completions 端点，实际：{}",
+            http_req.url
+        );
+        let header = |name: &str| {
+            http_req
+                .headers
+                .iter()
+                .find(|(k, _)| k.eq_ignore_ascii_case(name))
+                .map(|(_, v)| v.as_str())
+        };
+        assert_eq!(
+            header("Authorization"),
+            Some("Bearer SENTINEL_DEADBEEF"),
+            "应含 Bearer 鉴权头"
+        );
+
+        let body = http_req.body.expect("OpenAI 为 POST，应有 body");
+        let parsed: serde_json::Value = serde_json::from_str(&body).expect("body 应为合法 JSON");
+        assert_eq!(parsed["model"], "gpt-4o-mini", "body 应含 model");
+        assert_eq!(parsed["stream"], false, "应为非流式 stream=false");
+        let messages = parsed["messages"]
+            .as_array()
+            .expect("body 应含 messages 数组");
+        assert_eq!(messages.len(), 2, "默认 Prompt 应产出 system+user 两条");
+        assert_eq!(messages[0]["role"], "system");
+        assert_eq!(messages[1]["role"], "user");
+        assert_eq!(messages[1]["content"], "hello", "user 内容应为原文");
+
+        let ok = provider
+            .parse_response(r#"{"choices":[{"message":{"role":"assistant","content":"你好"}}]}"#)
+            .expect("含 choices[0].message.content 应解析成功");
+        assert_eq!(ok.translated, "你好");
+    }
+
+    // 对齐 acceptance TV3-F1-A01：OpenAI 错误响应体 → TranslateError（按 type/code 分类）。
+    #[test]
+    fn openai_parse_error_response() {
+        let provider = OpenAiProvider::new("SENTINEL_DEADBEEF", "gpt-4o-mini", "", "");
+
+        let auth_err = provider.parse_response(
+            r#"{"error":{"message":"Incorrect API key","type":"invalid_request_error","code":"invalid_api_key"}}"#,
+        );
+        assert!(
+            matches!(auth_err, Err(TranslateError::Auth(_))),
+            "invalid_api_key 应归类为 Auth，实际：{auth_err:?}"
+        );
+
+        let rate_err = provider.parse_response(
+            r#"{"error":{"message":"Rate limit reached","type":"requests","code":"rate_limit_exceeded"}}"#,
+        );
+        assert!(
+            matches!(rate_err, Err(TranslateError::RateLimit(_))),
+            "rate_limit_exceeded 应归类为 RateLimit，实际：{rate_err:?}"
+        );
+
+        // 错误消息不得泄露 apiKey 脏值（sentinel，非空可识别值）。
+        if let Err(e) = auth_err {
+            assert!(
+                !e.to_string().contains("SENTINEL_DEADBEEF"),
+                "错误消息不得含 apiKey"
+            );
+        }
+    }
+
+    // 对齐 acceptance TV3-F1-A01：Ollama build_request 端点/无鉴权头/messages，
+    // parse_response 取 message.content。
+    #[test]
+    fn ollama_build_request_and_parse() {
+        let provider = OllamaProvider::new("llama3", "", "");
+        let http_req = provider.build_request(&llm_req());
+
+        assert_eq!(http_req.method, "POST");
+        assert_eq!(
+            http_req.url, "http://localhost:11434/api/chat",
+            "URL 应为 Ollama /api/chat 端点，实际：{}",
+            http_req.url
+        );
+
+        let body = http_req.body.expect("Ollama 为 POST，应有 body");
+        let parsed: serde_json::Value = serde_json::from_str(&body).expect("body 应为合法 JSON");
+        assert_eq!(parsed["model"], "llama3", "body 应含 model");
+        assert_eq!(parsed["stream"], false, "应为非流式 stream=false");
+        let messages = parsed["messages"]
+            .as_array()
+            .expect("body 应含 messages 数组");
+        assert_eq!(messages.len(), 2, "默认 Prompt 应产出 system+user 两条");
+
+        let ok = provider
+            .parse_response(r#"{"message":{"role":"assistant","content":"你好"},"done":true}"#)
+            .expect("含 message.content 应解析成功");
+        assert_eq!(ok.translated, "你好");
+    }
+
+    // 对齐 acceptance TV3-F1-A01：Ollama 本地自部署无鉴权，绝不发 Authorization 头。
+    #[test]
+    fn ollama_local_no_auth_header() {
+        let provider = OllamaProvider::new("llama3", "", "");
+        let http_req = provider.build_request(&llm_req());
+
+        assert!(
+            http_req
+                .headers
+                .iter()
+                .all(|(k, _)| !k.eq_ignore_ascii_case("Authorization")),
+            "Ollama 本地无鉴权，不应发 Authorization 头，实际：{:?}",
+            http_req.headers
+        );
+        let cap = provider.capability();
+        assert!(!cap.needs_key, "Ollama 本地自部署，needs_key 应为 false");
+    }
+
+    // 自定义 base_url 覆盖默认端点（OpenAI 兼容网关场景）。
+    #[test]
+    fn openai_custom_base_url_overrides_default() {
+        let provider = OpenAiProvider::new("k", "gpt-4o-mini", "https://gw.example.com", "");
+        let http_req = provider.build_request(&llm_req());
+        assert_eq!(
+            http_req.url, "https://gw.example.com/v1/chat/completions",
+            "自定义 base_url 应覆盖默认端点"
+        );
+    }
+
+    // build_provider 缺必填字段（OpenAI apiKey）应明确报错，不含字段值。
+    #[test]
+    fn build_provider_openai_missing_fields_returns_err() {
+        let result = build_provider("openai", &[]);
+        assert!(result.is_err(), "openai 缺 apiKey 应返回 Err");
+        if let Err(err) = result {
+            assert!(err.contains("未配置"), "错误应提示未配置：{err}");
+            assert!(!err.contains("SENTINEL_DEADBEEF"), "错误不应含字段值");
+        }
+    }
+
+    #[test]
+    fn build_provider_ollama_with_model_succeeds() {
+        let creds = vec![("model".to_string(), "llama3".to_string())];
+        let result = build_provider("ollama", &creds);
+        assert!(result.is_ok(), "ollama 有 model 应成功");
+        assert_eq!(result.unwrap().capability().id, "ollama");
+    }
+
+    #[test]
+    fn registry_contains_openai_and_ollama() {
+        let reg = registry();
+        let openai = reg
+            .iter()
+            .find(|c| c.id == "openai")
+            .expect("注册表应含 openai");
+        assert!(openai.needs_key, "openai 应为需 key 源");
+        assert!(!openai.is_unofficial, "openai 为官方 API");
+        let ollama = reg
+            .iter()
+            .find(|c| c.id == "ollama")
+            .expect("注册表应含 ollama");
+        assert!(!ollama.needs_key, "ollama 本地无 key");
+        assert!(!ollama.is_unofficial, "ollama 为本地自部署官方运行时");
     }
 }

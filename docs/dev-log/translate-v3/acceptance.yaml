@@ -1,0 +1,155 @@
+# 版本前置验收标准清单（开工前登记、冻结）
+# 来源：机械派生自已冻结设计文档 docs/design/translation-sources-pot.md §五 V3（LLM 对话翻译）
+#       + §二.2.3（各源端点/鉴权/配置字段）+ §四（流式 YAGNI、非流式一次性取 content）+ §〇（独立重写不抄 pot）。
+# LLM 4 源：OpenAI、ChatGLM（智谱）、Gemini、Ollama（本地）。仅做非流式（流式列 YAGNI）。
+# 需 key 源（OpenAI/ChatGLM/Gemini）无法真网端到端验证（需用户密钥）：build/parse/签名/Prompt 替换走 objective 单测（mock/注入 HttpExecutor），真译归 manual_confirm。
+# Ollama 本地连通需自部署 11434，亦归 manual_confirm。AI 只翻译不发明、不放宽；改标准走 change_log。
+
+version: TV3
+title: LLM 对话翻译源（对应设计文档 V3，新增 4 源）
+source_doc: docs/design/translation-sources-pot.md（§五 V3 / §二.2.3 / §四 / §〇）
+frozen_at: 2026-06-06T00:00:00Z
+criteria_freeze: TV3-criteria@2026-06-06
+
+# 无 docs/STRATEGY.md → 战略层不启用。
+# 注：本环境无 scripts/freeze-lint.sh（TV1/TV2 亦无），织三网由编排器手工核对：
+#   coverage_check 每 covered 类别有匹配 category 验收项、无空洞；每 objective 项有可执行 verify；
+#   每项有 source_anchor 溯源；真网/本地不可机验项归 manual_confirm 并标 collect_env。
+
+coverage_check:
+  功能正确性:  covered
+  测试充分性:  covered
+  工程质量:    covered
+  性能:        N/A (本版仅新增 LLM 源调用与 Prompt 拼装，无性能目标)
+  UI还原度:    N/A (复用既有凭据/配置表单渲染，新源字段走既有 schema 渲染，未改 UI 结构)
+  资源规范:    N/A (不新增二进制资源)
+  安全:        covered
+  留痕产出:    covered
+  人工确认点:  covered
+
+acceptance:
+  # ── TV3-F1 OpenAI + Ollama（chat/completions 标准形态）─────────────
+  - id: TV3-F1-A01
+    assertion: "openai（POST {base_url}/v1/chat/completions、Authorization: Bearer {key}、body messages=[system,user]）与 ollama（POST {base_url}/api/chat 或兼容端点、本地无鉴权）各自 build_request 端点/头/body messages 正确（含 model 字段），parse_response 取 choices[0].message.content（ollama 取其响应体对应字段）正确，错误响应→TranslateError"
+    category: 功能正确性
+    source_anchor: 设计文档§二.2.3（OpenAI/Ollama 端点·鉴权·配置）+ §四（非流式取 content）+ §〇
+    kind: objective
+    verify:
+      type: test_id
+      ref: "openai_build_request_and_parse, openai_parse_error_response, ollama_build_request_and_parse, ollama_local_no_auth_header"
+      runner: cd src-tauri && cargo test
+      path: src-tauri/src/translate/providers.rs
+      expect: pass
+    evidence_ref: dev-log/translate-v3/f1-openai-ollama/test.md
+    level: 大功能
+    status: 待验
+
+  # ── TV3-F2 ChatGLM（JWT HS256）+ Gemini（URL 参 key / 异构体）───────
+  - id: TV3-F2-A01
+    assertion: "chatglm（智谱 open.bigmodel.cn/api/paas/v4/chat/completions、apiKey 拆 {id}.{secret} 手搓 JWT HS256、Authorization 带 JWT）签名对固定输入+固定 exp/ts 产出确定 token；gemini（generativelanguage.googleapis.com/.../gemini-pro:generateContent?key=，key 作 URL query、body contents/parts）build_request 端点/参数正确、parse 取 candidates[0].content.parts[0].text 正确，错误→TranslateError"
+    category: 功能正确性
+    source_anchor: 设计文档§二.2.3（ChatGLM JWT / Gemini URL 参·端点·取译文）+ §四（JWT 手搓 HS256）+ §〇
+    kind: objective
+    verify:
+      type: test_id
+      ref: "chatglm_jwt_hs256_deterministic, chatglm_build_request_and_parse, gemini_build_request_url_key_and_parse, gemini_parse_error_response"
+      runner: cd src-tauri && cargo test
+      path: src-tauri/src/translate/providers.rs
+      expect: pass
+    evidence_ref: dev-log/translate-v3/f2-chatglm-gemini/test.md
+    level: 大功能
+    status: 待验
+
+  # ── TV3-F3 LLM 配置 schema + Prompt 模板引擎 ──────────────────────
+  - id: TV3-F3-A01
+    assertion: "4 源 credential/config schema 声明正确字段（apiKey is_secret=true；model/base_url/prompt is_secret=false；Ollama needs_key=false 其余 needs_key=true，is_unofficial=false）；Prompt 模板变量替换正确（$text/$from/$to 占位替换为实际值，缺省走内置默认翻译 Prompt）；缺必填字段 build_provider→明确错误（不含字段值）"
+    category: 功能正确性
+    source_anchor: 设计文档§五.V3（配置 base_url/key/model/可编辑 Prompt）+ §二.2.3（各源配置字段）+ §三.决策4（凭据安全）
+    kind: objective
+    verify:
+      type: test_id
+      ref: "credential_schema_for_v3_llm_sources, prompt_template_substitutes_text_from_to, prompt_template_falls_back_to_default, build_provider_llm_missing_field_errors"
+      runner: cd src-tauri && cargo test
+      path: src-tauri/src/translate/credential.rs
+      expect: pass
+    evidence_ref: dev-log/translate-v3/f3-config-prompt/test.md
+    level: 大功能
+    status: 待验
+
+  # ── 测试充分性 ────────────────────────────────────────────────────
+  - id: TV3-A-TEST
+    assertion: "每个新源有 build_request + parse_response 命中与错误分支单测；ChatGLM JWT 有签名确定性单测（固定输入→确定 token）；Prompt 模板替换有命中单测；全量 cargo test 与 cargo test --release 全绿（连跑 ≥3 次无 flaky）"
+    category: 测试充分性
+    source_anchor: 设计文档§五.V3.验收（可配置返回翻译 / Prompt 替换正确）+ hints（抗 flaky）
+    kind: objective
+    verify:
+      type: command
+      ref: "cd src-tauri && cargo test 全绿 且 cargo test --release 全绿；rtk proxy 取原始 'test … ok'/'N passed'（N≥1）"
+      runner: cd src-tauri && cargo test; cargo test --release
+      path: src-tauri/
+      expect: pass
+    evidence_ref: dev-log/translate-v3/*/test.md
+    level: 版本
+    status: 待验
+
+  # ── 工程质量 ──────────────────────────────────────────────────────
+  - id: TV3-A-QUAL
+    assertion: "本版改动/新增无新增 clippy 警告（cargo clippy --all-targets -- -D warnings exit 0）、无遗留 TODO/FIXME"
+    category: 工程质量
+    source_anchor: code-standards §工程质量
+    kind: objective
+    verify:
+      type: command
+      ref: "cd src-tauri && cargo clippy --all-targets -- -D warnings (exit 0) 且 grep 新增无 TODO/FIXME"
+      runner: cd src-tauri && cargo clippy --all-targets -- -D warnings
+      path: src-tauri/
+      expect: pass
+    evidence_ref: dev-log/translate-v3/*/coding.md
+    level: 版本
+    status: 待验
+
+  # ── 安全 ──────────────────────────────────────────────────────────
+  - id: TV3-A-SEC
+    assertion: "LLM 请求构造/JWT 签名不把 apiKey/secret 写入 eprintln/log/错误消息；Prompt 拼装与 JWT 派生用后无残留明文泄露路径；凭据经 DbCredStore 存加密库（不入日志）。证否泄露的单测须用非空 sentinel 脏值（见 hints TV2-RETRO-1），非空值占位"
+    category: 安全
+    source_anchor: code-standards §安全 + 设计§三.决策4 + 密钥库改造（DbCredStore）+ hints TV2-RETRO-1
+    kind: objective
+    verify:
+      type: command
+      ref: "grep 确认新增 LLM provider 代码无将 apiKey/secret 值写入 eprintln/println/log；缺字段/泄露单测用 sentinel 脏值断言 !contains"
+      runner: cd src-tauri && grep -rn "eprintln\|println\|log::\|dbg!" src/translate/providers.rs
+      path: src-tauri/src/translate/providers.rs
+      expect: pass
+    evidence_ref: dev-log/translate-v3/*/review.md
+    level: 版本
+    status: 待验
+
+  # ── 留痕产出 ──────────────────────────────────────────────────────
+  - id: TV3-A-LOG
+    assertion: "本版每个小功能三联留痕齐（coding/test/review），每个大功能 feature-report.md，版本 version-verdict.md；commit 提交后回填真 hash"
+    category: 留痕产出
+    source_anchor: goal-dev 规范§五 + 目录约定
+    kind: objective
+    verify:
+      type: command
+      ref: "find dev-log/translate-v3 确认各大功能三联 + feature-report + 版本 verdict"
+      runner: find docs/dev-log/translate-v3 -type f
+      path: docs/dev-log/translate-v3/
+      expect: pass
+    evidence_ref: dev-log/translate-v3/
+    level: 版本
+    status: 待验
+
+  # ── 人工确认点（需用户密钥 / 本地 Ollama，真网真机，headless 采不了）─
+  - id: TV3-M01
+    assertion: "真网（用户配置 OpenAI/ChatGLM/Gemini API key 后）各返回正确译文；本地部署 Ollama（11434）连通并返回译文；可编辑 Prompt 生效"
+    category: 人工确认点
+    source_anchor: 设计文档§五.V3.验收（可配置返回翻译 / Ollama 本地连通）
+    kind: manual_confirm
+    verify: null
+    collect_env: real_device
+    evidence_ref: dev-log/translate-v3/manual-llm-sources.png
+    level: 版本
+    status: 待采证
+
+change_log: []

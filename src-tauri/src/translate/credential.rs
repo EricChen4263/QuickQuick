@@ -250,6 +250,53 @@ pub fn credential_schema(provider_id: &str) -> Vec<CredentialField> {
             is_secret: true,
             required: true,
         }],
+        "openai" => vec![
+            CredentialField {
+                key: "apiKey",
+                label: "API Key",
+                is_secret: true,
+                required: true,
+            },
+            CredentialField {
+                key: "model",
+                label: "模型（如 gpt-4o-mini）",
+                is_secret: false,
+                required: true,
+            },
+            CredentialField {
+                key: "base_url",
+                label: "Base URL（留空用官方端点）",
+                is_secret: false,
+                required: false,
+            },
+            CredentialField {
+                key: "prompt",
+                label: "自定义 Prompt（留空用内置默认）",
+                is_secret: false,
+                required: false,
+            },
+        ],
+        // Ollama 本地自部署无鉴权，无 apiKey 字段（needs_key=false）。
+        "ollama" => vec![
+            CredentialField {
+                key: "model",
+                label: "模型（如 llama3）",
+                is_secret: false,
+                required: true,
+            },
+            CredentialField {
+                key: "base_url",
+                label: "Base URL（留空用 localhost:11434）",
+                is_secret: false,
+                required: false,
+            },
+            CredentialField {
+                key: "prompt",
+                label: "自定义 Prompt（留空用内置默认）",
+                is_secret: false,
+                required: false,
+            },
+        ],
         _ => vec![],
     }
 }
