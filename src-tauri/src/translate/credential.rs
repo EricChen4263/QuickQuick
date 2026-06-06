@@ -297,6 +297,60 @@ pub fn credential_schema(provider_id: &str) -> Vec<CredentialField> {
                 required: false,
             },
         ],
+        // ChatGLM（智谱）：apiKey 形如 {id}.{secret}，整体作 secret 存加密库。
+        "chatglm" => vec![
+            CredentialField {
+                key: "apiKey",
+                label: "API Key（形如 id.secret）",
+                is_secret: true,
+                required: true,
+            },
+            CredentialField {
+                key: "model",
+                label: "模型（如 glm-4）",
+                is_secret: false,
+                required: true,
+            },
+            CredentialField {
+                key: "base_url",
+                label: "Base URL（留空用官方端点）",
+                is_secret: false,
+                required: false,
+            },
+            CredentialField {
+                key: "prompt",
+                label: "自定义 Prompt（留空用内置默认）",
+                is_secret: false,
+                required: false,
+            },
+        ],
+        // Gemini：apiKey 作 URL query 参，作 secret 存加密库。
+        "gemini" => vec![
+            CredentialField {
+                key: "apiKey",
+                label: "API Key",
+                is_secret: true,
+                required: true,
+            },
+            CredentialField {
+                key: "model",
+                label: "模型（如 gemini-pro）",
+                is_secret: false,
+                required: true,
+            },
+            CredentialField {
+                key: "base_url",
+                label: "Base URL（留空用官方域名）",
+                is_secret: false,
+                required: false,
+            },
+            CredentialField {
+                key: "prompt",
+                label: "自定义 Prompt（留空用内置默认）",
+                is_secret: false,
+                required: false,
+            },
+        ],
         _ => vec![],
     }
 }

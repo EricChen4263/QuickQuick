@@ -141,6 +141,26 @@ pub fn build_provider(
             let prompt = find("prompt").unwrap_or("");
             Ok(Box::new(OllamaProvider::new(model, base_url, prompt)))
         }
+        "chatglm" => {
+            let api_key = find("apiKey")
+                .ok_or_else(|| "chatglm 未配置 apiKey，请前往设置填入 API Key".to_string())?;
+            let model = find("model")
+                .ok_or_else(|| "chatglm 未配置 model，请前往设置填入模型名".to_string())?;
+            // base_url/prompt 选填：base_url 留空回退官方端点，prompt 留空回退内置默认。
+            let base_url = find("base_url").unwrap_or("");
+            let prompt = find("prompt").unwrap_or("");
+            Ok(Box::new(ChatGlmProvider::new(api_key, model, base_url, prompt)))
+        }
+        "gemini" => {
+            let api_key = find("apiKey")
+                .ok_or_else(|| "gemini 未配置 apiKey，请前往设置填入 API Key".to_string())?;
+            let model = find("model")
+                .ok_or_else(|| "gemini 未配置 model，请前往设置填入模型名".to_string())?;
+            // base_url/prompt 选填：base_url 留空回退官方域名，prompt 留空回退内置默认。
+            let base_url = find("base_url").unwrap_or("");
+            let prompt = find("prompt").unwrap_or("");
+            Ok(Box::new(GeminiProvider::new(api_key, model, base_url, prompt)))
+        }
         other => Err(format!("未知翻译 provider：{other}")),
     }
 }
@@ -168,6 +188,8 @@ pub fn registry() -> Vec<ProviderCapability> {
         GoogleProvider::new("").capability(),
         OpenAiProvider::new("", "", "", "").capability(),
         OllamaProvider::new("", "", "").capability(),
+        ChatGlmProvider::new("", "", "", "").capability(),
+        GeminiProvider::new("", "", "", "").capability(),
     ]
 }
 
@@ -2427,6 +2449,338 @@ fn optional_prompt(prompt: &str) -> Option<&str> {
     }
 }
 
+/// 把字节切片编码为 base64url（无填充）字符串。
+///
+/// 供 ChatGLM 手搓 JWT 的 header / payload / signature 三段编码复用。
+/// JWT（RFC 7519）规定用 base64url 且去除 `=` 填充。
+fn base64url_no_pad(bytes: &[u8]) -> String {
+    use base64::Engine;
+    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes)
+}
+
+/// 按智谱（ChatGLM）官方文档手搓 JWT HS256，返回 `header.payload.signature` 形态 token。
+///
+/// 算法（智谱 open.bigmodel.cn 鉴权文档 / 设计文档§四）：
+/// - header：`{"alg":"HS256","sign_type":"SIGN"}`
+/// - payload：`{"api_key":{id},"exp":{exp_ms},"timestamp":{timestamp_ms}}`（毫秒时间戳）
+/// - signature：`HMAC-SHA256(secret, base64url(header) + "." + base64url(payload))`
+/// - 三段均 base64url 无填充，以 `.` 连接。
+///
+/// `exp_ms`/`timestamp_ms` 作参数注入，使签名对固定输入确定、可独立复算锚定单测
+/// （不在内部读 SystemTime，避免签名不确定无法测）。
+/// 抽为纯函数：不持有/不打印 id 或 secret，调用方传入、用后即弃。
+fn chatglm_jwt(id: &str, secret: &str, exp_ms: i64, timestamp_ms: i64) -> String {
+    // header/payload 用 serde_json 构造保证转义正确；字段顺序与官方文档及参照向量一致。
+    let header = serde_json::json!({ "alg": "HS256", "sign_type": "SIGN" }).to_string();
+    let payload = serde_json::json!({
+        "api_key": id,
+        "exp": exp_ms,
+        "timestamp": timestamp_ms,
+    })
+    .to_string();
+
+    let header_b64 = base64url_no_pad(header.as_bytes());
+    let payload_b64 = base64url_no_pad(payload.as_bytes());
+    let signing_input = format!("{header_b64}.{payload_b64}");
+    let signature = hmac_sha256(secret.as_bytes(), signing_input.as_bytes());
+    let signature_b64 = base64url_no_pad(&signature);
+
+    format!("{signing_input}.{signature_b64}")
+}
+
+/// ChatGLM（智谱）端点常量（智谱开放平台 API 文档，独立实现不抄源码）。
+const CHATGLM_ENDPOINT: &str = "https://open.bigmodel.cn/api/paas/v4/chat/completions";
+
+/// JWT 有效期（毫秒）：签发后 1 小时。智谱要求 exp = 签发时刻 + 有效期。
+const CHATGLM_JWT_TTL_MS: i64 = 3_600_000;
+
+/// ChatGLM（智谱）chat-completions provider（需要 apiKey，形如 `{id}.{secret}`）。
+///
+/// 端点（智谱开放平台文档）：`POST https://open.bigmodel.cn/api/paas/v4/chat/completions`
+/// （OpenAI 兼容 chat/completions 形态），base_url 可覆盖。
+/// 鉴权：apiKey 拆 `{id}.{secret}`，手搓 JWT HS256（见 `chatglm_jwt`）置于 `Authorization` 头。
+/// body 与 OpenAI 同构（model/messages/stream），复用 `build_chat_body` + `render_prompt`。
+/// 响应取 `choices[0].message.content`；错误体 `{"error":{code,message}}` → TranslateError。
+pub struct ChatGlmProvider {
+    api_key: String,
+    model: String,
+    base_url: String,
+    prompt: String,
+}
+
+impl ChatGlmProvider {
+    /// 构造 ChatGLM provider。
+    ///
+    /// `api_key` 形如 `{id}.{secret}`；`base_url` 为空回退官方端点；`prompt` 为空回退内置默认。
+    pub fn new(api_key: &str, model: &str, base_url: &str, prompt: &str) -> Self {
+        Self {
+            api_key: api_key.to_string(),
+            model: model.to_string(),
+            base_url: base_url.to_string(),
+            prompt: prompt.to_string(),
+        }
+    }
+
+    /// 解析 base_url：空则回退官方端点，去尾部斜杠避免拼出双斜杠。
+    fn resolved_endpoint(&self) -> String {
+        let b = self.base_url.trim().trim_end_matches('/');
+        if b.is_empty() {
+            CHATGLM_ENDPOINT.to_string()
+        } else {
+            format!("{b}/api/paas/v4/chat/completions")
+        }
+    }
+
+    /// 基于 apiKey `{id}.{secret}` 与当前时间签发 JWT 鉴权头值。
+    ///
+    /// apiKey 缺 `.` 分隔时整体作 id、secret 为空（让服务端鉴权失败而非本地 panic）。
+    /// exp/timestamp 在此处用当前时间生成（请求时刻才需真实时间），
+    /// 签名逻辑本身在纯函数 `chatglm_jwt` 内、可独立测。
+    fn authorization(&self) -> String {
+        let (id, secret) = self
+            .api_key
+            .split_once('.')
+            .unwrap_or((self.api_key.as_str(), ""));
+        let now_ms = current_unix_secs() as i64 * 1000;
+        chatglm_jwt(id, secret, now_ms + CHATGLM_JWT_TTL_MS, now_ms)
+    }
+}
+
+impl TranslateProvider for ChatGlmProvider {
+    fn capability(&self) -> ProviderCapability {
+        ProviderCapability {
+            id: "chatglm",
+            name: "ChatGLM（智谱）",
+            needs_key: true,
+            is_unofficial: false,
+        }
+    }
+
+    fn build_request(&self, req: &TranslateRequest) -> ProviderHttpRequest {
+        let prompt = optional_prompt(&self.prompt);
+        let messages = render_prompt(prompt, req);
+        let body = build_chat_body(&self.model, &messages);
+
+        ProviderHttpRequest {
+            method: "POST",
+            url: self.resolved_endpoint(),
+            body: Some(body),
+            headers: vec![
+                // 智谱官方文档要求 `Authorization: Bearer <JWT>`（与 OpenAI 一致），JWT 非裸值。
+                (
+                    "Authorization".to_string(),
+                    format!("Bearer {}", self.authorization()),
+                ),
+                ("Content-Type".to_string(), "application/json".to_string()),
+            ],
+        }
+    }
+
+    fn parse_response(&self, raw: &str) -> Result<TranslateResponse, TranslateError> {
+        let v: serde_json::Value =
+            serde_json::from_str(raw).map_err(|e| TranslateError::ParseError(e.to_string()))?;
+
+        // 错误体 {"error":{code,message}}：按 code 归类，错误消息不回显 apiKey。
+        let error = &v["error"];
+        if !error.is_null() {
+            let code = error["code"].as_str().unwrap_or("");
+            let msg = error["message"].as_str().unwrap_or("unknown");
+            return Err(map_chatglm_error(code, msg));
+        }
+
+        let translated = v["choices"][0]["message"]["content"]
+            .as_str()
+            .ok_or_else(|| {
+                TranslateError::ParseError("missing choices[0].message.content".to_string())
+            })?
+            .trim()
+            .to_string();
+
+        Ok(TranslateResponse { translated })
+    }
+}
+
+/// 将 ChatGLM 错误体 code 归一为 `TranslateError`。
+///
+/// 错误码来源：智谱开放平台 API 文档错误码列表（1002/1003 鉴权、1302 限流、1112 余额）。
+/// msg 不含 apiKey。
+fn map_chatglm_error(code: &str, msg: &str) -> TranslateError {
+    match code {
+        "1001" | "1002" | "1003" | "1004" => {
+            TranslateError::Auth(format!("ChatGLM 鉴权失败 {code}: {msg}"))
+        }
+        "1302" | "1303" | "1305" => TranslateError::RateLimit(format!("ChatGLM 频率超限 {code}: {msg}")),
+        "1112" | "1113" => TranslateError::Quota(format!("ChatGLM 余额不足 {code}: {msg}")),
+        _ => TranslateError::ServerError(format!("ChatGLM 错误 {code}: {msg}")),
+    }
+}
+
+/// Gemini 端点基址常量（Google Generative Language API 文档，独立实现不抄源码）。
+const GEMINI_BASE: &str = "https://generativelanguage.googleapis.com";
+
+/// Gemini（Google）generateContent provider（需要 apiKey，key 作 URL query 参）。
+///
+/// 端点（Google Generative Language API 文档）：
+/// `POST {base}/v1beta/models/{model}:generateContent?key={apiKey}`，base 默认官方域名。
+/// 鉴权：apiKey 作 URL query 参（**不进请求头**）。
+/// body：`{"contents":[{"parts":[{"text":...}]}]}`，可含 `systemInstruction`。
+/// 响应取 `candidates[0].content.parts[0].text`；错误体 `{"error":{code,message,status}}` → TranslateError。
+pub struct GeminiProvider {
+    api_key: String,
+    model: String,
+    base_url: String,
+    prompt: String,
+}
+
+impl GeminiProvider {
+    /// 构造 Gemini provider。
+    ///
+    /// `base_url` 为空回退官方域名；`model` 为空回退 `gemini-pro`；`prompt` 为空回退内置默认。
+    pub fn new(api_key: &str, model: &str, base_url: &str, prompt: &str) -> Self {
+        Self {
+            api_key: api_key.to_string(),
+            model: model.to_string(),
+            base_url: base_url.to_string(),
+            prompt: prompt.to_string(),
+        }
+    }
+
+    /// 解析 base：空则回退官方域名，去尾部斜杠避免拼出双斜杠。
+    fn resolved_base(&self) -> &str {
+        let b = self.base_url.trim().trim_end_matches('/');
+        if b.is_empty() {
+            GEMINI_BASE
+        } else {
+            b
+        }
+    }
+
+    /// 解析 model：空则回退 `gemini-pro`。
+    fn resolved_model(&self) -> &str {
+        let m = self.model.trim();
+        if m.is_empty() {
+            "gemini-pro"
+        } else {
+            m
+        }
+    }
+}
+
+impl TranslateProvider for GeminiProvider {
+    fn capability(&self) -> ProviderCapability {
+        ProviderCapability {
+            id: "gemini",
+            name: "Gemini（Google）",
+            needs_key: true,
+            is_unofficial: false,
+        }
+    }
+
+    fn build_request(&self, req: &TranslateRequest) -> ProviderHttpRequest {
+        // 复用 render_prompt 得到 messages，再转为 Gemini 的 contents/parts 结构：
+        // system 消息映射为 systemInstruction，user 消息合并进 contents 的 parts.text。
+        let prompt = optional_prompt(&self.prompt);
+        let messages = render_prompt(prompt, req);
+        let body = build_gemini_body(&messages);
+
+        // key 作 URL query 参（percent-encode 防特殊字符破坏 URL），绝不进请求头。
+        let url = format!(
+            "{}/v1beta/models/{}:generateContent?key={}",
+            self.resolved_base(),
+            self.resolved_model(),
+            percent_encode(&self.api_key),
+        );
+
+        ProviderHttpRequest {
+            method: "POST",
+            url,
+            body: Some(body),
+            headers: vec![("Content-Type".to_string(), "application/json".to_string())],
+        }
+    }
+
+    fn parse_response(&self, raw: &str) -> Result<TranslateResponse, TranslateError> {
+        let v: serde_json::Value =
+            serde_json::from_str(raw).map_err(|e| TranslateError::ParseError(e.to_string()))?;
+
+        // 错误体 {"error":{code,message,status}}：按 status/code 归类，消息不回显 apiKey。
+        let error = &v["error"];
+        if !error.is_null() {
+            let code = error["code"].as_u64().unwrap_or(0);
+            let status = error["status"].as_str().unwrap_or("");
+            let msg = error["message"].as_str().unwrap_or("unknown");
+            return Err(map_gemini_error(code, status, msg));
+        }
+
+        let translated = v["candidates"][0]["content"]["parts"][0]["text"]
+            .as_str()
+            .ok_or_else(|| {
+                TranslateError::ParseError(
+                    "missing candidates[0].content.parts[0].text".to_string(),
+                )
+            })?
+            .trim()
+            .to_string();
+
+        Ok(TranslateResponse { translated })
+    }
+}
+
+/// 把 chat messages 转为 Gemini generateContent 请求体。
+///
+/// 映射规则（Google Generative Language API 文档）：
+/// - role=="system" 的消息合并为顶层 `systemInstruction.parts[].text`。
+/// - 其余消息（user/assistant）作为 `contents[].parts[].text`（role 归一为 user/model）。
+///
+/// 用 serde_json 构造自动正确转义文本。
+fn build_gemini_body(messages: &[ChatMessage]) -> String {
+    let system_text: String = messages
+        .iter()
+        .filter(|m| m.role == "system")
+        .map(|m| m.content.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    let contents: Vec<serde_json::Value> = messages
+        .iter()
+        .filter(|m| m.role != "system")
+        .map(|m| {
+            // Gemini 的 content role 取 user/model；assistant 归一为 model。
+            let role = if m.role == "assistant" { "model" } else { "user" };
+            serde_json::json!({ "role": role, "parts": [{ "text": m.content }] })
+        })
+        .collect();
+
+    let mut body = serde_json::json!({ "contents": contents });
+    if !system_text.is_empty() {
+        body["systemInstruction"] = serde_json::json!({ "parts": [{ "text": system_text }] });
+    }
+    body.to_string()
+}
+
+/// 将 Gemini 错误体的 status/code 归一为 `TranslateError`。
+///
+/// 分类参照 Google API 标准错误码（google.golang.org/grpc/codes / HTTP 映射）：
+/// UNAUTHENTICATED/PERMISSION_DENIED/无效 key→鉴权，RESOURCE_EXHAUSTED/429→限流，
+/// INVALID_ARGUMENT→不支持，5xx→服务端。msg 不含 apiKey。
+fn map_gemini_error(code: u64, status: &str, msg: &str) -> TranslateError {
+    if msg.to_ascii_lowercase().contains("api key not valid") {
+        return TranslateError::Auth(format!("Gemini 鉴权失败: {msg}"));
+    }
+    match (status, code) {
+        ("UNAUTHENTICATED" | "PERMISSION_DENIED", _) | (_, 401 | 403) => {
+            TranslateError::Auth(format!("Gemini 鉴权失败 {status}: {msg}"))
+        }
+        ("RESOURCE_EXHAUSTED", _) | (_, 429) => {
+            TranslateError::RateLimit(format!("Gemini 频率超限 {status}: {msg}"))
+        }
+        ("INVALID_ARGUMENT", _) | (_, 400) => {
+            TranslateError::Unsupported(format!("Gemini 请求无效 {status}: {msg}"))
+        }
+        _ => TranslateError::ServerError(format!("Gemini 错误 {status}: {msg}")),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::Lang;
@@ -4452,5 +4806,177 @@ Signature=dac06f9e1be8667102fc1dfe025834cc9da68f2359b28084891b8e03ee332a61";
             .expect("注册表应含 ollama");
         assert!(!ollama.needs_key, "ollama 本地无 key");
         assert!(!ollama.is_unofficial, "ollama 为本地自部署官方运行时");
+    }
+
+    // 对齐 acceptance TV3-F2-A01：ChatGLM 手搓 JWT HS256 的签名确定性。
+    //
+    // 参照 token 由独立 Python（hmac+hashlib+base64）按 JWT HS256 手算
+    // （固定 id/secret/exp/timestamp，header {"alg":"HS256","sign_type":"SIGN"}、
+    //  payload {"api_key","exp","timestamp"}，base64url 无填充），断言本实现产出与之逐字相等，
+    //  非「等于本实现自己的输出」的循环论证（见 hints TV2 复杂签名独立复算锚定）。
+    #[test]
+    fn chatglm_jwt_hs256_deterministic() {
+        // 固定输入：与 Python 参照向量同。exp/timestamp 注入固定值使签名确定。
+        let token = chatglm_jwt(
+            "test_id_12345",
+            "test_secret_67890",
+            1_717_632_000_000,
+            1_717_631_700_000,
+        );
+
+        // 三段 base64url 参照常量（Python 独立复算）。
+        let expected = "eyJhbGciOiJIUzI1NiIsInNpZ25fdHlwZSI6IlNJR04ifQ.eyJhcGlfa2V5IjoidGVzdF9pZF8xMjM0NSIsImV4cCI6MTcxNzYzMjAwMDAwMCwidGltZXN0YW1wIjoxNzE3NjMxNzAwMDAwfQ.p-yF6cb9lFXduM5xA4qbBQkjTckbRU9tTFfO2IIIf4M";
+        assert_eq!(
+            token, expected,
+            "JWT token 应与独立 Python 复算的参照向量逐字相等"
+        );
+    }
+
+    // 对齐 acceptance TV3-F2-A01：ChatGLM build_request 端点/JWT 鉴权头/messages，
+    // parse_response 取 choices[0].message.content（OpenAI 兼容 chat/completions 形态）。
+    #[test]
+    fn chatglm_build_request_and_parse() {
+        // apiKey 形如 {id}.{secret}；用 sentinel 脏值证否泄露。
+        let provider = ChatGlmProvider::new("SENTINELID.SENTINEL_DEADBEEF", "glm-4", "", "");
+        let http_req = provider.build_request(&llm_req());
+
+        assert_eq!(http_req.method, "POST");
+        assert_eq!(
+            http_req.url, "https://open.bigmodel.cn/api/paas/v4/chat/completions",
+            "URL 应为智谱 chat/completions 端点，实际：{}",
+            http_req.url
+        );
+        let header = |name: &str| {
+            http_req
+                .headers
+                .iter()
+                .find(|(k, _)| k.eq_ignore_ascii_case(name))
+                .map(|(_, v)| v.as_str())
+        };
+        let auth = header("Authorization").expect("应含 Authorization 头");
+        // 智谱官方要求 `Authorization: Bearer <JWT>`——独立守卫前缀，防裸 JWT 头（真请求 401）bug 类复发。
+        assert!(
+            auth.starts_with("Bearer "),
+            "Authorization 应带 Bearer 前缀，实际：{auth}"
+        );
+        // Authorization 头承载 JWT（三段 base64url，header.payload.signature），不是裸 secret。
+        assert_eq!(
+            auth.matches('.').count(),
+            2,
+            "Authorization 应为三段 JWT，实际：{auth}"
+        );
+        assert!(
+            !auth.contains("SENTINEL_DEADBEEF"),
+            "Authorization 头不得明文含 secret 脏值"
+        );
+        assert!(
+            !auth.contains("SENTINELID"),
+            "Authorization 头不得明文含 id 脏值（应为 base64url 编码后的 payload）"
+        );
+
+        let body = http_req.body.expect("ChatGLM 为 POST，应有 body");
+        let parsed: serde_json::Value = serde_json::from_str(&body).expect("body 应为合法 JSON");
+        assert_eq!(parsed["model"], "glm-4", "body 应含 model");
+        assert_eq!(parsed["stream"], false, "应为非流式 stream=false");
+        let messages = parsed["messages"]
+            .as_array()
+            .expect("body 应含 messages 数组");
+        assert_eq!(messages.len(), 2, "默认 Prompt 应产出 system+user 两条");
+        assert_eq!(messages[1]["content"], "hello", "user 内容应为原文");
+
+        let ok = provider
+            .parse_response(r#"{"choices":[{"message":{"role":"assistant","content":"你好"}}]}"#)
+            .expect("含 choices[0].message.content 应解析成功");
+        assert_eq!(ok.translated, "你好");
+    }
+
+    // 对齐 acceptance TV3-F2-A01：Gemini key 作 URL query 参（不进头），body contents/parts，
+    // parse_response 取 candidates[0].content.parts[0].text。
+    #[test]
+    fn gemini_build_request_url_key_and_parse() {
+        let provider = GeminiProvider::new("SENTINEL_DEADBEEF", "gemini-pro", "", "");
+        let http_req = provider.build_request(&llm_req());
+
+        assert_eq!(http_req.method, "POST");
+        assert_eq!(
+            http_req.url,
+            "https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key=SENTINEL_DEADBEEF",
+            "URL 应为 Gemini generateContent 端点且 key 作 query 参，实际：{}",
+            http_req.url
+        );
+        // 独立守卫：URL 必须以 ?key={apiKey} 携带 key（防 format! 漏占位符致 URL 不带 key 的 bug 类复发）。
+        assert!(
+            http_req.url.contains("?key=SENTINEL_DEADBEEF"),
+            "URL 必须以 ?key= 携带 apiKey，实际：{}",
+            http_req.url
+        );
+        // key 在 URL query，绝不进 Authorization 头。
+        assert!(
+            http_req
+                .headers
+                .iter()
+                .all(|(k, _)| !k.eq_ignore_ascii_case("Authorization")),
+            "Gemini key 走 URL query，不应发 Authorization 头，实际：{:?}",
+            http_req.headers
+        );
+
+        let body = http_req.body.expect("Gemini 为 POST，应有 body");
+        let parsed: serde_json::Value = serde_json::from_str(&body).expect("body 应为合法 JSON");
+        // body 形如 {"contents":[{"parts":[{"text":...}]}]}，原文进 parts[].text。
+        let text = parsed["contents"][0]["parts"][0]["text"]
+            .as_str()
+            .expect("body 应含 contents[0].parts[0].text");
+        assert_eq!(text, "hello", "contents 的 text 应为原文");
+
+        let ok = provider
+            .parse_response(
+                r#"{"candidates":[{"content":{"parts":[{"text":"你好"}],"role":"model"}}]}"#,
+            )
+            .expect("含 candidates[0].content.parts[0].text 应解析成功");
+        assert_eq!(ok.translated, "你好");
+    }
+
+    // 对齐 acceptance TV3-F2-A01：Gemini 错误响应体 → TranslateError，错误消息不泄露 key。
+    #[test]
+    fn gemini_parse_error_response() {
+        let provider = GeminiProvider::new("SENTINEL_DEADBEEF", "gemini-pro", "", "");
+
+        let err = provider.parse_response(
+            r#"{"error":{"code":400,"message":"API key not valid","status":"INVALID_ARGUMENT"}}"#,
+        );
+        assert!(
+            matches!(err, Err(TranslateError::Auth(_))),
+            "API key not valid 应归类为 Auth，实际：{err:?}"
+        );
+        if let Err(e) = err {
+            assert!(
+                !e.to_string().contains("SENTINEL_DEADBEEF"),
+                "错误消息不得含 apiKey"
+            );
+        }
+
+        let server_err = provider
+            .parse_response(r#"{"error":{"code":500,"message":"internal","status":"INTERNAL"}}"#);
+        assert!(
+            matches!(server_err, Err(TranslateError::ServerError(_))),
+            "500 INTERNAL 应归类为 ServerError，实际：{server_err:?}"
+        );
+    }
+
+    #[test]
+    fn registry_contains_chatglm_and_gemini() {
+        let reg = registry();
+        let chatglm = reg
+            .iter()
+            .find(|c| c.id == "chatglm")
+            .expect("注册表应含 chatglm");
+        assert!(chatglm.needs_key, "chatglm 应为需 key 源");
+        assert!(!chatglm.is_unofficial, "chatglm 为官方 API");
+        let gemini = reg
+            .iter()
+            .find(|c| c.id == "gemini")
+            .expect("注册表应含 gemini");
+        assert!(gemini.needs_key, "gemini 应为需 key 源");
+        assert!(!gemini.is_unofficial, "gemini 为官方 API");
     }
 }

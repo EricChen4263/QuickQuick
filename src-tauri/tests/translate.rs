@@ -143,17 +143,17 @@ fn provider_contract_parse_response_returns_error_on_missing_field() {
 
 /// A08：静态注册表枚举全部 provider。
 ///
-/// 现为 17 家：免 key 的 lingva / google_free / yandex / transmart / bing，
-/// 需 key 的 baidu / baidu_field / youdao / caiyun / niutrans / tencent / alibaba / volcengine / deepl_free / google / openai，
+/// 现为 19 家：免 key 的 lingva / google_free / yandex / transmart / bing，
+/// 需 key 的 baidu / baidu_field / youdao / caiyun / niutrans / tencent / alibaba / volcengine / deepl_free / google / openai / chatglm / gemini，
 /// 本地自部署的 ollama。
 /// 后续每新增一个源，此数随之增长，届时同步更新预期值。
 #[test]
-fn static_registry_lists_seventeen_providers() {
+fn static_registry_lists_nineteen_providers() {
     // Arrange + Act
     let providers = registry();
 
     // Assert
-    assert_eq!(providers.len(), 17, "注册表应恰好包含 17 家 provider");
+    assert_eq!(providers.len(), 19, "注册表应恰好包含 19 家 provider");
 }
 
 #[test]
