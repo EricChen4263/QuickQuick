@@ -171,6 +171,15 @@ pub fn rgba_to_png_for_test(width: usize, height: usize, rgba: &[u8]) -> Option<
 /// 2. `snapshot.image` 有值且 `rgba_to_png` 成功 → push `CapturedClip::Image`
 ///
 /// 结果：纯文本=[Text]，纯图=[Image]，图文=[Text,Image]，两者皆无=[]。
+/// 测试专用导出：暴露私有 `snapshot_to_clips`，锚定 html 透传不丢。
+///
+/// 仅供集成测试调用，不用于生产路径。函数无副作用，公开导出不影响安全性。
+#[doc(hidden)]
+#[must_use]
+pub fn snapshot_to_clips_for_test(snapshot: ClipboardSnapshot) -> Vec<CapturedClip> {
+    snapshot_to_clips(snapshot)
+}
+
 fn snapshot_to_clips(snapshot: ClipboardSnapshot) -> Vec<CapturedClip> {
     let mut clips = Vec::new();
 

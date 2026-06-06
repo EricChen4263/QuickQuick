@@ -47,8 +47,9 @@ fn fnv1a_64(data: &[u8]) -> u64 {
 /// arboard 会返回错误，此处降级为返回上次计数（不触发误捕）。
 ///
 /// # 复合指纹
-/// 文本字节与图片 RGBA 字节按固定顺序参与 FNV-1a 哈希；
-/// 两者皆无时返回旧 count；任一变化则 count+1。
+/// 文本、HTML、图片 RGBA 字节按固定顺序参与 FNV-1a 哈希；
+/// 三者皆无时返回旧 count；任一变化则 count+1。
+/// 纳入 HTML 使"同纯文本但新增/变更格式"也能触发捕获。
 /// 图片直接对 RGBA 字节哈希（不转 PNG，避免编码开销）。
 ///
 /// # 真实运行归 pending-manual
@@ -78,33 +79,58 @@ impl ArboardBackend {
         })
     }
 
-    /// 计算当前剪贴板内容的复合 FNV-1a 指纹。
+    /// 读取当前剪贴板的文本/HTML/图片并计算复合 FNV-1a 指纹。
     ///
-    /// 将文本字节与图片 RGBA 字节按固定顺序送入 `fnv1a_64`，
-    /// 保证文本或图片任一变化都会改变指纹值。
-    /// 两者皆无时返回 `None`（不更新计数）。
+    /// 实际哈希组合委托给纯函数 `composite_hash_bytes`（便于单测），
+    /// 此方法只负责从 arboard 取三段内容。三者皆无时返回 `None`。
     fn compute_composite_hash(cb: &mut arboard::Clipboard) -> Option<u64> {
         let text = cb.get_text().ok();
+        // get() 是一次性 builder，故 html 与 text/image 分别取；.ok() 降级 None 不 panic
+        let html = cb.get().html().ok();
         let image = cb.get_image().ok();
+        let image_bytes = image.as_ref().map(|img| img.bytes.as_ref());
 
-        if text.is_none() && image.is_none() {
-            return None;
-        }
-
-        // 将文本字节与图片字节拼接后统一哈希，顺序固定保证确定性
-        let mut combined: Vec<u8> = Vec::new();
-        if let Some(ref t) = text {
-            combined.extend_from_slice(t.as_bytes());
-        }
-        // 分隔符：避免 "ab"+"c" 与 "a"+"bc" 哈希值相同
-        combined.push(0xFF);
-        if let Some(ref img) = image {
-            // 直接对 RGBA 字节哈希，不转 PNG（避免编码开销）
-            combined.extend_from_slice(&img.bytes);
-        }
-
-        Some(fnv1a_64(&combined))
+        composite_hash_bytes(text.as_deref(), html.as_deref(), image_bytes)
     }
+}
+
+/// 由文本/HTML/图片字节计算复合 FNV-1a 指纹（纯函数，便于单测）。
+///
+/// 三段按固定顺序 text + 分隔符 + html + 分隔符 + image 拼接后哈希，
+/// 顺序与分隔符保证确定性：相邻段间的 `0xFF` 分隔符避免
+/// "ab"+"" 与 "a"+"b" 这类跨段拼接碰撞。
+///
+/// # 为什么把 html 也纳入
+/// "同纯文本但新增/变更了 html" 需触发 change_count 递增，
+/// 否则带格式的复制不会被捕获，无法走 ingest 补写 html。
+///
+/// # 返回
+/// 三者皆为 `None` 时返回 `None`（无内容，不更新计数）。
+#[must_use]
+pub fn composite_hash_bytes(
+    text: Option<&str>,
+    html: Option<&str>,
+    image: Option<&[u8]>,
+) -> Option<u64> {
+    if text.is_none() && html.is_none() && image.is_none() {
+        return None;
+    }
+
+    let mut combined: Vec<u8> = Vec::new();
+    if let Some(t) = text {
+        combined.extend_from_slice(t.as_bytes());
+    }
+    combined.push(0xFF);
+    if let Some(h) = html {
+        combined.extend_from_slice(h.as_bytes());
+    }
+    combined.push(0xFF);
+    if let Some(img) = image {
+        // 直接对 RGBA 字节哈希，不转 PNG（避免编码开销）
+        combined.extend_from_slice(img);
+    }
+
+    Some(fnv1a_64(&combined))
 }
 
 impl ClipboardBackend for ArboardBackend {
@@ -142,6 +168,10 @@ impl ClipboardBackend for ArboardBackend {
 
         let text = cb.get_text().ok();
 
+        // get() 是一次性 builder（与 get_text/get_image 分别调用）；无 HTML 时
+        // 返回 Err，用 .ok() 降级为 None 不 panic。
+        let html = cb.get().html().ok();
+
         // get_image 在 headless 或无图片时返回 Err（ContentNotAvailable 等），
         // 用 .ok() 降级为 None，不 panic。
         let image = cb.get_image().ok().map(|img_data| RawImageData {
@@ -152,7 +182,7 @@ impl ClipboardBackend for ArboardBackend {
 
         ClipboardSnapshot {
             text,
-            html: None,
+            html,
             image,
             has_self_marker: false,
             is_concealed: false,
