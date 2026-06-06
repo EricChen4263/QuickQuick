@@ -8,6 +8,7 @@ import { useEffect, useState } from "react";
 import { getClipImageOriginal, type ClipItem } from "../../ipc/ipc-client";
 import EmptyState from "../../components/EmptyState";
 import { writeToClipboard } from "../translate/browser-api";
+import { sanitizeRichHtml } from "./sanitize-html";
 
 interface ClipPreviewProps {
   item: ClipItem | null;
@@ -207,6 +208,22 @@ function PreviewActions({ item, onToggleFavorite, onDelete, onCopy, onPasteToFro
   );
 }
 
+/**
+ * 文本/富文本内容区：富文本经 sanitize 后用 dangerouslySetInnerHTML 渲染保留格式，
+ * 纯文本走 React 默认转义渲染。sanitize 在入 DOM 前完成（设计 §五 XSS 红线）。
+ */
+function PreviewContent({ item }: { item: ClipItem }) {
+  if (item.kind === "richtext" && item.htmlContent !== undefined) {
+    return (
+      <div
+        className="preview-content"
+        dangerouslySetInnerHTML={{ __html: sanitizeRichHtml(item.htmlContent) }}
+      />
+    );
+  }
+  return <div className="preview-content">{item.content}</div>;
+}
+
 /** 右侧预览子组件 */
 export function ClipPreview({
   item,
@@ -239,9 +256,7 @@ export function ClipPreview({
             {item.kind === "image" && item.imageId !== undefined ? (
               <ImagePreview imageId={item.imageId} thumbnailDataUrl={item.thumbnailDataUrl} />
             ) : (
-              <div className={item.kind === "richtext" ? "preview-content code" : "preview-content"}>
-                {item.content}
-              </div>
+              <PreviewContent item={item} />
             )}
             <dl className="meta-grid">
               <dt>类型</dt>

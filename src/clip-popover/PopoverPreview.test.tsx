@@ -57,4 +57,39 @@ describe("PopoverPreview 渲染", () => {
     render(<PopoverPreview item={makeTextItem({ isFavorite: false })} />);
     expect(screen.queryByText("已收藏")).toBeNull();
   });
+
+  it("popover_preview_renders_sanitized_richtext", () => {
+    const item = makeTextItem({
+      kind: "richtext",
+      content: "fallback",
+      htmlContent: "<b>hi</b><table><tr><td>x</td></tr></table>",
+    });
+
+    const { container } = render(<PopoverPreview item={item} />);
+
+    const content = container.querySelector(".popover-preview-content");
+    expect(content).not.toBeNull();
+    expect(content!.querySelector("b")).not.toBeNull();
+    expect(content!.querySelector("table")).not.toBeNull();
+    expect(content!.textContent).toContain("hi");
+  });
+
+  it("popover_preview_strips_malicious_html", () => {
+    const item = makeTextItem({
+      kind: "richtext",
+      content: "fallback",
+      htmlContent:
+        '<img src=x onerror="alert(1)">点<script>alert(2)</script>击<a href="javascript:alert(3)">x</a><iframe src="javascript:alert(4)"></iframe>',
+    });
+
+    const { container } = render(<PopoverPreview item={item} />);
+
+    const content = container.querySelector(".popover-preview-content");
+    expect(content).not.toBeNull();
+    expect(content!.querySelector("script")).toBeNull();
+    expect(content!.querySelector("iframe")).toBeNull();
+    expect(content!.innerHTML.toLowerCase()).not.toContain("onerror");
+    expect(content!.innerHTML.toLowerCase()).not.toContain("javascript:");
+    expect(content!.textContent).toContain("点");
+  });
 });

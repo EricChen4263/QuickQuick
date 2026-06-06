@@ -1,4 +1,5 @@
 import type { ClipItem } from "../ipc/ipc-client";
+import { sanitizeRichHtml } from "../panels/clipboard/sanitize-html";
 
 interface PopoverPreviewProps {
   item: ClipItem | null;
@@ -21,14 +22,20 @@ function formatTime(utcMs: number): string {
   });
 }
 
-/** 文本/富文本内容区 */
+/**
+ * 文本/富文本内容区：富文本经 sanitize 后用 dangerouslySetInnerHTML 渲染保留格式，
+ * 纯文本走 React 默认转义渲染。sanitize 在入 DOM 前完成（设计 §五 XSS 红线）。
+ */
 function TextContent({ item }: { item: ClipItem }) {
-  const isCode = item.kind === "richtext";
-  return (
-    <div className={isCode ? "popover-preview-content code" : "popover-preview-content"}>
-      {item.content}
-    </div>
-  );
+  if (item.kind === "richtext" && item.htmlContent !== undefined) {
+    return (
+      <div
+        className="popover-preview-content"
+        dangerouslySetInnerHTML={{ __html: sanitizeRichHtml(item.htmlContent) }}
+      />
+    );
+  }
+  return <div className="popover-preview-content">{item.content}</div>;
 }
 
 /** 图片内容区：优先用 thumbnailDataUrl，无则占位文字 */
