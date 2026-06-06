@@ -164,7 +164,8 @@ pub fn credential_schema(provider_id: &str) -> Vec<CredentialField> {
                 required: true,
             },
         ],
-        "youdao" => vec![
+        // 有道词典模式复用有道翻译同一套凭据（app_key/app_secret）。
+        "youdao" | "youdao_dict" => vec![
             CredentialField {
                 key: "app_key",
                 label: "应用 ID",
@@ -178,6 +179,7 @@ pub fn credential_schema(provider_id: &str) -> Vec<CredentialField> {
                 required: true,
             },
         ],
+        // ecdict 免 key，无凭据字段，落入 `_ => vec![]` 分支。
         "caiyun" => vec![CredentialField {
             key: "token",
             label: "Token",

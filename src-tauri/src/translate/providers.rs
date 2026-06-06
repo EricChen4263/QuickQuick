@@ -4,8 +4,8 @@
 //! HTTP 执行、重试、超时、凭据读取等横切关注点由核心框架层统一处理。
 
 use super::{
-    lang::map_lang_for_provider, HttpExecutor, ProviderCapability, ProviderHttpRequest,
-    TranslateError, TranslateProvider, TranslateRequest, TranslateResponse,
+    lang::map_lang_for_provider, DictEntry, HttpExecutor, PosDefinition, ProviderCapability,
+    ProviderHttpRequest, TranslateError, TranslateProvider, TranslateRequest, TranslateResponse,
 };
 
 /// 按 provider_id 与凭据切片动态构造对应的 `TranslateProvider`。
@@ -46,6 +46,7 @@ pub fn build_provider(
         "yandex" => Ok(Box::new(YandexProvider::new())),
         "transmart" => Ok(Box::new(TransmartProvider::new())),
         "bing" => Ok(Box::new(BingProvider::new())),
+        "ecdict" => Ok(Box::new(EcdictProvider::new())),
         "baidu" => {
             let app_id = find("app_id")
                 .ok_or_else(|| "baidu 未配置 AppID，请前往设置填入 API Key".to_string())?;
@@ -68,6 +69,13 @@ pub fn build_provider(
             let app_secret = find("app_secret")
                 .ok_or_else(|| "youdao 未配置应用密钥，请前往设置填入 API Key".to_string())?;
             Ok(Box::new(YoudaoProvider::new(app_key, app_secret)))
+        }
+        "youdao_dict" => {
+            let app_key = find("app_key")
+                .ok_or_else(|| "youdao_dict 未配置应用 ID，请前往设置填入 API Key".to_string())?;
+            let app_secret = find("app_secret")
+                .ok_or_else(|| "youdao_dict 未配置应用密钥，请前往设置填入 API Key".to_string())?;
+            Ok(Box::new(YoudaoDictProvider::new(app_key, app_secret)))
         }
         "caiyun" => {
             let token = find("token")
@@ -176,9 +184,11 @@ pub fn registry() -> Vec<ProviderCapability> {
         YandexProvider::new().capability(),
         TransmartProvider::new().capability(),
         BingProvider::new().capability(),
+        EcdictProvider::new().capability(),
         BaiduProvider::new("", "").capability(),
         BaiduFieldProvider::new("", "", "").capability(),
         YoudaoProvider::new("", "").capability(),
+        YoudaoDictProvider::new("", "").capability(),
         CaiyunProvider::new("").capability(),
         NiutransProvider::new("").capability(),
         TencentProvider::new("", "").capability(),
@@ -1038,6 +1048,292 @@ fn map_youdao_error(code: &str) -> TranslateError {
         "206" => TranslateError::TooLong(format!("有道翻译文本过长 {code}")),
         _ => TranslateError::ServerError(format!("有道翻译错误 {code}")),
     }
+}
+
+// 有道词典模式（同有道翻译签名，isWord 模式返回词条）
+
+/// 有道词典模式 provider（需要应用 ID app_key + 应用密钥 app_secret，同有道翻译 key）。
+///
+/// 端点与签名完全复用有道翻译（signType=v3，`youdao_sign`）；区别在于响应解析：
+/// 有道 `/api` 对单词查询会附带 `isWord:true` 与 `basic` 词条块。
+/// - `isWord===true` 且含 `basic`：取 basic 的音标（优先 us-phonetic→phonetic→uk-phonetic）、
+///   `explains`（按词性前缀分组为释义）、`wfs`（词形变化）→ `Dict(DictEntry)`。
+/// - 否则（非词或无 basic）：回退取 `translation[*]` 拼接为 `Plain`。
+///
+/// 字段来源：有道智云「自然语言翻译服务」API 文档 §词典结果（basic/wfs/explains）。
+pub struct YoudaoDictProvider {
+    app_key: String,
+    app_secret: String,
+}
+
+impl YoudaoDictProvider {
+    /// 构造有道词典模式 provider。
+    pub fn new(app_key: &str, app_secret: &str) -> Self {
+        Self {
+            app_key: app_key.to_string(),
+            app_secret: app_secret.to_string(),
+        }
+    }
+}
+
+impl TranslateProvider for YoudaoDictProvider {
+    fn capability(&self) -> ProviderCapability {
+        ProviderCapability {
+            id: "youdao_dict",
+            name: "有道词典",
+            needs_key: true,
+            is_unofficial: false,
+        }
+    }
+
+    fn build_request(&self, req: &TranslateRequest) -> ProviderHttpRequest {
+        let src = map_lang_for_provider("youdao", &req.source_lang);
+        let tgt = map_lang_for_provider("youdao", &req.target_lang);
+
+        // 完全复用有道翻译签名（signType=v3）：salt 随机、curtime 当前秒、SHA256 签名。
+        let salt = uuid::Uuid::new_v4().simple().to_string();
+        let curtime = current_unix_secs().to_string();
+        let sign = youdao_sign(&self.app_key, &req.text, &salt, &curtime, &self.app_secret);
+
+        let body = format!(
+            "q={}&from={}&to={}&appKey={}&salt={}&sign={}&signType=v3&curtime={}",
+            percent_encode(&req.text),
+            src,
+            tgt,
+            percent_encode(&self.app_key),
+            salt,
+            sign,
+            curtime,
+        );
+
+        ProviderHttpRequest {
+            method: "POST",
+            url: "https://openapi.youdao.com/api".to_string(),
+            body: Some(body),
+            headers: vec![(
+                "Content-Type".to_string(),
+                "application/x-www-form-urlencoded".to_string(),
+            )],
+        }
+    }
+
+    fn parse_response(&self, raw: &str) -> Result<TranslateResponse, TranslateError> {
+        let v: serde_json::Value =
+            serde_json::from_str(raw).map_err(|e| TranslateError::ParseError(e.to_string()))?;
+
+        // 错误码归一复用有道翻译（"0" 成功）。
+        if let Some(code) = v["errorCode"].as_str() {
+            if code != "0" {
+                return Err(map_youdao_error(code));
+            }
+        }
+
+        // isWord===true 且含 basic 块时解析为词条；否则回退普通译文。
+        let is_word = v["isWord"].as_bool().unwrap_or(false);
+        if is_word && v["basic"].is_object() {
+            return Ok(TranslateResponse::Dict {
+                entry: parse_youdao_basic(&v["basic"]),
+            });
+        }
+
+        // 回退：取 translation 数组拼接为 Plain（与有道翻译解析一致）。
+        let segments = v["translation"]
+            .as_array()
+            .ok_or_else(|| TranslateError::ParseError("missing translation array".to_string()))?;
+        let parts: Vec<&str> = segments.iter().filter_map(|s| s.as_str()).collect();
+        if parts.is_empty() {
+            return Err(TranslateError::ParseError("empty translation".to_string()));
+        }
+        Ok(TranslateResponse::plain(parts.join("\n")))
+    }
+}
+
+/// 把有道 `basic` 词条块解析为 `DictEntry`。
+///
+/// 字段映射（有道智云 API 文档 §词典结果）：
+/// - 音标：优先 `us-phonetic`，缺则 `phonetic`，再缺则 `uk-phonetic`。
+/// - 释义：`explains` 各项按词性前缀（如 "n."）分组为 `PosDefinition`。
+/// - 词形：`wfs[*].wf.value`（如复数 glaciers）。
+/// - 发音：有道 basic 不直接给音频 URL，留空。
+fn parse_youdao_basic(basic: &serde_json::Value) -> DictEntry {
+    let phonetic = ["us-phonetic", "phonetic", "uk-phonetic"]
+        .iter()
+        .find_map(|key| basic[*key].as_str())
+        .map(str::to_string);
+
+    let explains = basic["explains"]
+        .as_array()
+        .map(|arr| arr.iter().filter_map(|e| e.as_str()).collect::<Vec<_>>())
+        .unwrap_or_default();
+    let definitions = group_definitions_by_pos(&explains);
+
+    let inflections = basic["wfs"]
+        .as_array()
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|item| {
+                    let wf = &item["wf"];
+                    let name = wf["name"].as_str();
+                    let value = wf["value"].as_str()?;
+                    Some(match name {
+                        Some(n) => format!("{n}: {value}"),
+                        None => value.to_string(),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    DictEntry {
+        phonetic,
+        definitions,
+        examples: vec![],
+        audio: None,
+        inflections,
+    }
+}
+
+/// 把一组释义字符串按开头的词性前缀（如 "n."、"vt."）分组为 `PosDefinition`。
+///
+/// 识别规则：取首个空白前的 token，若以英文字母+点号结尾（如 `n.`/`vt.`/`adj.`）视为词性，
+/// 其余作为该词性下的释义；无可识别词性时 pos 留空、整条作为释义。
+/// 同一词性的多条释义合并到同一分组，保持出现顺序。
+fn group_definitions_by_pos(explains: &[&str]) -> Vec<PosDefinition> {
+    let mut groups: Vec<PosDefinition> = Vec::new();
+    for explain in explains {
+        let (pos, meaning) = split_pos_prefix(explain);
+        match groups.iter_mut().find(|g| g.pos.as_deref() == pos.as_deref()) {
+            Some(group) => group.meanings.push(meaning),
+            None => groups.push(PosDefinition {
+                pos,
+                meanings: vec![meaning],
+            }),
+        }
+    }
+    groups
+}
+
+/// 从释义文本切出词性前缀与剩余释义。
+///
+/// 词性前缀定义：首 token 由 ASCII 字母组成并以 `.` 结尾（如 `n.`/`vt.`/`adj.`）。
+/// 命中则返回 `(Some(pos), 余下释义)`；否则 `(None, 原文)`。
+fn split_pos_prefix(explain: &str) -> (Option<String>, String) {
+    let trimmed = explain.trim();
+    if let Some((head, rest)) = trimmed.split_once(char::is_whitespace) {
+        if is_pos_token(head) {
+            return (Some(head.to_string()), rest.trim().to_string());
+        }
+    }
+    (None, trimmed.to_string())
+}
+
+/// 判断 token 是否为词性前缀：以 `.` 结尾、点号前全为 ASCII 字母且非空。
+fn is_pos_token(token: &str) -> bool {
+    matches!(token.strip_suffix('.'), Some(body) if !body.is_empty() && body.chars().all(|c| c.is_ascii_alphabetic()))
+}
+
+// ECDICT 英汉词典（pot-app.com/api/dict POST，免 key，pot 自建公共服务）
+
+/// ECDICT 词典 provider（pot-app.com/api/dict POST，免 key）。
+///
+/// 端点（pot 自建公共服务，按公开接口形态独立实现，不参考任何第三方源码）：
+/// `POST https://pot-app.com/api/dict`，JSON body `{"word":"..."}`，
+/// 响应为 ECDICT 数据库行：`{word, phonetic, translation, definition, exchange, ...}`。
+/// - 音标取 `phonetic`。
+/// - `translation`（英汉释义，多词性按换行分隔）按词性前缀分组为释义。
+/// - `exchange`（如 `s:glaciers/p:glacial`）解析为词形列表（取各项 `:` 后的值）。
+///
+/// pot 自建公共服务、随对方改版即可能失效，标 is_unofficial=true（同 lingva 处理）。
+pub struct EcdictProvider;
+
+impl EcdictProvider {
+    /// 构造 ECDICT provider（无凭据）。
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl Default for EcdictProvider {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl TranslateProvider for EcdictProvider {
+    fn capability(&self) -> ProviderCapability {
+        ProviderCapability {
+            id: "ecdict",
+            name: "ECDICT 英汉词典",
+            needs_key: false,
+            is_unofficial: true,
+        }
+    }
+
+    fn build_request(&self, req: &TranslateRequest) -> ProviderHttpRequest {
+        // ECDICT 只查英文词，待查词置于 JSON body 的 word 字段；
+        // 用 serde_json 构造自动正确转义（避免手拼 JSON 注入风险）。
+        let body = serde_json::json!({ "word": req.text }).to_string();
+
+        ProviderHttpRequest {
+            method: "POST",
+            url: "https://pot-app.com/api/dict".to_string(),
+            body: Some(body),
+            headers: vec![(
+                "Content-Type".to_string(),
+                "application/json".to_string(),
+            )],
+        }
+    }
+
+    fn parse_response(&self, raw: &str) -> Result<TranslateResponse, TranslateError> {
+        let v: serde_json::Value =
+            serde_json::from_str(raw).map_err(|e| TranslateError::ParseError(e.to_string()))?;
+
+        // 未收录/非词时 word 与 translation 均空，视为无结果（ParseError，不 panic）。
+        let translation = v["translation"].as_str().unwrap_or("").trim();
+        if translation.is_empty() {
+            return Err(TranslateError::ParseError(
+                "ECDICT 未收录该词或返回空词条".to_string(),
+            ));
+        }
+
+        let phonetic = v["phonetic"]
+            .as_str()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string);
+
+        // translation 各行为一条释义，按词性前缀分组。
+        let explains: Vec<&str> = translation.lines().map(str::trim).filter(|l| !l.is_empty()).collect();
+        let definitions = group_definitions_by_pos(&explains);
+
+        let inflections = parse_ecdict_exchange(v["exchange"].as_str().unwrap_or(""));
+
+        Ok(TranslateResponse::Dict {
+            entry: DictEntry {
+                phonetic,
+                definitions,
+                examples: vec![],
+                audio: None,
+                inflections,
+            },
+        })
+    }
+}
+
+/// 解析 ECDICT `exchange` 字段为词形列表。
+///
+/// 格式（ECDICT 约定）：`类型:值` 以 `/` 分隔，如 `s:glaciers/p:glacial/3:glaciates`。
+/// 取各项 `:` 后的值作为词形；无 `:` 的项原样保留。空串返回空列表。
+fn parse_ecdict_exchange(exchange: &str) -> Vec<String> {
+    exchange
+        .split('/')
+        .filter_map(|item| {
+            let value = item.split_once(':').map(|(_, v)| v).unwrap_or(item);
+            let value = value.trim();
+            (!value.is_empty()).then(|| value.to_string())
+        })
+        .collect()
 }
 
 // 彩云小译（token 简单鉴权）
@@ -5035,5 +5331,247 @@ Signature=dac06f9e1be8667102fc1dfe025834cc9da68f2359b28084891b8e03ee332a61";
             .expect("注册表应含 gemini");
         assert!(gemini.needs_key, "gemini 应为需 key 源");
         assert!(!gemini.is_unofficial, "gemini 为官方 API");
+    }
+
+    // ECDICT 词典源（pot-app.com/api/dict POST，免 key，pot 自建）测试
+
+    /// 取出 Dict 变体的词条；非 Dict 即测试失败，让词典断言聚焦结构化字段。
+    fn dict_entry(resp: &TranslateResponse) -> &super::super::DictEntry {
+        match resp {
+            TranslateResponse::Dict { entry } => entry,
+            TranslateResponse::Plain { .. } => panic!("应返回 Dict，实际返回 Plain"),
+        }
+    }
+
+    // 对齐 acceptance TV4-F2-A01：build_request 端点/方法/body 正确；
+    // parse_response 把 ECDICT 英汉词条解析为 Dict（音标/按词性分组释义/词形）。
+    #[test]
+    fn ecdict_build_and_parse_dict() {
+        let provider = EcdictProvider::new();
+        let req = TranslateRequest {
+            text: "glacier".to_string(),
+            source_lang: Lang::new("en"),
+            target_lang: Lang::new("zh"),
+        };
+        let http_req = provider.build_request(&req);
+
+        assert_eq!(http_req.method, "POST");
+        assert_eq!(
+            http_req.url, "https://pot-app.com/api/dict",
+            "URL 应为 pot-app dict 端点，实际：{}",
+            http_req.url
+        );
+        let body = http_req.body.as_deref().expect("ECDICT POST 应带 body");
+        assert!(
+            body.contains("glacier"),
+            "body 应携带待查词 glacier，实际：{body}"
+        );
+
+        // 录制响应：ECDICT 行结构（word/phonetic/translation 按词性分行/exchange 词形）。
+        let raw = r#"{
+            "word": "glacier",
+            "phonetic": "ˈɡleɪʃər",
+            "translation": "n. 冰川，冰河\nvt. 测试动词义",
+            "exchange": "s:glaciers/p:glacial"
+        }"#;
+        let resp = provider.parse_response(raw).expect("ECDICT 词条应解析为 Dict");
+        let entry = dict_entry(&resp);
+
+        assert_eq!(entry.phonetic.as_deref(), Some("ˈɡleɪʃər"), "应取 phonetic");
+        // translation 按词性前缀（n./vt.）分组。
+        let noun = entry
+            .definitions
+            .iter()
+            .find(|d| d.pos.as_deref() == Some("n."))
+            .expect("应含名词词性分组");
+        assert!(
+            noun.meanings.iter().any(|m| m.contains("冰川")),
+            "名词释义应含「冰川」，实际：{:?}",
+            noun.meanings
+        );
+        let verb = entry
+            .definitions
+            .iter()
+            .find(|d| d.pos.as_deref() == Some("vt."))
+            .expect("应含及物动词词性分组");
+        assert!(
+            verb.meanings.iter().any(|m| m.contains("测试动词义")),
+            "动词释义应含「测试动词义」，实际：{:?}",
+            verb.meanings
+        );
+        // exchange 解析为词形列表。
+        assert!(
+            entry.inflections.iter().any(|i| i == "glaciers"),
+            "词形应含复数 glaciers，实际：{:?}",
+            entry.inflections
+        );
+    }
+
+    #[test]
+    fn ecdict_parse_invalid_json_returns_parse_error() {
+        let provider = EcdictProvider::new();
+        let err = provider.parse_response("not json");
+        assert!(
+            matches!(err, Err(TranslateError::ParseError(_))),
+            "非法 JSON 应返回 ParseError，实际：{err:?}"
+        );
+    }
+
+    #[test]
+    fn ecdict_parse_empty_word_returns_parse_error() {
+        let provider = EcdictProvider::new();
+        // 无 word/translation 的空响应（非词或未收录）应报 ParseError，不 panic。
+        let err = provider.parse_response(r#"{"word":"","translation":""}"#);
+        assert!(
+            matches!(err, Err(TranslateError::ParseError(_))),
+            "空词条应返回 ParseError，实际：{err:?}"
+        );
+    }
+
+    #[test]
+    fn registry_contains_ecdict_free_unofficial() {
+        let reg = registry();
+        let e = reg
+            .iter()
+            .find(|c| c.id == "ecdict")
+            .expect("注册表应含 ecdict");
+        assert!(!e.needs_key, "ecdict 应为免 key 源");
+        assert!(
+            e.is_unofficial,
+            "ecdict 为 pot 自建公共服务，is_unofficial 应为 true"
+        );
+        assert!(
+            build_provider("ecdict", &[]).is_ok(),
+            "build_provider(\"ecdict\") 应免 key 成功"
+        );
+    }
+
+    // 有道词典模式（同有道签名，isWord 模式，需 key）测试
+
+    // 对齐 acceptance TV4-F2-A01：isWord===true 且含 basic 时，
+    // 取 basic 音标/explains/词形为 Dict(DictEntry)。
+    #[test]
+    fn youdao_dict_parses_basic_to_dict() {
+        let provider = YoudaoDictProvider::new("app123", "sec456");
+        // 录制有道 isWord 响应：basic 含 phonetic/us-phonetic/explains/wfs。
+        let raw = r#"{
+            "errorCode": "0",
+            "query": "glacier",
+            "isWord": true,
+            "translation": ["冰川"],
+            "basic": {
+                "phonetic": "ˈɡleɪʃər",
+                "us-phonetic": "ˈɡleɪʃər",
+                "uk-phonetic": "ˈɡlasɪə",
+                "explains": ["n. 冰川，冰河"],
+                "wfs": [{"wf": {"name": "复数", "value": "glaciers"}}]
+            }
+        }"#;
+        let resp = provider
+            .parse_response(raw)
+            .expect("isWord 响应应解析为 Dict");
+        let entry = dict_entry(&resp);
+
+        assert_eq!(
+            entry.phonetic.as_deref(),
+            Some("ˈɡleɪʃər"),
+            "应优先取 us-phonetic/phonetic"
+        );
+        assert!(
+            entry
+                .definitions
+                .iter()
+                .flat_map(|d| &d.meanings)
+                .any(|m| m.contains("冰川")),
+            "释义应含 explains 的「冰川」，实际：{:?}",
+            entry.definitions
+        );
+        assert!(
+            entry.inflections.iter().any(|i| i.contains("glaciers")),
+            "词形应含 wfs 的复数 glaciers，实际：{:?}",
+            entry.inflections
+        );
+    }
+
+    // 对齐 acceptance TV4-F2-A01：非词（isWord!=true 或无 basic）回退 Plain（取 translation）。
+    #[test]
+    fn youdao_dict_falls_back_to_plain_when_not_word() {
+        let provider = YoudaoDictProvider::new("app123", "sec456");
+        // 非词响应：isWord=false、无 basic，应回退 Plain 取 translation 拼接。
+        let raw = r#"{
+            "errorCode": "0",
+            "query": "hello world this is a sentence",
+            "isWord": false,
+            "translation": ["你好世界这是一个句子"]
+        }"#;
+        let resp = provider.parse_response(raw).expect("非词响应应回退 Plain");
+        assert_eq!(plain_text(&resp), "你好世界这是一个句子");
+    }
+
+    #[test]
+    fn youdao_dict_error_code_maps_to_error() {
+        let provider = YoudaoDictProvider::new("app123", "sec456");
+        let err = provider.parse_response(r#"{"errorCode":"108","translation":null}"#);
+        assert!(
+            matches!(err, Err(TranslateError::Auth(_))),
+            "108 应用密钥无效应归一为 Auth，实际：{err:?}"
+        );
+    }
+
+    // 安全：有道词典复用有道签名，请求 body 不得泄露 app_secret（用 sentinel 脏值证否）。
+    #[test]
+    fn youdao_dict_build_request_does_not_leak_secret() {
+        let provider = YoudaoDictProvider::new("app123", "SENTINEL_DEADBEEF");
+        let req = TranslateRequest {
+            text: "glacier".to_string(),
+            source_lang: Lang::new("en"),
+            target_lang: Lang::new("zh"),
+        };
+        let http_req = provider.build_request(&req);
+
+        assert_eq!(http_req.method, "POST");
+        assert_eq!(
+            http_req.url, "https://openapi.youdao.com/api",
+            "应复用有道翻译端点，实际：{}",
+            http_req.url
+        );
+        let body = http_req.body.as_deref().expect("应带 body");
+        assert!(
+            !body.contains("SENTINEL_DEADBEEF"),
+            "请求 body 不得明文包含 app_secret"
+        );
+        // 签名应等于复用 youdao_sign 对 build 内实际 salt/curtime 重算的值（不另起算法）。
+        let salt = extract_form_field(body, "salt").expect("body 应含 salt");
+        let curtime = extract_form_field(body, "curtime").expect("body 应含 curtime");
+        let actual_sign = extract_form_field(body, "sign").expect("body 应含 sign");
+        let expected = youdao_sign("app123", "glacier", &salt, &curtime, "SENTINEL_DEADBEEF");
+        assert_eq!(
+            actual_sign, expected,
+            "有道词典应复用 youdao_sign 签名，不另起算法"
+        );
+    }
+
+    #[test]
+    fn build_provider_youdao_dict_missing_required_fields_returns_err() {
+        let creds = vec![("app_key".to_string(), "ak1".to_string())];
+        let result = build_provider("youdao_dict", &creds);
+        assert!(result.is_err(), "缺 app_secret 应返回 Err");
+    }
+
+    #[test]
+    fn registry_contains_youdao_dict_keyed() {
+        let reg = registry();
+        let y = reg
+            .iter()
+            .find(|c| c.id == "youdao_dict")
+            .expect("注册表应含 youdao_dict");
+        assert!(y.needs_key, "youdao_dict 应为需 key 源");
+    }
+
+    /// 从 `application/x-www-form-urlencoded` body 中取出指定字段值（测试辅助）。
+    fn extract_form_field(body: &str, key: &str) -> Option<String> {
+        body.split('&')
+            .find_map(|pair| pair.strip_prefix(&format!("{key}=")))
+            .map(|v| v.to_string())
     }
 }

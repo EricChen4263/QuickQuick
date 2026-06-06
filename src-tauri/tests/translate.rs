@@ -151,17 +151,18 @@ fn provider_contract_parse_response_returns_error_on_missing_field() {
 
 /// A08：静态注册表枚举全部 provider。
 ///
-/// 现为 19 家：免 key 的 lingva / google_free / yandex / transmart / bing，
-/// 需 key 的 baidu / baidu_field / youdao / caiyun / niutrans / tencent / alibaba / volcengine / deepl_free / google / openai / chatglm / gemini，
+/// 现为 21 家：免 key 的 lingva / google_free / yandex / transmart / bing / ecdict，
+/// 需 key 的 baidu / baidu_field / youdao / youdao_dict / caiyun / niutrans / tencent / alibaba / volcengine / deepl_free / google / openai / chatglm / gemini，
 /// 本地自部署的 ollama。
 /// 后续每新增一个源，此数随之增长，届时同步更新预期值。
+/// TV4-F2 新增词典源 ecdict（免 key）+ youdao_dict（需 key），19 → 21。
 #[test]
-fn static_registry_lists_nineteen_providers() {
+fn static_registry_lists_twenty_one_providers() {
     // Arrange + Act
     let providers = registry();
 
     // Assert
-    assert_eq!(providers.len(), 19, "注册表应恰好包含 19 家 provider");
+    assert_eq!(providers.len(), 21, "注册表应恰好包含 21 家 provider");
 }
 
 #[test]
@@ -221,7 +222,9 @@ fn static_registry_keyed_providers_need_key() {
     // Arrange：免 key 源 id 集合。后续新增免 key 源（deepl_web…）
     // 时往此集合补对应 id，避免把新免 key 源误判为需 key。
     // ollama 为本地自部署 LLM，本地免鉴权，故 needs_key=false，归入此集合。
-    let keyless_ids = ["lingva", "google_free", "yandex", "transmart", "bing", "ollama"];
+    let keyless_ids = [
+        "lingva", "google_free", "yandex", "transmart", "bing", "ecdict", "ollama",
+    ];
 
     // Act
     let providers = registry();
