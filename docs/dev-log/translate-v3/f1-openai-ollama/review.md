@@ -5,7 +5,7 @@ level: 小功能
 parent: TV3-F1
 created: 2026-06-06T00:00:00Z
 status: 通过
-commit: 2704e42
+commit: 48adaba
 acceptance_ids: [TV3-F1-A01]
 author: code-reviewer
 ---

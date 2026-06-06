@@ -6,7 +6,7 @@ parent: TV3
 children: [TV3-F1-S01-code, TV3-F1-S01-test, TV3-F1-S01-review]
 created: 2026-06-06T00:00:00Z
 status: 通过
-commit: 2704e42
+commit: 48adaba
 acceptance_ids: [TV3-F1-A01]
 ---
 
