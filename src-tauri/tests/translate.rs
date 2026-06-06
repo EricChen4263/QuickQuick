@@ -156,13 +156,14 @@ fn provider_contract_parse_response_returns_error_on_missing_field() {
 /// 本地自部署的 ollama。
 /// 后续每新增一个源，此数随之增长，届时同步更新预期值。
 /// TV4-F2 新增词典源 ecdict（免 key）+ youdao_dict（需 key），19 → 21。
+/// TV4-F3 新增 bing_dict（免 key 非官方）+ cambridge（免 key 网页抓取），21 → 23（pot 全集）。
 #[test]
-fn static_registry_lists_twenty_one_providers() {
+fn static_registry_lists_twenty_three_providers() {
     // Arrange + Act
     let providers = registry();
 
     // Assert
-    assert_eq!(providers.len(), 21, "注册表应恰好包含 21 家 provider");
+    assert_eq!(providers.len(), 23, "注册表应恰好包含 23 家 provider");
 }
 
 #[test]
@@ -223,7 +224,15 @@ fn static_registry_keyed_providers_need_key() {
     // 时往此集合补对应 id，避免把新免 key 源误判为需 key。
     // ollama 为本地自部署 LLM，本地免鉴权，故 needs_key=false，归入此集合。
     let keyless_ids = [
-        "lingva", "google_free", "yandex", "transmart", "bing", "ecdict", "ollama",
+        "lingva",
+        "google_free",
+        "yandex",
+        "transmart",
+        "bing",
+        "ecdict",
+        "bing_dict",
+        "cambridge",
+        "ollama",
     ];
 
     // Act

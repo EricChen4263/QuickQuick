@@ -12,10 +12,10 @@ use super::{
 ///
 /// `credentials` 为 `(field_key, value)` 键值对切片，与 `load_credentials` 返回类型一致。
 /// 字段名必须与 `credential_schema` 声明的 key 逐字对齐：
-/// - `lingva`、`google_free`、`yandex`、`transmart`：无凭据（免 key）
+/// - `lingva`、`google_free`、`yandex`、`transmart`、`bing`、`ecdict`、`bing_dict`、`cambridge`：无凭据（免 key）
 /// - `baidu`：`app_id`（必填）、`secret_key`（必填）
 /// - `baidu_field`：`app_id`、`secret_key`、`field`（领域，均必填）
-/// - `youdao`：`app_key`、`app_secret`（均必填）
+/// - `youdao`、`youdao_dict`：`app_key`、`app_secret`（均必填，词典模式同翻译 key）
 /// - `caiyun`：`token`（必填）
 /// - `niutrans`：`apikey`（必填）
 /// - `tencent`：`secret_id`、`secret_key`（均必填）
@@ -47,6 +47,8 @@ pub fn build_provider(
         "transmart" => Ok(Box::new(TransmartProvider::new())),
         "bing" => Ok(Box::new(BingProvider::new())),
         "ecdict" => Ok(Box::new(EcdictProvider::new())),
+        "bing_dict" => Ok(Box::new(BingDictProvider::new())),
+        "cambridge" => Ok(Box::new(CambridgeProvider::new())),
         "baidu" => {
             let app_id = find("app_id")
                 .ok_or_else(|| "baidu 未配置 AppID，请前往设置填入 API Key".to_string())?;
@@ -185,6 +187,8 @@ pub fn registry() -> Vec<ProviderCapability> {
         TransmartProvider::new().capability(),
         BingProvider::new().capability(),
         EcdictProvider::new().capability(),
+        BingDictProvider::new().capability(),
+        CambridgeProvider::new().capability(),
         BaiduProvider::new("", "").capability(),
         BaiduFieldProvider::new("", "", "").capability(),
         YoudaoProvider::new("", "").capability(),
@@ -1334,6 +1338,310 @@ fn parse_ecdict_exchange(exchange: &str) -> Vec<String> {
             (!value.is_empty()).then(|| value.to_string())
         })
         .collect()
+}
+
+// Bing 词典（bing.com/api/v6/dictionarywords/search，硬编码 appid，免 key，非官方）
+
+/// Bing 词典硬编码 appid（公开非官方接口要求的客户端标识，非安全凭据）。
+///
+/// 该接口免用户 key，但要求一个固定 appid 标识客户端；此值为公开可观测的 Bing
+/// 网页端 appid，非用户密钥、非签名密钥，硬编码不违反密钥不入库约定（同 Yandex
+/// 的会话 id / Transmart 的 client_key 处理）。
+const BING_DICT_APPID: &str = "8F6F50E7B7E59683C70AD4254456B49A9F1F90C5";
+
+/// Bing 词典端点（公开互操作协议事实，独立实现，不参考任何第三方源码）。
+const BING_DICT_BASE: &str = "https://www.bing.com/api/v6/dictionarywords/search";
+
+/// Bing 词典 provider（免 key，非官方 JSON 接口）。
+///
+/// 端点（按 bing.com/api/v6/dictionarywords/search 公开接口形态独立实现，不参考任何第三方源码）：
+/// `GET https://www.bing.com/api/v6/dictionarywords/search?q={词}&appid={硬编码}&mkt={目标市场}`，
+/// 响应为 JSON。字段映射（响应观测）：
+/// - 音标：`value[0].pronunciations[*].transcriptions[*].transcription` 首个。
+/// - 释义：`value[0].meaningGroups[*]` 按词性（`partsOfSpeech[*].name`）分组，
+///   释义文本取 `meanings[*].richDefinitions[*].fragments[*].text` 拼接。
+/// - 变形：`value[0].inflections[*].displayText`。
+///
+/// appid 免用户 key（硬编码客户端标识），非官方接口、微软可随时变更，标 is_unofficial=true。
+pub struct BingDictProvider;
+
+impl BingDictProvider {
+    /// 构造 Bing 词典 provider（无凭据）。
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl Default for BingDictProvider {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl TranslateProvider for BingDictProvider {
+    fn capability(&self) -> ProviderCapability {
+        ProviderCapability {
+            id: "bing_dict",
+            name: "Bing 词典",
+            needs_key: false,
+            is_unofficial: true,
+        }
+    }
+
+    fn build_request(&self, req: &TranslateRequest) -> ProviderHttpRequest {
+        // mkt 用目标语言市场（如 zh-CN）以拿到对应语言的释义；q 为待查词、走 percent-encode。
+        let mkt = map_lang_for_provider("bing_dict", &req.target_lang);
+        let url = format!(
+            "{BING_DICT_BASE}?q={}&appid={BING_DICT_APPID}&mkt={mkt}",
+            percent_encode(&req.text),
+        );
+
+        ProviderHttpRequest {
+            method: "GET",
+            url,
+            body: None,
+            headers: vec![],
+        }
+    }
+
+    fn parse_response(&self, raw: &str) -> Result<TranslateResponse, TranslateError> {
+        let v: serde_json::Value =
+            serde_json::from_str(raw).map_err(|e| TranslateError::ParseError(e.to_string()))?;
+
+        // value[0] 为词条；非词/未收录时 value 为空数组——明确提示、不 panic、不返垃圾。
+        let entry_json = v["value"].get(0).ok_or_else(|| {
+            TranslateError::ParseError("Bing 词典未收录该词或非单词输入".to_string())
+        })?;
+
+        let entry = parse_bing_dict_entry(entry_json);
+        if entry.definitions.is_empty() && entry.phonetic.is_none() {
+            return Err(TranslateError::ParseError(
+                "Bing 词典返回空词条".to_string(),
+            ));
+        }
+        Ok(TranslateResponse::Dict { entry })
+    }
+}
+
+/// 把 Bing 词典 `value[0]` 词条对象解析为 `DictEntry`。
+///
+/// 字段来源：bing.com/api/v6/dictionarywords/search 响应观测（见类型文档注释）。
+fn parse_bing_dict_entry(entry: &serde_json::Value) -> DictEntry {
+    let phonetic = entry["pronunciations"]
+        .as_array()
+        .and_then(|prons| prons.iter().find_map(bing_transcription))
+        .map(str::to_string);
+
+    let definitions = entry["meaningGroups"]
+        .as_array()
+        .map(|groups| groups.iter().map(parse_bing_meaning_group).collect())
+        .unwrap_or_default();
+
+    let inflections = entry["inflections"]
+        .as_array()
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|i| i["displayText"].as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    DictEntry {
+        phonetic,
+        definitions,
+        examples: vec![],
+        audio: None,
+        inflections,
+    }
+}
+
+/// 取一个 pronunciation 对象的首个音标转写（`transcriptions[*].transcription`）。
+fn bing_transcription(pron: &serde_json::Value) -> Option<&str> {
+    pron["transcriptions"]
+        .as_array()
+        .and_then(|ts| ts.iter().find_map(|t| t["transcription"].as_str()))
+}
+
+/// 把一个 Bing `meaningGroup` 解析为 `PosDefinition`（词性 + 该词性下各释义）。
+fn parse_bing_meaning_group(group: &serde_json::Value) -> PosDefinition {
+    let pos = group["partsOfSpeech"]
+        .as_array()
+        .and_then(|p| p.iter().find_map(|x| x["name"].as_str()))
+        .map(str::to_string);
+
+    let meanings = group["meanings"]
+        .as_array()
+        .map(|ms| ms.iter().filter_map(bing_meaning_text).collect())
+        .unwrap_or_default();
+
+    PosDefinition { pos, meanings }
+}
+
+/// 取一条 meaning 的释义文本（`richDefinitions[*].fragments[*].text` 拼接）。
+fn bing_meaning_text(meaning: &serde_json::Value) -> Option<String> {
+    let text: String = meaning["richDefinitions"]
+        .as_array()?
+        .iter()
+        .filter_map(|d| d["fragments"].as_array())
+        .flatten()
+        .filter_map(|f| f["text"].as_str())
+        .collect();
+    (!text.is_empty()).then_some(text)
+}
+
+// 剑桥词典（dictionary.cambridge.org/search GET，HTML 用 scraper 解析，仅英文输入）
+
+/// 剑桥词典站点根（用于把相对音频 URL 补全为绝对地址）。
+const CAMBRIDGE_ORIGIN: &str = "https://dictionary.cambridge.org";
+
+/// 剑桥词典端点（公开网页，HTML 解析，独立实现，不参考任何第三方源码）。
+const CAMBRIDGE_SEARCH_BASE: &str =
+    "https://dictionary.cambridge.org/search/english-chinese-simplified/direct/";
+
+/// 剑桥词典 provider（免 key，网页抓取，仅英文输入）。
+///
+/// 端点（按剑桥公开网页形态独立实现，不参考任何第三方源码）：
+/// `GET https://dictionary.cambridge.org/search/english-chinese-simplified/direct/?q={词}`，
+/// 响应为 HTML，用 `scraper`（CSS 选择器）提取（仅取文本/属性，不执行 JS）：
+/// - 音标：`.ipa` 首个文本。
+/// - 音频：`source[type=audio/mpeg]` 的 `src`（相对路径补全为绝对地址）。
+/// - 释义：`.def-block` 各块，词性取块内 `.pos`，释义合并块内 `.def`（英文）+ `.trans`（汉译）。
+///
+/// 网页抓取、有反爬风险（设计文档§二.2.4），标 is_unofficial=true。
+pub struct CambridgeProvider;
+
+impl CambridgeProvider {
+    /// 构造剑桥词典 provider（无凭据）。
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl Default for CambridgeProvider {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl TranslateProvider for CambridgeProvider {
+    fn capability(&self) -> ProviderCapability {
+        ProviderCapability {
+            id: "cambridge",
+            name: "剑桥词典",
+            needs_key: false,
+            is_unofficial: true,
+        }
+    }
+
+    fn build_request(&self, req: &TranslateRequest) -> ProviderHttpRequest {
+        // 剑桥仅支持英文输入查词；q 为待查词、走 percent-encode。
+        let url = format!("{CAMBRIDGE_SEARCH_BASE}?q={}", percent_encode(&req.text));
+
+        ProviderHttpRequest {
+            method: "GET",
+            url,
+            body: None,
+            headers: vec![],
+        }
+    }
+
+    fn parse_response(&self, raw: &str) -> Result<TranslateResponse, TranslateError> {
+        parse_cambridge_html(raw)
+    }
+}
+
+/// 把剑桥词典 HTML 页面解析为 `Dict`（音标/音频/释义）。
+///
+/// 用 `scraper` 选择器仅取文本/属性（不执行脚本，无注入风险）。
+/// 无释义块（搜索无结果/非词）时返回明确 `ParseError`，不 panic、不返垃圾。
+fn parse_cambridge_html(raw: &str) -> Result<TranslateResponse, TranslateError> {
+    use scraper::{Html, Selector};
+
+    let doc = Html::parse_document(raw);
+
+    // 选择器为编译期固定的合法 CSS，解析失败属编程错误——用 expect 暴露而非静默吞掉。
+    let def_block_sel =
+        Selector::parse(".def-block").expect("`.def-block` 应为合法 CSS 选择器");
+    let definitions: Vec<PosDefinition> = doc
+        .select(&def_block_sel)
+        .filter_map(parse_cambridge_def_block)
+        .collect();
+
+    if definitions.is_empty() {
+        return Err(TranslateError::ParseError(
+            "剑桥词典未找到该词的释义（非英文单词或无结果）".to_string(),
+        ));
+    }
+
+    let phonetic = select_first_text(&doc, ".ipa");
+    let audio = select_cambridge_audio(&doc);
+
+    Ok(TranslateResponse::Dict {
+        entry: DictEntry {
+            phonetic,
+            definitions,
+            examples: vec![],
+            audio,
+            inflections: vec![],
+        },
+    })
+}
+
+/// 把一个剑桥 `.def-block` 元素解析为 `PosDefinition`。
+///
+/// 词性取块内 `.pos`；释义合并块内 `.def`（英文释义）与 `.trans`（汉译），各取文本去空白。
+/// 无任何释义文本的块返回 None（跳过空块）。
+fn parse_cambridge_def_block(block: scraper::ElementRef) -> Option<PosDefinition> {
+    let pos = select_first_text_in(block, ".pos");
+
+    let mut meanings = Vec::new();
+    if let Some(def) = select_first_text_in(block, ".def") {
+        meanings.push(def);
+    }
+    if let Some(trans) = select_first_text_in(block, ".trans") {
+        meanings.push(trans);
+    }
+    if meanings.is_empty() {
+        return None;
+    }
+    Some(PosDefinition { pos, meanings })
+}
+
+/// 取剑桥页面首个 `source[type=audio/mpeg]` 的 `src`，相对路径补全为绝对地址。
+fn select_cambridge_audio(doc: &scraper::Html) -> Option<String> {
+    use scraper::Selector;
+    let sel = Selector::parse("source[type=\"audio/mpeg\"]")
+        .expect("音频 source 应为合法 CSS 选择器");
+    let src = doc.select(&sel).find_map(|el| el.value().attr("src"))?;
+    Some(absolutize_cambridge_url(src))
+}
+
+/// 把剑桥相对 URL 补全为绝对地址（已是绝对地址则原样返回）。
+fn absolutize_cambridge_url(src: &str) -> String {
+    if src.starts_with("http://") || src.starts_with("https://") {
+        return src.to_string();
+    }
+    format!("{CAMBRIDGE_ORIGIN}{src}")
+}
+
+/// 在整个文档内取首个匹配选择器的元素的去空白文本（无匹配/空文本返回 None）。
+fn select_first_text(doc: &scraper::Html, selector: &str) -> Option<String> {
+    use scraper::Selector;
+    let sel = Selector::parse(selector).expect("选择器应为合法 CSS");
+    doc.select(&sel).find_map(non_empty_text)
+}
+
+/// 在某元素子树内取首个匹配选择器的元素的去空白文本（无匹配/空文本返回 None）。
+fn select_first_text_in(root: scraper::ElementRef, selector: &str) -> Option<String> {
+    use scraper::Selector;
+    let sel = Selector::parse(selector).expect("选择器应为合法 CSS");
+    root.select(&sel).find_map(non_empty_text)
+}
+
+/// 取元素的全部后代文本并去首尾空白；空文本返回 None。
+fn non_empty_text(el: scraper::ElementRef) -> Option<String> {
+    let text: String = el.text().collect::<String>().trim().to_string();
+    (!text.is_empty()).then_some(text)
 }
 
 // 彩云小译（token 简单鉴权）
@@ -5573,5 +5881,268 @@ Signature=dac06f9e1be8667102fc1dfe025834cc9da68f2359b28084891b8e03ee332a61";
         body.split('&')
             .find_map(|pair| pair.strip_prefix(&format!("{key}=")))
             .map(|v| v.to_string())
+    }
+
+    // Bing 词典源（bing.com/api/v6/dictionarywords/search，硬编码 appid，免 key，非官方）测试
+
+    /// 录制 Bing 词典 JSON 响应（最小含音标 / 按词性分组释义 / 变形）。
+    ///
+    /// 形态对齐 bing.com/api/v6/dictionarywords/search 公开返回：`value[0]` 是词条，
+    /// `pronunciations[*].transcriptions[*].transcription` 为音标，
+    /// `meaningGroups[*]` 按词性（`partsOfSpeech[*].name`）分组，
+    /// 释义取 `meanings[*].richDefinitions[*].fragments[*].text`，
+    /// `inflections[*].displayText` 为变形。
+    const BING_DICT_FIXTURE: &str = r#"{
+        "value": [{
+            "normalizedWord": "glacier",
+            "word": "glacier",
+            "pronunciations": [
+                {"transcriptions": [{"transcription": "ˈɡleɪʃər"}]}
+            ],
+            "meaningGroups": [
+                {
+                    "partsOfSpeech": [{"name": "noun"}],
+                    "meanings": [
+                        {"richDefinitions": [{"fragments": [{"text": "冰川"}]}]},
+                        {"richDefinitions": [{"fragments": [{"text": "冰河"}]}]}
+                    ]
+                },
+                {
+                    "partsOfSpeech": [{"name": "verb"}],
+                    "meanings": [
+                        {"richDefinitions": [{"fragments": [{"text": "结冰"}]}]}
+                    ]
+                }
+            ],
+            "inflections": [
+                {"displayText": "glaciers"}
+            ]
+        }]
+    }"#;
+
+    // 对齐 acceptance TV4-F3-A01：bing_dict parse JSON → Dict（音标/按词性分组释义/变形）。
+    #[test]
+    fn bing_dict_parses_json_to_dict() {
+        let provider = BingDictProvider::new();
+        let resp = provider
+            .parse_response(BING_DICT_FIXTURE)
+            .expect("Bing 词典 JSON 应解析为 Dict");
+        let entry = dict_entry(&resp);
+
+        assert_eq!(entry.phonetic.as_deref(), Some("ˈɡleɪʃər"), "应取音标");
+
+        let noun = entry
+            .definitions
+            .iter()
+            .find(|d| d.pos.as_deref() == Some("noun"))
+            .expect("应含名词词性分组");
+        assert!(
+            noun.meanings.iter().any(|m| m == "冰川"),
+            "名词释义应含「冰川」，实际：{:?}",
+            noun.meanings
+        );
+        assert!(
+            noun.meanings.iter().any(|m| m == "冰河"),
+            "名词释义应含「冰河」，实际：{:?}",
+            noun.meanings
+        );
+        let verb = entry
+            .definitions
+            .iter()
+            .find(|d| d.pos.as_deref() == Some("verb"))
+            .expect("应含动词词性分组");
+        assert!(
+            verb.meanings.iter().any(|m| m == "结冰"),
+            "动词释义应含「结冰」，实际：{:?}",
+            verb.meanings
+        );
+
+        assert!(
+            entry.inflections.iter().any(|i| i == "glaciers"),
+            "变形应含复数 glaciers，实际：{:?}",
+            entry.inflections
+        );
+    }
+
+    // 对齐 acceptance TV4-F3-A01（错误/反爬分支）：非法 JSON → ParseError，不 panic。
+    #[test]
+    fn bing_dict_parse_invalid_json_returns_parse_error() {
+        let provider = BingDictProvider::new();
+        let err = provider.parse_response("<html>blocked</html>");
+        assert!(
+            matches!(err, Err(TranslateError::ParseError(_))),
+            "非法 JSON 应返回 ParseError，实际：{err:?}"
+        );
+    }
+
+    // build_request 命中 bing.com dictionarywords 端点且携带 appid + 待查词。
+    #[test]
+    fn bing_dict_build_request_hits_endpoint_with_appid() {
+        let provider = BingDictProvider::new();
+        let req = TranslateRequest {
+            text: "glacier".to_string(),
+            source_lang: Lang::new("en"),
+            target_lang: Lang::new("zh"),
+        };
+        let http_req = provider.build_request(&req);
+
+        assert!(
+            http_req.url.contains("bing.com/api/v6/dictionarywords/search"),
+            "URL 应命中 Bing 词典端点，实际：{}",
+            http_req.url
+        );
+        assert!(
+            http_req.url.contains("appid="),
+            "URL 应携带硬编码 appid，实际：{}",
+            http_req.url
+        );
+        assert!(
+            http_req.url.contains("glacier"),
+            "URL 应携带待查词 glacier，实际：{}",
+            http_req.url
+        );
+    }
+
+    #[test]
+    fn registry_contains_bing_dict_free_unofficial() {
+        let reg = registry();
+        let b = reg
+            .iter()
+            .find(|c| c.id == "bing_dict")
+            .expect("注册表应含 bing_dict");
+        assert!(!b.needs_key, "bing_dict 应为免 key 源");
+        assert!(b.is_unofficial, "bing_dict 为非官方接口，is_unofficial 应为 true");
+        assert!(
+            build_provider("bing_dict", &[]).is_ok(),
+            "build_provider(\"bing_dict\") 应免 key 成功"
+        );
+    }
+
+    // 剑桥词典源（dictionary.cambridge.org/search GET，HTML 用 scraper 解析，仅英文输入）测试
+
+    /// 录制剑桥词典 HTML 片段（最小含音标 / 音频 URL / 释义）。
+    ///
+    /// 选择器对齐剑桥页面结构：音标 `.ipa`，音频 `audio source[type='audio/mpeg']` 的 `src`，
+    /// 释义块 `.def-block`，其中词性 `.pos`、英文释义 `.def`、汉译 `.trans`。
+    const CAMBRIDGE_FIXTURE: &str = r#"<html><body>
+        <div class="pron"><span class="ipa">ˈɡlæs.i.ər</span></div>
+        <span class="us dpron-i">
+            <audio id="audio1"><source type="audio/mpeg" src="/media/english/us_pron/g/gla/glaci/glacier.mp3"/></audio>
+        </span>
+        <div class="pos-body">
+            <div class="def-block">
+                <span class="pos">noun</span>
+                <div class="def">a large mass of ice</div>
+                <span class="trans">冰川</span>
+            </div>
+            <div class="def-block">
+                <span class="pos">noun</span>
+                <div class="def">a slow-moving river of ice</div>
+                <span class="trans">冰河</span>
+            </div>
+        </div>
+    </body></html>"#;
+
+    // 对齐 acceptance TV4-F3-A01：cambridge parse HTML → Dict（音标/音频/释义）。
+    #[test]
+    fn cambridge_parses_html_to_dict() {
+        let provider = CambridgeProvider::new();
+        let resp = provider
+            .parse_response(CAMBRIDGE_FIXTURE)
+            .expect("剑桥 HTML 应解析为 Dict");
+        let entry = dict_entry(&resp);
+
+        assert_eq!(entry.phonetic.as_deref(), Some("ˈɡlæs.i.ər"), "应取 .ipa 音标");
+        assert_eq!(
+            entry.audio.as_deref(),
+            Some("https://dictionary.cambridge.org/media/english/us_pron/g/gla/glaci/glacier.mp3"),
+            "应取音频 URL 并补全为绝对地址"
+        );
+
+        let noun = entry
+            .definitions
+            .iter()
+            .find(|d| d.pos.as_deref() == Some("noun"))
+            .expect("应含名词词性分组");
+        assert!(
+            noun.meanings.iter().any(|m| m.contains("large mass of ice")),
+            "释义应含英文释义，实际：{:?}",
+            noun.meanings
+        );
+        assert!(
+            noun.meanings.iter().any(|m| m.contains("冰川")),
+            "释义应含汉译「冰川」，实际：{:?}",
+            noun.meanings
+        );
+    }
+
+    // 对齐 acceptance TV4-F3-A01（仅英文输入）：build_request 命中剑桥 search 端点。
+    #[test]
+    fn cambridge_build_request_hits_search_endpoint() {
+        let provider = CambridgeProvider::new();
+        let req = TranslateRequest {
+            text: "glacier".to_string(),
+            source_lang: Lang::new("en"),
+            target_lang: Lang::new("zh"),
+        };
+        let http_req = provider.build_request(&req);
+
+        assert_eq!(http_req.method, "GET");
+        assert!(
+            http_req.url.contains("dictionary.cambridge.org/search"),
+            "URL 应命中剑桥 search 端点，实际：{}",
+            http_req.url
+        );
+        assert!(
+            http_req.url.contains("glacier"),
+            "URL 应携带待查词 glacier，实际：{}",
+            http_req.url
+        );
+    }
+
+    #[test]
+    fn registry_contains_cambridge_free_unofficial() {
+        let reg = registry();
+        let c = reg
+            .iter()
+            .find(|c| c.id == "cambridge")
+            .expect("注册表应含 cambridge");
+        assert!(!c.needs_key, "cambridge 应为免 key 源");
+        assert!(c.is_unofficial, "cambridge 为网页抓取，is_unofficial 应为 true");
+        assert!(
+            build_provider("cambridge", &[]).is_ok(),
+            "build_provider(\"cambridge\") 应免 key 成功"
+        );
+    }
+
+    // 对齐 acceptance TV4-F3-A01（核心）：非词输入或解析无结果时回退/明确提示、不 panic、不返垃圾。
+    #[test]
+    fn dict_source_falls_back_or_hints_on_non_word() {
+        // Bing 词典：value 为空数组（非词/未收录）→ 明确 ParseError 提示，不 panic。
+        let bing = BingDictProvider::new();
+        let bing_err = bing.parse_response(r#"{"value": []}"#);
+        assert!(
+            matches!(&bing_err, Err(TranslateError::ParseError(msg)) if !msg.is_empty()),
+            "Bing 词典非词应返回带明确提示的 ParseError，实际：{bing_err:?}"
+        );
+
+        // 剑桥：页面无 .def-block（搜索无结果/非词）→ 明确 ParseError 提示，不 panic。
+        let cambridge = CambridgeProvider::new();
+        let cam_err =
+            cambridge.parse_response("<html><body><p>No results found</p></body></html>");
+        assert!(
+            matches!(&cam_err, Err(TranslateError::ParseError(msg)) if !msg.is_empty()),
+            "剑桥无结果应返回带明确提示的 ParseError，实际：{cam_err:?}"
+        );
+
+        // 两源对完全空/无关响应也不 panic（健壮性兜底）。
+        assert!(
+            bing.parse_response(r#"{}"#).is_err(),
+            "Bing 词典空对象应 Err 不 panic"
+        );
+        assert!(
+            cambridge.parse_response("").is_err(),
+            "剑桥空响应应 Err 不 panic"
+        );
     }
 }
