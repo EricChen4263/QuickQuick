@@ -299,6 +299,7 @@ function TranslatePage({ seed }: TranslatePageProps) {
   function handleSelectHistoryItem(item: TranslateHistoryItem) {
     setInputText(item.sourceText);
     setResult({
+      kind: "plain",
       translated: item.translatedText,
       sourceLang: item.sourceLang,
       targetLang: item.targetLang,

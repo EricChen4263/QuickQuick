@@ -5,6 +5,7 @@ import MiniTranslate from "./MiniTranslate";
 import type { TranslateResult } from "../ipc/ipc-client";
 
 const RESULT: TranslateResult = {
+  kind: "plain",
   translated: "你好，世界",
   sourceLang: "en",
   targetLang: "zh",

@@ -57,6 +57,7 @@ const MOCK_TEXT_ITEM = {
 };
 
 const MOCK_RESULT = {
+  kind: "plain" as const,
   translated: "你好，世界",
   sourceLang: "en",
   targetLang: "zh",

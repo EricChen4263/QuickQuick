@@ -10,7 +10,17 @@ use quickquick_lib::translate::providers::{
     baidu_field_sign, baidu_sign, on_quota_or_failure, youdao_sign, youdao_truncate, BaiduProvider,
     DeepLFreeProvider, GoogleProvider, LingvaProvider, UserPromptKind,
 };
-use quickquick_lib::translate::{Lang, TranslateError, TranslateProvider, TranslateRequest};
+use quickquick_lib::translate::{
+    Lang, TranslateError, TranslateProvider, TranslateRequest, TranslateResponse,
+};
+
+// 从翻译响应取出 Plain 变体译文；非 Plain 即测试失败（既有机翻源应全返 Plain）。
+fn plain_text(resp: &TranslateResponse) -> &str {
+    match resp {
+        TranslateResponse::Plain { translated } => translated,
+        TranslateResponse::Dict { .. } => panic!("既有源应返回 Plain，实际返回 Dict"),
+    }
+}
 
 // 构造测试用 TranslateRequest 的辅助函数
 fn make_request(text: &str, src: &str, tgt: &str) -> TranslateRequest {
@@ -76,7 +86,7 @@ fn provider_lingva_parse_response_success() {
 
     // Assert
     let resp = result.expect("成功 JSON 应解析成功");
-    assert_eq!(resp.translated, "你好，世界");
+    assert_eq!(plain_text(&resp), "你好，世界");
 }
 
 /// parse_response 缺 translation 字段 → TranslateError::ParseError
@@ -204,7 +214,7 @@ fn providers_keyed_baidu_parse_response_success() {
 
     // Assert
     let resp = result.expect("成功 JSON 应解析成功");
-    assert_eq!(resp.translated, "苹果");
+    assert_eq!(plain_text(&resp), "苹果");
 }
 
 /// A10-4: 百度 parse_response 错误码 54003（频率超限）→ RateLimit
@@ -331,7 +341,7 @@ fn providers_keyed_deepl_parse_response_success() {
 
     // Assert
     let resp = result.expect("成功 JSON 应解析成功");
-    assert_eq!(resp.translated, "你好，世界");
+    assert_eq!(plain_text(&resp), "你好，世界");
 }
 
 /// A10-10: DeepL Free parse_response 错误响应（含 quota 文案）→ Quota
@@ -436,7 +446,7 @@ fn providers_keyed_google_parse_response_success() {
 
     // Assert
     let resp = result.expect("成功 JSON 应解析成功");
-    assert_eq!(resp.translated, "你好");
+    assert_eq!(plain_text(&resp), "你好");
 }
 
 /// A10-15: Google parse_response 错误对象 status=PERMISSION_DENIED → Auth

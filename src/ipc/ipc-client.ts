@@ -13,11 +13,43 @@ export interface ClipItem {
   imageId?: string;
 }
 
-/** 翻译结果，与 Rust TranslateResultDto（camelCase）对齐。 */
-export interface TranslateResult {
+/** 词典词条结构化内容，与 Rust DictEntry（camelCase）对齐。 */
+export interface DictEntry {
+  phonetic: string | null;
+  definitions: PosDefinition[];
+  examples: string[];
+  audio: string | null;
+  inflections: string[];
+}
+
+/** 按词性分组的释义，与 Rust PosDefinition 对齐。 */
+export interface PosDefinition {
+  pos: string | null;
+  meanings: string[];
+}
+
+/**
+ * 翻译结果，与 Rust TranslateResultDto（camelCase）对齐的可判别联合。
+ *
+ * `kind` 取值与后端 TranslateResponse 的 serde tag 一致：
+ * - `"plain"`：普通译文，`translated` 为译文文本，无 `entry`。
+ * - `"dict"`：结构化词条，`entry` 为词条；`translated` 为词条纯文本摘要（回退展示用）。
+ */
+export type TranslateResult = TranslatePlainResult | TranslateDictResult;
+
+interface TranslateResultBase {
   translated: string;
   sourceLang: string;
   targetLang: string;
+}
+
+export interface TranslatePlainResult extends TranslateResultBase {
+  kind: "plain";
+}
+
+export interface TranslateDictResult extends TranslateResultBase {
+  kind: "dict";
+  entry: DictEntry;
 }
 
 /** 翻译历史条目，与 Rust TranslateHistoryDto（camelCase）对齐。 */

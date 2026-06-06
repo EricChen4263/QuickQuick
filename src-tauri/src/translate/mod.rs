@@ -46,10 +46,62 @@ pub struct TranslateRequest {
     pub target_lang: Lang,
 }
 
-/// 统一翻译响应。
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TranslateResponse {
-    pub translated: String,
+/// 统一翻译响应：单段译文（机翻/LLM）或结构化词条（词典源）。
+///
+/// 用 serde internally tagged 枚举携带 `kind` 判别标签，前端据此分别渲染：
+/// - `Plain` → `{"kind":"plain","translated":"..."}`，原译文文本渲染。
+/// - `Dict`  → `{"kind":"dict","entry":{...}}`，按 `DictEntry` 结构化渲染。
+///
+/// 既有 19 源（机翻 + LLM）全部产出 `Plain`；词典 4 源（TV4-F2/F3）产出 `Dict`。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "lowercase")]
+pub enum TranslateResponse {
+    /// 单段译文，携带翻译后的文本。
+    Plain {
+        /// 翻译后的文本。
+        translated: String,
+    },
+    /// 结构化词典词条。
+    Dict {
+        /// 词条结构化内容（音标/释义/例句/发音/变形）。
+        entry: DictEntry,
+    },
+}
+
+impl TranslateResponse {
+    /// 构造 Plain 变体的便捷方法（既有源高频使用）。
+    pub fn plain(translated: impl Into<String>) -> Self {
+        Self::Plain {
+            translated: translated.into(),
+        }
+    }
+}
+
+/// 词典词条结构化内容。
+///
+/// 字段全部用 `Option`/`Vec` 容空——不同词典源能提供的字段不一，缺失即空，
+/// 序列化后前端按字段有无渲染（设计文档§二.2.4）。
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct DictEntry {
+    /// 音标（如 "ˈɡleɪʃər"），无则 None。
+    pub phonetic: Option<String>,
+    /// 按词性分组的释义列表。
+    pub definitions: Vec<PosDefinition>,
+    /// 例句列表。
+    pub examples: Vec<String>,
+    /// 发音音频 URL，无则 None。
+    pub audio: Option<String>,
+    /// 词形变化（复数/时态等）列表。
+    pub inflections: Vec<String>,
+}
+
+/// 按词性分组的释义。
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct PosDefinition {
+    /// 词性（如 "noun"/"verb"），无则 None。
+    pub pos: Option<String>,
+    /// 该词性下的释义文本列表。
+    pub meanings: Vec<String>,
 }
 
 /// Provider 能力声明。
@@ -186,5 +238,63 @@ pub trait TranslateProvider: Send + Sync {
         let http_req = self.build_request(req);
         let raw = executor.execute(&http_req)?;
         self.parse_response(&raw)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // 对齐 acceptance TV4-F1-A01：Plain 变体 JSON 往返带 kind 标签且语义不丢。
+    #[test]
+    fn translate_response_plain_variant_roundtrip() {
+        let resp = TranslateResponse::plain("glacier");
+        let json = serde_json::to_string(&resp).expect("Plain 序列化应成功");
+        assert_eq!(json, r#"{"kind":"plain","translated":"glacier"}"#);
+
+        let back: TranslateResponse = serde_json::from_str(&json).expect("Plain 反序列化应成功");
+        assert_eq!(back, resp, "往返后应与原值相等");
+        assert!(
+            matches!(&back, TranslateResponse::Plain { translated } if translated == "glacier"),
+            "往返后应仍为 Plain 且译文不变"
+        );
+    }
+
+    // 对齐 acceptance TV4-F1-A01：既有源 parse_response 仍返回 Plain，不回归为 Dict。
+    #[test]
+    fn existing_providers_return_plain_no_regression() {
+        let provider = providers::build_provider("lingva", &[]).expect("lingva 应构造成功");
+        let resp = provider
+            .parse_response(r#"{"translation":"glacier"}"#)
+            .expect("含 translation 字段应解析成功");
+        assert!(
+            matches!(&resp, TranslateResponse::Plain { translated } if translated == "glacier"),
+            "既有机翻源应返回 Plain 变体，实际：{resp:?}"
+        );
+    }
+
+    // 对齐 acceptance TV4-F1-A01：Dict 变体序列化带 kind 类型标签，前端可判别。
+    #[test]
+    fn dict_entry_serializes_with_type_tag() {
+        let entry = DictEntry {
+            phonetic: Some("ˈɡleɪʃər".to_string()),
+            definitions: vec![PosDefinition {
+                pos: Some("noun".to_string()),
+                meanings: vec!["冰川".to_string()],
+            }],
+            examples: vec!["The glacier melts.".to_string()],
+            audio: None,
+            inflections: vec!["glaciers".to_string()],
+        };
+        let resp = TranslateResponse::Dict { entry };
+        let value: serde_json::Value =
+            serde_json::to_value(&resp).expect("Dict 序列化应成功");
+
+        assert_eq!(value["kind"], "dict", "应携带 kind=dict 类型标签");
+        assert_eq!(value["entry"]["phonetic"], "ˈɡleɪʃər");
+        assert_eq!(value["entry"]["definitions"][0]["pos"], "noun");
+        assert_eq!(value["entry"]["definitions"][0]["meanings"][0], "冰川");
+        assert_eq!(value["entry"]["examples"][0], "The glacier melts.");
+        assert_eq!(value["entry"]["inflections"][0], "glaciers");
     }
 }

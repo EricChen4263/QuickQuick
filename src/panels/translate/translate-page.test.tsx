@@ -37,6 +37,7 @@ import {
   setSelectedProvider,
   getProviderCredentialSchema,
   getProviderCredentials,
+  type TranslateResult,
 } from "../../ipc/ipc-client";
 import { PROVIDER_CONFIG_CHANGED_EVENT } from "../../ipc/events";
 import { writeToClipboard, speakText } from "./browser-api";
@@ -75,7 +76,8 @@ const MOCK_HISTORY = [
 ];
 
 /** 测试用翻译结果 */
-const MOCK_RESULT = {
+const MOCK_RESULT: TranslateResult = {
+  kind: "plain",
   translated: "你好世界",
   sourceLang: "en",
   targetLang: "zh",
@@ -125,7 +127,7 @@ describe("translate-page", () => {
 
   it("translate-page: 改目标语为 en 后点翻译，translateText 第二参为 'en'", async () => {
     // Arrange
-    mockTranslateText.mockResolvedValue({ translated: "Hello World", sourceLang: "zh", targetLang: "en" });
+    mockTranslateText.mockResolvedValue({ kind: "plain", translated: "Hello World", sourceLang: "zh", targetLang: "en" });
     const user = userEvent.setup();
     render(<TranslatePage />);
 
@@ -696,7 +698,7 @@ describe("translate-page", () => {
     // Arrange：第一次成功返回「第一次译文」，第二次返回可控 pending promise
     let resolveSecond: ((value: typeof MOCK_RESULT) => void) | undefined;
     mockTranslateText
-      .mockResolvedValueOnce({ translated: "第一次译文", sourceLang: "en", targetLang: "zh" })
+      .mockResolvedValueOnce({ kind: "plain", translated: "第一次译文", sourceLang: "en", targetLang: "zh" })
       .mockReturnValueOnce(
         new Promise((resolve) => {
           resolveSecond = resolve;

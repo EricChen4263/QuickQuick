@@ -25,7 +25,10 @@ use crate::translate::history::{
 };
 use crate::translate::lang::resolve_direction_with_source;
 use crate::translate::providers::{build_provider, registry};
-use crate::translate::{HttpExecutor, Lang, ProviderHttpRequest, TranslateError, TranslateRequest};
+use crate::translate::{
+    DictEntry, HttpExecutor, Lang, ProviderHttpRequest, TranslateError, TranslateRequest,
+    TranslateResponse,
+};
 
 /// 默认翻译源 id（免 key，开箱可用）。
 ///
@@ -127,12 +130,35 @@ impl HttpExecutor for FakeExecutor {
 /// 翻译结果 DTO（返回给前端）。
 ///
 /// 字段用 camelCase 序列化，与前端 TypeScript 接口对齐。
+/// `kind` 为类型判别标签（`"plain"`/`"dict"`），与后端 `TranslateResponse`
+/// 的 serde tag 取值一致——前端据此分别渲染普通译文 / 结构化词条。
+/// Plain 结果 `translated` 为译文、`entry` 为 None；Dict 结果 `entry` 为词条、
+/// `translated` 为词条的纯文本摘要（供历史栏与不支持词典渲染处回退展示）。
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TranslateResultDto {
+    pub kind: String,
     pub translated: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub entry: Option<DictEntry>,
     pub source_lang: String,
     pub target_lang: String,
+}
+
+/// 把词典词条压成单行纯文本摘要，供历史记录与回退展示。
+///
+/// 取首个有释义的词性的释义拼接；无释义则回退音标或空串。
+fn dict_entry_summary(entry: &DictEntry) -> String {
+    let meanings: Vec<&str> = entry
+        .definitions
+        .iter()
+        .flat_map(|d| d.meanings.iter())
+        .map(String::as_str)
+        .collect();
+    if !meanings.is_empty() {
+        return meanings.join("; ");
+    }
+    entry.phonetic.clone().unwrap_or_default()
 }
 
 /// 翻译历史条目 DTO（供 A08 历史栏回填）。
@@ -211,10 +237,16 @@ pub fn translate_text_impl(
     // 改调 provider.translate（默认实现 = 单步 build/execute/parse；多步源如 Bing override）。
     let resp = provider.translate(&req, exec).map_err(|e| e.to_string())?;
 
+    // 拆出类型判别标签 + 历史用纯文本：Plain 直接取译文，Dict 压成摘要回退。
+    let (kind, translated, entry) = match resp {
+        TranslateResponse::Plain { translated } => ("plain", translated, None),
+        TranslateResponse::Dict { entry } => ("dict", dict_entry_summary(&entry), Some(entry)),
+    };
+
     add_translate_history(
         conn,
         text,
-        &resp.translated,
+        &translated,
         source.as_str(),
         target.as_str(),
         &provider_id,
@@ -222,7 +254,9 @@ pub fn translate_text_impl(
     .map_err(|e| e.to_string())?;
 
     Ok(TranslateResultDto {
-        translated: resp.translated,
+        kind: kind.to_string(),
+        translated,
+        entry,
         source_lang: source.as_str().to_string(),
         target_lang: target.as_str().to_string(),
     })

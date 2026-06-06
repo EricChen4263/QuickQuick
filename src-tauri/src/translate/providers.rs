@@ -257,7 +257,7 @@ impl TranslateProvider for LingvaProvider {
             .ok_or_else(|| TranslateError::ParseError("missing translation".to_string()))?
             .to_string();
 
-        Ok(TranslateResponse { translated })
+        Ok(TranslateResponse::plain(translated))
     }
 }
 
@@ -339,7 +339,7 @@ impl TranslateProvider for GoogleFreeProvider {
             translated.push_str(part);
         }
 
-        Ok(TranslateResponse { translated })
+        Ok(TranslateResponse::plain(translated))
     }
 }
 
@@ -432,7 +432,7 @@ impl TranslateProvider for YandexProvider {
             return Err(TranslateError::ParseError("empty text array".to_string()));
         }
 
-        Ok(TranslateResponse { translated })
+        Ok(TranslateResponse::plain(translated))
     }
 }
 
@@ -554,7 +554,7 @@ impl TranslateProvider for TransmartProvider {
             ));
         }
 
-        Ok(TranslateResponse { translated })
+        Ok(TranslateResponse::plain(translated))
     }
 }
 
@@ -632,7 +632,7 @@ impl TranslateProvider for BingProvider {
             })?
             .to_string();
 
-        Ok(TranslateResponse { translated })
+        Ok(TranslateResponse::plain(translated))
     }
 
     fn translate(
@@ -751,7 +751,7 @@ impl TranslateProvider for BaiduProvider {
             .ok_or_else(|| TranslateError::ParseError("missing trans_result[0].dst".to_string()))?
             .to_string();
 
-        Ok(TranslateResponse { translated })
+        Ok(TranslateResponse::plain(translated))
     }
 }
 
@@ -861,7 +861,7 @@ impl TranslateProvider for BaiduFieldProvider {
         }
 
         let translated = concat_baidu_dst(&v)?;
-        Ok(TranslateResponse { translated })
+        Ok(TranslateResponse::plain(translated))
     }
 }
 
@@ -979,9 +979,7 @@ impl TranslateProvider for YoudaoProvider {
         if parts.is_empty() {
             return Err(TranslateError::ParseError("empty translation".to_string()));
         }
-        Ok(TranslateResponse {
-            translated: parts.join("\n"),
-        })
+        Ok(TranslateResponse::plain(parts.join("\n")))
     }
 }
 
@@ -1130,7 +1128,7 @@ impl TranslateProvider for CaiyunProvider {
             }
         };
 
-        Ok(TranslateResponse { translated })
+        Ok(TranslateResponse::plain(translated))
     }
 }
 
@@ -1215,7 +1213,7 @@ impl TranslateProvider for NiutransProvider {
             .ok_or_else(|| TranslateError::ParseError("missing tgt_text".to_string()))?
             .to_string();
 
-        Ok(TranslateResponse { translated })
+        Ok(TranslateResponse::plain(translated))
     }
 }
 
@@ -1333,7 +1331,7 @@ impl TranslateProvider for TencentProvider {
             .ok_or_else(|| TranslateError::ParseError("missing Response.TargetText".to_string()))?
             .to_string();
 
-        Ok(TranslateResponse { translated })
+        Ok(TranslateResponse::plain(translated))
     }
 }
 
@@ -1504,7 +1502,7 @@ impl TranslateProvider for AlibabaProvider {
             .ok_or_else(|| TranslateError::ParseError("missing Data.Translated".to_string()))?
             .to_string();
 
-        Ok(TranslateResponse { translated })
+        Ok(TranslateResponse::plain(translated))
     }
 }
 
@@ -1679,7 +1677,7 @@ impl TranslateProvider for VolcengineProvider {
             ));
         }
 
-        Ok(TranslateResponse { translated })
+        Ok(TranslateResponse::plain(translated))
     }
 }
 
@@ -1941,7 +1939,7 @@ impl TranslateProvider for DeepLFreeProvider {
             .ok_or_else(|| TranslateError::ParseError("missing translations[0].text".to_string()))?
             .to_string();
 
-        Ok(TranslateResponse { translated })
+        Ok(TranslateResponse::plain(translated))
     }
 }
 
@@ -2053,7 +2051,7 @@ impl TranslateProvider for GoogleProvider {
             })?
             .to_string();
 
-        Ok(TranslateResponse { translated })
+        Ok(TranslateResponse::plain(translated))
     }
 }
 
@@ -2336,7 +2334,7 @@ impl TranslateProvider for OpenAiProvider {
             .trim()
             .to_string();
 
-        Ok(TranslateResponse { translated })
+        Ok(TranslateResponse::plain(translated))
     }
 }
 
@@ -2435,7 +2433,7 @@ impl TranslateProvider for OllamaProvider {
             .trim()
             .to_string();
 
-        Ok(TranslateResponse { translated })
+        Ok(TranslateResponse::plain(translated))
     }
 }
 
@@ -2596,7 +2594,7 @@ impl TranslateProvider for ChatGlmProvider {
             .trim()
             .to_string();
 
-        Ok(TranslateResponse { translated })
+        Ok(TranslateResponse::plain(translated))
     }
 }
 
@@ -2722,7 +2720,7 @@ impl TranslateProvider for GeminiProvider {
             .trim()
             .to_string();
 
-        Ok(TranslateResponse { translated })
+        Ok(TranslateResponse::plain(translated))
     }
 }
 
@@ -2786,6 +2784,16 @@ mod tests {
     use super::super::Lang;
     use super::*;
 
+    /// 从翻译响应取出 Plain 变体的译文文本；非 Plain（如 Dict）即测试失败。
+    ///
+    /// 既有机翻/LLM 源全部产出 Plain，本 helper 让断言聚焦译文值、不在每处重复 match。
+    fn plain_text(resp: &TranslateResponse) -> &str {
+        match resp {
+            TranslateResponse::Plain { translated } => translated,
+            TranslateResponse::Dict { .. } => panic!("既有源应返回 Plain，实际返回 Dict"),
+        }
+    }
+
     // 对齐 acceptance TV1-F1-A01：注册表含 lingva（免 key）、不含 mymemory；
     // build_provider 对 lingva 成功、对 mymemory 返回未知源错误。
     #[test]
@@ -2841,7 +2849,7 @@ mod tests {
         let ok = provider
             .parse_response(r#"{"translation":"glacier"}"#)
             .expect("含 translation 字段应解析成功");
-        assert_eq!(ok.translated, "glacier");
+        assert_eq!(plain_text(&ok), "glacier");
 
         let err = provider.parse_response(r#"{"foo":"bar"}"#);
         assert!(
@@ -3016,13 +3024,13 @@ mod tests {
         let single = provider
             .parse_response(r#"[[["glacier","冰川",null,null,2]],null,"zh-CN"]"#)
             .expect("单分句应解析成功");
-        assert_eq!(single.translated, "glacier");
+        assert_eq!(plain_text(&single), "glacier");
 
         // 多分句：拼接各分句 result[0][i][0]（实测 Google 不在分句间补空格，原样拼接）。
         let multi = provider
             .parse_response(r#"[[["Hello","你好",null,null,2],["World","世界",null,null,2]],null,"zh-CN"]"#)
             .expect("多分句应解析成功");
-        assert_eq!(multi.translated, "HelloWorld");
+        assert_eq!(plain_text(&multi), "HelloWorld");
 
         // result[0] 为空数组 → ParseError。
         let empty = provider.parse_response(r#"[[],null,"en"]"#);
@@ -3137,13 +3145,13 @@ mod tests {
         let ok = provider
             .parse_response(r#"{"code":200,"lang":"en-zh","nmt_code":200,"text":["冰川"]}"#)
             .expect("含 text 数组应解析成功");
-        assert_eq!(ok.translated, "冰川");
+        assert_eq!(plain_text(&ok), "冰川");
 
         // 多元素 text 数组拼接（Yandex 偶将长文本分段返回）。
         let multi = provider
             .parse_response(r#"{"code":200,"text":["你好世界。","你好吗?"]}"#)
             .expect("多元素 text 数组应解析成功");
-        assert_eq!(multi.translated, "你好世界。你好吗?");
+        assert_eq!(plain_text(&multi), "你好世界。你好吗?");
 
         // 录制错误样例（artifacts/yandex-error-sample.json）：code!=200 → 错误。
         let err = provider.parse_response(r#"{"code":405,"message":"Session is invalid"}"#);
@@ -3244,7 +3252,7 @@ mod tests {
                 r#"{"header":{"ret_code":"succ"},"auto_translation":["","冰川",""],"src_lang":"en","tgt_lang":"zh"}"#,
             )
             .expect("含 auto_translation 应解析成功");
-        assert_eq!(ok.translated, "冰川");
+        assert_eq!(plain_text(&ok), "冰川");
 
         // 多段拼接（实测多 text_list 逐项对应）。
         let multi = provider
@@ -3252,7 +3260,7 @@ mod tests {
                 r#"{"header":{"ret_code":"succ"},"auto_translation":["Glaciers are melting.","Hello World"]}"#,
             )
             .expect("多段 auto_translation 应解析成功");
-        assert_eq!(multi.translated, "Glaciers are melting.Hello World");
+        assert_eq!(plain_text(&multi), "Glaciers are melting.Hello World");
 
         // ret_code != succ → 错误。
         let err = provider.parse_response(r#"{"header":{"ret_code":"fail","message":"bad"}}"#);
@@ -3390,7 +3398,7 @@ mod tests {
         let resp = provider
             .translate(&bing_req(), &exec)
             .expect("Bing 两步应成功解析出译文");
-        assert_eq!(resp.translated, "冰川");
+        assert_eq!(plain_text(&resp), "冰川");
 
         // 验证两步顺序：第一步打 auth、第二步打 translate 端点。
         let urls = exec.seen_urls.borrow();
@@ -3470,7 +3478,7 @@ mod tests {
         let ok = provider
             .parse_response(r#"[{"translations":[{"text":"冰川","to":"zh-Hans"}]}]"#)
             .expect("含 translations[0].text 应解析成功");
-        assert_eq!(ok.translated, "冰川");
+        assert_eq!(plain_text(&ok), "冰川");
 
         // 缺 translations 字段 → ParseError。
         let missing = provider.parse_response(r#"[{"detectedLanguage":{"language":"en"}}]"#);
@@ -3600,13 +3608,13 @@ mod tests {
         let ok = provider
             .parse_response(r#"{"from":"en","to":"zh","trans_result":[{"src":"hello","dst":"你好"}]}"#)
             .expect("含 trans_result.dst 应解析成功");
-        assert_eq!(ok.translated, "你好");
+        assert_eq!(plain_text(&ok), "你好");
 
         // 多段 dst 换行拼接（百度逐段返回）。
         let multi = provider
             .parse_response(r#"{"trans_result":[{"src":"a","dst":"甲"},{"src":"b","dst":"乙"}]}"#)
             .expect("多段 trans_result 应解析成功");
-        assert_eq!(multi.translated, "甲\n乙");
+        assert_eq!(plain_text(&multi), "甲\n乙");
 
         // 错误响应（error_code）→ TranslateError（54001 签名错误归一为 Auth）。
         let err = provider.parse_response(r#"{"error_code":"54001","error_msg":"Invalid Sign"}"#);
@@ -3762,13 +3770,13 @@ mod tests {
         let ok = provider
             .parse_response(r#"{"errorCode":"0","query":"hello","translation":["你好"],"l":"en2zh-CHS"}"#)
             .expect("含 translation 应解析成功");
-        assert_eq!(ok.translated, "你好");
+        assert_eq!(plain_text(&ok), "你好");
 
         // 多段 translation 换行拼接。
         let multi = provider
             .parse_response(r#"{"errorCode":"0","translation":["你好","世界"]}"#)
             .expect("多段 translation 应解析成功");
-        assert_eq!(multi.translated, "你好\n世界");
+        assert_eq!(plain_text(&multi), "你好\n世界");
 
         // errorCode != 0 → TranslateError（108 应用密钥无效归一为 Auth）。
         let err = provider.parse_response(r#"{"errorCode":"108","translation":null}"#);
@@ -3881,13 +3889,13 @@ mod tests {
         let ok = provider
             .parse_response(r#"{"target":["你好"],"confidence":0.9}"#)
             .expect("含 target 应解析成功");
-        assert_eq!(ok.translated, "你好");
+        assert_eq!(plain_text(&ok), "你好");
 
         // 兼容 target 为字符串形态（部分接口返回单串）。
         let ok_str = provider
             .parse_response(r#"{"target":"你好世界"}"#)
             .expect("target 为字符串也应解析成功");
-        assert_eq!(ok_str.translated, "你好世界");
+        assert_eq!(plain_text(&ok_str), "你好世界");
 
         // 错误响应（message 字段，无 target）→ TranslateError。
         // 错误响应（message 含 token）→ map_caiyun_error 归为 Auth。
@@ -3998,7 +4006,7 @@ mod tests {
         let ok = provider
             .parse_response(r#"{"from":"en","to":"zh","tgt_text":"你好","src_text":"hello"}"#)
             .expect("含 tgt_text 应解析成功");
-        assert_eq!(ok.translated, "你好");
+        assert_eq!(plain_text(&ok), "你好");
 
         // 错误响应（error_code 13001 apikey 错误）→ map_niutrans_error 归为 Auth。
         let err =
@@ -4172,7 +4180,7 @@ Signature=cc913306276069356aef21567e4670d036b69e1fd30eb24e17d7c536ed7decaf";
                 r#"{"Response":{"TargetText":"你好","Source":"en","Target":"zh","RequestId":"r1"}}"#,
             )
             .expect("含 Response.TargetText 应解析成功");
-        assert_eq!(ok.translated, "你好");
+        assert_eq!(plain_text(&ok), "你好");
 
         // 错误响应（Response.Error）→ TranslateError。
         // AuthFailure.SignatureFailure 应归一为 Auth。
@@ -4329,7 +4337,7 @@ Signature=cc913306276069356aef21567e4670d036b69e1fd30eb24e17d7c536ed7decaf";
         let ok = provider
             .parse_response(r#"{"Code":"200","Data":{"WordCount":"5","Translated":"你好"},"RequestId":"r1"}"#)
             .expect("含 Data.Translated 应解析成功");
-        assert_eq!(ok.translated, "你好");
+        assert_eq!(plain_text(&ok), "你好");
 
         // 错误响应（Code 非 200 + 鉴权类 Message）→ Auth。
         let err = provider.parse_response(
@@ -4506,7 +4514,7 @@ Signature=dac06f9e1be8667102fc1dfe025834cc9da68f2359b28084891b8e03ee332a61";
                 r#"{"TranslationList":[{"Translation":"你好","DetectedSourceLanguage":"en"}]}"#,
             )
             .expect("含 TranslationList[].Translation 应解析成功");
-        assert_eq!(ok.translated, "你好");
+        assert_eq!(plain_text(&ok), "你好");
 
         // 多段译文应按序拼接。
         let multi = provider
@@ -4514,7 +4522,7 @@ Signature=dac06f9e1be8667102fc1dfe025834cc9da68f2359b28084891b8e03ee332a61";
                 r#"{"TranslationList":[{"Translation":"你好"},{"Translation":"世界"}]}"#,
             )
             .expect("多段译文应解析成功");
-        assert_eq!(multi.translated, "你好世界", "多段译文应拼接");
+        assert_eq!(plain_text(&multi), "你好世界", "多段译文应拼接");
 
         // 错误响应（ResponseMetadata.Error）→ TranslateError。
         // SignatureDoesNotMatch 应归一为 Auth。
@@ -4681,7 +4689,7 @@ Signature=dac06f9e1be8667102fc1dfe025834cc9da68f2359b28084891b8e03ee332a61";
         let ok = provider
             .parse_response(r#"{"choices":[{"message":{"role":"assistant","content":"你好"}}]}"#)
             .expect("含 choices[0].message.content 应解析成功");
-        assert_eq!(ok.translated, "你好");
+        assert_eq!(plain_text(&ok), "你好");
     }
 
     // 对齐 acceptance TV3-F1-A01：OpenAI 错误响应体 → TranslateError（按 type/code 分类）。
@@ -4740,7 +4748,7 @@ Signature=dac06f9e1be8667102fc1dfe025834cc9da68f2359b28084891b8e03ee332a61";
         let ok = provider
             .parse_response(r#"{"message":{"role":"assistant","content":"你好"},"done":true}"#)
             .expect("含 message.content 应解析成功");
-        assert_eq!(ok.translated, "你好");
+        assert_eq!(plain_text(&ok), "你好");
     }
 
     // 对齐 acceptance TV3-F1-A01：Ollama 本地自部署无鉴权，绝不发 Authorization 头。
@@ -4936,7 +4944,7 @@ Signature=dac06f9e1be8667102fc1dfe025834cc9da68f2359b28084891b8e03ee332a61";
         let ok = provider
             .parse_response(r#"{"choices":[{"message":{"role":"assistant","content":"你好"}}]}"#)
             .expect("含 choices[0].message.content 应解析成功");
-        assert_eq!(ok.translated, "你好");
+        assert_eq!(plain_text(&ok), "你好");
     }
 
     // 对齐 acceptance TV3-F2-A01：Gemini key 作 URL query 参（不进头），body contents/parts，
@@ -4982,7 +4990,7 @@ Signature=dac06f9e1be8667102fc1dfe025834cc9da68f2359b28084891b8e03ee332a61";
                 r#"{"candidates":[{"content":{"parts":[{"text":"你好"}],"role":"model"}}]}"#,
             )
             .expect("含 candidates[0].content.parts[0].text 应解析成功");
-        assert_eq!(ok.translated, "你好");
+        assert_eq!(plain_text(&ok), "你好");
     }
 
     // 对齐 acceptance TV3-F2-A01：Gemini 错误响应体 → TranslateError，错误消息不泄露 key。

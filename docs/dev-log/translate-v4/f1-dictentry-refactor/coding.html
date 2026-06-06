@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>编码记录 · TranslateResponse 枚举重构（Plain | Dict + DictEntry）</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg: #f8f9fa; --card: #ffffff; --card-2: #f3f4f5; --mist: #e2e8f0; --mist-hover: #f1f5f9;
+  --fjord: #05192d; --ink: #191c1d; --ink-2: #44474d; --outline: #74777d; --line: #c4c6cd;
+  --glacier: #d1d5db; --accent: #3e54ac; --accent-dim: #1a338b; --accent-soft: #dde1ff;
+  --green-bg: #e6f0ea; --green-tx: #2f6b4f; --grey-bg: #ececef; --grey-tx: #6b6f76; --err: #ba1a1a;
+  --shadow: 0 12px 32px rgba(5,25,45,0.08); --radius: 12px;
+}
+* { box-sizing: border-box; }
+html { -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility; scroll-behavior: smooth; }
+body { margin: 0; background: var(--bg); color: var(--ink); font-family: 'Inter', -apple-system, sans-serif; font-size: 16px; font-weight: 400; line-height: 1.65; letter-spacing: -0.003em; }
+.mono { font-family: 'JetBrains Mono', monospace; }
+.topbar { position: sticky; top: 0; z-index: 50; background: rgba(248,249,250,0.85); backdrop-filter: blur(12px); border-bottom: 1px solid var(--line); }
+.topbar-in { max-width: 1040px; margin: 0 auto; height: 60px; padding: 0 32px; display: flex; align-items: center; justify-content: space-between; }
+.topbar .brand { font-size: 15px; font-weight: 600; color: var(--fjord); letter-spacing: -0.01em; }
+.topbar .tag { font-family: 'JetBrains Mono', monospace; font-size: 10.5px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--accent); background: var(--mist); padding: 4px 10px; border-radius: 999px; }
+.hero { background: linear-gradient(160deg, #05192d 0%, #0c2440 45%, #1c2f55 100%); color: #fff; position: relative; overflow: hidden; }
+.hero::after { content: ''; position: absolute; inset: 0; background: radial-gradient(120% 90% at 78% 8%, rgba(120,150,210,0.22), transparent 60%); pointer-events: none; }
+.hero-in { max-width: 1040px; margin: 0 auto; padding: 72px 32px 64px; position: relative; z-index: 1; }
+.hero .kicker { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 22px; }
+.hero .chip-hero { font-family: 'JetBrains Mono', monospace; font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; padding: 5px 12px; border-radius: 999px; }
+.chip-hero.solid { background: var(--accent); color: #fff; }
+.chip-hero.ghost { background: rgba(255,255,255,0.1); color: #c7d2ec; border: 1px solid rgba(255,255,255,0.18); }
+.hero h1 { font-size: clamp(32px, 5.2vw, 48px); font-weight: 700; line-height: 1.1; letter-spacing: -0.025em; margin: 0 0 24px; color: #fff; }
+.hero .lede { font-size: 17px; font-weight: 400; line-height: 1.7; color: #c7d2ec; max-width: 64ch; margin: 0; }
+.hero .meta { display: flex; flex-wrap: wrap; gap: 6px 28px; margin-top: 32px; padding-top: 22px; border-top: 1px solid rgba(255,255,255,0.14); font-family: 'JetBrains Mono', monospace; font-size: 12px; color: #9fb0d0; }
+.hero .meta b { color: #d7e0f2; font-weight: 500; }
+.wrap { max-width: 1040px; margin: 0 auto; padding: 64px 32px 120px; }
+section { margin-top: 72px; }
+section:first-child { margin-top: 0; }
+.sec-head { display: flex; align-items: baseline; gap: 14px; border-left: 4px solid var(--accent); padding-left: 16px; margin-bottom: 28px; }
+.sec-num { font-family: 'JetBrains Mono', monospace; font-size: 13px; font-weight: 500; color: var(--accent); flex: none; }
+h2 { font-size: 26px; font-weight: 600; color: var(--fjord); margin: 0; letter-spacing: -0.02em; line-height: 1.2; }
+.subhead { font-size: 18px; font-weight: 600; color: var(--fjord); margin: 40px 0 16px; letter-spacing: -0.01em; }
+p { margin: 0 0 16px; max-width: 70ch; color: var(--ink-2); }
+.intro { font-size: 17px; color: var(--ink-2); }
+code, .codeword { font-family: 'JetBrains Mono', monospace; font-size: 0.84em; background: var(--mist); color: var(--accent-dim); padding: 1.5px 6px; border-radius: 4px; word-break: break-word; }
+.tablecard { border: 1px solid var(--glacier); border-radius: var(--radius); overflow: hidden; background: var(--card); margin: 4px 0; }
+table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+thead { background: var(--mist); }
+thead th { text-align: left; padding: 13px 16px; font-size: 11px; font-weight: 600; letter-spacing: 0.02em; text-transform: uppercase; color: var(--accent); }
+tbody td { padding: 13px 16px; vertical-align: top; border-top: 1px solid var(--line); color: var(--ink-2); }
+tbody tr:first-child td { border-top: none; }
+tbody tr:hover { background: var(--mist-hover); }
+td code { font-size: 12px; }
+td strong { color: var(--fjord); font-weight: 600; }
+.chip { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; font-size: 11.5px; font-weight: 500; padding: 3px 10px; border-radius: 999px; }
+.chip.done { background: var(--green-bg); color: var(--green-tx); }
+.chip.wait { background: #f3ecda; color: #8a6d2f; }
+.chip.new { background: var(--accent-soft); color: var(--accent-dim); }
+.chip.meta { background: var(--card-2); color: var(--outline); font-family: 'JetBrains Mono', monospace; font-size: 10.5px; letter-spacing: 0.02em; }
+.st-cell { width: 100px; }
+.figures { display: grid; grid-template-columns: repeat(2,1fr); gap: 16px; margin: 20px 0 8px; }
+@media (min-width:680px){ .figures { grid-template-columns: repeat(4,1fr); } }
+.figure { background: var(--card); border: 1px solid var(--glacier); border-radius: var(--radius); padding: 20px; }
+.figure .val { font-family: 'JetBrains Mono', monospace; font-size: 20px; font-weight: 500; color: var(--fjord); letter-spacing: -0.02em; }
+.figure .lab { font-size: 12px; color: var(--outline); margin-top: 6px; line-height: 1.4; }
+.ladder { background: var(--card); border: 1px solid var(--glacier); border-radius: var(--radius); padding: 22px 24px; margin: 20px 0; font-family: 'JetBrains Mono', monospace; font-size: 13px; line-height: 2; white-space: pre; overflow-x: auto; color: var(--ink-2); }
+.ladder .a { color: var(--accent); }
+.ladder b { color: var(--fjord); font-weight: 500; }
+.callout { background: rgba(255,255,255,0.7); backdrop-filter: blur(12px); border: 1px solid var(--glacier); border-radius: var(--radius); padding: 24px 28px; margin-top: 28px; box-shadow: var(--shadow); }
+.callout .label { font-family: 'JetBrains Mono', monospace; font-size: 10.5px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--accent); display: block; margin-bottom: 12px; }
+.callout p { margin: 0; color: var(--ink-2); font-size: 15px; max-width: none; }
+.probs { display: grid; gap: 14px; margin-top: 4px; }
+@media (min-width:760px){ .probs { grid-template-columns: 1fr 1fr; } }
+.prob { background: var(--card); border: 1px solid var(--glacier); border-radius: var(--radius); padding: 22px 24px; }
+.prob-top { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; }
+.prob-id { font-family: 'JetBrains Mono', monospace; font-size: 12px; font-weight: 600; color: #fff; background: var(--fjord); padding: 2px 9px; border-radius: 6px; }
+.prob h3 { font-size: 16px; font-weight: 600; color: var(--fjord); margin: 0; flex: 1; min-width: 160px; line-height: 1.3; letter-spacing: -0.01em; }
+.prob p { margin: 0; font-size: 14px; color: var(--ink-2); max-width: none; line-height: 1.6; }
+.prob .resolve { margin-top: 12px; }
+.pcard { background: var(--card); border: 1px solid var(--glacier); border-radius: var(--radius); padding: 6px 24px; }
+.principles { list-style: none; padding: 0; margin: 0; }
+.principles li { padding: 15px 0 15px 20px; position: relative; border-top: 1px solid var(--line); font-size: 14.5px; color: var(--ink-2); }
+.principles li:first-child { border-top: none; }
+.principles li::before { content: ''; position: absolute; left: 0; top: 22px; width: 8px; height: 2px; background: var(--accent); }
+.principles b { font-weight: 600; color: var(--fjord); }
+footer { background: var(--card-2); border-top: 1px solid var(--line); margin-top: 88px; }
+.footer-in { max-width: 1040px; margin: 0 auto; padding: 28px 32px; display: flex; justify-content: space-between; flex-wrap: wrap; gap: 10px; font-family: 'JetBrains Mono', monospace; font-size: 11.5px; color: var(--outline); }
+.footer-in b { color: var(--fjord); font-weight: 600; }
+strong { font-weight: 600; }
+@media (max-width:560px){ .topbar-in, .hero-in, .wrap, .footer-in { padding-left: 20px; padding-right: 20px; } table { font-size: 12.5px; } thead th, tbody td { padding: 10px 12px; } }
+@media print { body { background: #fff; } .topbar { position: static; } section { break-inside: avoid; } }
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="topbar-in">
+    <span class="brand">translate-v4 · 编码留痕</span>
+    <span class="tag">TV4-F1-S01 · coding</span>
+  </div>
+</div>
+
+<header class="hero">
+  <div class="hero-in">
+    <div class="kicker">
+      <span class="chip-hero solid">TV4-F1-S01</span>
+      <span class="chip-hero ghost">acceptance · TV4-F1-A01</span>
+      <span class="chip-hero ghost">parent · TV4-F1</span>
+    </div>
+    <h1>TranslateResponse 枚举重构<br>Plain | Dict + DictEntry</h1>
+    <p class="lede">把翻译结果从单译文 struct 重构为可判别枚举，为词典源（TV4-F2/F3）腾出结构化承载，且既有 19 源（机翻 + LLM）零行为回归。前后端类型对齐 serde tag，Plain 渲染不回归，Dict 渲染留 TV4-F4。</p>
+    <div class="meta">
+      <span><b>类型</b>　coding · 大功能</span>
+      <span><b>commit</b>　PENDING</span>
+      <span><b>更新</b>　2026-06-06</span>
+      <span><b>author</b>　coder</span>
+    </div>
+  </div>
+</header>
+
+<div class="wrap">
+
+  <section>
+    <div class="sec-head"><span class="sec-num">一</span><h2>做了什么</h2></div>
+    <p class="intro">把翻译结果类型从单译文 struct 重构为可判别枚举 <code>TranslateResponse</code>，为后续词典源腾出结构化承载，且既有源零行为回归。</p>
+    <div class="pcard">
+      <ul class="principles">
+        <li>后端 <code>TranslateResponse</code> 改为 internally tagged 枚举（serde <code>tag = "kind"</code>、<code>rename_all = "lowercase"</code>）：<code>Plain { translated }</code> → <code>{"kind":"plain","translated":"..."}</code>；<code>Dict { entry }</code> → <code>{"kind":"dict","entry":{...}}</code>。</li>
+        <li>新增 <code>DictEntry</code>（音标 / 按词性分组释义 <code>PosDefinition</code> / 例句 / 发音 / 词形变化，全 <code>Option</code>/<code>Vec</code> 容空）与便捷构造 <code>TranslateResponse::plain(...)</code>。</li>
+        <li>全部既有源 <code>parse_response</code> 改返回 <code>Plain</code> 变体（构造点统一走 <code>TranslateResponse::plain</code>）。</li>
+        <li>IPC 边界 <code>TranslateResultDto</code> 升级带判别标签：新增 <code>kind</code>（<code>"plain"</code>/<code>"dict"</code>）+ 可选 <code>entry</code>；<code>translate_text_impl</code> 按 variant 拆分映射，Dict 经 <code>dict_entry_summary</code> 压成纯文本写历史并回退展示。</li>
+        <li>前端 <code>TranslateResult</code> 改为可判别联合（<code>TranslatePlainResult | TranslateDictResult</code>），新增 TS <code>DictEntry</code>/<code>PosDefinition</code>；消费处补 <code>kind: "plain"</code>。Dict 渲染组件留 TV4-F4，本步只保证类型编译通过、Plain 渲染不回归。</li>
+      </ul>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-head"><span class="sec-num">二</span><h2>关键决策与理由</h2></div>
+    <div class="probs">
+      <div class="prob">
+        <div class="prob-top"><span class="prob-id">D1</span><h3>enum 用 struct variant</h3></div>
+        <p>配合 serde internally tagged，要求各变体序列化为 JSON object；tuple/newtype 无法内联 tag，struct variant 把 <code>kind</code> 与字段同层平铺，前端拿到扁平 <code>{kind, translated}</code> 即可判别。</p>
+      </div>
+      <div class="prob">
+        <div class="prob-top"><span class="prob-id">D2</span><h3>tag = "kind" + lowercase</h3></div>
+        <p>判别字段名 <code>kind</code> 与前端可判别联合习惯一致；lowercase 让 tag 值为 <code>"plain"</code>/<code>"dict"</code>，前后端字符串字面量对齐、避免大小写错配。</p>
+      </div>
+      <div class="prob">
+        <div class="prob-top"><span class="prob-id">D3</span><h3>DTO 保留扁平三字段 + 加 kind/entry</h3></div>
+        <p>既有前端组件与测试大量依赖 <code>result.translated</code>/<code>sourceLang</code>/<code>targetLang</code>，Plain 路径字段不变 → 渲染与历史写入零回归；Dict 路径 <code>translated</code> 填摘要兜底，老组件有可读回退。</p>
+      </div>
+      <div class="prob">
+        <div class="prob-top"><span class="prob-id">D4</span><h3>dict_entry_summary 兜底</h3></div>
+        <p>历史表 <code>translated_text</code> 是纯文本列，词条无法整存；取首批释义按词性扁平化 join 成单行，无释义再退音标，保证历史栏可读、不丢信息。</p>
+      </div>
+      <div class="prob">
+        <div class="prob-top"><span class="prob-id">D5</span><h3>entry 用 skip_serializing_if</h3></div>
+        <p>Plain 结果不带 <code>entry</code> 键，前端联合 plain 分支无该字段，序列化产物与 TS 类型严格对齐。</p>
+      </div>
+      <div class="prob">
+        <div class="prob-top"><span class="prob-id">D6</span><h3>集成测试各自加 plain_text helper</h3></div>
+        <p><code>tests/providers.rs</code> 与 <code>tests/translate.rs</code> 是独立 crate，无法复用单测模块 helper，各自加一份从 <code>Plain</code> 取译文、遇 <code>Dict</code> panic 的小工具。</p>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-head"><span class="sec-num">三</span><h2>三冻结测试（TV4-F1-A01）</h2></div>
+    <div class="tablecard">
+      <table>
+        <thead><tr><th>测试</th><th>验什么</th><th class="st-cell">状态</th></tr></thead>
+        <tbody>
+          <tr><td><code>translate_response_plain_variant_roundtrip</code></td><td>Plain JSON 往返带 <code>kind</code> 标签且语义不丢（断言序列化串、反序列化相等）</td><td><span class="chip done">✓ ok</span></td></tr>
+          <tr><td><code>existing_providers_return_plain_no_regression</code></td><td>既有源（lingva）<code>parse_response</code> 仍返回 <code>Plain</code>，不回归为 Dict</td><td><span class="chip done">✓ ok</span></td></tr>
+          <tr><td><code>dict_entry_serializes_with_type_tag</code></td><td>Dict 变体序列化携带 <code>kind=dict</code>，逐字段验音标/词性/释义/例句/词形</td><td><span class="chip done">✓ ok</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-head"><span class="sec-num">四</span><h2>坑与注意</h2></div>
+    <div class="pcard">
+      <ul class="principles">
+        <li><b>同名字段误伤</b>：<code>.translated</code> 在 <code>cache.rs</code>（<code>CacheEntry</code> DB 列）与 <code>tests/translate.rs</code> 的 <code>CacheEntry { translated }</code> 处同名但无关；批量 perl 替换只针对 <code>TranslateResponse</code> 变量（ok/ok_str/single/multi/resp），未误伤；line 2049 字符串字面量亦保留。</li>
+        <li><b>partial-move</b>：<code>matches!</code> 模式绑定按值 move，失败消息里再 <code>{resp:?}</code> 会报错 → 统一用 <code>matches!(&resp, ...)</code> 借用。</li>
+        <li><b>RTK 折叠输出</b>：<code>cargo test</code> 输出被折叠成 "N passed" 摘要、丢 per-test 行；验证三冻结命中与 <code>test result: ok</code> 时用 <code>rtk proxy cargo test</code> 取原始输出存 artifacts。</li>
+      </ul>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-head"><span class="sec-num">五</span><h2>验证结果（实跑）</h2></div>
+    <div class="figures">
+      <div class="figure"><div class="val">246 / 0</div><div class="lab">cargo test 主库 passed / failed</div></div>
+      <div class="figure"><div class="val">246 / 0</div><div class="lab">cargo test --release 主库</div></div>
+      <div class="figure"><div class="val">465 / 0</div><div class="lab">pnpm test passed / failed</div></div>
+      <div class="figure"><div class="val">0</div><div class="lab">clippy + tsc error</div></div>
+    </div>
+    <div class="tablecard">
+      <table>
+        <thead><tr><th>命令</th><th>结果</th><th class="st-cell">状态</th></tr></thead>
+        <tbody>
+          <tr><td><code>cargo test</code>（主库）</td><td><code>test result: ok. 246 passed; 0 failed</code></td><td><span class="chip done">✓ 通过</span></td></tr>
+          <tr><td><code>cargo test --release</code></td><td>主库 246 passed，全 32 套件 0 failed</td><td><span class="chip done">✓ 通过</span></td></tr>
+          <tr><td>三冻结</td><td><code>test result: ok. 10 passed; 0 failed</code>（含 3 目标 <code>... ok</code>）</td><td><span class="chip done">✓ 命中</span></td></tr>
+          <tr><td><code>cargo clippy --all-targets -- -D warnings</code></td><td>exit 0，0 warning/error</td><td><span class="chip done">✓ 通过</span></td></tr>
+          <tr><td><code>pnpm test</code></td><td><code>Test Files 52 passed / Tests 465 passed</code></td><td><span class="chip done">✓ 通过</span></td></tr>
+          <tr><td><code>npx tsc --noEmit</code></td><td>exit 0，0 error</td><td><span class="chip done">✓ 通过</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="callout">
+      <span class="label">总评</span>
+      <p>后端枚举重构 + serde tag + 全源 Plain 替换落地，三冻结全绿；前后端类型对齐（kind: plain|dict），Plain 渲染零回归，Dict 渲染留 TV4-F4。无 TODO/FIXME，无装饰性分隔注释。</p>
+    </div>
+  </section>
+
+</div>
+
+<footer>
+  <div class="footer-in">
+    <span><b>编码记录 · TV4-F1-S01</b></span>
+    <span>2026-06-06 · Nordic Serenity</span>
+  </div>
+</footer>
+
+</body>
+</html>

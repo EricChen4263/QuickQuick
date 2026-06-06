@@ -110,6 +110,7 @@ describe("toggleFavoriteClip", () => {
 describe("translateText", () => {
   it("不带 target 时使用正确命令名与文本参数", async () => {
     const result: TranslateResult = {
+      kind: "plain",
       translated: "Hello",
       sourceLang: "zh",
       targetLang: "en",
@@ -127,6 +128,7 @@ describe("translateText", () => {
 
   it("带 target 时正确传递 target 参数", async () => {
     const result: TranslateResult = {
+      kind: "plain",
       translated: "Bonjour",
       sourceLang: "zh",
       targetLang: "fr",

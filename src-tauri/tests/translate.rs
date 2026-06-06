@@ -20,6 +20,14 @@ use quickquick_lib::translate::{
     TranslateRequest, TranslateResponse,
 };
 
+// 从翻译响应取出 Plain 变体译文；非 Plain 即测试失败（stub/既有源应全返 Plain）。
+fn plain_text(resp: &TranslateResponse) -> &str {
+    match resp {
+        TranslateResponse::Plain { translated } => translated,
+        TranslateResponse::Dict { .. } => panic!("既有源应返回 Plain，实际返回 Dict"),
+    }
+}
+
 // 测试用 stub provider
 
 /// 最小 stub provider，仅实现 trait 规定的三件职责。
@@ -57,7 +65,7 @@ impl TranslateProvider for StubProvider {
             .as_str()
             .ok_or_else(|| TranslateError::ParseError("missing 'translated' field".to_string()))?
             .to_string();
-        Ok(TranslateResponse { translated })
+        Ok(TranslateResponse::plain(translated))
     }
 }
 
@@ -108,7 +116,7 @@ fn provider_contract_parse_response_extracts_translated_text() {
 
     // Assert
     let resp = result.expect("合法 JSON 应解析成功");
-    assert_eq!(resp.translated, "你好");
+    assert_eq!(plain_text(&resp), "你好");
 }
 
 #[test]
