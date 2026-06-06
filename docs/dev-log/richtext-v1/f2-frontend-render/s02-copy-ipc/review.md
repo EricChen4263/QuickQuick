@@ -6,7 +6,7 @@ parent: RT1-F2
 children: []
 created: 2026-06-07T00:00:00Z
 status: 通过
-commit: WIP
+commit: 4e0caa3
 acceptance_ids: [RT1-F2-A02]
 author: code-reviewer
 ---
