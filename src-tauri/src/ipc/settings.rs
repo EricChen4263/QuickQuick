@@ -35,12 +35,12 @@ use std::collections::HashMap;
 
 use crate::autostart::AutostartConfig;
 use crate::hotkey::{HotkeyAction, HotkeyConfig, HotkeyError, HotkeyRegistrar};
+use crate::ipc::translate::resolve_provider_or_fallback;
 use crate::settings::AppSettings;
 use crate::translate::credential::{
     credential_schema, delete_credentials, load_credentials_for_display, save_credentials,
     DbCredStore,
 };
-use crate::ipc::translate::resolve_provider_or_fallback;
 use crate::translate::providers::registry;
 use crate::CaptureState;
 
@@ -1174,7 +1174,10 @@ mod tests {
         set_provider_credentials_impl("baidu", values, &store, &conn).unwrap();
         // 前置断言：删除前 secret 与非密字段都确实已配置（避免删除后全 false 是假绿）
         let before = get_provider_credentials_impl("baidu", &conn).unwrap();
-        assert!(before.iter().all(|item| item.is_set), "删除前所有字段应已配置");
+        assert!(
+            before.iter().all(|item| item.is_set),
+            "删除前所有字段应已配置"
+        );
 
         delete_provider_credentials_impl("baidu", &store, &conn).unwrap();
 

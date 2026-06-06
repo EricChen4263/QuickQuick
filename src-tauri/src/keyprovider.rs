@@ -190,7 +190,9 @@ fn read_platform_machine_id() -> Option<Vec<u8>> {
     let text = String::from_utf8_lossy(&output.stdout);
     // 行形如：    MachineGuid    REG_SZ    xxxxxxxx-xxxx-...
     let line = text.lines().find(|l| l.contains("MachineGuid"))?;
-    line.split_whitespace().last().map(|s| s.as_bytes().to_vec())
+    line.split_whitespace()
+        .last()
+        .map(|s| s.as_bytes().to_vec())
 }
 
 /// 其余平台（无已知机器标识来源）：直接走回退常量盐。
@@ -301,7 +303,10 @@ impl LocalKeyProvider {
                 .map_err(|_| KeyError::Decrypt)?,
         );
 
-        plaintext.as_slice().try_into().map_err(|_| KeyError::Decrypt)
+        plaintext
+            .as_slice()
+            .try_into()
+            .map_err(|_| KeyError::Decrypt)
     }
 
     /// 从机器标识 + 文件内随机盐派生 KEK（Argon2id），返回 Zeroizing 包装的 32 字节。
@@ -472,7 +477,10 @@ mod tests {
     #[test]
     fn machine_id_never_empty() {
         let id = machine_id();
-        assert!(!id.is_empty(), "machine_id 应永不为空（取不到时回退常量盐）");
+        assert!(
+            !id.is_empty(),
+            "machine_id 应永不为空（取不到时回退常量盐）"
+        );
     }
 
     /// 判别力测试：reader 返回 None（模拟平台读取失败）→ 必须回退到 FALLBACK_MACHINE_ID。

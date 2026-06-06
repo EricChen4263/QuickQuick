@@ -101,7 +101,10 @@ async fn download_install_and_notify(
     already_ready: &Arc<AtomicBool>,
 ) -> Result<(), String> {
     let version = update.version.clone();
-    if let Err(e) = update.download_and_install(|_chunk, _total| {}, || {}).await {
+    if let Err(e) = update
+        .download_and_install(|_chunk, _total| {}, || {})
+        .await
+    {
         eprintln!("update: 下载更新 {version} 失败：{e}");
         return Err(format!("下载更新失败：{e}"));
     }

@@ -394,7 +394,10 @@ mod tests {
     #[test]
     fn map_lang_for_bing_uses_zh_hans_and_hant() {
         assert_eq!(map_lang_for_provider("bing", &Lang::new("zh")), "zh-Hans");
-        assert_eq!(map_lang_for_provider("bing", &Lang::new("zh-CN")), "zh-Hans");
+        assert_eq!(
+            map_lang_for_provider("bing", &Lang::new("zh-CN")),
+            "zh-Hans"
+        );
         assert_eq!(
             map_lang_for_provider("bing", &Lang::new("zh-Hans")),
             "zh-Hans"
@@ -564,7 +567,10 @@ mod tests {
     fn map_lang_for_provider_transmart_distinguishes_traditional() {
         // 实测 Transmart 用 source.lang/target.lang；区分简繁：zh 简中、zh-TW 繁中。
         assert_eq!(map_lang_for_provider("transmart", &Lang::new("zh")), "zh");
-        assert_eq!(map_lang_for_provider("transmart", &Lang::new("zh-CN")), "zh");
+        assert_eq!(
+            map_lang_for_provider("transmart", &Lang::new("zh-CN")),
+            "zh"
+        );
         assert_eq!(
             map_lang_for_provider("transmart", &Lang::new("zh-TW")),
             "zh-TW"
@@ -592,10 +598,7 @@ mod tests {
     // 有道用 zh-CHS（简）/ zh-CHT（繁）语言码（有道智云 API 文档）。
     #[test]
     fn map_lang_for_provider_youdao_uses_zh_chs_and_cht() {
-        assert_eq!(
-            map_lang_for_provider("youdao", &Lang::new("zh")),
-            "zh-CHS"
-        );
+        assert_eq!(map_lang_for_provider("youdao", &Lang::new("zh")), "zh-CHS");
         assert_eq!(
             map_lang_for_provider("youdao", &Lang::new("zh-CN")),
             "zh-CHS"

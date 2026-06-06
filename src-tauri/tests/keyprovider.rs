@@ -33,7 +33,9 @@ impl KeyProvider for FakeKeyProvider {
 fn keyprovider_trait_abstraction_is_usable() {
     let fake: &dyn KeyProvider = &FakeKeyProvider::with_fixed_key(0xAB);
 
-    let key = fake.get_or_create_key().expect("FakeKeyProvider 不应返回错误");
+    let key = fake
+        .get_or_create_key()
+        .expect("FakeKeyProvider 不应返回错误");
 
     assert_eq!(key.len(), 32, "密钥应为 32 字节");
     assert_eq!(key, [0xAB_u8; 32], "FakeKeyProvider 应返回预设的固定密钥");

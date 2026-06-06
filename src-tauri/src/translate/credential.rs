@@ -718,12 +718,20 @@ mod tests {
             .expect("secret 应写入 provider_secret 表");
         assert_eq!(secret, "sk1", "provider_secret 应存 secret 实际值");
 
-        let secret_in_config: Option<String> = read_from_db(&store_conn, "baidu", "secret_key").unwrap();
-        assert!(secret_in_config.is_none(), "secret 不应写入 provider_config");
+        let secret_in_config: Option<String> =
+            read_from_db(&store_conn, "baidu", "secret_key").unwrap();
+        assert!(
+            secret_in_config.is_none(),
+            "secret 不应写入 provider_config"
+        );
 
         // 非密字段进 provider_config，不进 provider_secret
         let app_id = read_from_db(&store_conn, "baidu", "app_id").unwrap();
-        assert_eq!(app_id, Some("id1".to_string()), "非密字段应写入 provider_config");
+        assert_eq!(
+            app_id,
+            Some("id1".to_string()),
+            "非密字段应写入 provider_config"
+        );
         assert!(
             store.get_secret("baidu", "app_id").unwrap().is_none(),
             "非密字段不应写入 provider_secret"
@@ -734,8 +742,13 @@ mod tests {
     fn load_for_display_reports_secret_present_without_returning_plaintext() {
         let conn = make_test_db();
         let store = DbCredStore::new(&conn);
-        save_credentials("baidu", &[("app_id", "id1"), ("secret_key", "sk1")], &store, &conn)
-            .unwrap();
+        save_credentials(
+            "baidu",
+            &[("app_id", "id1"), ("secret_key", "sk1")],
+            &store,
+            &conn,
+        )
+        .unwrap();
 
         let display = load_credentials_for_display("baidu", &conn).unwrap();
 
@@ -856,7 +869,9 @@ mod tests {
             store.get_secret("baidu", "secret_key").unwrap(),
             Some("test_secret".to_string())
         );
-        assert!(read_from_db(&conn, "baidu", "secret_key").unwrap().is_none());
+        assert!(read_from_db(&conn, "baidu", "secret_key")
+            .unwrap()
+            .is_none());
 
         // 非密在 DB，不在 store
         assert_eq!(
@@ -886,29 +901,17 @@ mod tests {
             "app_id 应为非密（appid 非密）"
         );
         assert!(field(&bf, "app_id").required, "app_id 应为必填");
-        assert!(
-            field(&bf, "secret_key").is_secret,
-            "secret_key 应为 secret"
-        );
+        assert!(field(&bf, "secret_key").is_secret, "secret_key 应为 secret");
         assert!(field(&bf, "secret_key").required, "secret_key 应为必填");
-        assert!(
-            !field(&bf, "field").is_secret,
-            "field（领域）应为非密"
-        );
+        assert!(!field(&bf, "field").is_secret, "field（领域）应为非密");
         assert!(field(&bf, "field").required, "field 应为必填");
 
         // 有道：app_key（非密）、app_secret（密）。
         let yd = credential_schema("youdao");
         assert_eq!(yd.len(), 2, "youdao schema 应有 2 个字段");
-        assert!(
-            !field(&yd, "app_key").is_secret,
-            "app_key 应为非密"
-        );
+        assert!(!field(&yd, "app_key").is_secret, "app_key 应为非密");
         assert!(field(&yd, "app_key").required, "app_key 应为必填");
-        assert!(
-            field(&yd, "app_secret").is_secret,
-            "app_secret 应为 secret"
-        );
+        assert!(field(&yd, "app_secret").is_secret, "app_secret 应为 secret");
         assert!(field(&yd, "app_secret").required, "app_secret 应为必填");
 
         // 彩云：token（密、必填，唯一字段）。
@@ -926,15 +929,9 @@ mod tests {
         // 腾讯云：secret_id（非密）、secret_key（密），均必填。
         let tc = credential_schema("tencent");
         assert_eq!(tc.len(), 2, "tencent schema 应有 2 个字段");
-        assert!(
-            !field(&tc, "secret_id").is_secret,
-            "secret_id 应为非密"
-        );
+        assert!(!field(&tc, "secret_id").is_secret, "secret_id 应为非密");
         assert!(field(&tc, "secret_id").required, "secret_id 应为必填");
-        assert!(
-            field(&tc, "secret_key").is_secret,
-            "secret_key 应为 secret"
-        );
+        assert!(field(&tc, "secret_key").is_secret, "secret_key 应为 secret");
         assert!(field(&tc, "secret_key").required, "secret_key 应为必填");
 
         // 阿里：accesskey_id（非密）、accesskey_secret（密），均必填。
@@ -1042,14 +1039,8 @@ mod tests {
             !field(&ol, "base_url").is_secret,
             "ollama base_url 应为非密"
         );
-        assert!(
-            !field(&ol, "base_url").required,
-            "ollama base_url 应为选填"
-        );
+        assert!(!field(&ol, "base_url").required, "ollama base_url 应为选填");
         assert!(!field(&ol, "prompt").is_secret, "ollama prompt 应为非密");
-        assert!(
-            !field(&ol, "prompt").required,
-            "ollama prompt 应为选填"
-        );
+        assert!(!field(&ol, "prompt").required, "ollama prompt 应为选填");
     }
 }

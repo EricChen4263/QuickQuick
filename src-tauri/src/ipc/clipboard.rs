@@ -363,8 +363,8 @@ mod tests {
         };
         ingest(&conn, &clip_item).expect("文本条目入库失败");
 
-        let result =
-            pick_latest_translate_text_impl(&conn).expect("pick_latest_translate_text_impl 不应失败");
+        let result = pick_latest_translate_text_impl(&conn)
+            .expect("pick_latest_translate_text_impl 不应失败");
         assert_eq!(
             result,
             Some("hello world".to_string()),
@@ -379,8 +379,8 @@ mod tests {
         let png = make_test_png(2, 2);
         ingest_image_as_clip(&conn, 2, 2, &png, 20 * 1024 * 1024).expect("图片条目入库失败");
 
-        let result =
-            pick_latest_translate_text_impl(&conn).expect("pick_latest_translate_text_impl 不应失败");
+        let result = pick_latest_translate_text_impl(&conn)
+            .expect("pick_latest_translate_text_impl 不应失败");
         assert!(result.is_none(), "图片条目应返回 None");
     }
 
@@ -389,8 +389,8 @@ mod tests {
     fn pick_latest_translate_text_impl_returns_none_for_empty_db() {
         let conn = make_test_conn();
 
-        let result =
-            pick_latest_translate_text_impl(&conn).expect("pick_latest_translate_text_impl 不应失败");
+        let result = pick_latest_translate_text_impl(&conn)
+            .expect("pick_latest_translate_text_impl 不应失败");
         assert!(result.is_none(), "空库应返回 None");
     }
 
@@ -406,8 +406,8 @@ mod tests {
         )
         .expect("clip_items 插入失败");
 
-        let result =
-            pick_latest_translate_text_impl(&conn).expect("pick_latest_translate_text_impl 不应失败");
+        let result = pick_latest_translate_text_impl(&conn)
+            .expect("pick_latest_translate_text_impl 不应失败");
         assert!(result.is_none(), "纯空白 content 应返回 None");
     }
 }
