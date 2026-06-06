@@ -210,3 +210,13 @@ pending:
     added_at: 2026-06-06T00:00:00Z
     status: 待采证
     note: "标注/降级逻辑已 objective 渲染测试覆盖（含双向断言）；纯视觉呈现需真机目测。不阻塞 TV1 done。"
+
+  - acceptance_id: RT1-M01
+    version: RT1
+    assertion: "真机：从浏览器复制带格式内容→历史条目保存为 richtext 且预览区显示加粗/颜色/表格等格式；点「粘贴到前台」到富文本编辑器(Word/备忘录/邮件)格式还原；点「复制」后到富文本编辑器粘贴带格式；粘到纯文本编辑器自动退纯文本(兜底)；纯 RTF 源(如 macOS TextEdit)按设计退纯文本"
+    source_anchor: docs/design/quickquick-richtext-fidelity.md§一.决策1-3 + §七(粘贴兜底)
+    collect_env: real_device
+    evidence_ref: docs/dev-log/richtext-v1/manual-richtext-roundtrip.png（待采）
+    added_at: 2026-06-07T00:00:00Z
+    status: 待采证
+    note: "捕获(get().html)/还原(set().html)/复制 IPC 均 objective 单测覆盖纯逻辑；arboard GUI 读写 + CGEvent 粘贴注入 headless 采不了，需真机往返目测。不阻塞 RT1 done。"
