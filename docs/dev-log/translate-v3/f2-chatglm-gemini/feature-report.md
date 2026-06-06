@@ -6,7 +6,7 @@ parent: TV3
 children: [TV3-F2-S01-code, TV3-F2-S01-test, TV3-F2-S01-review]
 created: 2026-06-06T00:00:00Z
 status: 通过
-commit: PENDING
+commit: 9f92e25
 acceptance_ids: [TV3-F2-A01]
 ---
 

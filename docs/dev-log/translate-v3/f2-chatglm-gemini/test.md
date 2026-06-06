@@ -5,7 +5,7 @@ level: 小功能
 parent: TV3-F2
 created: 2026-06-06T00:00:00Z
 status: 通过
-commit: PENDING
+commit: 9f92e25
 acceptance_ids: [TV3-F2-A01]
 ---
 
