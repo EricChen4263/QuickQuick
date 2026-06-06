@@ -661,14 +661,14 @@ fn init_capture_state(app: &tauri::App) -> CaptureState {
 
 /// 主窗口红绿灯（交通灯）按钮的逻辑坐标 (x, y)。
 ///
-/// 自绘标题栏 `.qq-titlebar` 高 38px，macOS 红绿灯按钮约 14px。
+/// 自绘标题栏 `.qq-titlebar` 高 44px，macOS 红绿灯按钮约 14px。
 /// - x=18：接近标题栏左缩进，不与「QuickQuick」文字重叠。
-/// - y=12：几何居中为 (38-14)/2=12，按钮中线 ≈ 12+7=19 正对栏中线 19，与标题文字中线对齐。
+/// - y=15：几何居中为 (44-14)/2=15，按钮中线 ≈ 15+7=22 正对栏中线 22，与标题文字中线对齐。
 ///   （config 字段在隐藏窗口上常失效，故由 NSWindow 重定位兜底，不依赖 config。）
 ///
 /// 抽成纯函数便于单测，定位副作用由 [`reposition_traffic_lights`] 在 macOS 守卫下执行。
 pub fn traffic_light_logical_position() -> (f64, f64) {
-    (18.0, 12.0)
+    (18.0, 15.0)
 }
 
 /// macOS：把 NSWindow 的三颗红绿灯按钮整体移到 [`traffic_light_logical_position`] 给定位置。
@@ -827,6 +827,16 @@ mod tests {
             "CmdOrCtrl+Shift+T",
             "translate 热键默认值应为 CmdOrCtrl+Shift+T"
         );
+    }
+
+    /// 红绿灯按钮应与 44px 自绘标题栏中线对齐
+    #[test]
+    fn traffic_light_position_matches_titlebar_center() {
+        // Arrange & Act
+        let position = traffic_light_logical_position();
+
+        // Assert
+        assert_eq!(position, (18.0, 15.0));
     }
 
     /// 空切片（无剪贴板变化）不应触发前端刷新
