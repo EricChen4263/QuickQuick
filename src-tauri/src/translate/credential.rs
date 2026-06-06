@@ -144,6 +144,100 @@ pub fn credential_schema(provider_id: &str) -> Vec<CredentialField> {
                 required: true,
             },
         ],
+        "baidu_field" => vec![
+            CredentialField {
+                key: "app_id",
+                label: "AppID",
+                is_secret: false,
+                required: true,
+            },
+            CredentialField {
+                key: "secret_key",
+                label: "Secret Key",
+                is_secret: true,
+                required: true,
+            },
+            CredentialField {
+                key: "field",
+                label: "领域（如 it/finance）",
+                is_secret: false,
+                required: true,
+            },
+        ],
+        "youdao" => vec![
+            CredentialField {
+                key: "app_key",
+                label: "应用 ID",
+                is_secret: false,
+                required: true,
+            },
+            CredentialField {
+                key: "app_secret",
+                label: "应用密钥",
+                is_secret: true,
+                required: true,
+            },
+        ],
+        "caiyun" => vec![CredentialField {
+            key: "token",
+            label: "Token",
+            is_secret: true,
+            required: true,
+        }],
+        "niutrans" => vec![CredentialField {
+            key: "apikey",
+            label: "API Key",
+            is_secret: true,
+            required: true,
+        }],
+        "tencent" => vec![
+            CredentialField {
+                key: "secret_id",
+                label: "SecretId",
+                is_secret: false,
+                required: true,
+            },
+            CredentialField {
+                key: "secret_key",
+                label: "SecretKey",
+                is_secret: true,
+                required: true,
+            },
+        ],
+        "alibaba" => vec![
+            CredentialField {
+                key: "accesskey_id",
+                label: "AccessKey ID",
+                is_secret: false,
+                required: true,
+            },
+            CredentialField {
+                key: "accesskey_secret",
+                label: "AccessKey Secret",
+                is_secret: true,
+                required: true,
+            },
+        ],
+        "volcengine" => vec![
+            CredentialField {
+                key: "access_key_id",
+                label: "AccessKeyId",
+                is_secret: false,
+                required: true,
+            },
+            CredentialField {
+                key: "secret_access_key",
+                label: "SecretAccessKey",
+                is_secret: true,
+                required: true,
+            },
+            CredentialField {
+                key: "region",
+                label: "地域（默认 cn-north-1）",
+                is_secret: false,
+                required: false,
+            },
+        ],
         "deepl_free" => vec![CredentialField {
             key: "auth_key",
             label: "Auth Key",
@@ -667,5 +761,119 @@ mod tests {
             Some("test_app".to_string())
         );
         assert!(store.get_secret("baidu", "app_id").unwrap().is_none());
+    }
+
+    /// 取指定 key 的字段，便于断言其 is_secret/required。
+    fn field<'a>(fields: &'a [CredentialField], key: &str) -> &'a CredentialField {
+        fields
+            .iter()
+            .find(|f| f.key == key)
+            .unwrap_or_else(|| panic!("schema 应含字段 {key}"))
+    }
+
+    // 对齐 acceptance TV2-F5-A01（凭据 schema 部分）：
+    // baidu_field/youdao 两源 schema 字段与 is_secret 标记正确。
+    #[test]
+    fn credential_schema_for_v2_keyed_sources() {
+        // 百度专业：app_id（非密）、secret_key（密）、field（非密）。
+        let bf = credential_schema("baidu_field");
+        assert_eq!(bf.len(), 3, "baidu_field schema 应有 3 个字段");
+        assert!(
+            !field(&bf, "app_id").is_secret,
+            "app_id 应为非密（appid 非密）"
+        );
+        assert!(field(&bf, "app_id").required, "app_id 应为必填");
+        assert!(
+            field(&bf, "secret_key").is_secret,
+            "secret_key 应为 secret"
+        );
+        assert!(field(&bf, "secret_key").required, "secret_key 应为必填");
+        assert!(
+            !field(&bf, "field").is_secret,
+            "field（领域）应为非密"
+        );
+        assert!(field(&bf, "field").required, "field 应为必填");
+
+        // 有道：app_key（非密）、app_secret（密）。
+        let yd = credential_schema("youdao");
+        assert_eq!(yd.len(), 2, "youdao schema 应有 2 个字段");
+        assert!(
+            !field(&yd, "app_key").is_secret,
+            "app_key 应为非密"
+        );
+        assert!(field(&yd, "app_key").required, "app_key 应为必填");
+        assert!(
+            field(&yd, "app_secret").is_secret,
+            "app_secret 应为 secret"
+        );
+        assert!(field(&yd, "app_secret").required, "app_secret 应为必填");
+
+        // 彩云：token（密、必填，唯一字段）。
+        let cy = credential_schema("caiyun");
+        assert_eq!(cy.len(), 1, "caiyun schema 应有 1 个字段");
+        assert!(field(&cy, "token").is_secret, "token 应为 secret");
+        assert!(field(&cy, "token").required, "token 应为必填");
+
+        // 小牛：apikey（密、必填，唯一字段）。
+        let nt = credential_schema("niutrans");
+        assert_eq!(nt.len(), 1, "niutrans schema 应有 1 个字段");
+        assert!(field(&nt, "apikey").is_secret, "apikey 应为 secret");
+        assert!(field(&nt, "apikey").required, "apikey 应为必填");
+
+        // 腾讯云：secret_id（非密）、secret_key（密），均必填。
+        let tc = credential_schema("tencent");
+        assert_eq!(tc.len(), 2, "tencent schema 应有 2 个字段");
+        assert!(
+            !field(&tc, "secret_id").is_secret,
+            "secret_id 应为非密"
+        );
+        assert!(field(&tc, "secret_id").required, "secret_id 应为必填");
+        assert!(
+            field(&tc, "secret_key").is_secret,
+            "secret_key 应为 secret"
+        );
+        assert!(field(&tc, "secret_key").required, "secret_key 应为必填");
+
+        // 阿里：accesskey_id（非密）、accesskey_secret（密），均必填。
+        let ab = credential_schema("alibaba");
+        assert_eq!(ab.len(), 2, "alibaba schema 应有 2 个字段");
+        assert!(
+            !field(&ab, "accesskey_id").is_secret,
+            "accesskey_id 应为非密"
+        );
+        assert!(field(&ab, "accesskey_id").required, "accesskey_id 应为必填");
+        assert!(
+            field(&ab, "accesskey_secret").is_secret,
+            "accesskey_secret 应为 secret"
+        );
+        assert!(
+            field(&ab, "accesskey_secret").required,
+            "accesskey_secret 应为必填"
+        );
+
+        // 火山：access_key_id（非密、必填）、secret_access_key（密、必填）、region（非密、选填）。
+        let vc = credential_schema("volcengine");
+        assert_eq!(vc.len(), 3, "volcengine schema 应有 3 个字段");
+        assert!(
+            !field(&vc, "access_key_id").is_secret,
+            "access_key_id 应为非密"
+        );
+        assert!(
+            field(&vc, "access_key_id").required,
+            "access_key_id 应为必填"
+        );
+        assert!(
+            field(&vc, "secret_access_key").is_secret,
+            "secret_access_key 应为 secret"
+        );
+        assert!(
+            field(&vc, "secret_access_key").required,
+            "secret_access_key 应为必填"
+        );
+        assert!(!field(&vc, "region").is_secret, "region 应为非密");
+        assert!(
+            !field(&vc, "region").required,
+            "region 应为选填（有默认 cn-north-1）"
+        );
     }
 }

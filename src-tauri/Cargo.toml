@@ -35,6 +35,13 @@ argon2 = "0.5"
 rand = "0.8"
 zeroize = { version = "1" }
 md5 = "0.7"
+# 有道翻译 signType=v3 签名为 SHA256（官方文档要求）；sha2 已作为 tauri 传递依赖在 lockfile 中，
+# 此处显式声明以直接使用，不新增实际下载。
+sha2 = "0.10"
+# 腾讯云 TC3-HMAC-SHA256（三层密钥派生）与阿里云 HMAC-SHA1 签名需 HMAC 构造；
+# hmac 提供通用 HMAC，配合 sha2(SHA256)/sha1(SHA1) 摘要算法。sha1 为阿里 HMAC-SHA1 所需。
+hmac = "0.12"
+sha1 = "0.10"
 arboard = "3"
 ureq = { version = "2", features = ["tls"] }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }

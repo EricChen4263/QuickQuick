@@ -7,8 +7,8 @@
 //! - V2-F2-A11 quota_explicit_no_silent_switch：撞额度显式提示，不自动切换 provider
 
 use quickquick_lib::translate::providers::{
-    baidu_sign, on_quota_or_failure, BaiduProvider, DeepLFreeProvider, GoogleProvider, LingvaProvider,
-    UserPromptKind,
+    baidu_field_sign, baidu_sign, on_quota_or_failure, youdao_sign, youdao_truncate, BaiduProvider,
+    DeepLFreeProvider, GoogleProvider, LingvaProvider, UserPromptKind,
 };
 use quickquick_lib::translate::{Lang, TranslateError, TranslateProvider, TranslateRequest};
 
@@ -592,5 +592,41 @@ fn quota_explicit_no_silent_switch_network_error_returns_none() {
         prompt.is_none(),
         "Network 错误不应触发用户提示（由重试逻辑处理），实际: {:?}",
         prompt.map(|p| p.message)
+    );
+}
+
+// TV2-F1：百度专业 / 有道 签名纯函数确定性（跨 crate 边界）集成测试
+
+/// TV2-F1-A01：baidu_field_sign 对固定输入产出确定 MD5（pub 函数跨 crate 可用）。
+#[test]
+fn baidu_field_sign_is_deterministic_across_crate() {
+    let sign = baidu_field_sign("appid123", "hello", "12345", "it", "secret");
+    assert_eq!(
+        sign, "0ddfb12f98655a716cc509c2538a4386",
+        "baidu_field 签名应为 MD5(appid+q+salt+field+secret) 确定值"
+    );
+}
+
+/// TV2-F1-A01：youdao_sign 短/长文本确定 SHA256 + truncate 边界（pub 函数跨 crate 可用）。
+#[test]
+fn youdao_sign_and_truncate_are_deterministic_across_crate() {
+    let short = youdao_sign("app123", "hello", "saltX", "1700000000", "sec456");
+    assert_eq!(
+        short, "de9f455414aeb5c0057ad78813f9be70ff0ef07f9ea70cf53ee90169860871a2",
+        "短文本（len<=20 用全文）签名应为确定 SHA256"
+    );
+
+    let long_text = "this is a very long text over twenty chars";
+    let long = youdao_sign("app123", long_text, "saltX", "1700000000", "sec456");
+    assert_eq!(
+        long, "b61bfa28f19cdff1f69386cb076d25c13902bc855a97e91364dbad6fe76c3c3b",
+        "长文本 truncate(前10+len+后10) 后签名应为确定 SHA256"
+    );
+
+    // truncate 边界：恰 20 用全文、21 触发截断。
+    assert_eq!(youdao_truncate("12345678901234567890"), "12345678901234567890");
+    assert_eq!(
+        youdao_truncate("123456789012345678901"),
+        "1234567890212345678901"
     );
 }

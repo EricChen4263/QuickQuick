@@ -7,7 +7,7 @@
 //! - V2-F1-A04 same_source_retry_no_cross_failover：错误降级，同源退避重试，绝不自动跨源
 //! - V2-F1-A05 credential_schema_keychain：provider 声明结构化字段 schema，secret→keychain，非密→加密 DB
 //! - V2-F1-A07 timeout_and_cancel_inflight：超时归 Network，连续选中只认最新请求
-//! - V2-F1-A08 static_registry_lists：静态注册表枚举全部 provider（随免 key 源增长，现 8 家）
+//! - V2-F1-A08 static_registry_lists：静态注册表枚举全部 provider（随源增长，现 10 家）
 
 use quickquick_lib::translate::cancel::InflightTracker;
 use quickquick_lib::translate::error::{classify_timeout, map_provider_error};
@@ -143,15 +143,16 @@ fn provider_contract_parse_response_returns_error_on_missing_field() {
 
 /// A08：静态注册表枚举全部 provider。
 ///
-/// 现为 8 家：lingva / google_free / yandex / transmart / bing（免 key）+ baidu / deepl_free / google（需 key）。
-/// 后续每新增一个免 key 源（deepl_web…），此数随之增长，届时同步更新预期值。
+/// 现为 15 家：免 key 的 lingva / google_free / yandex / transmart / bing，
+/// 需 key 的 baidu / baidu_field / youdao / caiyun / niutrans / tencent / alibaba / volcengine / deepl_free / google。
+/// 后续每新增一个源，此数随之增长，届时同步更新预期值。
 #[test]
-fn static_registry_lists_eight_providers() {
+fn static_registry_lists_fifteen_providers() {
     // Arrange + Act
     let providers = registry();
 
     // Assert
-    assert_eq!(providers.len(), 8, "注册表应恰好包含 8 家 provider");
+    assert_eq!(providers.len(), 15, "注册表应恰好包含 15 家 provider");
 }
 
 #[test]

@@ -14,6 +14,12 @@ use super::{
 /// 字段名必须与 `credential_schema` 声明的 key 逐字对齐：
 /// - `lingva`、`google_free`、`yandex`、`transmart`：无凭据（免 key）
 /// - `baidu`：`app_id`（必填）、`secret_key`（必填）
+/// - `baidu_field`：`app_id`、`secret_key`、`field`（领域，均必填）
+/// - `youdao`：`app_key`、`app_secret`（均必填）
+/// - `caiyun`：`token`（必填）
+/// - `niutrans`：`apikey`（必填）
+/// - `tencent`：`secret_id`、`secret_key`（均必填）
+/// - `alibaba`：`accesskey_id`、`accesskey_secret`（均必填）
 /// - `deepl_free`：`auth_key`（必填）
 /// - `google`：`api_key`（必填）
 ///
@@ -47,6 +53,66 @@ pub fn build_provider(
                 .ok_or_else(|| "baidu 未配置 SecretKey，请前往设置填入 API Key".to_string())?;
             Ok(Box::new(BaiduProvider::new(app_id, secret_key)))
         }
+        "baidu_field" => {
+            let app_id = find("app_id")
+                .ok_or_else(|| "baidu_field 未配置 AppID，请前往设置填入 API Key".to_string())?;
+            let secret_key = find("secret_key")
+                .ok_or_else(|| "baidu_field 未配置 SecretKey，请前往设置填入 API Key".to_string())?;
+            let field = find("field")
+                .ok_or_else(|| "baidu_field 未配置领域 field，请前往设置填入".to_string())?;
+            Ok(Box::new(BaiduFieldProvider::new(app_id, secret_key, field)))
+        }
+        "youdao" => {
+            let app_key = find("app_key")
+                .ok_or_else(|| "youdao 未配置应用 ID，请前往设置填入 API Key".to_string())?;
+            let app_secret = find("app_secret")
+                .ok_or_else(|| "youdao 未配置应用密钥，请前往设置填入 API Key".to_string())?;
+            Ok(Box::new(YoudaoProvider::new(app_key, app_secret)))
+        }
+        "caiyun" => {
+            let token = find("token")
+                .ok_or_else(|| "caiyun 未配置 token，请前往设置填入 API Key".to_string())?;
+            Ok(Box::new(CaiyunProvider::new(token)))
+        }
+        "niutrans" => {
+            let apikey = find("apikey")
+                .ok_or_else(|| "niutrans 未配置 apikey，请前往设置填入 API Key".to_string())?;
+            Ok(Box::new(NiutransProvider::new(apikey)))
+        }
+        "tencent" => {
+            let secret_id = find("secret_id")
+                .ok_or_else(|| "tencent 未配置 SecretId，请前往设置填入 API Key".to_string())?;
+            let secret_key = find("secret_key")
+                .ok_or_else(|| "tencent 未配置 SecretKey，请前往设置填入 API Key".to_string())?;
+            Ok(Box::new(TencentProvider::new(secret_id, secret_key)))
+        }
+        "alibaba" => {
+            let access_key_id = find("accesskey_id").ok_or_else(|| {
+                "alibaba 未配置 AccessKey ID，请前往设置填入 API Key".to_string()
+            })?;
+            let access_key_secret = find("accesskey_secret").ok_or_else(|| {
+                "alibaba 未配置 AccessKey Secret，请前往设置填入 API Key".to_string()
+            })?;
+            Ok(Box::new(AlibabaProvider::new(
+                access_key_id,
+                access_key_secret,
+            )))
+        }
+        "volcengine" => {
+            let access_key_id = find("access_key_id").ok_or_else(|| {
+                "volcengine 未配置 AccessKeyId，请前往设置填入 API Key".to_string()
+            })?;
+            let secret_access_key = find("secret_access_key").ok_or_else(|| {
+                "volcengine 未配置 SecretAccessKey，请前往设置填入 API Key".to_string()
+            })?;
+            // region 选填，留空回退默认地域。
+            let region = find("region").unwrap_or(VOLCENGINE_DEFAULT_REGION);
+            Ok(Box::new(VolcengineProvider::new(
+                access_key_id,
+                secret_access_key,
+                region,
+            )))
+        }
         "deepl_free" => {
             let auth_key = find("auth_key")
                 .ok_or_else(|| "deepl_free 未配置 auth_key，请前往设置填入 API Key".to_string())?;
@@ -73,6 +139,13 @@ pub fn registry() -> Vec<ProviderCapability> {
         TransmartProvider::new().capability(),
         BingProvider::new().capability(),
         BaiduProvider::new("", "").capability(),
+        BaiduFieldProvider::new("", "", "").capability(),
+        YoudaoProvider::new("", "").capability(),
+        CaiyunProvider::new("").capability(),
+        NiutransProvider::new("").capability(),
+        TencentProvider::new("", "").capability(),
+        AlibabaProvider::new("", "").capability(),
+        VolcengineProvider::new("", "", "").capability(),
         DeepLFreeProvider::new("").capability(),
         GoogleProvider::new("").capability(),
     ]
@@ -666,6 +739,1086 @@ fn map_baidu_error(code: u64, v: &serde_json::Value) -> TranslateError {
         58002 => TranslateError::ServerError(format!("百度翻译服务不可用: {msg}")),
         _ => TranslateError::ServerError(format!("百度翻译未知错误 {code}: {msg}")),
     }
+}
+
+// 百度专业翻译（fieldtranslate）
+
+/// 百度专业（领域）翻译 provider（需要 AppID + SecretKey + 领域 field）。
+///
+/// 端点（百度翻译开放平台「领域翻译」API 文档）：
+/// `POST https://fanyi-api.baidu.com/api/trans/vip/fieldtranslate`
+/// 签名算法（官方文档 §领域翻译·签名）：
+/// `sign = MD5(appid + q + salt + field + secret_key)`（比基础百度多拼入领域 field）。
+/// 请求参数：q/from/to/appid/salt/sign/domain(=field)；
+/// 响应取 `trans_result[*].dst`（逐段译文）。
+pub struct BaiduFieldProvider {
+    app_id: String,
+    secret_key: String,
+    field: String,
+}
+
+impl BaiduFieldProvider {
+    /// 构造百度专业翻译 provider。
+    pub fn new(app_id: &str, secret_key: &str, field: &str) -> Self {
+        Self {
+            app_id: app_id.to_string(),
+            secret_key: secret_key.to_string(),
+            field: field.to_string(),
+        }
+    }
+}
+
+impl TranslateProvider for BaiduFieldProvider {
+    fn capability(&self) -> ProviderCapability {
+        ProviderCapability {
+            id: "baidu_field",
+            name: "百度专业翻译",
+            needs_key: true,
+            is_unofficial: false,
+        }
+    }
+
+    fn build_request(&self, req: &TranslateRequest) -> ProviderHttpRequest {
+        let src = map_lang_for_provider("baidu_field", &req.source_lang);
+        let tgt = map_lang_for_provider("baidu_field", &req.target_lang);
+
+        // 每次请求生成随机 salt 防重放（百度领域翻译 API 文档要求）。
+        let salt = uuid::Uuid::new_v4().simple().to_string();
+        let sign = baidu_field_sign(&self.app_id, &req.text, &salt, &self.field, &self.secret_key);
+
+        // domain 参数承载领域（field）；q/appid 走 percent-encode。
+        let body = format!(
+            "q={}&from={}&to={}&appid={}&salt={}&domain={}&sign={}",
+            percent_encode(&req.text),
+            src,
+            tgt,
+            percent_encode(&self.app_id),
+            salt,
+            percent_encode(&self.field),
+            sign,
+        );
+
+        ProviderHttpRequest {
+            method: "POST",
+            url: "https://fanyi-api.baidu.com/api/trans/vip/fieldtranslate".to_string(),
+            body: Some(body),
+            headers: vec![(
+                "Content-Type".to_string(),
+                "application/x-www-form-urlencoded".to_string(),
+            )],
+        }
+    }
+
+    fn parse_response(&self, raw: &str) -> Result<TranslateResponse, TranslateError> {
+        let v: serde_json::Value =
+            serde_json::from_str(raw).map_err(|e| TranslateError::ParseError(e.to_string()))?;
+
+        // 百度出错时返回 error_code（字符串或数字），复用基础百度错误码归一。
+        if let Some(code) = extract_number_or_string(&v["error_code"]) {
+            return Err(map_baidu_error(code, &v));
+        }
+
+        let translated = concat_baidu_dst(&v)?;
+        Ok(TranslateResponse { translated })
+    }
+}
+
+/// 计算百度专业（领域）翻译请求签名。
+///
+/// 算法（百度翻译开放平台「领域翻译」API 文档）：
+/// `sign = MD5(appid + q + salt + field + secret_key)` 的十六进制小写。
+/// 比基础百度签名多拼入领域 field。抽为纯函数以便对任意 salt 直接验证算法正确性。
+pub fn baidu_field_sign(appid: &str, q: &str, salt: &str, field: &str, secret_key: &str) -> String {
+    let input = format!("{appid}{q}{salt}{field}{secret_key}");
+    format!("{:x}", md5::compute(input.as_bytes()))
+}
+
+/// 拼接百度响应 `trans_result[*].dst` 各段译文（换行分隔）。
+///
+/// 百度对多行输入逐段返回译文；空数组或全空译文视为格式错误（ParseError）。
+fn concat_baidu_dst(v: &serde_json::Value) -> Result<String, TranslateError> {
+    let segments = v["trans_result"]
+        .as_array()
+        .ok_or_else(|| TranslateError::ParseError("missing trans_result array".to_string()))?;
+    let parts: Vec<&str> = segments
+        .iter()
+        .filter_map(|seg| seg["dst"].as_str())
+        .collect();
+    if parts.is_empty() {
+        return Err(TranslateError::ParseError(
+            "empty trans_result dst".to_string(),
+        ));
+    }
+    Ok(parts.join("\n"))
+}
+
+// 有道智云翻译（signType=v3）
+
+/// 有道智云翻译 provider（需要应用 ID app_key + 应用密钥 app_secret）。
+///
+/// 端点（有道智云「自然语言翻译服务」API 文档）：
+/// `POST https://openapi.youdao.com/api`，signType=v3。
+/// 签名算法（官方文档 §计算签名）：
+/// `sign = SHA256(appKey + truncate(q) + salt + curtime + appSecret)` 的十六进制小写，
+/// 其中 `truncate(q)`：字符数 ≤ 20 用全文，否则取「前 10 字符 + 字符长度 + 后 10 字符」。
+/// 请求参数：q/from/to/appKey/salt/sign/signType=v3/curtime；
+/// 响应取 `translation[*]`（逐段译文）。
+pub struct YoudaoProvider {
+    app_key: String,
+    app_secret: String,
+}
+
+impl YoudaoProvider {
+    /// 构造有道智云翻译 provider。
+    pub fn new(app_key: &str, app_secret: &str) -> Self {
+        Self {
+            app_key: app_key.to_string(),
+            app_secret: app_secret.to_string(),
+        }
+    }
+}
+
+impl TranslateProvider for YoudaoProvider {
+    fn capability(&self) -> ProviderCapability {
+        ProviderCapability {
+            id: "youdao",
+            name: "有道翻译",
+            needs_key: true,
+            is_unofficial: false,
+        }
+    }
+
+    fn build_request(&self, req: &TranslateRequest) -> ProviderHttpRequest {
+        let src = map_lang_for_provider("youdao", &req.source_lang);
+        let tgt = map_lang_for_provider("youdao", &req.target_lang);
+
+        // salt 用随机 uuid 防重放；curtime 为当前 Unix 秒（官方文档要求 signType=v3）。
+        let salt = uuid::Uuid::new_v4().simple().to_string();
+        let curtime = current_unix_secs().to_string();
+        let sign = youdao_sign(&self.app_key, &req.text, &salt, &curtime, &self.app_secret);
+
+        let body = format!(
+            "q={}&from={}&to={}&appKey={}&salt={}&sign={}&signType=v3&curtime={}",
+            percent_encode(&req.text),
+            src,
+            tgt,
+            percent_encode(&self.app_key),
+            salt,
+            sign,
+            curtime,
+        );
+
+        ProviderHttpRequest {
+            method: "POST",
+            url: "https://openapi.youdao.com/api".to_string(),
+            body: Some(body),
+            headers: vec![(
+                "Content-Type".to_string(),
+                "application/x-www-form-urlencoded".to_string(),
+            )],
+        }
+    }
+
+    fn parse_response(&self, raw: &str) -> Result<TranslateResponse, TranslateError> {
+        let v: serde_json::Value =
+            serde_json::from_str(raw).map_err(|e| TranslateError::ParseError(e.to_string()))?;
+
+        // 有道用 errorCode 表达错误（"0" 为成功），非 0 归一为 TranslateError。
+        if let Some(code) = v["errorCode"].as_str() {
+            if code != "0" {
+                return Err(map_youdao_error(code));
+            }
+        }
+
+        let segments = v["translation"]
+            .as_array()
+            .ok_or_else(|| TranslateError::ParseError("missing translation array".to_string()))?;
+        let parts: Vec<&str> = segments.iter().filter_map(|s| s.as_str()).collect();
+        if parts.is_empty() {
+            return Err(TranslateError::ParseError("empty translation".to_string()));
+        }
+        Ok(TranslateResponse {
+            translated: parts.join("\n"),
+        })
+    }
+}
+
+/// 计算有道 signType=v3 请求签名。
+///
+/// 算法（有道智云 API 文档 §计算签名）：
+/// `sign = SHA256(appKey + truncate(q) + salt + curtime + appSecret)` 十六进制小写。
+/// 抽为纯函数：对固定 salt+curtime 可断言确定 SHA256 值，使签名算法可单测验证。
+pub fn youdao_sign(app_key: &str, q: &str, salt: &str, curtime: &str, app_secret: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let input = format!("{app_key}{}{salt}{curtime}{app_secret}", youdao_truncate(q));
+    let digest = Sha256::digest(input.as_bytes());
+    format!("{digest:x}")
+}
+
+/// 有道签名 `truncate(q)` 规则（官方文档 §计算签名）。
+///
+/// 按**字符数**判断（非字节）：长度 ≤ 20 返回全文；否则返回「前 10 字符 + 字符长度 + 后 10 字符」。
+/// 用 `chars()` 取字符避免中文按字节切分 panic。
+pub fn youdao_truncate(q: &str) -> String {
+    let chars: Vec<char> = q.chars().collect();
+    let len = chars.len();
+    if len <= 20 {
+        return q.to_string();
+    }
+    let prefix: String = chars[..10].iter().collect();
+    let suffix: String = chars[len - 10..].iter().collect();
+    format!("{prefix}{len}{suffix}")
+}
+
+/// 返回当前 Unix 时间戳（秒）。
+///
+/// 隔离真实时间读取，使 `youdao_sign` 保持纯函数、可对固定 curtime 测确定签名。
+fn current_unix_secs() -> u64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+/// 将有道 errorCode（非 "0"）归一为 `TranslateError`。
+///
+/// 错误码来源：有道智云 API 文档 §错误代码列表。
+fn map_youdao_error(code: &str) -> TranslateError {
+    match code {
+        "101" | "102" | "103" | "104" | "105" | "106" | "107" => {
+            TranslateError::Unsupported(format!("有道翻译请求参数错误 {code}"))
+        }
+        "108" | "110" | "111" | "202" | "401" => {
+            TranslateError::Auth(format!("有道翻译密钥/账户错误 {code}"))
+        }
+        "207" | "303" => TranslateError::ServerError(format!("有道翻译服务端错误 {code}")),
+        "302" | "411" | "412" => TranslateError::RateLimit(format!("有道翻译频率超限 {code}")),
+        "402" => TranslateError::Quota(format!("有道翻译余额不足 {code}")),
+        "206" => TranslateError::TooLong(format!("有道翻译文本过长 {code}")),
+        _ => TranslateError::ServerError(format!("有道翻译错误 {code}")),
+    }
+}
+
+// 彩云小译（token 简单鉴权）
+
+/// 彩云小译翻译 provider（需要 token）。
+///
+/// 端点（彩云小译开放平台 API 文档 https://docs.caiyunapp.com/blog/2018/09/03/translator/）：
+/// `POST https://api.interpreter.caiyunai.com/v1/translator`
+/// 鉴权（官方文档「请求头」）：`x-authorization: token {token}`、`content-type: application/json`。
+/// 请求 body（官方文档「请求参数」）：`{"source":["原文"],"trans_type":"{src}2{tgt}","request_id":"...","detect":true}`，
+/// 其中 source 为原文数组，trans_type 形如 `en2zh`/`auto2zh`（源2目标）。
+/// 响应（官方文档「返回结果」）取 `target`（与 source 逐项对应的译文数组）首项。
+pub struct CaiyunProvider {
+    token: String,
+}
+
+impl CaiyunProvider {
+    /// 构造彩云小译 provider。
+    pub fn new(token: &str) -> Self {
+        Self {
+            token: token.to_string(),
+        }
+    }
+}
+
+impl TranslateProvider for CaiyunProvider {
+    fn capability(&self) -> ProviderCapability {
+        ProviderCapability {
+            id: "caiyun",
+            name: "彩云小译",
+            needs_key: true,
+            is_unofficial: false,
+        }
+    }
+
+    fn build_request(&self, req: &TranslateRequest) -> ProviderHttpRequest {
+        let src = map_lang_for_provider("caiyun", &req.source_lang);
+        let tgt = map_lang_for_provider("caiyun", &req.target_lang);
+
+        // trans_type 为「源2目标」形态（官方文档约定，如 en2zh）；request_id 仅作幂等标识，用随机 uuid。
+        // 用 serde_json::json! 构造 body 自动正确转义文本（避免手拼 JSON 注入风险）。
+        let body = serde_json::json!({
+            "source": [req.text],
+            "trans_type": format!("{src}2{tgt}"),
+            "request_id": uuid::Uuid::new_v4().simple().to_string(),
+            "detect": true,
+        })
+        .to_string();
+
+        ProviderHttpRequest {
+            method: "POST",
+            url: "https://api.interpreter.caiyunai.com/v1/translator".to_string(),
+            body: Some(body),
+            headers: vec![
+                (
+                    "x-authorization".to_string(),
+                    format!("token {}", self.token),
+                ),
+                ("content-type".to_string(), "application/json".to_string()),
+            ],
+        }
+    }
+
+    fn parse_response(&self, raw: &str) -> Result<TranslateResponse, TranslateError> {
+        let v: serde_json::Value =
+            serde_json::from_str(raw).map_err(|e| TranslateError::ParseError(e.to_string()))?;
+
+        // 错误响应：彩云用 message 字段携带错误文案（无 target）；归一为 Auth/ServerError。
+        if v["target"].is_null() {
+            if let Some(msg) = v["message"].as_str() {
+                return Err(map_caiyun_error(msg));
+            }
+            return Err(TranslateError::ParseError("missing target".to_string()));
+        }
+
+        // target 主形态为数组（与 source 逐项对应），取首项；兼容单字符串形态。
+        let translated = match &v["target"] {
+            serde_json::Value::Array(arr) => arr
+                .first()
+                .and_then(|t| t.as_str())
+                .ok_or_else(|| TranslateError::ParseError("empty target array".to_string()))?
+                .to_string(),
+            serde_json::Value::String(s) => s.clone(),
+            _ => {
+                return Err(TranslateError::ParseError(
+                    "target 非数组或字符串".to_string(),
+                ))
+            }
+        };
+
+        Ok(TranslateResponse { translated })
+    }
+}
+
+/// 将彩云错误响应 message 归一为 `TranslateError`。
+///
+/// 彩云用 HTTP 状态码 + body message 表达错误；此处按 message 文案归类
+/// （token 相关→Auth，其余→ServerError）。文案来源：彩云小译 API 文档错误说明。
+fn map_caiyun_error(msg: &str) -> TranslateError {
+    let lower = msg.to_ascii_lowercase();
+    if lower.contains("token") || lower.contains("auth") || lower.contains("unauthorized") {
+        TranslateError::Auth(format!("彩云小译鉴权失败: {msg}"))
+    } else {
+        TranslateError::ServerError(format!("彩云小译错误: {msg}"))
+    }
+}
+
+// 小牛翻译（body apikey 鉴权）
+
+/// 小牛翻译 provider（需要 apikey）。
+///
+/// 端点（小牛翻译开放平台 API 文档 https://niutrans.com/documents/contents/trans_text）：
+/// `POST https://api.niutrans.com/NiuTransServer/translation`，`content-type: application/json`。
+/// 请求 body（官方文档「请求参数」）：`{"from":"{src}","to":"{tgt}","apikey":"{apikey}","src_text":"原文"}`，
+/// apikey 直接置于请求体内（非请求头）。
+/// 响应（官方文档「返回结果」）成功取 `tgt_text`；失败返回 `error_code`/`error_msg`。
+pub struct NiutransProvider {
+    apikey: String,
+}
+
+impl NiutransProvider {
+    /// 构造小牛翻译 provider。
+    pub fn new(apikey: &str) -> Self {
+        Self {
+            apikey: apikey.to_string(),
+        }
+    }
+}
+
+impl TranslateProvider for NiutransProvider {
+    fn capability(&self) -> ProviderCapability {
+        ProviderCapability {
+            id: "niutrans",
+            name: "小牛翻译",
+            needs_key: true,
+            is_unofficial: false,
+        }
+    }
+
+    fn build_request(&self, req: &TranslateRequest) -> ProviderHttpRequest {
+        let src = map_lang_for_provider("niutrans", &req.source_lang);
+        let tgt = map_lang_for_provider("niutrans", &req.target_lang);
+
+        // apikey 置于 body（官方文档约定，非请求头）；用 serde_json 构造自动正确转义文本。
+        let body = serde_json::json!({
+            "from": src,
+            "to": tgt,
+            "apikey": self.apikey,
+            "src_text": req.text,
+        })
+        .to_string();
+
+        ProviderHttpRequest {
+            method: "POST",
+            url: "https://api.niutrans.com/NiuTransServer/translation".to_string(),
+            body: Some(body),
+            headers: vec![("content-type".to_string(), "application/json".to_string())],
+        }
+    }
+
+    fn parse_response(&self, raw: &str) -> Result<TranslateResponse, TranslateError> {
+        let v: serde_json::Value =
+            serde_json::from_str(raw).map_err(|e| TranslateError::ParseError(e.to_string()))?;
+
+        // 错误响应：小牛用 error_code（字符串或数字）携带错误码（无 tgt_text）。
+        if let Some(code) = extract_number_or_string(&v["error_code"]) {
+            let msg = v["error_msg"].as_str().unwrap_or("unknown");
+            return Err(map_niutrans_error(code, msg));
+        }
+
+        let translated = v["tgt_text"]
+            .as_str()
+            .ok_or_else(|| TranslateError::ParseError("missing tgt_text".to_string()))?
+            .to_string();
+
+        Ok(TranslateResponse { translated })
+    }
+}
+
+/// 将小牛 error_code 归一为 `TranslateError`。
+///
+/// 错误码来源：小牛翻译 API 文档「错误码」列表（如 13001 apikey 错误、19001 余额不足）。
+fn map_niutrans_error(code: u64, msg: &str) -> TranslateError {
+    match code {
+        13001 | 13002 | 13003 | 13007 => {
+            TranslateError::Auth(format!("小牛翻译鉴权失败 {code}: {msg}"))
+        }
+        14001 | 14002 => TranslateError::TooLong(format!("小牛翻译文本过长 {code}: {msg}")),
+        19001 | 19002 => TranslateError::Quota(format!("小牛翻译余额不足 {code}: {msg}")),
+        17001 => TranslateError::RateLimit(format!("小牛翻译频率超限 {code}: {msg}")),
+        _ => TranslateError::ServerError(format!("小牛翻译错误 {code}: {msg}")),
+    }
+}
+
+// 腾讯云 TMT（TC3-HMAC-SHA256 三层密钥派生）
+
+/// 腾讯云机器翻译（TMT）端点与签名常量（按腾讯云官方文档，非 pot 源码）。
+///
+/// 文档来源：
+/// - 接口：cloud.tencent.com/document/api/551/15619（TextTranslate）
+/// - 签名 v3：cloud.tencent.com/document/api/551/30637（TC3-HMAC-SHA256）
+const TENCENT_HOST: &str = "tmt.tencentcloudapi.com";
+const TENCENT_SERVICE: &str = "tmt";
+const TENCENT_ACTION: &str = "TextTranslate";
+const TENCENT_VERSION: &str = "2018-03-21";
+const TENCENT_REGION: &str = "ap-guangzhou";
+/// 腾讯云 TMT 请求 Content-Type（签名 CanonicalHeaders 与实际头须逐字一致）。
+const TENCENT_CONTENT_TYPE: &str = "application/json; charset=utf-8";
+
+/// 腾讯云机器翻译 provider（需要 SecretId + SecretKey）。
+///
+/// 端点：`POST https://tmt.tencentcloudapi.com`，签名 TC3-HMAC-SHA256。
+/// Action=TextTranslate、Version=2018-03-21、Region=ap-guangzhou。
+/// 响应取 `Response.TargetText`；`Response.Error` 表错误。
+pub struct TencentProvider {
+    secret_id: String,
+    secret_key: String,
+}
+
+impl TencentProvider {
+    /// 构造腾讯云翻译 provider。
+    pub fn new(secret_id: &str, secret_key: &str) -> Self {
+        Self {
+            secret_id: secret_id.to_string(),
+            secret_key: secret_key.to_string(),
+        }
+    }
+
+    /// 按腾讯云约定构造请求 body（SourceText/Source/Target/ProjectId）。
+    ///
+    /// 用 serde_json 构造，自动正确转义文本，并保证字段顺序稳定
+    /// （签名对 body 求 SHA256，body 文本须与实际发送逐字一致）。
+    fn build_body(req: &TranslateRequest) -> String {
+        let src = map_lang_for_provider("tencent", &req.source_lang);
+        let tgt = map_lang_for_provider("tencent", &req.target_lang);
+        serde_json::json!({
+            "SourceText": req.text,
+            "Source": src,
+            "Target": tgt,
+            "ProjectId": 0,
+        })
+        .to_string()
+    }
+}
+
+impl TranslateProvider for TencentProvider {
+    fn capability(&self) -> ProviderCapability {
+        ProviderCapability {
+            id: "tencent",
+            name: "腾讯云翻译",
+            needs_key: true,
+            is_unofficial: false,
+        }
+    }
+
+    fn build_request(&self, req: &TranslateRequest) -> ProviderHttpRequest {
+        let body = Self::build_body(req);
+        let timestamp = current_unix_secs() as i64;
+        let authorization = tencent_tc3_sign(&self.secret_id, &self.secret_key, &body, timestamp);
+
+        ProviderHttpRequest {
+            method: "POST",
+            url: format!("https://{TENCENT_HOST}"),
+            body: Some(body),
+            headers: vec![
+                ("Authorization".to_string(), authorization),
+                ("Content-Type".to_string(), TENCENT_CONTENT_TYPE.to_string()),
+                ("Host".to_string(), TENCENT_HOST.to_string()),
+                ("X-TC-Action".to_string(), TENCENT_ACTION.to_string()),
+                ("X-TC-Version".to_string(), TENCENT_VERSION.to_string()),
+                ("X-TC-Region".to_string(), TENCENT_REGION.to_string()),
+                ("X-TC-Timestamp".to_string(), timestamp.to_string()),
+            ],
+        }
+    }
+
+    fn parse_response(&self, raw: &str) -> Result<TranslateResponse, TranslateError> {
+        let v: serde_json::Value =
+            serde_json::from_str(raw).map_err(|e| TranslateError::ParseError(e.to_string()))?;
+
+        // 腾讯云用 Response.Error 表错误（Code 形如 "AuthFailure.SignatureFailure"）。
+        let error = &v["Response"]["Error"];
+        if !error.is_null() {
+            let code = error["Code"].as_str().unwrap_or("Unknown");
+            let msg = error["Message"].as_str().unwrap_or("unknown");
+            return Err(map_tencent_error(code, msg));
+        }
+
+        let translated = v["Response"]["TargetText"]
+            .as_str()
+            .ok_or_else(|| TranslateError::ParseError("missing Response.TargetText".to_string()))?
+            .to_string();
+
+        Ok(TranslateResponse { translated })
+    }
+}
+
+/// 计算腾讯云 TC3-HMAC-SHA256 签名，返回完整 `Authorization` 头值。
+///
+/// 算法（腾讯云签名 v3 官方文档 cloud.tencent.com/document/api/551/30637，非 pot 源码）：
+/// 1. 拼 CanonicalRequest = method\n uri\n query\n canonicalHeaders\n signedHeaders\n SHA256(payload)
+/// 2. 拼 StringToSign = "TC3-HMAC-SHA256"\n timestamp\n credentialScope\n SHA256(CanonicalRequest)
+/// 3. 三层密钥派生：HMAC(HMAC(HMAC("TC3"+secretKey, date), service), "tc3_request")
+/// 4. Signature = hex(HMAC(signingKey, StringToSign))，组装 Authorization 头
+///
+/// 抽为纯函数：对固定 secret/timestamp/payload 可断言确定 Authorization，使签名可单测验证。
+/// `timestamp` 为 Unix 秒；CanonicalHeaders 固定含 content-type/host/x-tc-action（与实际发送头一致）。
+pub fn tencent_tc3_sign(secret_id: &str, secret_key: &str, payload: &str, timestamp: i64) -> String {
+    use sha2::{Digest, Sha256};
+
+    let date = unix_secs_to_utc_date(timestamp);
+
+    // 步骤 1：CanonicalRequest（POST、根路径、空 query、固定签名头集）。
+    let canonical_headers = format!(
+        "content-type:{}\nhost:{}\nx-tc-action:{}\n",
+        TENCENT_CONTENT_TYPE,
+        TENCENT_HOST,
+        TENCENT_ACTION.to_ascii_lowercase(),
+    );
+    let signed_headers = "content-type;host;x-tc-action";
+    let hashed_payload = format!("{:x}", Sha256::digest(payload.as_bytes()));
+    let canonical_request = format!(
+        "POST\n/\n\n{canonical_headers}\n{signed_headers}\n{hashed_payload}"
+    );
+
+    // 步骤 2：StringToSign。
+    let credential_scope = format!("{date}/{TENCENT_SERVICE}/tc3_request");
+    let hashed_canonical = format!("{:x}", Sha256::digest(canonical_request.as_bytes()));
+    let string_to_sign = format!(
+        "TC3-HMAC-SHA256\n{timestamp}\n{credential_scope}\n{hashed_canonical}"
+    );
+
+    // 步骤 3：三层密钥派生。
+    let secret_date = hmac_sha256(format!("TC3{secret_key}").as_bytes(), date.as_bytes());
+    let secret_service = hmac_sha256(&secret_date, TENCENT_SERVICE.as_bytes());
+    let secret_signing = hmac_sha256(&secret_service, b"tc3_request");
+
+    // 步骤 4：Signature 与 Authorization 头。
+    let signature = hmac_sha256(&secret_signing, string_to_sign.as_bytes());
+    let signature_hex = to_hex_lower(&signature);
+
+    format!(
+        "TC3-HMAC-SHA256 Credential={secret_id}/{credential_scope}, \
+SignedHeaders={signed_headers}, Signature={signature_hex}"
+    )
+}
+
+/// 将腾讯云 `Response.Error.Code` 归一为 `TranslateError`。
+///
+/// 错误码来源：腾讯云公共错误码 + TMT 业务错误码官方文档（cloud.tencent.com/document/api/551/30640）。
+/// 按 Code 前缀/关键词归类（鉴权→Auth、限流→RateLimit、配额→Quota）。
+fn map_tencent_error(code: &str, msg: &str) -> TranslateError {
+    if code.starts_with("AuthFailure") || code == "UnauthorizedOperation" {
+        TranslateError::Auth(format!("腾讯云翻译鉴权失败 {code}: {msg}"))
+    } else if code == "RequestLimitExceeded" || code.starts_with("RequestLimitExceeded") {
+        TranslateError::RateLimit(format!("腾讯云翻译频率超限 {code}: {msg}"))
+    } else if code.contains("Resource") && code.contains("Insufficient") {
+        TranslateError::Quota(format!("腾讯云翻译资源不足 {code}: {msg}"))
+    } else if code.starts_with("UnsupportedOperation") {
+        TranslateError::Unsupported(format!("腾讯云翻译不支持 {code}: {msg}"))
+    } else {
+        TranslateError::ServerError(format!("腾讯云翻译错误 {code}: {msg}"))
+    }
+}
+
+// 阿里翻译（HMAC-SHA1 + Base64，RPC 风格签名）
+
+/// 阿里云机器翻译端点与签名常量（按阿里云官方文档，非 pot 源码）。
+///
+/// 文档来源：
+/// - 接口：help.aliyun.com/document_detail/158244（机器翻译·获取翻译·通用版）
+/// - RPC 签名：help.aliyun.com/document_detail/30563（签名机制 HMAC-SHA1 + Base64）
+const ALIBABA_HOST: &str = "mt.cn-hangzhou.aliyuncs.com";
+const ALIBABA_ACTION: &str = "TranslateGeneral";
+const ALIBABA_VERSION: &str = "2018-10-12";
+
+/// 阿里云机器翻译 provider（需要 AccessKeyId + AccessKeySecret）。
+///
+/// 端点：`GET http://mt.cn-hangzhou.aliyuncs.com/`，RPC 风格 HMAC-SHA1 + Base64 签名。
+/// Action=TranslateGeneral、Version=2018-10-12。响应取 `Data.Translated`；`Code != 200` 表错误。
+pub struct AlibabaProvider {
+    access_key_id: String,
+    access_key_secret: String,
+}
+
+impl AlibabaProvider {
+    /// 构造阿里云翻译 provider。
+    pub fn new(access_key_id: &str, access_key_secret: &str) -> Self {
+        Self {
+            access_key_id: access_key_id.to_string(),
+            access_key_secret: access_key_secret.to_string(),
+        }
+    }
+}
+
+impl TranslateProvider for AlibabaProvider {
+    fn capability(&self) -> ProviderCapability {
+        ProviderCapability {
+            id: "alibaba",
+            name: "阿里翻译",
+            needs_key: true,
+            is_unofficial: false,
+        }
+    }
+
+    fn build_request(&self, req: &TranslateRequest) -> ProviderHttpRequest {
+        let src = map_lang_for_provider("alibaba", &req.source_lang);
+        let tgt = map_lang_for_provider("alibaba", &req.target_lang);
+
+        // SignatureNonce 防重放，用随机 uuid；Timestamp 为 ISO8601 UTC（官方要求）。
+        let nonce = uuid::Uuid::new_v4().simple().to_string();
+        let timestamp = unix_secs_to_iso8601_utc(current_unix_secs() as i64);
+
+        // RPC 公共参数 + 业务参数（不含 Signature；签名后再追加）。
+        let params: Vec<(&str, &str)> = vec![
+            ("AccessKeyId", &self.access_key_id),
+            ("Action", ALIBABA_ACTION),
+            ("Format", "JSON"),
+            ("FormatType", "text"),
+            ("Scene", "general"),
+            ("SignatureMethod", "HMAC-SHA1"),
+            ("SignatureNonce", &nonce),
+            ("SignatureVersion", "1.0"),
+            ("SourceLanguage", &src),
+            ("SourceText", &req.text),
+            ("TargetLanguage", &tgt),
+            ("Timestamp", &timestamp),
+            ("Version", ALIBABA_VERSION),
+        ];
+
+        let signature = alibaba_hmac_sign("GET", &params, &self.access_key_secret);
+
+        // 拼 query：所有签名参数 + Signature，值统一 RFC3986 编码。
+        let mut query = params
+            .iter()
+            .map(|(k, v)| format!("{}={}", percent_encode(k), percent_encode(v)))
+            .collect::<Vec<_>>()
+            .join("&");
+        query.push_str(&format!("&Signature={}", percent_encode(&signature)));
+
+        ProviderHttpRequest {
+            method: "GET",
+            url: format!("http://{ALIBABA_HOST}/?{query}"),
+            body: None,
+            headers: vec![],
+        }
+    }
+
+    fn parse_response(&self, raw: &str) -> Result<TranslateResponse, TranslateError> {
+        let v: serde_json::Value =
+            serde_json::from_str(raw).map_err(|e| TranslateError::ParseError(e.to_string()))?;
+
+        // 阿里用 Code 表状态："200" 成功；非 200（数字或错误码字符串）表错误。
+        let code = v["Code"].as_str().unwrap_or("");
+        if code != "200" {
+            let msg = v["Message"].as_str().unwrap_or("unknown");
+            return Err(map_alibaba_error(code, msg));
+        }
+
+        let translated = v["Data"]["Translated"]
+            .as_str()
+            .ok_or_else(|| TranslateError::ParseError("missing Data.Translated".to_string()))?
+            .to_string();
+
+        Ok(TranslateResponse { translated })
+    }
+}
+
+/// 计算阿里云 RPC 风格 HMAC-SHA1 签名，返回 Base64 字符串。
+///
+/// 算法（阿里云签名机制官方文档 help.aliyun.com/document_detail/30563，非 pot 源码）：
+/// 1. 按参数名字典序排序，RFC3986 编码每个 key/value，拼 `k1=v1&k2=v2...` 规范化查询串
+/// 2. StringToSign = `METHOD + "&" + encode("/") + "&" + encode(规范化查询串)`
+/// 3. Signature = `Base64(HMAC-SHA1(accessKeySecret + "&", StringToSign))`
+///
+/// 抽为纯函数：对固定参数集可断言确定 Base64 签名，使签名可单测验证。
+/// `params` 不含 Signature 本身（签名结果由调用方追加进 query）。
+pub fn alibaba_hmac_sign(method: &str, params: &[(&str, &str)], access_key_secret: &str) -> String {
+    use base64::Engine;
+
+    // 步骤 1：按 key 字典序排序后 RFC3986 编码拼规范化查询串。
+    let mut sorted: Vec<&(&str, &str)> = params.iter().collect();
+    sorted.sort_by(|a, b| a.0.cmp(b.0));
+    let canonical = sorted
+        .iter()
+        .map(|(k, v)| format!("{}={}", percent_encode(k), percent_encode(v)))
+        .collect::<Vec<_>>()
+        .join("&");
+
+    // 步骤 2：StringToSign（method & encode("/") & encode(canonical)）。
+    let string_to_sign = format!(
+        "{}&{}&{}",
+        method,
+        percent_encode("/"),
+        percent_encode(&canonical),
+    );
+
+    // 步骤 3：HMAC-SHA1(secret + "&", stringToSign) 后 Base64。
+    let signature = hmac_sha1(
+        format!("{access_key_secret}&").as_bytes(),
+        string_to_sign.as_bytes(),
+    );
+    base64::engine::general_purpose::STANDARD.encode(signature)
+}
+
+/// 将阿里云错误 `Code` 归一为 `TranslateError`。
+///
+/// 错误码来源：阿里云机器翻译 API 错误码官方文档（help.aliyun.com/document_detail/158244）。
+/// 按 Code 关键词归类（鉴权→Auth、限流→RateLimit、配额→Quota）。
+fn map_alibaba_error(code: &str, msg: &str) -> TranslateError {
+    if code.contains("AccessKey") || code.contains("Signature") || code.contains("Forbidden") {
+        TranslateError::Auth(format!("阿里翻译鉴权失败 {code}: {msg}"))
+    } else if code.starts_with("Throttling") {
+        TranslateError::RateLimit(format!("阿里翻译频率超限 {code}: {msg}"))
+    } else if code.contains("Quota") || code.contains("Arrearage") {
+        TranslateError::Quota(format!("阿里翻译配额不足 {code}: {msg}"))
+    } else {
+        TranslateError::ServerError(format!("阿里翻译错误 {code}: {msg}"))
+    }
+}
+
+// 火山引擎翻译（AWS SigV4 风格四层 HMAC-SHA256）
+
+/// 火山引擎机器翻译端点与签名常量（按火山引擎官方文档，非 pot 源码）。
+///
+/// 文档来源：
+/// - 接口：volcengine.com/docs/4640/65067（机器翻译 TranslateText）
+/// - 签名 V4：volcengine.com/docs/6369/67269（签名方法 V4，AWS SigV4 风格）
+const VOLCENGINE_HOST: &str = "open.volcengineapi.com";
+const VOLCENGINE_SERVICE: &str = "translate";
+const VOLCENGINE_ACTION: &str = "TranslateText";
+const VOLCENGINE_VERSION: &str = "2020-06-01";
+/// 默认地域（用户未在凭据 region 字段填写时采用）。
+const VOLCENGINE_DEFAULT_REGION: &str = "cn-north-1";
+/// 火山请求 Content-Type（签名 CanonicalHeaders 与实际头须逐字一致）。
+const VOLCENGINE_CONTENT_TYPE: &str = "application/json";
+
+/// 火山引擎机器翻译 provider（需要 AccessKeyId + SecretAccessKey + Region）。
+///
+/// 端点：`POST https://open.volcengineapi.com/?Action=TranslateText&Version=2020-06-01`，
+/// 签名 AWS SigV4 风格四层 HMAC-SHA256。响应取 `TranslationList[].Translation` 拼接；
+/// `ResponseMetadata.Error` 表错误。
+pub struct VolcengineProvider {
+    access_key_id: String,
+    secret_access_key: String,
+    region: String,
+}
+
+impl VolcengineProvider {
+    /// 构造火山引擎翻译 provider。
+    pub fn new(access_key_id: &str, secret_access_key: &str, region: &str) -> Self {
+        Self {
+            access_key_id: access_key_id.to_string(),
+            secret_access_key: secret_access_key.to_string(),
+            region: region.to_string(),
+        }
+    }
+
+    /// 按火山约定构造请求 body（SourceLanguage/TargetLanguage/TextList）。
+    ///
+    /// 用 serde_json 构造，自动正确转义文本；body 对 SHA256 求 payloadHash，
+    /// 须与实际发送逐字一致。
+    fn build_body(req: &TranslateRequest) -> String {
+        let src = map_lang_for_provider("volcengine", &req.source_lang);
+        let tgt = map_lang_for_provider("volcengine", &req.target_lang);
+        serde_json::json!({
+            "SourceLanguage": src,
+            "TargetLanguage": tgt,
+            "TextList": [req.text],
+        })
+        .to_string()
+    }
+}
+
+impl TranslateProvider for VolcengineProvider {
+    fn capability(&self) -> ProviderCapability {
+        ProviderCapability {
+            id: "volcengine",
+            name: "火山翻译",
+            needs_key: true,
+            is_unofficial: false,
+        }
+    }
+
+    fn build_request(&self, req: &TranslateRequest) -> ProviderHttpRequest {
+        let body = Self::build_body(req);
+        let timestamp = current_unix_secs() as i64;
+        let x_date = unix_secs_to_compact_utc(timestamp);
+        let payload_hash = to_hex_lower(&sha256_digest(body.as_bytes()));
+        let authorization = volcengine_sigv4_sign(
+            &self.access_key_id,
+            &self.secret_access_key,
+            &self.region,
+            &body,
+            timestamp,
+        );
+
+        ProviderHttpRequest {
+            method: "POST",
+            url: format!(
+                "https://{VOLCENGINE_HOST}/?Action={VOLCENGINE_ACTION}&Version={VOLCENGINE_VERSION}"
+            ),
+            body: Some(body),
+            headers: vec![
+                ("Authorization".to_string(), authorization),
+                ("Content-Type".to_string(), VOLCENGINE_CONTENT_TYPE.to_string()),
+                ("Host".to_string(), VOLCENGINE_HOST.to_string()),
+                ("X-Date".to_string(), x_date),
+                ("X-Content-Sha256".to_string(), payload_hash),
+            ],
+        }
+    }
+
+    fn parse_response(&self, raw: &str) -> Result<TranslateResponse, TranslateError> {
+        let v: serde_json::Value =
+            serde_json::from_str(raw).map_err(|e| TranslateError::ParseError(e.to_string()))?;
+
+        // 火山用 ResponseMetadata.Error 表错误（Code 形如 "SignatureDoesNotMatch"）。
+        let error = &v["ResponseMetadata"]["Error"];
+        if !error.is_null() {
+            let code = error["Code"].as_str().unwrap_or("Unknown");
+            let msg = error["Message"].as_str().unwrap_or("unknown");
+            return Err(map_volcengine_error(code, msg));
+        }
+
+        let list = v["TranslationList"]
+            .as_array()
+            .ok_or_else(|| TranslateError::ParseError("missing TranslationList".to_string()))?;
+        let translated = list
+            .iter()
+            .filter_map(|item| item["Translation"].as_str())
+            .collect::<Vec<_>>()
+            .join("");
+        if translated.is_empty() {
+            return Err(TranslateError::ParseError(
+                "TranslationList 无 Translation 文本".to_string(),
+            ));
+        }
+
+        Ok(TranslateResponse { translated })
+    }
+}
+
+/// 计算火山引擎 SigV4 风格签名，返回完整 `Authorization` 头值。
+///
+/// 算法（火山引擎签名方法 V4 官方文档 volcengine.com/docs/6369/67269，非 pot 源码）：
+/// 1. 拼 CanonicalRequest = method\n uri\n query\n canonicalHeaders\n signedHeaders\n SHA256(payload)
+/// 2. 拼 StringToSign = "HMAC-SHA256"\n xDate\n credentialScope\n SHA256(CanonicalRequest)
+/// 3. 四层密钥派生：HMAC(HMAC(HMAC(HMAC(secretAccessKey, date), region), service), "request")
+/// 4. Signature = hex(HMAC(signingKey, StringToSign))，组装 Authorization 头
+///
+/// 与 AWS SigV4 区别（火山特有）：算法标识 `HMAC-SHA256`、credentialScope 以 `request` 结尾、
+/// 签名密钥首层直接用 secretAccessKey（不加 "AWS4" 前缀）、X-Date 为紧凑 `YYYYMMDDThhmmssZ`。
+///
+/// 抽为纯函数：对固定 secret/region/payload/timestamp 可断言确定 Authorization，使签名可单测验证。
+/// `timestamp` 为 Unix 秒；CanonicalHeaders 固定含 content-type/host/x-content-sha256/x-date
+/// （与实际发送头一致、按字母序）。
+pub fn volcengine_sigv4_sign(
+    access_key_id: &str,
+    secret_access_key: &str,
+    region: &str,
+    payload: &str,
+    timestamp: i64,
+) -> String {
+    let x_date = unix_secs_to_compact_utc(timestamp);
+    let short_date = unix_secs_to_compact_date(timestamp);
+    let payload_hash = to_hex_lower(&sha256_digest(payload.as_bytes()));
+
+    // 步骤 1：CanonicalRequest（POST、根路径、固定 query、签名头集按字母序）。
+    let canonical_query =
+        format!("Action={VOLCENGINE_ACTION}&Version={VOLCENGINE_VERSION}");
+    let canonical_headers = format!(
+        "content-type:{VOLCENGINE_CONTENT_TYPE}\nhost:{VOLCENGINE_HOST}\nx-content-sha256:{payload_hash}\nx-date:{x_date}\n"
+    );
+    let signed_headers = "content-type;host;x-content-sha256;x-date";
+    let canonical_request = format!(
+        "POST\n/\n{canonical_query}\n{canonical_headers}\n{signed_headers}\n{payload_hash}"
+    );
+
+    // 步骤 2：StringToSign。
+    let credential_scope = format!("{short_date}/{region}/{VOLCENGINE_SERVICE}/request");
+    let hashed_canonical = to_hex_lower(&sha256_digest(canonical_request.as_bytes()));
+    let string_to_sign =
+        format!("HMAC-SHA256\n{x_date}\n{credential_scope}\n{hashed_canonical}");
+
+    // 步骤 3：四层密钥派生（首层直接用 secretAccessKey，无 "AWS4" 前缀，火山特有）。
+    let k_date = hmac_sha256(secret_access_key.as_bytes(), short_date.as_bytes());
+    let k_region = hmac_sha256(&k_date, region.as_bytes());
+    let k_service = hmac_sha256(&k_region, VOLCENGINE_SERVICE.as_bytes());
+    let k_signing = hmac_sha256(&k_service, b"request");
+
+    // 步骤 4：Signature 与 Authorization 头。
+    let signature = to_hex_lower(&hmac_sha256(&k_signing, string_to_sign.as_bytes()));
+
+    format!(
+        "HMAC-SHA256 Credential={access_key_id}/{credential_scope}, \
+SignedHeaders={signed_headers}, Signature={signature}"
+    )
+}
+
+/// 将火山 `ResponseMetadata.Error.Code` 归一为 `TranslateError`。
+///
+/// 错误码来源：火山引擎公共错误码官方文档（volcengine.com/docs/6369/67270）。
+/// 按 Code 关键词归类（签名/鉴权→Auth、限流→RateLimit、配额→Quota）。
+fn map_volcengine_error(code: &str, msg: &str) -> TranslateError {
+    if code.contains("Signature")
+        || code.contains("Auth")
+        || code.contains("AccessKey")
+        || code == "AccessDenied"
+    {
+        TranslateError::Auth(format!("火山翻译鉴权失败 {code}: {msg}"))
+    } else if code.contains("FlowLimit") || code.contains("Throttling") {
+        TranslateError::RateLimit(format!("火山翻译频率超限 {code}: {msg}"))
+    } else if code.contains("Quota") || code.contains("Arrears") {
+        TranslateError::Quota(format!("火山翻译配额不足 {code}: {msg}"))
+    } else {
+        TranslateError::ServerError(format!("火山翻译错误 {code}: {msg}"))
+    }
+}
+
+// 云厂商签名共用工具（HMAC / hex / 时间格式化）
+
+/// 计算 HMAC-SHA256，返回 32 字节摘要。
+///
+/// 供腾讯云 TC3 三层密钥派生与最终签名复用。
+fn hmac_sha256(key: &[u8], msg: &[u8]) -> Vec<u8> {
+    use hmac::{Mac, SimpleHmac};
+    use sha2::Sha256;
+    // SimpleHmac::new_from_slice 对任意长度 key 不会失败（HMAC 定义允许任意长度 key）。
+    let mut mac = SimpleHmac::<Sha256>::new_from_slice(key).expect("HMAC 接受任意长度 key");
+    mac.update(msg);
+    mac.finalize().into_bytes().to_vec()
+}
+
+/// 计算 SHA-256，返回 32 字节摘要。
+///
+/// 供火山 SigV4 的 payloadHash 与 CanonicalRequest 哈希复用。
+fn sha256_digest(msg: &[u8]) -> Vec<u8> {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(msg).to_vec()
+}
+
+/// 计算 HMAC-SHA1，返回 20 字节摘要。
+///
+/// 供阿里云 RPC 风格签名复用（官方要求 HMAC-SHA1）。
+fn hmac_sha1(key: &[u8], msg: &[u8]) -> Vec<u8> {
+    use hmac::{Mac, SimpleHmac};
+    use sha1::Sha1;
+    let mut mac = SimpleHmac::<Sha1>::new_from_slice(key).expect("HMAC 接受任意长度 key");
+    mac.update(msg);
+    mac.finalize().into_bytes().to_vec()
+}
+
+/// 将字节切片转为小写十六进制字符串。
+fn to_hex_lower(bytes: &[u8]) -> String {
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        out.push(hex_lower(b >> 4));
+        out.push(hex_lower(b & 0x0F));
+    }
+    out
+}
+
+/// 将 4 位 nibble 转为小写十六进制字符。
+fn hex_lower(nibble: u8) -> char {
+    match nibble {
+        0..=9 => (b'0' + nibble) as char,
+        _ => (b'a' + nibble - 10) as char,
+    }
+}
+
+/// 将 Unix 秒转为 UTC 日期字符串 `YYYY-MM-DD`（腾讯云 credential scope 用）。
+///
+/// 自实现公历换算（不引入 chrono），对 1970 起的正时间戳精确。
+fn unix_secs_to_utc_date(timestamp: i64) -> String {
+    let (year, month, day, _, _, _) = unix_secs_to_utc_parts(timestamp);
+    format!("{year:04}-{month:02}-{day:02}")
+}
+
+/// 将 Unix 秒转为 ISO8601 UTC 字符串 `YYYY-MM-DDThh:mm:ssZ`（阿里云 Timestamp 用）。
+fn unix_secs_to_iso8601_utc(timestamp: i64) -> String {
+    let (year, month, day, hour, min, sec) = unix_secs_to_utc_parts(timestamp);
+    format!("{year:04}-{month:02}-{day:02}T{hour:02}:{min:02}:{sec:02}Z")
+}
+
+/// 将 Unix 秒转为火山 SigV4 紧凑 UTC 时间戳 `YYYYMMDDThhmmssZ`（X-Date 头用）。
+fn unix_secs_to_compact_utc(timestamp: i64) -> String {
+    let (year, month, day, hour, min, sec) = unix_secs_to_utc_parts(timestamp);
+    format!("{year:04}{month:02}{day:02}T{hour:02}{min:02}{sec:02}Z")
+}
+
+/// 将 Unix 秒转为紧凑 UTC 短日期 `YYYYMMDD`（火山 credential scope 用）。
+fn unix_secs_to_compact_date(timestamp: i64) -> String {
+    let (year, month, day, _, _, _) = unix_secs_to_utc_parts(timestamp);
+    format!("{year:04}{month:02}{day:02}")
+}
+
+/// 把 Unix 秒拆为 UTC `(年, 月, 日, 时, 分, 秒)`。
+///
+/// 自实现公历日期换算（避免引入 chrono），用「以 0000-03-01 为纪元的天数公式」处理闰年。
+/// 仅用于签名时间戳格式化，对 1970 起的合法时间戳精确。
+fn unix_secs_to_utc_parts(timestamp: i64) -> (i64, u32, u32, u32, u32, u32) {
+    let days = timestamp.div_euclid(86_400);
+    let secs_of_day = timestamp.rem_euclid(86_400);
+    let hour = (secs_of_day / 3600) as u32;
+    let min = ((secs_of_day % 3600) / 60) as u32;
+    let sec = (secs_of_day % 60) as u32;
+
+    // 民用历算法（Howard Hinnant civil_from_days）：以 0000-03-01 为基准。
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let year = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = (doy - (153 * mp + 2) / 5 + 1) as u32;
+    let month = (if mp < 10 { mp + 3 } else { mp - 9 }) as u32;
+    let year = if month <= 2 { year + 1 } else { year };
+
+    (year, month, day, hour, min, sec)
 }
 
 // DeepL Free
@@ -1739,5 +2892,1056 @@ mod tests {
                 cap.is_unofficial
             );
         }
+    }
+
+    // 百度专业（fieldtranslate）测试（需 key，官方 API 文档协议）
+
+    // 对齐 acceptance TV2-F1-A01：baidu_field_sign 对固定输入产出确定 MD5；
+    // build_request 用 fieldtranslate 端点、body 含 domain(field) 与正确签名。
+    #[test]
+    fn baidu_field_sign_and_build() {
+        // 签名串 MD5(appid + text + salt + field + secret) 的确定值（printf|md5 手算核对）。
+        let sign = baidu_field_sign("appid123", "hello", "12345", "it", "secret");
+        assert_eq!(
+            sign, "0ddfb12f98655a716cc509c2538a4386",
+            "baidu_field 签名应为 MD5(appid+q+salt+field+secret) 的确定值，实际：{sign}"
+        );
+
+        let provider = BaiduFieldProvider::new("appid123", "secret", "it");
+        let req = TranslateRequest {
+            text: "hello".to_string(),
+            source_lang: Lang::new("en"),
+            target_lang: Lang::new("zh"),
+        };
+        let http_req = provider.build_request(&req);
+
+        assert_eq!(http_req.method, "POST");
+        assert_eq!(
+            http_req.url, "https://fanyi-api.baidu.com/api/trans/vip/fieldtranslate",
+            "URL 应为百度专业 fieldtranslate 端点，实际：{}",
+            http_req.url
+        );
+        let body = http_req.body.expect("百度专业为 POST，应有 body");
+        assert!(body.contains("q=hello"), "body 应含编码后 q，实际：{body}");
+        assert!(body.contains("from=en"), "body 应含 from=en，实际：{body}");
+        assert!(body.contains("to=zh"), "body 应含 to=zh，实际：{body}");
+        assert!(
+            body.contains("appid=appid123"),
+            "body 应含 appid，实际：{body}"
+        );
+        assert!(
+            body.contains("domain=it"),
+            "body 应含 domain=it（领域 field 经 domain 参数传递），实际：{body}"
+        );
+        // 签名由 build 内随机 salt 计算，故重算同 salt 比对。
+        let salt = body
+            .split("salt=")
+            .nth(1)
+            .and_then(|s| s.split('&').next())
+            .expect("body 应含 salt 参数");
+        let expected_sign = baidu_field_sign("appid123", "hello", salt, "it", "secret");
+        assert!(
+            body.contains(&format!("sign={expected_sign}")),
+            "body 的 sign 应等于 baidu_field_sign(appid,q,salt,field,secret)，实际 body：{body}"
+        );
+    }
+
+    // 对齐 acceptance TV2-F1-A01：parse_response 拼接 trans_result[*].dst；错误响应→TranslateError。
+    #[test]
+    fn baidu_field_parse() {
+        let provider = BaiduFieldProvider::new("appid123", "secret", "it");
+
+        // 成功响应：trans_result 各 dst 拼接。
+        let ok = provider
+            .parse_response(r#"{"from":"en","to":"zh","trans_result":[{"src":"hello","dst":"你好"}]}"#)
+            .expect("含 trans_result.dst 应解析成功");
+        assert_eq!(ok.translated, "你好");
+
+        // 多段 dst 换行拼接（百度逐段返回）。
+        let multi = provider
+            .parse_response(r#"{"trans_result":[{"src":"a","dst":"甲"},{"src":"b","dst":"乙"}]}"#)
+            .expect("多段 trans_result 应解析成功");
+        assert_eq!(multi.translated, "甲\n乙");
+
+        // 错误响应（error_code）→ TranslateError（54001 签名错误归一为 Auth）。
+        let err = provider.parse_response(r#"{"error_code":"54001","error_msg":"Invalid Sign"}"#);
+        assert!(err.is_err(), "error_code 应返回错误，实际：{err:?}");
+        assert!(
+            matches!(err, Err(TranslateError::Auth(_))),
+            "54001 签名错误应归一为 Auth，实际：{err:?}"
+        );
+
+        // 非法 JSON → ParseError。
+        let invalid = provider.parse_response("not json");
+        assert!(
+            matches!(invalid, Err(TranslateError::ParseError(_))),
+            "非法 JSON 应返回 ParseError，实际：{invalid:?}"
+        );
+    }
+
+    #[test]
+    fn build_provider_baidu_field_missing_required_fields_returns_err() {
+        // 缺 field（领域）必填字段应报错，且错误消息不含任何字段值（安全约定）。
+        let creds = vec![
+            ("app_id".to_string(), "id1".to_string()),
+            (
+                "secret_key".to_string(),
+                "sk_secret_must_not_leak".to_string(),
+            ),
+        ];
+        let result = build_provider("baidu_field", &creds);
+        assert!(result.is_err(), "缺 field 应返回 Err");
+        if let Err(err) = result {
+            assert!(
+                !err.contains("sk_secret_must_not_leak"),
+                "错误消息不应含 secret 值：{err}"
+            );
+        }
+    }
+
+    #[test]
+    fn build_provider_baidu_field_with_all_fields_succeeds() {
+        let creds = vec![
+            ("app_id".to_string(), "id1".to_string()),
+            ("secret_key".to_string(), "sk1".to_string()),
+            ("field".to_string(), "it".to_string()),
+        ];
+        let result = build_provider("baidu_field", &creds);
+        assert!(result.is_ok(), "百度专业全字段应成功");
+        assert_eq!(result.unwrap().capability().id, "baidu_field");
+    }
+
+    #[test]
+    fn registry_contains_baidu_field_keyed_official() {
+        let reg = registry();
+        let bf = reg
+            .iter()
+            .find(|c| c.id == "baidu_field")
+            .expect("注册表应含 baidu_field");
+        assert!(bf.needs_key, "baidu_field 应为需 key 源");
+        assert!(
+            !bf.is_unofficial,
+            "baidu_field 为官方 API，is_unofficial 应为 false"
+        );
+    }
+
+    // 有道（signType=v3）测试（需 key，官方 API 文档协议）
+
+    // 对齐 acceptance TV2-F1-A01：youdao_sign 纯函数对固定输入产出确定 SHA256；
+    // truncate 规则边界（短文本用全文、长文本前10+len+后10）；build_request 端点/参数正确。
+    #[test]
+    fn youdao_sign_v3_and_build() {
+        // 短文本（len<=20）：truncate 用全文。SHA256(appKey+input+salt+curtime+appSecret) 确定值。
+        let short_sign = youdao_sign("app123", "hello", "saltX", "1700000000", "sec456");
+        assert_eq!(
+            short_sign, "de9f455414aeb5c0057ad78813f9be70ff0ef07f9ea70cf53ee90169860871a2",
+            "短文本 youdao 签名应为确定 SHA256，实际：{short_sign}"
+        );
+
+        // 长文本（len>20）：truncate = 前10字符 + 字符长度 + 后10字符。
+        let long_text = "this is a very long text over twenty chars";
+        assert_eq!(long_text.chars().count(), 42, "样例长文本应为 42 字符");
+        let long_sign = youdao_sign("app123", long_text, "saltX", "1700000000", "sec456");
+        assert_eq!(
+            long_sign, "b61bfa28f19cdff1f69386cb076d25c13902bc855a97e91364dbad6fe76c3c3b",
+            "长文本 truncate(前10+len+后10) 后签名应为确定 SHA256，实际：{long_sign}"
+        );
+
+        // 边界：恰好 20 字符仍用全文（<=20）。
+        let exactly20 = "12345678901234567890";
+        assert_eq!(exactly20.chars().count(), 20);
+        assert_eq!(youdao_truncate(exactly20), exactly20, "恰好 20 字符应用全文");
+
+        // 21 字符触发截断：前10 + "21" + 后10。
+        assert_eq!(
+            youdao_truncate("123456789012345678901"),
+            "1234567890212345678901",
+            "21 字符应截断为 前10+21+后10"
+        );
+
+        let provider = YoudaoProvider::new("app123", "sec456");
+        let req = TranslateRequest {
+            text: "hello".to_string(),
+            source_lang: Lang::new("en"),
+            target_lang: Lang::new("zh"),
+        };
+        let http_req = provider.build_request(&req);
+
+        assert_eq!(http_req.method, "POST");
+        assert_eq!(
+            http_req.url, "https://openapi.youdao.com/api",
+            "URL 应为有道 openapi 端点，实际：{}",
+            http_req.url
+        );
+        let body = http_req.body.expect("有道为 POST，应有 body");
+        assert!(body.contains("q=hello"), "body 应含编码后 q，实际：{body}");
+        assert!(body.contains("from=en"), "body 应含 from=en，实际：{body}");
+        assert!(
+            body.contains("to=zh-CHS"),
+            "body 应含 to=zh-CHS（有道简中码），实际：{body}"
+        );
+        assert!(
+            body.contains("appKey=app123"),
+            "body 应含 appKey，实际：{body}"
+        );
+        assert!(
+            body.contains("signType=v3"),
+            "body 应含 signType=v3，实际：{body}"
+        );
+        assert!(body.contains("salt="), "body 应含 salt，实际：{body}");
+        assert!(body.contains("curtime="), "body 应含 curtime，实际：{body}");
+        // 签名应等于对 build 内实际 salt/curtime 重算的 youdao_sign。
+        let salt = body
+            .split("salt=")
+            .nth(1)
+            .and_then(|s| s.split('&').next())
+            .expect("body 应含 salt");
+        let curtime = body
+            .split("curtime=")
+            .nth(1)
+            .and_then(|s| s.split('&').next())
+            .expect("body 应含 curtime");
+        let expected = youdao_sign("app123", "hello", salt, curtime, "sec456");
+        assert!(
+            body.contains(&format!("sign={expected}")),
+            "body 的 sign 应等于 youdao_sign(appKey,truncate(q),salt,curtime,appSecret)，实际 body：{body}"
+        );
+    }
+
+    // 对齐 acceptance TV2-F1-A01：parse_response 拼接 translation[*]；错误响应→TranslateError。
+    #[test]
+    fn youdao_parse() {
+        let provider = YoudaoProvider::new("app123", "sec456");
+
+        // 成功响应：translation 数组拼接（errorCode=0）。
+        let ok = provider
+            .parse_response(r#"{"errorCode":"0","query":"hello","translation":["你好"],"l":"en2zh-CHS"}"#)
+            .expect("含 translation 应解析成功");
+        assert_eq!(ok.translated, "你好");
+
+        // 多段 translation 换行拼接。
+        let multi = provider
+            .parse_response(r#"{"errorCode":"0","translation":["你好","世界"]}"#)
+            .expect("多段 translation 应解析成功");
+        assert_eq!(multi.translated, "你好\n世界");
+
+        // errorCode != 0 → TranslateError（108 应用密钥无效归一为 Auth）。
+        let err = provider.parse_response(r#"{"errorCode":"108","translation":null}"#);
+        assert!(err.is_err(), "errorCode!=0 应返回错误，实际：{err:?}");
+        assert!(
+            matches!(err, Err(TranslateError::Auth(_))),
+            "108 应用密钥无效应归一为 Auth，实际：{err:?}"
+        );
+
+        // 非法 JSON → ParseError。
+        let invalid = provider.parse_response("not json");
+        assert!(
+            matches!(invalid, Err(TranslateError::ParseError(_))),
+            "非法 JSON 应返回 ParseError，实际：{invalid:?}"
+        );
+    }
+
+    #[test]
+    fn build_provider_youdao_missing_required_fields_returns_err() {
+        // 缺 app_secret 应报错。
+        let creds = vec![("app_key".to_string(), "ak1".to_string())];
+        let result = build_provider("youdao", &creds);
+        assert!(result.is_err(), "缺 app_secret 应返回 Err");
+    }
+
+    #[test]
+    fn build_provider_youdao_with_all_fields_succeeds() {
+        let creds = vec![
+            ("app_key".to_string(), "ak1".to_string()),
+            ("app_secret".to_string(), "as1".to_string()),
+        ];
+        let result = build_provider("youdao", &creds);
+        assert!(result.is_ok(), "有道全字段应成功");
+        assert_eq!(result.unwrap().capability().id, "youdao");
+    }
+
+    #[test]
+    fn registry_contains_youdao_keyed_official() {
+        let reg = registry();
+        let y = reg
+            .iter()
+            .find(|c| c.id == "youdao")
+            .expect("注册表应含 youdao");
+        assert!(y.needs_key, "youdao 应为需 key 源");
+        assert!(
+            !y.is_unofficial,
+            "youdao 为官方 API，is_unofficial 应为 false"
+        );
+    }
+
+    // 彩云小译（token 简单鉴权，需 key，官方 API 文档协议）测试
+
+    // 对齐 acceptance TV2-F2-A01：build_request 端点/x-authorization 头/JSON body 结构正确；
+    // parse_response 取 target[0]；错误响应→TranslateError。
+    #[test]
+    fn caiyun_build_and_parse() {
+        let provider = CaiyunProvider::new("tok123");
+        let req = TranslateRequest {
+            text: "hello".to_string(),
+            source_lang: Lang::new("en"),
+            target_lang: Lang::new("zh"),
+        };
+        let http_req = provider.build_request(&req);
+
+        assert_eq!(http_req.method, "POST");
+        assert_eq!(
+            http_req.url, "https://api.interpreter.caiyunai.com/v1/translator",
+            "URL 应为彩云 translator 端点，实际：{}",
+            http_req.url
+        );
+        // 鉴权头：x-authorization: token {token}（彩云官方文档约定）。
+        let auth = http_req
+            .headers
+            .iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case("x-authorization"))
+            .expect("应含 x-authorization 头");
+        assert_eq!(
+            auth.1, "token tok123",
+            "x-authorization 应为 'token {{token}}'，实际：{}",
+            auth.1
+        );
+        assert!(
+            http_req
+                .headers
+                .iter()
+                .any(|(k, v)| k.eq_ignore_ascii_case("content-type")
+                    && v.contains("application/json")),
+            "应含 content-type: application/json 头，实际：{:?}",
+            http_req.headers
+        );
+
+        // body 为合法 JSON，含 source（数组）、trans_type=en2zh、request_id。
+        let body = http_req.body.expect("彩云为 POST，应有 body");
+        let parsed: serde_json::Value =
+            serde_json::from_str(&body).expect("body 应为合法 JSON");
+        assert_eq!(
+            parsed["source"][0], "hello",
+            "source 应为含原文的数组，实际：{body}"
+        );
+        assert_eq!(
+            parsed["trans_type"], "en2zh",
+            "trans_type 应按 en→zh 映射为 en2zh，实际：{body}"
+        );
+        assert!(
+            parsed["request_id"].is_string(),
+            "应含 request_id 字符串，实际：{body}"
+        );
+
+        // 成功响应：target 为译文数组，取首项。
+        let ok = provider
+            .parse_response(r#"{"target":["你好"],"confidence":0.9}"#)
+            .expect("含 target 应解析成功");
+        assert_eq!(ok.translated, "你好");
+
+        // 兼容 target 为字符串形态（部分接口返回单串）。
+        let ok_str = provider
+            .parse_response(r#"{"target":"你好世界"}"#)
+            .expect("target 为字符串也应解析成功");
+        assert_eq!(ok_str.translated, "你好世界");
+
+        // 错误响应（message 字段，无 target）→ TranslateError。
+        // 错误响应（message 含 token）→ map_caiyun_error 归为 Auth。
+        let err = provider.parse_response(r#"{"message":"token is invalid"}"#);
+        assert!(
+            matches!(err, Err(TranslateError::Auth(_))),
+            "token 无效的错误消息应归一为 Auth，实际：{err:?}"
+        );
+
+        // 错误响应（message 不含 token 关键词）→ 归为 ServerError（非 token 类错误兜底）。
+        let server_err = provider.parse_response(r#"{"message":"internal error"}"#);
+        assert!(
+            matches!(server_err, Err(TranslateError::ServerError(_))),
+            "非鉴权类错误消息应归一为 ServerError，实际：{server_err:?}"
+        );
+
+        // 非法 JSON → ParseError。
+        let invalid = provider.parse_response("not json");
+        assert!(
+            matches!(invalid, Err(TranslateError::ParseError(_))),
+            "非法 JSON 应返回 ParseError，实际：{invalid:?}"
+        );
+    }
+
+    #[test]
+    fn build_provider_caiyun_missing_token_returns_err() {
+        // 缺 token 必填字段应报错，且错误消息不含任何字段值（安全约定 TV2-F5-A01）。
+        // 传一个错拼 key 的脏密钥值：token 仍缺失走缺字段路径，坐实错误消息不泄露该脏值。
+        let creds = vec![("toke".to_string(), "tok_secret_must_not_leak".to_string())];
+        let result = build_provider("caiyun", &creds);
+        assert!(result.is_err(), "缺 token 应返回 Err");
+        if let Err(err) = result {
+            assert!(
+                !err.contains("tok_secret_must_not_leak"),
+                "错误消息不应含 token 值：{err}"
+            );
+        }
+    }
+
+    #[test]
+    fn build_provider_caiyun_with_token_succeeds() {
+        let creds = vec![("token".to_string(), "tok123".to_string())];
+        let result = build_provider("caiyun", &creds);
+        assert!(result.is_ok(), "彩云有 token 应成功");
+        assert_eq!(result.unwrap().capability().id, "caiyun");
+    }
+
+    #[test]
+    fn registry_contains_caiyun_keyed_official() {
+        let reg = registry();
+        let c = reg
+            .iter()
+            .find(|c| c.id == "caiyun")
+            .expect("注册表应含 caiyun");
+        assert!(c.needs_key, "caiyun 应为需 key 源");
+        assert!(
+            !c.is_unofficial,
+            "caiyun 为官方 API，is_unofficial 应为 false"
+        );
+    }
+
+    // 小牛翻译（body apikey，需 key，官方 API 文档协议）测试
+
+    // 对齐 acceptance TV2-F2-A01：build_request 端点/JSON body（from/to/apikey/src_text）正确；
+    // parse_response 取 tgt_text；错误响应→TranslateError。
+    #[test]
+    fn niutrans_build_and_parse() {
+        let provider = NiutransProvider::new("apikey789");
+        let req = TranslateRequest {
+            text: "hello".to_string(),
+            source_lang: Lang::new("en"),
+            target_lang: Lang::new("zh"),
+        };
+        let http_req = provider.build_request(&req);
+
+        assert_eq!(http_req.method, "POST");
+        assert_eq!(
+            http_req.url, "https://api.niutrans.com/NiuTransServer/translation",
+            "URL 应为小牛 translation 端点，实际：{}",
+            http_req.url
+        );
+        assert!(
+            http_req
+                .headers
+                .iter()
+                .any(|(k, v)| k.eq_ignore_ascii_case("content-type")
+                    && v.contains("application/json")),
+            "应含 content-type: application/json 头，实际：{:?}",
+            http_req.headers
+        );
+
+        // body 为合法 JSON，含 from/to/apikey/src_text。
+        let body = http_req.body.expect("小牛为 POST，应有 body");
+        let parsed: serde_json::Value =
+            serde_json::from_str(&body).expect("body 应为合法 JSON");
+        assert_eq!(parsed["from"], "en", "from 应为 en，实际：{body}");
+        assert_eq!(parsed["to"], "zh", "to 应为 zh，实际：{body}");
+        assert_eq!(
+            parsed["apikey"], "apikey789",
+            "body 应含 apikey，实际：{body}"
+        );
+        assert_eq!(
+            parsed["src_text"], "hello",
+            "src_text 应为原文，实际：{body}"
+        );
+
+        // 成功响应：取 tgt_text。
+        let ok = provider
+            .parse_response(r#"{"from":"en","to":"zh","tgt_text":"你好","src_text":"hello"}"#)
+            .expect("含 tgt_text 应解析成功");
+        assert_eq!(ok.translated, "你好");
+
+        // 错误响应（error_code 13001 apikey 错误）→ map_niutrans_error 归为 Auth。
+        let err =
+            provider.parse_response(r#"{"error_code":"13001","error_msg":"apikey error"}"#);
+        assert!(
+            matches!(err, Err(TranslateError::Auth(_))),
+            "13001 apikey 错误应归一为 Auth，实际：{err:?}"
+        );
+
+        // 错误响应（error_code 19001 余额不足）→ 归为 Quota。
+        let quota_err =
+            provider.parse_response(r#"{"error_code":"19001","error_msg":"no balance"}"#);
+        assert!(
+            matches!(quota_err, Err(TranslateError::Quota(_))),
+            "19001 余额不足应归一为 Quota，实际：{quota_err:?}"
+        );
+
+        // 非法 JSON → ParseError。
+        let invalid = provider.parse_response("not json");
+        assert!(
+            matches!(invalid, Err(TranslateError::ParseError(_))),
+            "非法 JSON 应返回 ParseError，实际：{invalid:?}"
+        );
+    }
+
+    #[test]
+    fn build_provider_niutrans_missing_apikey_returns_err() {
+        // 缺 apikey 必填字段应报错，且错误消息不含任何字段值（安全约定 TV2-F5-A01）。
+        // 传一个错拼 key 的脏密钥值：apikey 仍缺失走缺字段路径，坐实错误消息不泄露该脏值。
+        let creds = vec![("apike".to_string(), "key_secret_must_not_leak".to_string())];
+        let result = build_provider("niutrans", &creds);
+        assert!(result.is_err(), "缺 apikey 应返回 Err");
+        if let Err(err) = result {
+            assert!(
+                !err.contains("key_secret_must_not_leak"),
+                "错误消息不应含 apikey 值：{err}"
+            );
+        }
+    }
+
+    #[test]
+    fn build_provider_niutrans_with_apikey_succeeds() {
+        let creds = vec![("apikey".to_string(), "apikey789".to_string())];
+        let result = build_provider("niutrans", &creds);
+        assert!(result.is_ok(), "小牛有 apikey 应成功");
+        assert_eq!(result.unwrap().capability().id, "niutrans");
+    }
+
+    #[test]
+    fn registry_contains_niutrans_keyed_official() {
+        let reg = registry();
+        let n = reg
+            .iter()
+            .find(|c| c.id == "niutrans")
+            .expect("注册表应含 niutrans");
+        assert!(n.needs_key, "niutrans 应为需 key 源");
+        assert!(
+            !n.is_unofficial,
+            "niutrans 为官方 API，is_unofficial 应为 false"
+        );
+    }
+
+    // 腾讯云 TMT（TC3-HMAC-SHA256，需 key，官方 API 文档协议）测试
+
+    // 对齐 acceptance TV2-F3-A01：tencent_tc3_sign 纯函数对固定输入产出确定 Authorization。
+    // 参照向量由独立 Python 实现按腾讯云签名 v3 官方文档（cloud.tencent.com/document/api/551/30637）
+    // 计算（非 pot 源码），固定 secret/timestamp/payload 下手算核对。
+    #[test]
+    fn tencent_tc3_signature_deterministic() {
+        let payload = r#"{"SourceText":"hello","Source":"en","Target":"zh","ProjectId":0}"#;
+        let auth = tencent_tc3_sign(
+            "AKIDtest_secret_id_123",
+            "test_secret_key_abc",
+            payload,
+            1_700_000_000,
+        );
+
+        // timestamp=1700000000 对应 UTC 日期 2023-11-14；credential scope 用该 date。
+        let expected = "TC3-HMAC-SHA256 Credential=AKIDtest_secret_id_123/2023-11-14/tmt/tc3_request, \
+SignedHeaders=content-type;host;x-tc-action, \
+Signature=cc913306276069356aef21567e4670d036b69e1fd30eb24e17d7c536ed7decaf";
+        assert_eq!(
+            auth, expected,
+            "tencent TC3 Authorization 应为按官方文档计算的确定值，实际：{auth}"
+        );
+
+        // 同输入二次调用应稳定一致（纯函数确定性）。
+        let auth2 = tencent_tc3_sign(
+            "AKIDtest_secret_id_123",
+            "test_secret_key_abc",
+            payload,
+            1_700_000_000,
+        );
+        assert_eq!(auth, auth2, "同输入两次签名应一致（确定性）");
+    }
+
+    // 对齐 acceptance TV2-F3-A01：build_request 端点/头/JSON body 正确；
+    // parse_response 取 Response.TargetText；错误响应→TranslateError。
+    #[test]
+    fn tencent_build_and_parse() {
+        let provider = TencentProvider::new("secret_id_1", "secret_key_1");
+        let req = TranslateRequest {
+            text: "hello".to_string(),
+            source_lang: Lang::new("en"),
+            target_lang: Lang::new("zh"),
+        };
+        let http_req = provider.build_request(&req);
+
+        assert_eq!(http_req.method, "POST");
+        assert_eq!(
+            http_req.url, "https://tmt.tencentcloudapi.com",
+            "URL 应为腾讯云 TMT 端点，实际：{}",
+            http_req.url
+        );
+        // 必需头：Authorization、X-TC-Action、X-TC-Version、X-TC-Timestamp、X-TC-Region、Host、Content-Type。
+        let header = |name: &str| {
+            http_req
+                .headers
+                .iter()
+                .find(|(k, _)| k.eq_ignore_ascii_case(name))
+                .map(|(_, v)| v.as_str())
+        };
+        assert_eq!(
+            header("X-TC-Action"),
+            Some("TextTranslate"),
+            "应含 X-TC-Action: TextTranslate 头，实际：{:?}",
+            http_req.headers
+        );
+        assert_eq!(
+            header("X-TC-Version"),
+            Some("2018-03-21"),
+            "应含 X-TC-Version: 2018-03-21 头"
+        );
+        assert!(
+            header("X-TC-Region").is_some(),
+            "应含 X-TC-Region 头，实际：{:?}",
+            http_req.headers
+        );
+        assert!(
+            header("X-TC-Timestamp").is_some(),
+            "应含 X-TC-Timestamp 头"
+        );
+        let auth = header("Authorization").expect("应含 Authorization 头");
+        assert!(
+            auth.starts_with("TC3-HMAC-SHA256 Credential=secret_id_1/"),
+            "Authorization 应为 TC3 签名头，实际：{auth}"
+        );
+
+        // body 为合法 JSON，含 SourceText/Source/Target。
+        let body = http_req.body.expect("腾讯为 POST，应有 body");
+        let parsed: serde_json::Value =
+            serde_json::from_str(&body).expect("body 应为合法 JSON");
+        assert_eq!(parsed["SourceText"], "hello", "body 应含 SourceText");
+        assert_eq!(parsed["Source"], "en", "body 应含 Source=en");
+        assert_eq!(parsed["Target"], "zh", "body 应含 Target=zh");
+
+        // Authorization 应等于对 build 内实际 timestamp 重算的 tencent_tc3_sign。
+        let timestamp: i64 = header("X-TC-Timestamp")
+            .expect("应含 X-TC-Timestamp")
+            .parse()
+            .expect("timestamp 应为整数");
+        let expected_auth = tencent_tc3_sign("secret_id_1", "secret_key_1", &body, timestamp);
+        assert_eq!(
+            auth, expected_auth,
+            "Authorization 应等于 tencent_tc3_sign(secret_id,secret_key,body,timestamp)"
+        );
+
+        // 成功响应：取 Response.TargetText。
+        let ok = provider
+            .parse_response(
+                r#"{"Response":{"TargetText":"你好","Source":"en","Target":"zh","RequestId":"r1"}}"#,
+            )
+            .expect("含 Response.TargetText 应解析成功");
+        assert_eq!(ok.translated, "你好");
+
+        // 错误响应（Response.Error）→ TranslateError。
+        // AuthFailure.SignatureFailure 应归一为 Auth。
+        let err = provider.parse_response(
+            r#"{"Response":{"Error":{"Code":"AuthFailure.SignatureFailure","Message":"signature error"},"RequestId":"r2"}}"#,
+        );
+        assert!(
+            matches!(err, Err(TranslateError::Auth(_))),
+            "AuthFailure.* 应归一为 Auth，实际：{err:?}"
+        );
+
+        // 限流错误归一为 RateLimit。
+        let rate = provider.parse_response(
+            r#"{"Response":{"Error":{"Code":"RequestLimitExceeded","Message":"too many requests"},"RequestId":"r3"}}"#,
+        );
+        assert!(
+            matches!(rate, Err(TranslateError::RateLimit(_))),
+            "RequestLimitExceeded 应归一为 RateLimit，实际：{rate:?}"
+        );
+
+        // 非法 JSON → ParseError。
+        let invalid = provider.parse_response("not json");
+        assert!(
+            matches!(invalid, Err(TranslateError::ParseError(_))),
+            "非法 JSON 应返回 ParseError，实际：{invalid:?}"
+        );
+    }
+
+    #[test]
+    fn build_provider_tencent_missing_secret_key_returns_err() {
+        // 缺 secret_key 必填字段应报错，且错误消息不含任何字段值（安全约定 TV2-F5-A01）。
+        // 传一个错拼 key 的脏密钥值：secret_key 仍缺失走缺字段路径，坐实错误消息不泄露该脏值。
+        let creds = vec![
+            ("secret_id".to_string(), "sid1".to_string()),
+            (
+                "secret_ke".to_string(),
+                "sk_secret_must_not_leak".to_string(),
+            ),
+        ];
+        let result = build_provider("tencent", &creds);
+        assert!(result.is_err(), "缺 secret_key 应返回 Err");
+        if let Err(err) = result {
+            assert!(
+                !err.contains("sk_secret_must_not_leak"),
+                "错误消息不应含 secret_key 值：{err}"
+            );
+        }
+    }
+
+    #[test]
+    fn build_provider_tencent_with_all_fields_succeeds() {
+        let creds = vec![
+            ("secret_id".to_string(), "sid1".to_string()),
+            ("secret_key".to_string(), "sk1".to_string()),
+        ];
+        let result = build_provider("tencent", &creds);
+        assert!(result.is_ok(), "腾讯全字段应成功");
+        assert_eq!(result.unwrap().capability().id, "tencent");
+    }
+
+    #[test]
+    fn registry_contains_tencent_keyed_official() {
+        let reg = registry();
+        let t = reg
+            .iter()
+            .find(|c| c.id == "tencent")
+            .expect("注册表应含 tencent");
+        assert!(t.needs_key, "tencent 应为需 key 源");
+        assert!(
+            !t.is_unofficial,
+            "tencent 为官方 API，is_unofficial 应为 false"
+        );
+    }
+
+    // 阿里翻译（HMAC-SHA1 + Base64，需 key，官方 API 文档协议）测试
+
+    // 对齐 acceptance TV2-F3-A01：alibaba_hmac_sign 纯函数对固定输入产出确定 Base64 签名。
+    // 参照向量由独立 Python 实现按阿里云 RPC 签名官方文档（help.aliyun.com/document_detail/30563）
+    // 计算（非 pot 源码），固定参数下手算核对。
+    #[test]
+    fn alibaba_hmac_signature_deterministic() {
+        // 固定全套规范化参数（公共 + 业务），按官方 RPC 签名机制计算。
+        let params: Vec<(&str, &str)> = vec![
+            ("AccessKeyId", "LTAItest_access_id"),
+            ("Action", "TranslateGeneral"),
+            ("Format", "JSON"),
+            ("FormatType", "text"),
+            ("Scene", "general"),
+            ("SignatureMethod", "HMAC-SHA1"),
+            ("SignatureNonce", "fixed-nonce-123"),
+            ("SignatureVersion", "1.0"),
+            ("SourceLanguage", "en"),
+            ("SourceText", "hello"),
+            ("TargetLanguage", "zh"),
+            ("Timestamp", "2023-11-14T00:00:00Z"),
+            ("Version", "2018-10-12"),
+        ];
+        let sig = alibaba_hmac_sign("GET", &params, "test_access_secret");
+        assert_eq!(
+            sig, "+uwyBbn3LNXWPJOuNcXCiWB/32k=",
+            "alibaba HMAC-SHA1 签名应为按官方文档计算的确定 Base64 值，实际：{sig}"
+        );
+
+        // 同输入二次调用应稳定一致（纯函数确定性）。
+        let sig2 = alibaba_hmac_sign("GET", &params, "test_access_secret");
+        assert_eq!(sig, sig2, "同输入两次签名应一致（确定性）");
+    }
+
+    // 对齐 acceptance TV2-F3-A01：build_request 端点/签名参数正确；
+    // parse_response 取 Data.Translated；错误响应→TranslateError。
+    #[test]
+    fn alibaba_build_and_parse() {
+        let provider = AlibabaProvider::new("access_id_1", "access_secret_1");
+        let req = TranslateRequest {
+            text: "hello".to_string(),
+            source_lang: Lang::new("en"),
+            target_lang: Lang::new("zh"),
+        };
+        let http_req = provider.build_request(&req);
+
+        assert_eq!(http_req.method, "GET");
+        assert!(
+            http_req
+                .url
+                .starts_with("http://mt.cn-hangzhou.aliyuncs.com/"),
+            "URL 应为阿里翻译端点，实际：{}",
+            http_req.url
+        );
+        // URL query 应含签名机制参数与签名本身。
+        assert!(
+            http_req.url.contains("Action=TranslateGeneral"),
+            "URL 应含 Action=TranslateGeneral，实际：{}",
+            http_req.url
+        );
+        assert!(
+            http_req.url.contains("SignatureMethod=HMAC-SHA1"),
+            "URL 应含 SignatureMethod=HMAC-SHA1"
+        );
+        assert!(
+            http_req.url.contains("AccessKeyId=access_id_1"),
+            "URL 应含 AccessKeyId"
+        );
+        assert!(
+            http_req.url.contains("Signature="),
+            "URL 应含 Signature 参数，实际：{}",
+            http_req.url
+        );
+        assert!(
+            http_req.url.contains("SourceText=hello"),
+            "URL 应含 SourceText=hello"
+        );
+
+        // 成功响应：取 Data.Translated。
+        let ok = provider
+            .parse_response(r#"{"Code":"200","Data":{"WordCount":"5","Translated":"你好"},"RequestId":"r1"}"#)
+            .expect("含 Data.Translated 应解析成功");
+        assert_eq!(ok.translated, "你好");
+
+        // 错误响应（Code 非 200 + 鉴权类 Message）→ Auth。
+        let err = provider.parse_response(
+            r#"{"Code":"InvalidAccessKeyId.NotFound","Message":"Specified access key is not found.","RequestId":"r2"}"#,
+        );
+        assert!(
+            matches!(err, Err(TranslateError::Auth(_))),
+            "鉴权类错误应归一为 Auth，实际：{err:?}"
+        );
+
+        // 限流错误归一为 RateLimit。
+        let rate = provider.parse_response(
+            r#"{"Code":"Throttling.User","Message":"Request was denied due to user flow control.","RequestId":"r3"}"#,
+        );
+        assert!(
+            matches!(rate, Err(TranslateError::RateLimit(_))),
+            "Throttling.* 应归一为 RateLimit，实际：{rate:?}"
+        );
+
+        // 非法 JSON → ParseError。
+        let invalid = provider.parse_response("not json");
+        assert!(
+            matches!(invalid, Err(TranslateError::ParseError(_))),
+            "非法 JSON 应返回 ParseError，实际：{invalid:?}"
+        );
+    }
+
+    #[test]
+    fn build_provider_alibaba_missing_secret_returns_err() {
+        // 缺 accesskey_secret 必填字段应报错，错误消息不含任何字段值（安全约定 TV2-F5-A01）。
+        let creds = vec![
+            ("accesskey_id".to_string(), "aid1".to_string()),
+            (
+                "accesskey_secre".to_string(),
+                "as_secret_must_not_leak".to_string(),
+            ),
+        ];
+        let result = build_provider("alibaba", &creds);
+        assert!(result.is_err(), "缺 accesskey_secret 应返回 Err");
+        if let Err(err) = result {
+            assert!(
+                !err.contains("as_secret_must_not_leak"),
+                "错误消息不应含 accesskey_secret 值：{err}"
+            );
+        }
+    }
+
+    #[test]
+    fn build_provider_alibaba_with_all_fields_succeeds() {
+        let creds = vec![
+            ("accesskey_id".to_string(), "aid1".to_string()),
+            ("accesskey_secret".to_string(), "as1".to_string()),
+        ];
+        let result = build_provider("alibaba", &creds);
+        assert!(result.is_ok(), "阿里全字段应成功");
+        assert_eq!(result.unwrap().capability().id, "alibaba");
+    }
+
+    #[test]
+    fn registry_contains_alibaba_keyed_official() {
+        let reg = registry();
+        let a = reg
+            .iter()
+            .find(|c| c.id == "alibaba")
+            .expect("注册表应含 alibaba");
+        assert!(a.needs_key, "alibaba 应为需 key 源");
+        assert!(
+            !a.is_unofficial,
+            "alibaba 为官方 API，is_unofficial 应为 false"
+        );
+    }
+
+    // 火山引擎翻译（AWS SigV4 风格四层 HMAC-SHA256，需 key，官方 API 文档协议）测试
+
+    // 对齐 acceptance TV2-F4-A01：volcengine_sigv4_sign 纯函数对固定输入产出确定 Authorization。
+    // 参照向量由独立 Python 实现按火山引擎签名 V4 官方文档（volcengine.com/docs/6369/67269）
+    // 计算（非 pot 源码），固定 access_key/secret/region/payload/timestamp 下手算核对。
+    #[test]
+    fn volcengine_sigv4_signature_deterministic() {
+        let payload =
+            r#"{"SourceLanguage":"en","TargetLanguage":"zh","TextList":["hello"]}"#;
+        let auth = volcengine_sigv4_sign(
+            "AKLTtest_access_key_id_123",
+            "test_secret_access_key_abc",
+            "cn-north-1",
+            payload,
+            1_700_000_000,
+        );
+
+        // timestamp=1700000000 对应 UTC X-Date 20231114T221320Z；credential scope 用短日期 20231114。
+        let expected = "HMAC-SHA256 Credential=AKLTtest_access_key_id_123/20231114/cn-north-1/translate/request, \
+SignedHeaders=content-type;host;x-content-sha256;x-date, \
+Signature=dac06f9e1be8667102fc1dfe025834cc9da68f2359b28084891b8e03ee332a61";
+        assert_eq!(
+            auth, expected,
+            "volcengine SigV4 Authorization 应为按官方文档计算的确定值，实际：{auth}"
+        );
+
+        // 同输入二次调用应稳定一致（纯函数确定性）。
+        let auth2 = volcengine_sigv4_sign(
+            "AKLTtest_access_key_id_123",
+            "test_secret_access_key_abc",
+            "cn-north-1",
+            payload,
+            1_700_000_000,
+        );
+        assert_eq!(auth, auth2, "同输入两次签名应一致（确定性）");
+    }
+
+    // 对齐 acceptance TV2-F4-A01：build_request 端点/头/JSON body 正确；
+    // parse_response 取 TranslationList[].Translation；错误响应→TranslateError。
+    #[test]
+    fn volcengine_build_and_parse() {
+        let provider =
+            VolcengineProvider::new("access_id_1", "access_secret_1", "cn-north-1");
+        let req = TranslateRequest {
+            text: "hello".to_string(),
+            source_lang: Lang::new("en"),
+            target_lang: Lang::new("zh"),
+        };
+        let http_req = provider.build_request(&req);
+
+        assert_eq!(http_req.method, "POST");
+        assert_eq!(
+            http_req.url,
+            "https://open.volcengineapi.com/?Action=TranslateText&Version=2020-06-01",
+            "URL 应为火山翻译端点，实际：{}",
+            http_req.url
+        );
+
+        let header = |name: &str| {
+            http_req
+                .headers
+                .iter()
+                .find(|(k, _)| k.eq_ignore_ascii_case(name))
+                .map(|(_, v)| v.as_str())
+        };
+        assert_eq!(
+            header("Content-Type"),
+            Some("application/json"),
+            "应含 Content-Type: application/json 头，实际：{:?}",
+            http_req.headers
+        );
+        assert!(
+            header("Host").is_some(),
+            "应含 Host 头，实际：{:?}",
+            http_req.headers
+        );
+        assert!(header("X-Date").is_some(), "应含 X-Date 头");
+        assert!(
+            header("X-Content-Sha256").is_some(),
+            "应含 X-Content-Sha256 头"
+        );
+        let auth = header("Authorization").expect("应含 Authorization 头");
+        assert!(
+            auth.starts_with("HMAC-SHA256 Credential=access_id_1/"),
+            "Authorization 应为 SigV4 签名头，实际：{auth}"
+        );
+
+        // body 为合法 JSON，含 SourceLanguage/TargetLanguage/TextList。
+        let body = http_req.body.expect("火山为 POST，应有 body");
+        let parsed: serde_json::Value =
+            serde_json::from_str(&body).expect("body 应为合法 JSON");
+        assert_eq!(parsed["SourceLanguage"], "en", "body 应含 SourceLanguage=en");
+        assert_eq!(parsed["TargetLanguage"], "zh", "body 应含 TargetLanguage=zh");
+        assert_eq!(
+            parsed["TextList"][0], "hello",
+            "body TextList[0] 应为待译文本"
+        );
+
+        // 成功响应：取 TranslationList[].Translation 拼接。
+        let ok = provider
+            .parse_response(
+                r#"{"TranslationList":[{"Translation":"你好","DetectedSourceLanguage":"en"}]}"#,
+            )
+            .expect("含 TranslationList[].Translation 应解析成功");
+        assert_eq!(ok.translated, "你好");
+
+        // 多段译文应按序拼接。
+        let multi = provider
+            .parse_response(
+                r#"{"TranslationList":[{"Translation":"你好"},{"Translation":"世界"}]}"#,
+            )
+            .expect("多段译文应解析成功");
+        assert_eq!(multi.translated, "你好世界", "多段译文应拼接");
+
+        // 错误响应（ResponseMetadata.Error）→ TranslateError。
+        // SignatureDoesNotMatch 应归一为 Auth。
+        let err = provider.parse_response(
+            r#"{"ResponseMetadata":{"Error":{"Code":"SignatureDoesNotMatch","Message":"signature mismatch"},"RequestId":"r1"}}"#,
+        );
+        assert!(
+            matches!(err, Err(TranslateError::Auth(_))),
+            "SignatureDoesNotMatch 应归一为 Auth，实际：{err:?}"
+        );
+
+        // 限流错误归一为 RateLimit。
+        let rate = provider.parse_response(
+            r#"{"ResponseMetadata":{"Error":{"Code":"FlowLimitExceeded","Message":"too many requests"},"RequestId":"r2"}}"#,
+        );
+        assert!(
+            matches!(rate, Err(TranslateError::RateLimit(_))),
+            "FlowLimitExceeded 应归一为 RateLimit，实际：{rate:?}"
+        );
+
+        // 非法 JSON → ParseError。
+        let invalid = provider.parse_response("not json");
+        assert!(
+            matches!(invalid, Err(TranslateError::ParseError(_))),
+            "非法 JSON 应返回 ParseError，实际：{invalid:?}"
+        );
+    }
+
+    #[test]
+    fn build_provider_volcengine_missing_secret_returns_err() {
+        // 缺 secret_access_key 必填字段应报错，错误消息不含任何字段值（安全约定 TV2-F5-A01）。
+        // 传错拼 key 的脏密钥：secret_access_key 仍缺失走缺字段路径，坐实错误消息不泄露脏值。
+        let creds = vec![
+            ("access_key_id".to_string(), "akid1".to_string()),
+            (
+                "secret_access_ke".to_string(),
+                "sak_secret_must_not_leak".to_string(),
+            ),
+        ];
+        let result = build_provider("volcengine", &creds);
+        assert!(result.is_err(), "缺 secret_access_key 应返回 Err");
+        if let Err(err) = result {
+            assert!(
+                !err.contains("sak_secret_must_not_leak"),
+                "错误消息不应含 secret_access_key 值：{err}"
+            );
+        }
+    }
+
+    #[test]
+    fn build_provider_volcengine_with_all_fields_succeeds() {
+        // region 非必填（有默认 cn-north-1），仅 access_key_id + secret_access_key 即可构造。
+        let creds = vec![
+            ("access_key_id".to_string(), "akid1".to_string()),
+            ("secret_access_key".to_string(), "sak1".to_string()),
+        ];
+        let result = build_provider("volcengine", &creds);
+        assert!(result.is_ok(), "火山全必填字段应成功");
+        assert_eq!(result.unwrap().capability().id, "volcengine");
+    }
+
+    #[test]
+    fn registry_contains_volcengine_keyed_official() {
+        let reg = registry();
+        let v = reg
+            .iter()
+            .find(|c| c.id == "volcengine")
+            .expect("注册表应含 volcengine");
+        assert!(v.needs_key, "volcengine 应为需 key 源");
+        assert!(
+            !v.is_unofficial,
+            "volcengine 为官方 API，is_unofficial 应为 false"
+        );
     }
 }

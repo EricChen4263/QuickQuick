@@ -1,0 +1,185 @@
+# 版本前置验收标准清单（开工前登记、冻结）
+# 来源：机械派生自已冻结设计文档 docs/design/translation-sources-pot.md §五 V2（需 key 机翻）
+#       + 〇章（独立重写不抄 pot）+ 二章 2.2（各源端点/签名/取译文）。
+# 既有 keyed 源 baidu/deepl_free(官方)/google 已存在；本版新增 7 源：
+#   baidu_field/youdao/caiyun/niutrans/tencent/alibaba/volcengine。
+# 需 key 源无法真网端到端验证（需用户密钥）：签名/build/parse 走 objective 单测（mock/录制），
+#   真译归 manual_confirm。AI 只翻译不发明、不放宽；改标准走 change_log。
+
+version: TV2
+title: 需 key 机翻源（对应设计文档 V2，新增 7 源）
+source_doc: docs/design/translation-sources-pot.md（§五 V2 / §二.2.2 / §〇）
+frozen_at: 2026-06-06T00:00:00Z
+criteria_freeze: TV2-criteria@2026-06-06
+
+# 无 docs/STRATEGY.md → 战略层不启用。
+
+coverage_check:
+  功能正确性:  covered
+  测试充分性:  covered
+  工程质量:    covered
+  性能:        N/A (本版仅新增翻译源调用与签名，无性能目标)
+  UI还原度:    N/A (复用既有凭据表单/翻译源选择器，未改 UI 结构；新源凭据 schema 走既有渲染)
+  资源规范:    N/A (不新增二进制资源)
+  安全:        covered
+  留痕产出:    covered
+  人工确认点:  covered
+
+acceptance:
+  # ── TV2-F1 百度专业 + 有道（MD5 / SHA256 签名）──────────────────────
+  - id: TV2-F1-A01
+    assertion: "baidu_field（MD5(appid+text+salt+field+secret) 签名、fieldtranslate 端点）与 youdao（SHA256 signType=v3、truncate 规则）各自 build_request 签名串/端点正确、parse_response 取 trans_result.dst / translation 正确，错误响应→TranslateError"
+    category: 功能正确性
+    source_anchor: 设计文档§二.2.2（百度专业/有道 端点·签名·取译文）+ §〇
+    kind: objective
+    verify:
+      type: test_id
+      ref: "baidu_field_sign_and_build, baidu_field_parse, youdao_sign_v3_and_build, youdao_parse"
+      runner: cd src-tauri && cargo test
+      path: src-tauri/src/translate/providers.rs
+      expect: pass
+    evidence_ref: dev-log/translate-v2/f1-baidufield-youdao/test.md
+    level: 大功能
+    status: 待验
+
+  # ── TV2-F2 彩云 + 小牛（token / apikey 简单鉴权）────────────────────
+  - id: TV2-F2-A01
+    assertion: "caiyun（x-authorization: token 头）与 niutrans（body apikey）各自 build_request 鉴权/端点/body 正确、parse_response 取 target[0] / tgt_text 正确，错误响应→TranslateError"
+    category: 功能正确性
+    source_anchor: 设计文档§二.2.2（彩云/小牛 端点·鉴权·取译文）+ §〇
+    kind: objective
+    verify:
+      type: test_id
+      ref: "caiyun_build_and_parse, niutrans_build_and_parse"
+      runner: cd src-tauri && cargo test
+      path: src-tauri/src/translate/providers.rs
+      expect: pass
+    evidence_ref: dev-log/translate-v2/f2-caiyun-niutrans/test.md
+    level: 大功能
+    status: 待验
+
+  # ── TV2-F3 腾讯 + 阿里（云厂商 HMAC 签名）──────────────────────────
+  - id: TV2-F3-A01
+    assertion: "tencent（TC3-HMAC-SHA256 三层密钥派生）与 alibaba（HMAC-SHA1+Base64）各自签名计算正确（对固定输入产出确定签名）、build_request 端点/头正确、parse_response 取 Response.TargetText / Data.Translated 正确，错误→TranslateError"
+    category: 功能正确性
+    source_anchor: 设计文档§二.2.2（腾讯/阿里 签名·端点·取译文）+ §〇
+    kind: objective
+    verify:
+      type: test_id
+      ref: "tencent_tc3_signature_deterministic, tencent_build_and_parse, alibaba_hmac_signature_deterministic, alibaba_build_and_parse"
+      runner: cd src-tauri && cargo test
+      path: src-tauri/src/translate/providers.rs
+      expect: pass
+    evidence_ref: dev-log/translate-v2/f3-tencent-alibaba/test.md
+    level: 大功能
+    status: 待验
+
+  # ── TV2-F4 火山（AWS SigV4 四层 HMAC）──────────────────────────────
+  - id: TV2-F4-A01
+    assertion: "volcengine（AWS SigV4 风格四层 HMAC-SHA256 签名）签名计算对固定输入产出确定签名、build_request 端点/头正确、parse_response 取 TranslationList[].Translation 正确，错误→TranslateError"
+    category: 功能正确性
+    source_anchor: 设计文档§二.2.2（火山 SigV4·端点·取译文）+ §〇
+    kind: objective
+    verify:
+      type: test_id
+      ref: "volcengine_sigv4_signature_deterministic, volcengine_build_and_parse"
+      runner: cd src-tauri && cargo test
+      path: src-tauri/src/translate/providers.rs
+      expect: pass
+    evidence_ref: dev-log/translate-v2/f4-volcengine/test.md
+    level: 大功能
+    status: 待验
+
+  # ── 凭据 schema ───────────────────────────────────────────────────
+  - id: TV2-F5-A01
+    assertion: "7 新源各自 credential_schema 声明正确凭据字段（is_secret 标记正确：appid/secret_id 非密、secret_key/token/apikey 为密），build_provider 缺必填字段→明确错误（不含字段值），均 needs_key=true、is_unofficial=false（官方 API）"
+    category: 功能正确性
+    source_anchor: 设计文档§二.2.2（各源凭据字段）+ §三.决策4（凭据安全）
+    kind: objective
+    verify:
+      type: test_id
+      ref: "credential_schema_for_v2_keyed_sources, build_provider_missing_required_field_errors"
+      runner: cd src-tauri && cargo test
+      path: src-tauri/src/translate/credential.rs
+      expect: pass
+    evidence_ref: dev-log/translate-v2/f5-credentials/test.md
+    level: 大功能
+    status: 待验
+
+  # ── 测试充分性 ────────────────────────────────────────────────────
+  - id: TV2-A-TEST
+    assertion: "每个新源有 build_request + parse_response 命中与错误分支单测；含签名的源有签名确定性单测（固定输入→确定签名）；全量 cargo test 与 cargo test --release 全绿（连跑 ≥3 次无 flaky）"
+    category: 测试充分性
+    source_anchor: 设计文档§五.V2.验收（签名正确 mock 单测）+ hints（抗 flaky）
+    kind: objective
+    verify:
+      type: command
+      ref: "cd src-tauri && cargo test 全绿 且 cargo test --release 全绿；rtk proxy 取原始 'test … ok'/'N passed'（N≥1）"
+      runner: cd src-tauri && cargo test; cargo test --release
+      path: src-tauri/
+      expect: pass
+    evidence_ref: dev-log/translate-v2/*/test.md
+    level: 版本
+    status: 待验
+
+  # ── 工程质量 ──────────────────────────────────────────────────────
+  - id: TV2-A-QUAL
+    assertion: "本版改动/新增无新增 clippy 警告（cargo clippy --all-targets -- -D warnings exit 0）、无遗留 TODO/FIXME"
+    category: 工程质量
+    source_anchor: code-standards §工程质量
+    kind: objective
+    verify:
+      type: command
+      ref: "cd src-tauri && cargo clippy --all-targets -- -D warnings (exit 0) 且 grep 新增无 TODO/FIXME"
+      runner: cd src-tauri && cargo clippy --all-targets -- -D warnings
+      path: src-tauri/
+      expect: pass
+    evidence_ref: dev-log/translate-v2/*/coding.md
+    level: 版本
+    status: 待验
+
+  # ── 安全 ──────────────────────────────────────────────────────────
+  - id: TV2-A-SEC
+    assertion: "签名计算与请求构造不把 secret_key/token/apikey 等密钥写入 eprintln/log/错误消息；签名用后无残留明文泄露路径；凭据经 DbCredStore 存加密库（不入日志）"
+    category: 安全
+    source_anchor: code-standards §安全 + 设计§三.决策4 + 密钥库改造（DbCredStore）
+    kind: objective
+    verify:
+      type: command
+      ref: "grep 确认新增 provider 签名代码无将 secret/token/apikey 值写入 eprintln/println/log；签名单测不打印密钥"
+      runner: cd src-tauri && grep -rn "eprintln\|println\|log::\|dbg!" src/translate/providers.rs
+      path: src-tauri/src/translate/providers.rs
+      expect: pass
+    evidence_ref: dev-log/translate-v2/*/review.md
+    level: 版本
+    status: 待验
+
+  # ── 留痕产出 ──────────────────────────────────────────────────────
+  - id: TV2-A-LOG
+    assertion: "本版每个小功能三联留痕齐（coding/test/review），每个大功能 feature-report.md，版本 version-verdict.md；commit 提交后回填真 hash"
+    category: 留痕产出
+    source_anchor: goal-dev 规范§五 + 目录约定
+    kind: objective
+    verify:
+      type: command
+      ref: "find dev-log/translate-v2 确认各大功能三联 + feature-report + 版本 verdict"
+      runner: find docs/dev-log/translate-v2 -type f
+      path: docs/dev-log/translate-v2/
+      expect: pass
+    evidence_ref: dev-log/translate-v2/
+    level: 版本
+    status: 待验
+
+  # ── 人工确认点（需用户密钥，真网，headless 采不了）──────────────────
+  - id: TV2-F1234-M01
+    assertion: "真网（用户配置各源 API key 后）下 baidu_field/youdao/caiyun/niutrans/tencent/alibaba/volcengine 各返回正确译文"
+    category: 人工确认点
+    source_anchor: 设计文档§五.V2.验收（真实 key 走 manual_confirm）
+    kind: manual_confirm
+    verify: null
+    collect_env: real_device
+    evidence_ref: dev-log/translate-v2/manual-keyed-sources.png
+    level: 版本
+    status: 待采证
+
+change_log: []
