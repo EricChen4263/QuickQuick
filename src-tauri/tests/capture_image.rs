@@ -359,7 +359,8 @@ fn capture_and_ingest_rolls_back_on_partial_failure() {
             is_deleted        INTEGER NOT NULL DEFAULT 0,
             deleted_at_utc    INTEGER,
             text_hash         TEXT,
-            is_favorite       INTEGER NOT NULL DEFAULT 0
+            is_favorite       INTEGER NOT NULL DEFAULT 0,
+            html_content      TEXT
         );",
     )
     .expect("建 clip_items 表应成功");

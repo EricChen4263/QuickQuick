@@ -489,7 +489,8 @@ mod tests {
                  is_deleted        INTEGER NOT NULL DEFAULT 0,
                  deleted_at_utc    INTEGER,
                  text_hash         TEXT,
-                 is_favorite       INTEGER NOT NULL DEFAULT 0
+                 is_favorite       INTEGER NOT NULL DEFAULT 0,
+                 html_content      TEXT
              );",
         )
         .expect("建测试表失败");

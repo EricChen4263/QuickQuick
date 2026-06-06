@@ -233,6 +233,8 @@ pub struct ClipItemRow {
     pub is_favorite: bool,
     /// 最后修改时间（UTC epoch ms）
     pub last_modified_utc: i64,
+    /// 富文本 HTML（None=纯文本条目）；供预览富文本渲染与粘贴/复制还原格式
+    pub html_content: Option<String>,
 }
 
 /// 完整剪贴板条目行，含关联图片字段（list_items_with_images 返回元素）。
@@ -254,6 +256,8 @@ pub struct ClipItemRowWithImage {
     pub image_id: Option<String>,
     /// 缩略图 BLOB（WebP 字节；None 表示无图）
     pub thumbnail: Option<Vec<u8>>,
+    /// 富文本 HTML（None=纯文本/图片条目）；供预览富文本渲染与粘贴/复制还原格式
+    pub html_content: Option<String>,
 }
 
 /// 返回未软删条目列表，LEFT JOIN 图片缩略图：收藏优先，组内按最近修改时间降序。
@@ -268,7 +272,7 @@ pub struct ClipItemRowWithImage {
 pub fn list_items_with_images(conn: &Connection) -> Result<Vec<ClipItemRowWithImage>, DbError> {
     let mut stmt = conn.prepare(
         "SELECT ci.id, ci.content, ci.kind, ci.is_favorite, ci.last_modified_utc,
-                cimg.id AS image_id, cimg.thumbnail
+                cimg.id AS image_id, cimg.thumbnail, ci.html_content
          FROM clip_items ci
          LEFT JOIN clip_images cimg ON cimg.clip_item_id = ci.id AND cimg.is_deleted = 0
          WHERE ci.is_deleted = 0
@@ -282,6 +286,7 @@ pub fn list_items_with_images(conn: &Connection) -> Result<Vec<ClipItemRowWithIm
         let last_modified: i64 = row.get(4)?;
         let image_id: Option<String> = row.get(5)?;
         let thumbnail: Option<Vec<u8>> = row.get(6)?;
+        let html_content: Option<String> = row.get(7)?;
         Ok(ClipItemRowWithImage {
             id,
             content,
@@ -290,6 +295,7 @@ pub fn list_items_with_images(conn: &Connection) -> Result<Vec<ClipItemRowWithIm
             last_modified_utc: last_modified,
             image_id,
             thumbnail,
+            html_content,
         })
     })?;
 
@@ -311,7 +317,7 @@ pub fn list_items_with_images(conn: &Connection) -> Result<Vec<ClipItemRowWithIm
 /// `DbError::Sqlite`：SQL 执行失败
 pub fn list_items_full(conn: &Connection) -> Result<Vec<ClipItemRow>, DbError> {
     let mut stmt = conn.prepare(
-        "SELECT id, content, kind, is_favorite, last_modified_utc
+        "SELECT id, content, kind, is_favorite, last_modified_utc, html_content
          FROM clip_items
          WHERE is_deleted = 0
          ORDER BY is_favorite DESC, last_modified_utc DESC, rowid DESC",
@@ -322,12 +328,14 @@ pub fn list_items_full(conn: &Connection) -> Result<Vec<ClipItemRow>, DbError> {
         let kind: String = row.get(2)?;
         let is_fav_int: i64 = row.get(3)?;
         let last_modified: i64 = row.get(4)?;
+        let html_content: Option<String> = row.get(5)?;
         Ok(ClipItemRow {
             id,
             content,
             kind,
             is_favorite: is_fav_int != 0,
             last_modified_utc: last_modified,
+            html_content,
         })
     })?;
 
@@ -472,28 +480,37 @@ pub fn ingest(conn: &Connection, item: &CapturedItem) -> Result<IngestOutcome, D
     let hash = text_hash(&item.text);
     let now_ms = current_utc_ms();
 
-    // 查询是否已有未软删的同 hash 行
-    let existing_id: Option<String> = conn
+    // 查询是否已有未软删的同 hash 行（连带其 html_content 以便补写判定）
+    let existing: Option<(String, Option<String>)> = conn
         .query_row(
-            "SELECT id FROM clip_items WHERE text_hash = ?1 AND is_deleted = 0 LIMIT 1",
+            "SELECT id, html_content FROM clip_items
+             WHERE text_hash = ?1 AND is_deleted = 0 LIMIT 1",
             rusqlite::params![hash],
-            |row| row.get::<_, String>(0),
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?)),
         )
         .optional()?;
 
-    if let Some(id) = existing_id {
-        // 命中：置顶刷新，不新建行
+    if let Some((id, existing_html)) = existing {
+        // 命中已有行：决策4——旧行无 html 而新来的带 html，则补写并升 kind，再置顶。
+        // 其余情况（已有 html / 新来纯文本）仅置顶刷新，不动 html，纯文本去重语义不变。
+        if existing_html.is_none() && item.html.is_some() {
+            conn.execute(
+                "UPDATE clip_items SET html_content = ?1, kind = 'richtext' WHERE id = ?2",
+                rusqlite::params![item.html, id],
+            )?;
+        }
         bump_to_top(conn, &id)?;
         return Ok(IngestOutcome::Bumped(id));
     }
 
-    // 未命中：插入新行
+    // 未命中：插入新行。带 html 时 kind='richtext'，否则 'text'。
     let new_id = Uuid::new_v4().to_string();
+    let kind = if item.html.is_some() { "richtext" } else { "text" };
     conn.execute(
         "INSERT INTO clip_items
-             (id, content, kind, created_utc, last_modified_utc, is_deleted, text_hash)
-         VALUES (?1, ?2, 'text', ?3, ?3, 0, ?4)",
-        rusqlite::params![new_id, item.text, now_ms, hash],
+             (id, content, kind, created_utc, last_modified_utc, is_deleted, text_hash, html_content)
+         VALUES (?1, ?2, ?3, ?4, ?4, 0, ?5, ?6)",
+        rusqlite::params![new_id, item.text, kind, now_ms, hash, item.html],
     )?;
 
     Ok(IngestOutcome::Inserted(new_id))
@@ -735,7 +752,8 @@ fn ensure_schema(conn: &Connection) -> Result<(), DbError> {
             is_deleted        INTEGER NOT NULL DEFAULT 0,  -- 墓碑：0=正常 1=软删
             deleted_at_utc    INTEGER,                     -- 软删时间（UTC epoch ms）
             text_hash         TEXT,                        -- 纯文本内容哈希，用于去重（非加密，判重用途）
-            is_favorite       INTEGER NOT NULL DEFAULT 0   -- 收藏标记：0=普通 1=收藏（§九.2 ★置顶收藏）
+            is_favorite       INTEGER NOT NULL DEFAULT 0,  -- 收藏标记：0=普通 1=收藏（§九.2 ★置顶收藏）
+            html_content      TEXT                         -- 富文本 HTML（NULL=纯文本）；随整库 SQLCipher 加密
         );
 
         -- 图片表：缩略图/原图拆分（设计§五/§十）
@@ -803,6 +821,44 @@ fn ensure_schema(conn: &Connection) -> Result<(), DbError> {
         );
         ",
     )?;
+    // 存量库迁移：CREATE TABLE IF NOT EXISTS 不会给旧表补列，故对已存在的旧 clip_items
+    // 单独做 html_content 列迁移（幂等）。新建库已含该列，迁移检测后直接跳过。
+    migrate_html_column(conn)?;
+    Ok(())
+}
+
+/// 检测某表是否已含指定列（基于 `PRAGMA table_info`）。
+///
+/// 用于幂等迁移守卫：SQLite 无 `ADD COLUMN IF NOT EXISTS`，需先查列再决定是否 ALTER。
+///
+/// # Errors
+/// `DbError::Sqlite`：PRAGMA 查询失败
+fn has_column(conn: &Connection, table: &str, column: &str) -> Result<bool, DbError> {
+    // table_info 的列名在第 1 位（cid, name, type, ...）；table 名来自内部常量，非用户输入。
+    let mut stmt = conn.prepare(&format!("PRAGMA table_info({table})"))?;
+    let mut rows = stmt.query([])?;
+    while let Some(row) = rows.next()? {
+        let name: String = row.get(1)?;
+        if name == column {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+/// 幂等迁移：为存量 `clip_items` 表补 `html_content TEXT` 列。
+///
+/// 为何用 table_info 守卫：SQLite 不支持 `ADD COLUMN IF NOT EXISTS`，重复 ALTER 会报
+/// "duplicate column name"。先查列是否存在，缺列才 ALTER，保证多次调用安全（幂等）。
+/// 新列默认 NULL，随整库 SQLCipher 加密。
+///
+/// # Errors
+/// `DbError::Sqlite`：PRAGMA 或 ALTER 执行失败
+fn migrate_html_column(conn: &Connection) -> Result<(), DbError> {
+    if has_column(conn, "clip_items", "html_content")? {
+        return Ok(());
+    }
+    conn.execute_batch("ALTER TABLE clip_items ADD COLUMN html_content TEXT;")?;
     Ok(())
 }
 
@@ -895,7 +951,8 @@ mod tests {
                  is_deleted        INTEGER NOT NULL DEFAULT 0,
                  deleted_at_utc    INTEGER,
                  text_hash         TEXT,
-                 is_favorite       INTEGER NOT NULL DEFAULT 0
+                 is_favorite       INTEGER NOT NULL DEFAULT 0,
+                 html_content      TEXT
              );
              CREATE TABLE IF NOT EXISTS clip_images (
                  id                TEXT PRIMARY KEY NOT NULL,
@@ -1215,5 +1272,153 @@ mod tests {
 
         assert_eq!(original_present, 1, "未超阈值图片 original_present 应为 1");
         assert!(!original_blob.is_empty(), "未超阈值图片原图 BLOB 应非空");
+    }
+
+    /// 富文本 ingest→查询 roundtrip：带 html 的 CapturedItem 入库后，
+    /// 通过 list_items_full 读回的 html_content 与原值一致、kind='richtext'。
+    #[test]
+    fn ingest_richtext_roundtrip_persists_html_and_kind() {
+        let conn = make_test_conn();
+        let html = "<b>hello</b> <i>world</i>".to_string();
+        let item = CapturedItem {
+            text: "hello world".to_string(),
+            html: Some(html.clone()),
+        };
+
+        let outcome = ingest(&conn, &item).expect("富文本 ingest 不应 Err");
+        let id = match outcome {
+            IngestOutcome::Inserted(id) => id,
+            IngestOutcome::Bumped(_) => panic!("首次入库应 Inserted"),
+        };
+
+        let rows = list_items_full(&conn).expect("list_items_full 不应 Err");
+        let row = rows.iter().find(|r| r.id == id).expect("应能查到刚入库的行");
+        assert_eq!(row.kind, "richtext", "带 html 的条目 kind 应为 richtext");
+        assert_eq!(
+            row.html_content.as_deref(),
+            Some(html.as_str()),
+            "读回的 html_content 应与入库值一致"
+        );
+    }
+
+    /// 存量库迁移幂等：手动建不含 html_content 列的旧表，跑迁移后列存在且可写读，
+    /// 再次跑迁移不报错（幂等）。
+    #[test]
+    fn html_column_migration_idempotent_on_existing_db() {
+        // 旧版 clip_items：无 html_content 列
+        let conn = rusqlite::Connection::open_in_memory().expect("内存库开启失败");
+        conn.execute_batch(
+            "CREATE TABLE clip_items (
+                 id                TEXT PRIMARY KEY NOT NULL,
+                 content           TEXT,
+                 kind              TEXT NOT NULL DEFAULT 'text',
+                 created_utc       INTEGER NOT NULL,
+                 last_modified_utc INTEGER NOT NULL,
+                 is_deleted        INTEGER NOT NULL DEFAULT 0,
+                 deleted_at_utc    INTEGER,
+                 text_hash         TEXT,
+                 is_favorite       INTEGER NOT NULL DEFAULT 0
+             );",
+        )
+        .expect("建旧表失败");
+
+        assert!(
+            !has_column(&conn, "clip_items", "html_content").expect("查列失败"),
+            "迁移前不应有 html_content 列"
+        );
+
+        migrate_html_column(&conn).expect("首次迁移不应 Err");
+        assert!(
+            has_column(&conn, "clip_items", "html_content").expect("查列失败"),
+            "迁移后应有 html_content 列"
+        );
+
+        // 列可写读
+        conn.execute(
+            "INSERT INTO clip_items
+                 (id, content, kind, created_utc, last_modified_utc, is_deleted, html_content)
+             VALUES ('x', 'c', 'richtext', 1, 1, 0, '<b>x</b>')",
+            [],
+        )
+        .expect("迁移后应可写 html_content");
+        let read: Option<String> = conn
+            .query_row(
+                "SELECT html_content FROM clip_items WHERE id = 'x'",
+                [],
+                |r| r.get(0),
+            )
+            .expect("应可读 html_content");
+        assert_eq!(read.as_deref(), Some("<b>x</b>"), "读回值应一致");
+
+        // 第二次迁移幂等：不报错、列仍在
+        migrate_html_column(&conn).expect("重复迁移应幂等、不报错");
+        assert!(
+            has_column(&conn, "clip_items", "html_content").expect("查列失败"),
+            "重复迁移后列仍应存在"
+        );
+    }
+
+    /// 纯文本去重语义不变：同纯文本（无 html）连续 ingest 两次仍只一行（第二次 Bumped）。
+    #[test]
+    fn dedup_by_plaintext_unchanged() {
+        let conn = make_test_conn();
+        let item = CapturedItem {
+            text: "same text".to_string(),
+            html: None,
+        };
+
+        let first = ingest(&conn, &item).expect("首次 ingest 失败");
+        let first_id = match first {
+            IngestOutcome::Inserted(id) => id,
+            IngestOutcome::Bumped(_) => panic!("首次应 Inserted"),
+        };
+
+        let second = ingest(&conn, &item).expect("二次 ingest 失败");
+        match second {
+            IngestOutcome::Bumped(id) => assert_eq!(id, first_id, "二次应 bump 同一行"),
+            IngestOutcome::Inserted(_) => panic!("相同纯文本二次应 Bumped 而非新增"),
+        }
+
+        let count = count_live(&conn).expect("count_live 失败");
+        assert_eq!(count, 1, "相同纯文本去重后应仅 1 行");
+    }
+
+    /// 命中补写：先 ingest 纯文本行（html=None,kind=text），再 ingest 同 text 带 html 的，
+    /// 同一行被补写 html_content 且 kind 升为 richtext，不新增行。
+    #[test]
+    fn ingest_backfills_html_and_upgrades_kind_on_hit() {
+        let conn = make_test_conn();
+        let plain = CapturedItem {
+            text: "rich later".to_string(),
+            html: None,
+        };
+        let first = ingest(&conn, &plain).expect("纯文本 ingest 失败");
+        let id = match first {
+            IngestOutcome::Inserted(id) => id,
+            IngestOutcome::Bumped(_) => panic!("首次应 Inserted"),
+        };
+
+        let rich = CapturedItem {
+            text: "rich later".to_string(),
+            html: Some("<u>rich later</u>".to_string()),
+        };
+        let second = ingest(&conn, &rich).expect("带 html 的二次 ingest 失败");
+        match second {
+            IngestOutcome::Bumped(bumped_id) => {
+                assert_eq!(bumped_id, id, "应补写并 bump 同一行")
+            }
+            IngestOutcome::Inserted(_) => panic!("同纯文本带 html 应补写已有行，不新增"),
+        }
+
+        assert_eq!(count_live(&conn).expect("count_live 失败"), 1, "应仍仅 1 行");
+
+        let rows = list_items_full(&conn).expect("list_items_full 失败");
+        let row = rows.iter().find(|r| r.id == id).expect("应查到该行");
+        assert_eq!(row.kind, "richtext", "补写后 kind 应升为 richtext");
+        assert_eq!(
+            row.html_content.as_deref(),
+            Some("<u>rich later</u>"),
+            "补写后 html_content 应为新值"
+        );
     }
 }
