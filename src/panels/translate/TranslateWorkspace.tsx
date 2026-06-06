@@ -1,6 +1,7 @@
 import type { TranslateResult, Provider } from "../../ipc/ipc-client";
 import { availableActions, resolveTranslateAction } from "../../translate/translate-actions";
 import DirBar from "./DirBar";
+import DictEntryView from "./DictEntryView";
 
 /** 译文操作按钮的中文标签（具名常量，避免魔术字符串） */
 const ACTION_LABELS: Record<string, string> = {
@@ -134,7 +135,11 @@ function TranslateWorkspace({
             <div className="field-label">
               译文 · {result.sourceLang} → {result.targetLang}
             </div>
-            <div className="tx-out">{result.translated}</div>
+            {result.kind === "dict" ? (
+              <DictEntryView entry={result.entry} />
+            ) : (
+              <div className="tx-out">{result.translated}</div>
+            )}
 
             <div className="tx-actions">
               {actions

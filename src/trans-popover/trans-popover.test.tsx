@@ -64,6 +64,7 @@ const MOCK_RESULT = {
 };
 
 const RESULT_B = {
+  kind: "plain" as const,
   translated: "第二段译文",
   sourceLang: "en",
   targetLang: "zh",

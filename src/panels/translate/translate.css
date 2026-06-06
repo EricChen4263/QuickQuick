@@ -153,6 +153,104 @@
   letter-spacing: -0.01em;
 }
 
+/* 词典词条展示：音标 / 按词性分组释义 / 例句 / 变形 / 发音 */
+.dict-entry {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+/* 音标：等宽字体、accent 色，区别于普通译文 */
+.dict-phonetic {
+  font-family: var(--mono);
+  font-size: 16px;
+  color: var(--accent);
+}
+
+/* 释义分组列表：去默认列表样式，纵向排列 */
+.dict-defs {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* 词性标签：小徽章，弱化背景 */
+.dict-pos {
+  display: inline-block;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--muted);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 6px;
+  margin-bottom: 5px;
+}
+
+/* 该词性下的释义列表 */
+.dict-meanings {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.dict-meaning {
+  font-size: 16px;
+  line-height: 1.45;
+  color: var(--fg);
+}
+
+/* 区块小标题（例句 / 变形） */
+.dict-section-label {
+  font-size: 12px;
+  color: var(--muted);
+  margin-bottom: 6px;
+}
+
+.dict-example-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+/* 例句：稍弱化、左侧 accent 竖条点缀 */
+.dict-example {
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--muted);
+  padding-left: 10px;
+  border-left: 2px solid var(--accent-line);
+}
+
+/* 变形：标签 + 词形并排 */
+.dict-inflections {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 13px;
+}
+
+.dict-inflection-words {
+  font-family: var(--mono);
+  color: var(--fg);
+}
+
+/* 发音播放器：原生 audio controls，限宽不撑满 */
+.dict-audio {
+  width: 240px;
+  max-width: 100%;
+  height: 34px;
+}
+
 /* 译文操作按钮行 */
 .tx-actions {
   margin-top: 14px;
