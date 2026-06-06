@@ -11,6 +11,8 @@ export interface ClipItem {
   thumbnailDataUrl?: string;
   /** 图片项的原图 ID，用于调 getClipImageOriginal；文本项无此字段。 */
   imageId?: string;
+  /** 富文本项的 HTML 串；纯文本项与图片项无此字段。 */
+  htmlContent?: string;
 }
 
 /** 词典词条结构化内容，与 Rust DictEntry（camelCase）对齐。 */

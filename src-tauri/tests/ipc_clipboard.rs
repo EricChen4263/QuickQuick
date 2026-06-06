@@ -153,6 +153,45 @@ fn ipc_clipboard_list_dto_fields_complete() {
     assert!(item.last_modified_utc > 0, "last_modified_utc 应为正整数");
 }
 
+/// RT1-F1-A03：富文本条目 DTO 透出原 html 串，kind 为 richtext
+#[test]
+fn list_clip_items_exposes_html_content_for_richtext() {
+    use quickquick_lib::clipboard::CapturedItem;
+    let (_dir, conn) = open_tmp_db();
+
+    let html = "<b>hello</b>".to_string();
+    let item = CapturedItem {
+        text: "hello".to_string(),
+        html: Some(html.clone()),
+    };
+    db::ingest(&conn, &item).expect("富文本条目 ingest 应成功");
+
+    let items = list_clip_items_impl(&conn).expect("list 应成功");
+    let rich = items
+        .iter()
+        .find(|it| it.kind == "richtext")
+        .expect("应有富文本条目");
+    assert_eq!(rich.html_content, Some(html), "富文本条目应透出原 html 串");
+}
+
+/// RT1-F1-A03：纯文本条目 DTO 的 html_content 为 None
+#[test]
+fn list_clip_items_html_null_for_plaintext() {
+    let (_dir, conn) = open_tmp_db();
+
+    insert_text(&conn, "plain text");
+
+    let items = list_clip_items_impl(&conn).expect("list 应成功");
+    let text_dto = items
+        .iter()
+        .find(|it| it.kind == "text")
+        .expect("应有纯文本条目");
+    assert!(
+        text_dto.html_content.is_none(),
+        "纯文本条目 html_content 应为 None"
+    );
+}
+
 /// I-1 修订：with_db helper — None 时返回 Err 且错误信息含"数据库不可用"
 ///
 /// 验证当 AppDb 持有 None 时，with_db 返回 Err 而非 panic，

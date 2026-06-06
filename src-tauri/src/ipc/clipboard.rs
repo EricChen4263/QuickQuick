@@ -34,6 +34,9 @@ pub struct ClipItemDto {
     pub thumbnail_data_url: Option<String>,
     /// 关联 clip_images 行的 id；文本条目为 `None`。
     pub image_id: Option<String>,
+    /// 富文本 HTML 串（序列化为 `htmlContent`）；纯文本/图片条目为 `None`。
+    /// 透出供前端富文本预览与粘贴还原格式。
+    pub html_content: Option<String>,
 }
 
 /// list_clip_items 的纯函数实现，可在测试中直接调用。
@@ -61,6 +64,7 @@ pub fn list_clip_items_impl(conn: &Connection) -> Result<Vec<ClipItemDto>, DbErr
                 last_modified_utc: r.last_modified_utc,
                 thumbnail_data_url,
                 image_id: r.image_id,
+                html_content: r.html_content,
             }
         })
         .collect();
