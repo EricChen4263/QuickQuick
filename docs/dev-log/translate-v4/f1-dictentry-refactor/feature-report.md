@@ -6,7 +6,7 @@ parent: TV4
 children: [TV4-F1-S01-code, TV4-F1-S01-test, TV4-F1-S01-review]
 created: 2026-06-06T00:00:00Z
 status: 通过
-commit: PENDING
+commit: a46ce51
 acceptance_ids: [TV4-F1-A01]
 ---
 

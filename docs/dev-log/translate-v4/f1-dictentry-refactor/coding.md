@@ -6,7 +6,7 @@ parent: TV4-F1
 children: []
 created: 2026-06-06T00:00:00Z
 status: 通过
-commit: PENDING
+commit: a46ce51
 acceptance_ids: [TV4-F1-A01]
 evidence:
   - src-tauri/src/translate/mod.rs
