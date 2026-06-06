@@ -189,7 +189,7 @@ pub fn build_provider(
 /// 返回编译期静态注册表：各 provider 的能力声明列表。
 ///
 /// 调用方可枚举此列表渲染 UI 选择器或构建凭据表单，无需运行时反射。
-/// Lingva 置于首位，作为免 key 默认源。
+/// Lingva 列于首位（仅 UI 展示顺序）；默认源由 ipc::translate::DEFAULT_PROVIDER_ID 决定。
 pub fn registry() -> Vec<ProviderCapability> {
     vec![
         LingvaProvider::new().capability(),
@@ -218,7 +218,7 @@ pub fn registry() -> Vec<ProviderCapability> {
 
 // Lingva
 
-/// Lingva provider（免 key 默认源）。
+/// Lingva provider（免 key 机翻源）。
 ///
 /// Lingva 是开源 Google 翻译前端，提供无认证的纯 GET HTTP 接口。
 /// 端点（按公开互操作协议事实独立实现，不参考任何第三方源码）：

@@ -305,7 +305,6 @@ pub fn translate_text(
     target: Option<String>,
 ) -> Result<TranslateResultDto, String> {
     let settings_path = resolve_config_path(&app, "settings.json")?;
-    let ecdict_db = Arc::clone(&ecdict.0);
     // secret 存进同一加密 DB 的 provider_secret 表（去 Keychain），故在 with_db 闭包内构造 DbCredStore。
     let result = with_db(&state, |conn| {
         let cred_store = DbCredStore::new(conn);
@@ -319,7 +318,7 @@ pub fn translate_text(
             },
             &settings_path,
             &cred_store,
-            Arc::clone(&ecdict_db),
+            Arc::clone(&ecdict.0),
         )
     });
     if result.is_ok() {

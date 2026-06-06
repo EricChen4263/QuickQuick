@@ -217,6 +217,16 @@ mod tests {
     }
 
     #[test]
+    fn lookup_empty_string_returns_none() {
+        let (_dir, path) = fixture_db(&[("glacier", "ˈɡleɪʃər", "n. 冰川", "")]);
+        let db = EcdictDb::new(path);
+
+        // 空词查询走未命中路径：既不 panic 也不误命中任何词条。
+        let result = db.lookup("").expect("空词查询不应出错");
+        assert!(result.is_none(), "空词应返回 None，实际：{result:?}");
+    }
+
+    #[test]
     fn lookup_is_case_insensitive() {
         let (_dir, path) = fixture_db(&[("Glacier", "ˈɡleɪʃər", "n. 冰川", "")]);
         let db = EcdictDb::new(path);
