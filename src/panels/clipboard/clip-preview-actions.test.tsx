@@ -13,6 +13,7 @@ vi.mock("../../ipc/ipc-client", () => ({
   deleteClipItem: vi.fn(),
   toggleFavoriteClip: vi.fn(),
   getClipImageOriginal: vi.fn(),
+  copyClipToClipboard: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock("../../panels/translate/browser-api", () => ({
@@ -20,10 +21,11 @@ vi.mock("../../panels/translate/browser-api", () => ({
 }));
 
 import { writeToClipboard } from "../../panels/translate/browser-api";
-import { getClipImageOriginal } from "../../ipc/ipc-client";
+import { getClipImageOriginal, copyClipToClipboard } from "../../ipc/ipc-client";
 
 const mockWriteToClipboard = vi.mocked(writeToClipboard);
 const mockGetClipImageOriginal = vi.mocked(getClipImageOriginal);
+const mockCopyClipToClipboard = vi.mocked(copyClipToClipboard);
 
 const TEXT_ITEM = {
   id: "item-1",
@@ -56,6 +58,7 @@ describe("ClipPreview 操作按钮", () => {
     vi.clearAllMocks();
     mockGetClipImageOriginal.mockResolvedValue(null);
     mockWriteToClipboard.mockResolvedValue(undefined);
+    mockCopyClipToClipboard.mockResolvedValue(undefined);
   });
 
   it("文本项渲染五个操作按钮（粘贴到前台/复制/一键翻译/收藏/删除）", () => {
@@ -185,7 +188,8 @@ describe("ClipPreview 操作按钮", () => {
     expect(screen.queryByRole("button", { name: "删除" })).not.toBeInTheDocument();
   });
 
-  it("点击复制按钮真正调用 writeToClipboard 写入 item.content（Bug2 复制链路）", async () => {
+  // RT1-F2-S02：复制按钮改调 IPC copy_clip_to_clipboard，按 id 取 text+html 写系统剪贴板（富文本保真）。
+  it("copy_button_invokes_copy_clip_to_clipboard", async () => {
     const user = userEvent.setup();
     render(
       <ClipPreview
@@ -200,6 +204,26 @@ describe("ClipPreview 操作按钮", () => {
 
     await user.click(screen.getByRole("button", { name: "复制" }));
 
-    expect(mockWriteToClipboard).toHaveBeenCalledWith("Hello World");
+    expect(mockCopyClipToClipboard).toHaveBeenCalledWith("item-1");
+  });
+
+  // 纯文本条目复制不回归：仍走 copyClipToClipboard(id)（后端 html=None 走 set_text，行为等价），不再走 writeToClipboard。
+  it("plaintext_copy_not_regressed", async () => {
+    const user = userEvent.setup();
+    render(
+      <ClipPreview
+        item={TEXT_ITEM}
+        onToggleFavorite={vi.fn()}
+        onDelete={vi.fn()}
+        onCopy={vi.fn()}
+        onPasteToFront={vi.fn()}
+        onTranslate={vi.fn()}
+      />
+    );
+
+    await user.click(screen.getByRole("button", { name: "复制" }));
+
+    expect(mockCopyClipToClipboard).toHaveBeenCalledWith("item-1");
+    expect(mockWriteToClipboard).not.toHaveBeenCalled();
   });
 });

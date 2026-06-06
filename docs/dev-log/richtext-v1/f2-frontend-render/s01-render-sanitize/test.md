@@ -6,7 +6,7 @@ parent: RT1-F2
 children: []
 created: 2026-06-07T00:00:00Z
 status: 通过
-commit: PENDING
+commit: 2b5d985
 acceptance_ids: [RT1-F2-A01, RT1-A-SEC]
 evidence:
   - src/panels/clipboard/ClipPreview.test.tsx

@@ -5,9 +5,8 @@
  */
 
 import { useEffect, useState } from "react";
-import { getClipImageOriginal, type ClipItem } from "../../ipc/ipc-client";
+import { copyClipToClipboard, getClipImageOriginal, type ClipItem } from "../../ipc/ipc-client";
 import EmptyState from "../../components/EmptyState";
-import { writeToClipboard } from "../translate/browser-api";
 import { sanitizeRichHtml } from "./sanitize-html";
 
 interface ClipPreviewProps {
@@ -151,7 +150,8 @@ function PreviewActions({ item, onToggleFavorite, onDelete, onCopy, onPasteToFro
   onTranslate: (item: ClipItem) => void;
 }) {
   function handleCopy() {
-    writeToClipboard(item.content).catch(() => {
+    // 走后端 IPC 按 id 取 text+html 写系统剪贴板，保真富文本格式（纯文本项 html=None 走 set_text，行为等价）。
+    copyClipToClipboard(item.id).catch(() => {
       // 复制失败静默处理，不影响主流程
     });
     onCopy(item);

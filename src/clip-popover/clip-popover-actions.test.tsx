@@ -6,6 +6,7 @@ vi.mock("../ipc/ipc-client", () => ({
   listClipItems: vi.fn(),
   pasteToFront: vi.fn(),
   hideAndReturnFocus: vi.fn(),
+  copyClipToClipboard: vi.fn(),
 }));
 
 vi.mock("../panels/translate/browser-api", () => ({
@@ -29,22 +30,23 @@ vi.mock("@tauri-apps/api/window", () => ({
   }),
 }));
 
-import { listClipItems, pasteToFront, hideAndReturnFocus } from "../ipc/ipc-client";
+import { listClipItems, pasteToFront, hideAndReturnFocus, copyClipToClipboard } from "../ipc/ipc-client";
 import { writeToClipboard } from "../panels/translate/browser-api";
 
-const mockListClipItems = listClipItems as ReturnType<typeof vi.fn>;
-const mockPasteToFront = pasteToFront as ReturnType<typeof vi.fn>;
-const mockWriteToClipboard = writeToClipboard as ReturnType<typeof vi.fn>;
-const mockHideAndReturnFocus = hideAndReturnFocus as ReturnType<typeof vi.fn>;
+const mockListClipItems = vi.mocked(listClipItems);
+const mockPasteToFront = vi.mocked(pasteToFront);
+const mockWriteToClipboard = vi.mocked(writeToClipboard);
+const mockHideAndReturnFocus = vi.mocked(hideAndReturnFocus);
+const mockCopyClipToClipboard = vi.mocked(copyClipToClipboard);
 
 const ITEMS = [
-  { id: "id1", content: "first item", kind: "text", isFavorite: false, lastModifiedUtc: Date.now() },
-  { id: "id2", content: "second item", kind: "text", isFavorite: false, lastModifiedUtc: Date.now() },
-  { id: "id3", content: "third item", kind: "text", isFavorite: false, lastModifiedUtc: Date.now() },
+  { id: "id1", content: "first item", kind: "text" as const, isFavorite: false, lastModifiedUtc: Date.now() },
+  { id: "id2", content: "second item", kind: "text" as const, isFavorite: false, lastModifiedUtc: Date.now() },
+  { id: "id3", content: "third item", kind: "text" as const, isFavorite: false, lastModifiedUtc: Date.now() },
   {
     id: "id-img",
     content: "",
-    kind: "image",
+    kind: "image" as const,
     isFavorite: false,
     lastModifiedUtc: Date.now(),
     thumbnailDataUrl: "data:image/png;base64,abc",
@@ -63,6 +65,7 @@ beforeEach(() => {
   mockWriteToClipboard.mockResolvedValue(undefined);
   mockHide.mockResolvedValue(undefined);
   mockHideAndReturnFocus.mockResolvedValue(undefined);
+  mockCopyClipToClipboard.mockResolvedValue(undefined);
 });
 
 describe("ClipPopoverApp 键盘动作", () => {
@@ -82,7 +85,8 @@ describe("ClipPopoverApp 键盘动作", () => {
     });
   });
 
-  it("按 Alt+Enter 调 writeToClipboard(content) 并 hide", async () => {
+  // RT1-F2-S02：Alt+Enter 复制改调 IPC copyClipToClipboard(id)（富文本保真），不再走 writeToClipboard。
+  it("按 Alt+Enter 调 copyClipToClipboard(id) 并 hide", async () => {
     render(<ClipPopoverApp />);
 
     await waitFor(() => {
@@ -93,9 +97,10 @@ describe("ClipPopoverApp 键盘动作", () => {
     fireEvent.keyDown(input, { key: "Enter", altKey: true });
 
     await waitFor(() => {
-      expect(mockWriteToClipboard).toHaveBeenCalledWith("first item");
+      expect(mockCopyClipToClipboard).toHaveBeenCalledWith("id1");
       expect(mockHide).toHaveBeenCalled();
     });
+    expect(mockWriteToClipboard).not.toHaveBeenCalled();
   });
 
   it("按 ArrowDown 选中第二项", async () => {
@@ -132,7 +137,7 @@ describe("ClipPopoverApp 键盘动作", () => {
     });
   });
 
-  it("图片条目按 Alt+Enter：writeToClipboard 和 hide 均不被调用", async () => {
+  it("图片条目按 Alt+Enter：copyClipToClipboard 和 hide 均不被调用", async () => {
     render(<ClipPopoverApp />);
 
     await waitFor(() => {
@@ -154,7 +159,7 @@ describe("ClipPopoverApp 键盘动作", () => {
     fireEvent.keyDown(input, { key: "Enter", altKey: true });
 
     await new Promise((r) => setTimeout(r, 50));
-    expect(mockWriteToClipboard).not.toHaveBeenCalled();
+    expect(mockCopyClipToClipboard).not.toHaveBeenCalled();
     expect(mockHide).not.toHaveBeenCalled();
   });
 

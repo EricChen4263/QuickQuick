@@ -4,7 +4,8 @@ import { invoke } from "@tauri-apps/api/core";
 export interface ClipItem {
   id: string;
   content: string;
-  kind: string;
+  /** 条目类型，与 Rust ClipKind 对齐；用字面量联合消除拼写错误静默通过的隐患。 */
+  kind: "text" | "richtext" | "image";
   isFavorite: boolean;
   lastModifiedUtc: number;
   /** 图片项的缩略图 data URL（data:image/webp;base64,...），文本项无此字段。 */

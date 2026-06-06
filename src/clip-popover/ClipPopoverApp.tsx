@@ -1,7 +1,6 @@
 import { useState, useEffect, useMemo, useRef } from "react";
 import type { ClipItem } from "../ipc/ipc-client";
-import { listClipItems, pasteToFront, hideAndReturnFocus } from "../ipc/ipc-client";
-import { writeToClipboard } from "../panels/translate/browser-api";
+import { listClipItems, pasteToFront, hideAndReturnFocus, copyClipToClipboard } from "../ipc/ipc-client";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { filterClipBySearch, groupClipItems } from "./grouping";
 import { advanceSelection } from "./keyboard-nav";
@@ -28,7 +27,7 @@ function buildFlatList(groups: ReturnType<typeof groupClipItems>): ClipItem[] {
  * 键盘交互（由 search input 的 onKeyDown 处理）：
  *   - ↑ / ↓：在 visibleFlatList 中移动选中项（advanceSelection）
  *   - Enter：pasteToFront(selectedId) 成功后 hide 窗口
- *   - Alt+Enter：writeToClipboard(selectedItem.content) 成功后 hide 窗口
+ *   - Alt+Enter：copyClipToClipboard(selectedItem.id) 成功后 hide 窗口（富文本保真）
  *   - Esc：由 main.tsx 的全局快捷键处理，不在此组件内
  */
 export default function ClipPopoverApp() {
@@ -124,9 +123,10 @@ export default function ClipPopoverApp() {
     if (e.key === "Enter" && e.altKey) {
       e.preventDefault();
       if (selectedItem === null) return;
-      // 图片条目 content 为空字符串，写入会静默破坏剪贴板，做 no-op
+      // 图片条目无文本/HTML 可写，做 no-op
       if (selectedItem.kind === "image") return;
-      writeToClipboard(selectedItem.content)
+      // 走后端 IPC 按 id 取 text+html 写系统剪贴板，保真富文本格式（替代仅写纯文本的 writeToClipboard）。
+      copyClipToClipboard(selectedItem.id)
         .then(() => getCurrentWindow().hide())
         .catch((err: unknown) => {
           console.error("[clip-popover] copy failed:", err);

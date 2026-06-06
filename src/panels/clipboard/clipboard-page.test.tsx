@@ -25,6 +25,7 @@ import {
   toggleFavoriteClip,
   pasteToFront,
   openAccessibilitySettings,
+  type ClipItem,
 } from "../../ipc/ipc-client";
 
 const mockListen = vi.mocked(listen);
@@ -36,7 +37,7 @@ const mockPasteToFront = vi.mocked(pasteToFront);
 const mockOpenAccessibilitySettings = vi.mocked(openAccessibilitySettings);
 
 /** 测试用剪贴板条目数据 */
-const MOCK_ITEMS = [
+const MOCK_ITEMS: ClipItem[] = [
   {
     id: "item-1",
     content: "Hello World",

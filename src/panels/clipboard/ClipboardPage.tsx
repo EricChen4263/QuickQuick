@@ -275,7 +275,7 @@ function ClipboardPage({ onTranslateItem }: ClipboardPageProps) {
         item={highlightedClipItem}
         onToggleFavorite={handleToggleFavorite}
         onDelete={handleDelete}
-        onCopy={(_item) => { /* 复制逻辑在 ClipPreview 内部调用 writeToClipboard 完成 */ }}
+        onCopy={(_item) => { /* 复制逻辑在 ClipPreview 内部调用 copyClipToClipboard(id) 完成，带富文本保真 */ }}
         onPasteToFront={(item) => { void handlePasteToFront(item); }}
         onTranslate={(item) => { onTranslateItem?.(item.content); }}
       />
