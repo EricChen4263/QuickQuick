@@ -18,8 +18,9 @@ use std::path::Path;
 
 use crate::db::DbError;
 use crate::ipc::settings::{get_selected_provider_impl, resolve_config_path};
-use crate::ipc::{with_db, AppDb};
+use crate::ipc::{with_db, AppDb, EcdictDbState};
 use crate::translate::credential::{load_credentials, CredStore, DbCredStore};
+use crate::translate::ecdict_db::EcdictDb;
 use crate::translate::history::{
     add_translate_history, list_translate_history as db_list_translate_history, TranslateHistoryRow,
 };
@@ -32,7 +33,7 @@ use crate::translate::{
 
 /// 默认翻译源 id（免 key，开箱可用）。
 ///
-/// 设计文档§三.决策1：移除 MyMemory 后默认切 Lingva（pot 自建实例最稳）。
+/// 设计文档§三.决策1：免 key 开箱可用的机翻源，无第三方实例可用性依赖。
 pub const DEFAULT_PROVIDER_ID: &str = "google_free";
 
 /// 把持久化的 selected_provider 解析为当前注册表内的有效 id。
@@ -190,13 +191,27 @@ impl From<TranslateHistoryRow> for TranslateHistoryDto {
     }
 }
 
+/// 翻译请求的用户输入三元组：原文 + 用户配置的源/目标语言。
+///
+/// 把同源同生命周期的三个请求参数聚为一组，使 `translate_text_impl` 参数数量
+/// 收敛在 clippy 上限内（设计同 code-standards「参数 > 5 改结构体」）。
+/// `configured_source`/`configured_target` 为 `None` 时分别走自动检测 / 回退默认目标。
+pub struct TranslateInput<'a> {
+    /// 待翻译原文。
+    pub text: &'a str,
+    /// 用户显式指定的源语言码（如 "ja"）；`None`/"auto" 走自动检测。
+    pub configured_source: Option<&'a str>,
+    /// 用户配置的目标语言码；`None` 走方向解析的默认目标。
+    pub configured_target: Option<&'a str>,
+}
+
 /// `translate_text` 的纯函数实现，可在测试中直接调用。
 ///
 /// 编排流程：
 /// 1. 校验输入（空/全空白 text → Err，不发网络）
 /// 2. 读 settings_path 取 selected_provider_id
 /// 3. load_credentials(provider_id, cred_store, conn) 加载凭据
-/// 4. build_provider(provider_id, &creds) 动态构造 provider（缺必填凭据 → Err）
+/// 4. build_provider(provider_id, &creds, ecdict_db) 动态构造 provider（缺必填凭据 → Err）
 /// 5. 定方向（resolve_direction_with_source）
 /// 6. provider.translate(req, exec)（单步源默认 build/execute/parse；多步源自行编排）
 /// 7. 写入翻译历史（provider_id 为真实选中的 id）
@@ -211,22 +226,23 @@ impl From<TranslateHistoryRow> for TranslateHistoryDto {
 pub fn translate_text_impl(
     conn: &Connection,
     exec: &dyn HttpExecutor,
-    text: &str,
-    configured_source: Option<&str>,
-    configured_target: Option<&str>,
+    input: TranslateInput<'_>,
     settings_path: &Path,
     cred_store: &dyn CredStore,
+    ecdict_db: Arc<EcdictDb>,
 ) -> Result<TranslateResultDto, String> {
+    let text = input.text;
     if text.trim().is_empty() {
         return Err("翻译文本不能为空或全空白".to_string());
     }
 
     let provider_id = get_selected_provider_impl(settings_path)?;
     let creds = load_credentials(&provider_id, cred_store, conn).map_err(|e| e.to_string())?;
-    let provider = build_provider(&provider_id, &creds)?;
+    let provider = build_provider(&provider_id, &creds, Some(ecdict_db))?;
 
-    let target_lang = configured_target.map(Lang::new);
-    let (source, target) = resolve_direction_with_source(text, configured_source, target_lang);
+    let target_lang = input.configured_target.map(Lang::new);
+    let (source, target) =
+        resolve_direction_with_source(text, input.configured_source, target_lang);
 
     let req = TranslateRequest {
         text: text.to_string(),
@@ -283,22 +299,27 @@ pub fn list_translate_history_impl(conn: &Connection) -> Result<Vec<TranslateHis
 pub fn translate_text(
     app: AppHandle,
     state: State<'_, AppDb>,
+    ecdict: State<'_, EcdictDbState>,
     text: String,
     source: Option<String>,
     target: Option<String>,
 ) -> Result<TranslateResultDto, String> {
     let settings_path = resolve_config_path(&app, "settings.json")?;
+    let ecdict_db = Arc::clone(&ecdict.0);
     // secret 存进同一加密 DB 的 provider_secret 表（去 Keychain），故在 with_db 闭包内构造 DbCredStore。
     let result = with_db(&state, |conn| {
         let cred_store = DbCredStore::new(conn);
         translate_text_impl(
             conn,
             &UreqExecutor,
-            &text,
-            source.as_deref(),
-            target.as_deref(),
+            TranslateInput {
+                text: &text,
+                configured_source: source.as_deref(),
+                configured_target: target.as_deref(),
+            },
             &settings_path,
             &cred_store,
+            Arc::clone(&ecdict_db),
         )
     });
     if result.is_ok() {
@@ -324,6 +345,13 @@ mod tests {
 
     use crate::translate::credential::MockCredStore;
 
+    /// 测试用占位本地词典 DAO：路径不存在，仅供非 ecdict 源的调用传参（永不被查询）。
+    fn placeholder_ecdict_db() -> Arc<EcdictDb> {
+        Arc::new(EcdictDb::new(std::path::PathBuf::from(
+            "/nonexistent/ecdict.db",
+        )))
+    }
+
     // 对齐 acceptance TV1-F1-A03：持久化的 selected_provider 不在注册表内
     // （含旧值 mymemory、已下架 id、任意未知 id）时，解析回退为默认源 google_free；
     // 注册表内的合法 id 原样保留。
@@ -332,7 +360,10 @@ mod tests {
         // 旧值 mymemory（已删除）→ 回退默认源 google_free
         assert_eq!(resolve_provider_or_fallback("mymemory"), "google_free");
         // 任意未知 id → 回退 google_free
-        assert_eq!(resolve_provider_or_fallback("totally_unknown"), "google_free");
+        assert_eq!(
+            resolve_provider_or_fallback("totally_unknown"),
+            "google_free"
+        );
         // 已下架的 bing_dict / cambridge（Commit 1）→ 回退默认源
         assert_eq!(resolve_provider_or_fallback("bing_dict"), "google_free");
         assert_eq!(resolve_provider_or_fallback("cambridge"), "google_free");
@@ -394,11 +425,14 @@ mod tests {
         let result = translate_text_impl(
             &conn,
             &fake,
-            "hello world",
-            None,
-            None,
+            TranslateInput {
+                text: "hello world",
+                configured_source: None,
+                configured_target: None,
+            },
             settings_file.path(),
             &store,
+            placeholder_ecdict_db(),
         );
         // Assert: 无 source 显式值，检测 en，翻到 zh
         let dto = result.expect("应成功");
@@ -419,11 +453,14 @@ mod tests {
         let result = translate_text_impl(
             &conn,
             &fake,
-            "こんにちは",
-            Some("ja"),
-            Some("ko"),
+            TranslateInput {
+                text: "こんにちは",
+                configured_source: Some("ja"),
+                configured_target: Some("ko"),
+            },
             settings_file.path(),
             &store,
+            placeholder_ecdict_db(),
         );
         // Assert
         let dto = result.expect("应成功");
@@ -443,11 +480,14 @@ mod tests {
         let result = translate_text_impl(
             &conn,
             &fake,
-            "   ",
-            None,
-            None,
+            TranslateInput {
+                text: "   ",
+                configured_source: None,
+                configured_target: None,
+            },
             settings_file.path(),
             &store,
+            placeholder_ecdict_db(),
         );
         // Assert
         assert!(result.is_err());
@@ -466,11 +506,14 @@ mod tests {
         translate_text_impl(
             &conn,
             &fake,
-            "hello world",
-            None,
-            None,
+            TranslateInput {
+                text: "hello world",
+                configured_source: None,
+                configured_target: None,
+            },
             settings_file.path(),
             &store,
+            placeholder_ecdict_db(),
         )
         .expect("应成功");
         // Assert：历史记录中 provider_id 应为 "lingva"，不应是硬编码字符串
@@ -503,11 +546,14 @@ mod tests {
         translate_text_impl(
             &conn,
             &fake,
-            "你好",
-            None,
-            None,
+            TranslateInput {
+                text: "你好",
+                configured_source: None,
+                configured_target: None,
+            },
             settings_file.path(),
             &store,
+            placeholder_ecdict_db(),
         )
         .expect("deepl_free 翻译应成功");
 
@@ -539,11 +585,14 @@ mod tests {
         let result = translate_text_impl(
             &conn,
             &fake,
-            "hello world",
-            None,
-            None,
+            TranslateInput {
+                text: "hello world",
+                configured_source: None,
+                configured_target: None,
+            },
             settings_file.path(),
             &store,
+            placeholder_ecdict_db(),
         );
         // Assert：应返回含"未配置"的错误，执行器不应被调用
         assert!(result.is_err(), "百度无凭据应返回 Err");

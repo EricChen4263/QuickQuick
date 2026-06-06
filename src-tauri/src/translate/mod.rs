@@ -7,6 +7,7 @@
 pub mod cache;
 pub mod cancel;
 pub mod credential;
+pub mod ecdict_db;
 pub mod error;
 pub mod history;
 pub mod lang;
@@ -263,7 +264,7 @@ mod tests {
     // 对齐 acceptance TV4-F1-A01：既有源 parse_response 仍返回 Plain，不回归为 Dict。
     #[test]
     fn existing_providers_return_plain_no_regression() {
-        let provider = providers::build_provider("lingva", &[]).expect("lingva 应构造成功");
+        let provider = providers::build_provider("lingva", &[], None).expect("lingva 应构造成功");
         let resp = provider
             .parse_response(r#"{"translation":"glacier"}"#)
             .expect("含 translation 字段应解析成功");
@@ -287,8 +288,7 @@ mod tests {
             inflections: vec!["glaciers".to_string()],
         };
         let resp = TranslateResponse::Dict { entry };
-        let value: serde_json::Value =
-            serde_json::to_value(&resp).expect("Dict 序列化应成功");
+        let value: serde_json::Value = serde_json::to_value(&resp).expect("Dict 序列化应成功");
 
         assert_eq!(value["kind"], "dict", "应携带 kind=dict 类型标签");
         assert_eq!(value["entry"]["phonetic"], "ˈɡleɪʃər");

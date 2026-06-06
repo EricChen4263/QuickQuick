@@ -61,6 +61,20 @@ jobs:
       - name: 安装前端依赖
         run: pnpm install --frozen-lockfile
 
+      # 生成本地 ECDICT 词库：按固定 commit SHA 拉源 CSV（钉死 SHA 保证可复现，
+      # 避免上游改库变体积/字段），跑生成器精简为 4 列 SQLite 写入 resources/ecdict.db。
+      # 真库与源 CSV 均不入 git（见 .gitignore），故每次发布在 CI 现生成。
+      - name: 生成 ECDICT 本地词库
+        shell: bash
+        run: |
+          set -euo pipefail
+          ECDICT_SHA="bc015ed2e24a7abef49fc6dbbb7fe32c1dadaf8b"
+          CSV_URL="https://raw.githubusercontent.com/skywind3000/ECDICT/${ECDICT_SHA}/ecdict.csv"
+          echo "拉取 ECDICT 源 CSV（SHA=${ECDICT_SHA}）"
+          curl -fsSL "$CSV_URL" -o ecdict.csv
+          python3 src-tauri/tools/gen_ecdict_db.py ecdict.csv src-tauri/resources/ecdict.db
+          test -s src-tauri/resources/ecdict.db || { echo "::error::ecdict.db 生成为空"; exit 1; }
+
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

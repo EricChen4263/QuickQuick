@@ -6,12 +6,15 @@
 //! - V2-F2-A10 providers_keyed：百度/DeepL Free/Google 三家适配（鉴权字段 + 请求映射 + 错误码归一）
 //! - V2-F2-A11 quota_explicit_no_silent_switch：撞额度显式提示，不自动切换 provider
 
+use quickquick_lib::translate::ecdict_db::EcdictDb;
 use quickquick_lib::translate::providers::{
-    baidu_field_sign, baidu_sign, on_quota_or_failure, youdao_sign, youdao_truncate, BaiduProvider,
-    DeepLFreeProvider, GoogleProvider, LingvaProvider, UserPromptKind,
+    baidu_field_sign, baidu_sign, build_provider, on_quota_or_failure, youdao_sign,
+    youdao_truncate, BaiduProvider, DeepLFreeProvider, EcdictProvider, GoogleProvider,
+    LingvaProvider, UserPromptKind,
 };
 use quickquick_lib::translate::{
-    Lang, TranslateError, TranslateProvider, TranslateRequest, TranslateResponse,
+    HttpExecutor, Lang, ProviderHttpRequest, TranslateError, TranslateProvider, TranslateRequest,
+    TranslateResponse,
 };
 
 // 从翻译响应取出 Plain 变体译文；非 Plain 即测试失败（既有机翻源应全返 Plain）。
@@ -60,9 +63,7 @@ fn provider_lingva_build_request_url_path_encoding() {
     // Assert: 端点前缀 + 语言码路径段 + text 的 percent-encoding（空格 → %20）
     assert_eq!(http_req.method, "GET", "Lingva 使用 GET");
     assert!(
-        http_req
-            .url
-            .starts_with("https://lingva.pot-app.com/api/v1/"),
+        http_req.url.starts_with("https://lingva.ml/api/v1/"),
         "URL 须为 Lingva 端点，实际: {}",
         http_req.url
     );
@@ -634,9 +635,124 @@ fn youdao_sign_and_truncate_are_deterministic_across_crate() {
     );
 
     // truncate 边界：恰 20 用全文、21 触发截断。
-    assert_eq!(youdao_truncate("12345678901234567890"), "12345678901234567890");
+    assert_eq!(
+        youdao_truncate("12345678901234567890"),
+        "12345678901234567890"
+    );
     assert_eq!(
         youdao_truncate("123456789012345678901"),
         "1234567890212345678901"
+    );
+}
+
+// TV-ECDICT provider_ecdict（本地 SQLite 词库，免 key、零网络）
+
+/// 调用即 panic 的执行器：ECDICT 走本地查询，若误触网络路径此处会炸出，
+/// 用以证伪「provider 仍发 HTTP」的回归。
+struct NeverExecutor;
+
+impl HttpExecutor for NeverExecutor {
+    fn execute(&self, _req: &ProviderHttpRequest) -> Result<String, TranslateError> {
+        panic!("ECDICT provider 不应发起任何 HTTP 请求");
+    }
+}
+
+/// 建临时 ECDICT 库写入单行，返回 (TempDir 守卫, 包好 Arc 的 DAO)。
+///
+/// 守卫须持有到断言结束，否则 TempDir drop 删库致查询失败。
+fn ecdict_fixture(
+    word: &str,
+    phonetic: &str,
+    translation: &str,
+    exchange: &str,
+) -> (tempfile::TempDir, std::sync::Arc<EcdictDb>) {
+    let dir = tempfile::TempDir::new().expect("创建临时目录");
+    let path = dir.path().join("ecdict.db");
+    let conn = rusqlite::Connection::open(&path).expect("建库");
+    conn.execute_batch(
+        "CREATE TABLE ecdict (word TEXT NOT NULL, phonetic TEXT, \
+         translation TEXT, exchange TEXT);",
+    )
+    .expect("建表");
+    conn.execute(
+        "INSERT INTO ecdict (word, phonetic, translation, exchange) VALUES (?1, ?2, ?3, ?4)",
+        [word, phonetic, translation, exchange],
+    )
+    .expect("插入行");
+    (dir, std::sync::Arc::new(EcdictDb::new(path)))
+}
+
+/// capability 声明 id=ecdict、免 key，且 is_unofficial=false（本地离线、不随第三方改版失效）。
+#[test]
+fn provider_ecdict_capability_keyless_and_official() {
+    let provider = EcdictProvider::new(std::sync::Arc::new(EcdictDb::new(
+        std::path::PathBuf::new(),
+    )));
+
+    let cap = provider.capability();
+
+    assert_eq!(cap.id, "ecdict");
+    assert!(!cap.needs_key, "ECDICT 为免 key 源");
+    assert!(!cap.is_unofficial, "本地离线词库不应标记为非官方");
+}
+
+/// build_provider("ecdict") 未注入本地库时返回错误（不 panic）；注入后成功。
+#[test]
+fn build_provider_ecdict_requires_local_db() {
+    assert!(
+        build_provider("ecdict", &[], None).is_err(),
+        "未注入本地库应返回错误"
+    );
+
+    let (_dir, db) = ecdict_fixture("glacier", "", "n. 冰川", "");
+    assert!(
+        build_provider("ecdict", &[], Some(db)).is_ok(),
+        "注入本地库后应成功构造"
+    );
+}
+
+/// 命中：translate 走本地库返回 Dict（音标 + 按词性分组释义 + 词形变化），全程不触网络。
+#[test]
+fn provider_ecdict_translate_hit_returns_dict() {
+    let (_dir, db) = ecdict_fixture("glacier", "ˈɡleɪʃər", "n. 冰川，冰河", "s:glaciers");
+    let provider = EcdictProvider::new(db);
+    let req = make_request("glacier", "en", "zh");
+
+    let resp = provider
+        .translate(&req, &NeverExecutor)
+        .expect("命中应返回 Ok");
+
+    let TranslateResponse::Dict { entry } = resp else {
+        panic!("ECDICT 命中应返回 Dict，实际：{resp:?}");
+    };
+    assert_eq!(entry.phonetic.as_deref(), Some("ˈɡleɪʃər"), "应取音标");
+    assert!(
+        entry
+            .definitions
+            .iter()
+            .flat_map(|d| &d.meanings)
+            .any(|m| m.contains("冰川")),
+        "释义应含「冰川」，实际：{:?}",
+        entry.definitions
+    );
+    assert!(
+        entry.inflections.iter().any(|i| i == "glaciers"),
+        "词形应含 glaciers，实际：{:?}",
+        entry.inflections
+    );
+}
+
+/// 未命中：translate 返回 ParseError（与原远程源「未收录」语义一致，不 panic）。
+#[test]
+fn provider_ecdict_translate_miss_returns_parse_error() {
+    let (_dir, db) = ecdict_fixture("glacier", "", "n. 冰川", "");
+    let provider = EcdictProvider::new(db);
+    let req = make_request("notarealword", "en", "zh");
+
+    let err = provider.translate(&req, &NeverExecutor);
+
+    assert!(
+        matches!(err, Err(TranslateError::ParseError(_))),
+        "未收录词应返回 ParseError，实际：{err:?}"
     );
 }

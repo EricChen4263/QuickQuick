@@ -10,3 +10,8 @@ tsconfig.tsbuildinfo
 *.key
 /src-tauri/gen
 /.claude
+# ECDICT 本地词库：真库由 CI 用 tools/gen_ecdict_db.py 生成（~数十MB），不入库；
+# 源 CSV 同样不入库（CI 按固定 commit SHA 临时拉取）。
+/src-tauri/resources/ecdict.db
+/src-tauri/ecdict.csv
+ecdict.csv

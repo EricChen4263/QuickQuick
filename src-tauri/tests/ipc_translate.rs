@@ -10,14 +10,31 @@
 
 use quickquick_lib::db;
 use quickquick_lib::ipc::translate::{
-    list_translate_history_impl, translate_text_impl, FakeExecutor,
+    list_translate_history_impl, translate_text_impl, FakeExecutor, TranslateInput,
 };
 use quickquick_lib::translate::credential::{CredError, CredStore};
+use quickquick_lib::translate::ecdict_db::EcdictDb;
 use rusqlite::Connection;
 use std::collections::HashMap;
 use std::io::Write;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use tempfile::tempdir;
+
+/// 占位 ECDICT DAO：路径不存在，供非 ecdict 源的调用传参（永不被查询）。
+fn placeholder_ecdict_db() -> Arc<EcdictDb> {
+    Arc::new(EcdictDb::new(std::path::PathBuf::from(
+        "/nonexistent/ecdict.db",
+    )))
+}
+
+/// 构造仅含原文、源/目标语言走默认的 `TranslateInput`（自动检测方向）。
+fn auto_input(text: &str) -> TranslateInput<'_> {
+    TranslateInput {
+        text,
+        configured_source: None,
+        configured_target: None,
+    }
+}
 
 /// 集成测试用内存 CredStore，不触碰 OS keychain（headless）。
 struct LocalMockCredStore {
@@ -75,11 +92,17 @@ fn ipc_translate_chinese_text_produces_zh_to_en_direction() {
     let (_dir, conn) = open_tmp_db();
     let settings_path = write_settings(&_dir, "lingva");
     let store = LocalMockCredStore::new();
-    let fake =
-        FakeExecutor::new(r#"{"translation":"Hello"}"#);
+    let fake = FakeExecutor::new(r#"{"translation":"Hello"}"#);
 
-    let result = translate_text_impl(&conn, &fake, "你好", None, None, &settings_path, &store)
-        .expect("翻译应成功");
+    let result = translate_text_impl(
+        &conn,
+        &fake,
+        auto_input("你好"),
+        &settings_path,
+        &store,
+        placeholder_ecdict_db(),
+    )
+    .expect("翻译应成功");
 
     assert_eq!(result.source_lang, "zh", "中文输入 sourceLang 应为 zh");
     assert_eq!(result.target_lang, "en", "中文输入 targetLang 应为 en");
@@ -92,11 +115,17 @@ fn ipc_translate_english_text_produces_en_to_zh_direction() {
     let (_dir, conn) = open_tmp_db();
     let settings_path = write_settings(&_dir, "lingva");
     let store = LocalMockCredStore::new();
-    let fake =
-        FakeExecutor::new(r#"{"translation":"你好"}"#);
+    let fake = FakeExecutor::new(r#"{"translation":"你好"}"#);
 
-    let result = translate_text_impl(&conn, &fake, "Hello", None, None, &settings_path, &store)
-        .expect("翻译应成功");
+    let result = translate_text_impl(
+        &conn,
+        &fake,
+        auto_input("Hello"),
+        &settings_path,
+        &store,
+        placeholder_ecdict_db(),
+    )
+    .expect("翻译应成功");
 
     assert_eq!(result.source_lang, "en", "英文输入 sourceLang 应为 en");
     assert_eq!(result.target_lang, "zh", "英文输入 targetLang 应为 zh");
@@ -109,14 +138,20 @@ fn ipc_translate_writes_to_history_after_success() {
     let (_dir, conn) = open_tmp_db();
     let settings_path = write_settings(&_dir, "lingva");
     let store = LocalMockCredStore::new();
-    let fake =
-        FakeExecutor::new(r#"{"translation":"World"}"#);
+    let fake = FakeExecutor::new(r#"{"translation":"World"}"#);
 
     let count_before =
         quickquick_lib::translate::history::translate_history_count(&conn).expect("count 应成功");
 
-    translate_text_impl(&conn, &fake, "世界", None, None, &settings_path, &store)
-        .expect("翻译应成功");
+    translate_text_impl(
+        &conn,
+        &fake,
+        auto_input("世界"),
+        &settings_path,
+        &store,
+        placeholder_ecdict_db(),
+    )
+    .expect("翻译应成功");
 
     let count_after =
         quickquick_lib::translate::history::translate_history_count(&conn).expect("count 应成功");
@@ -132,7 +167,14 @@ fn ipc_translate_empty_text_returns_error_without_calling_executor() {
     let store = LocalMockCredStore::new();
     let fake = FakeExecutor::new("should not be called");
 
-    let result = translate_text_impl(&conn, &fake, "", None, None, &settings_path, &store);
+    let result = translate_text_impl(
+        &conn,
+        &fake,
+        auto_input(""),
+        &settings_path,
+        &store,
+        placeholder_ecdict_db(),
+    );
 
     assert!(result.is_err(), "空文本应返回 Err");
     assert_eq!(fake.call_count(), 0, "空文本不应触发执行器");
@@ -146,7 +188,14 @@ fn ipc_translate_whitespace_text_returns_error_without_calling_executor() {
     let store = LocalMockCredStore::new();
     let fake = FakeExecutor::new("should not be called");
 
-    let result = translate_text_impl(&conn, &fake, "   \t\n", None, None, &settings_path, &store);
+    let result = translate_text_impl(
+        &conn,
+        &fake,
+        auto_input("   \t\n"),
+        &settings_path,
+        &store,
+        placeholder_ecdict_db(),
+    );
 
     assert!(result.is_err(), "全空白文本应返回 Err");
     assert_eq!(fake.call_count(), 0, "全空白文本不应触发执行器");
@@ -158,15 +207,27 @@ fn ipc_translate_list_history_returns_entries_in_desc_order() {
     let (_dir, conn) = open_tmp_db();
     let settings_path = write_settings(&_dir, "lingva");
     let store = LocalMockCredStore::new();
-    let fake1 =
-        FakeExecutor::new(r#"{"translation":"Hello"}"#);
-    let fake2 =
-        FakeExecutor::new(r#"{"translation":"World"}"#);
+    let fake1 = FakeExecutor::new(r#"{"translation":"Hello"}"#);
+    let fake2 = FakeExecutor::new(r#"{"translation":"World"}"#);
 
-    translate_text_impl(&conn, &fake1, "你好", None, None, &settings_path, &store)
-        .expect("第一次翻译应成功");
-    translate_text_impl(&conn, &fake2, "世界", None, None, &settings_path, &store)
-        .expect("第二次翻译应成功");
+    translate_text_impl(
+        &conn,
+        &fake1,
+        auto_input("你好"),
+        &settings_path,
+        &store,
+        placeholder_ecdict_db(),
+    )
+    .expect("第一次翻译应成功");
+    translate_text_impl(
+        &conn,
+        &fake2,
+        auto_input("世界"),
+        &settings_path,
+        &store,
+        placeholder_ecdict_db(),
+    )
+    .expect("第二次翻译应成功");
 
     let history = list_translate_history_impl(&conn).expect("list 应成功");
 

@@ -3,6 +3,9 @@
 //! 本文件实现薄 provider 三件职责（capability / build_request / parse_response）；
 //! HTTP 执行、重试、超时、凭据读取等横切关注点由核心框架层统一处理。
 
+use std::sync::Arc;
+
+use super::ecdict_db::EcdictDb;
 use super::{
     lang::map_lang_for_provider, DictEntry, HttpExecutor, PosDefinition, ProviderCapability,
     ProviderHttpRequest, TranslateError, TranslateProvider, TranslateRequest, TranslateResponse,
@@ -30,6 +33,7 @@ use super::{
 pub fn build_provider(
     provider_id: &str,
     credentials: &[(String, String)],
+    ecdict_db: Option<Arc<EcdictDb>>,
 ) -> Result<Box<dyn super::TranslateProvider>, String> {
     // trim 后空字符串视同缺失，避免把全空白值当有效凭据，防止签名错误（如百度 54001）。
     let find = |key: &str| -> Option<&str> {
@@ -46,7 +50,10 @@ pub fn build_provider(
         "yandex" => Ok(Box::new(YandexProvider::new())),
         "transmart" => Ok(Box::new(TransmartProvider::new())),
         "bing" => Ok(Box::new(BingProvider::new())),
-        "ecdict" => Ok(Box::new(EcdictProvider::new())),
+        "ecdict" => {
+            let db = ecdict_db.ok_or_else(|| "ecdict 本地词典库未就绪".to_string())?;
+            Ok(Box::new(EcdictProvider::new(db)))
+        }
         "baidu" => {
             let app_id = find("app_id")
                 .ok_or_else(|| "baidu 未配置 AppID，请前往设置填入 API Key".to_string())?;
@@ -57,8 +64,9 @@ pub fn build_provider(
         "baidu_field" => {
             let app_id = find("app_id")
                 .ok_or_else(|| "baidu_field 未配置 AppID，请前往设置填入 API Key".to_string())?;
-            let secret_key = find("secret_key")
-                .ok_or_else(|| "baidu_field 未配置 SecretKey，请前往设置填入 API Key".to_string())?;
+            let secret_key = find("secret_key").ok_or_else(|| {
+                "baidu_field 未配置 SecretKey，请前往设置填入 API Key".to_string()
+            })?;
             let field = find("field")
                 .ok_or_else(|| "baidu_field 未配置领域 field，请前往设置填入".to_string())?;
             Ok(Box::new(BaiduFieldProvider::new(app_id, secret_key, field)))
@@ -95,9 +103,8 @@ pub fn build_provider(
             Ok(Box::new(TencentProvider::new(secret_id, secret_key)))
         }
         "alibaba" => {
-            let access_key_id = find("accesskey_id").ok_or_else(|| {
-                "alibaba 未配置 AccessKey ID，请前往设置填入 API Key".to_string()
-            })?;
+            let access_key_id = find("accesskey_id")
+                .ok_or_else(|| "alibaba 未配置 AccessKey ID，请前往设置填入 API Key".to_string())?;
             let access_key_secret = find("accesskey_secret").ok_or_else(|| {
                 "alibaba 未配置 AccessKey Secret，请前往设置填入 API Key".to_string()
             })?;
@@ -139,7 +146,9 @@ pub fn build_provider(
             // base_url/prompt 选填：base_url 留空回退官方端点，prompt 留空回退内置默认。
             let base_url = find("base_url").unwrap_or("");
             let prompt = find("prompt").unwrap_or("");
-            Ok(Box::new(OpenAiProvider::new(api_key, model, base_url, prompt)))
+            Ok(Box::new(OpenAiProvider::new(
+                api_key, model, base_url, prompt,
+            )))
         }
         "ollama" => {
             let model = find("model")
@@ -157,7 +166,9 @@ pub fn build_provider(
             // base_url/prompt 选填：base_url 留空回退官方端点，prompt 留空回退内置默认。
             let base_url = find("base_url").unwrap_or("");
             let prompt = find("prompt").unwrap_or("");
-            Ok(Box::new(ChatGlmProvider::new(api_key, model, base_url, prompt)))
+            Ok(Box::new(ChatGlmProvider::new(
+                api_key, model, base_url, prompt,
+            )))
         }
         "gemini" => {
             let api_key = find("apiKey")
@@ -167,7 +178,9 @@ pub fn build_provider(
             // base_url/prompt 选填：base_url 留空回退官方域名，prompt 留空回退内置默认。
             let base_url = find("base_url").unwrap_or("");
             let prompt = find("prompt").unwrap_or("");
-            Ok(Box::new(GeminiProvider::new(api_key, model, base_url, prompt)))
+            Ok(Box::new(GeminiProvider::new(
+                api_key, model, base_url, prompt,
+            )))
         }
         other => Err(format!("未知翻译 provider：{other}")),
     }
@@ -184,7 +197,7 @@ pub fn registry() -> Vec<ProviderCapability> {
         YandexProvider::new().capability(),
         TransmartProvider::new().capability(),
         BingProvider::new().capability(),
-        EcdictProvider::new().capability(),
+        EcdictProvider::new(Arc::new(EcdictDb::new(std::path::PathBuf::new()))).capability(),
         BaiduProvider::new("", "").capability(),
         BaiduFieldProvider::new("", "", "").capability(),
         YoudaoProvider::new("", "").capability(),
@@ -451,7 +464,9 @@ impl TranslateProvider for YandexProvider {
 /// 错误码来源：Yandex translate v1 tr.json 公开协议响应观测（实测 405=会话失效）。
 fn map_yandex_error(code: u64, msg: &str) -> TranslateError {
     match code {
-        401 | 402 | 403 | 405 => TranslateError::Auth(format!("Yandex 会话/鉴权失败 {code}: {msg}")),
+        401 | 402 | 403 | 405 => {
+            TranslateError::Auth(format!("Yandex 会话/鉴权失败 {code}: {msg}"))
+        }
         404 | 413 => TranslateError::TooLong(format!("Yandex 文本过长 {code}: {msg}")),
         422 | 501 => TranslateError::Unsupported(format!("Yandex 语言不支持 {code}: {msg}")),
         429 => TranslateError::RateLimit(format!("Yandex 频率超限 {code}: {msg}")),
@@ -527,10 +542,7 @@ impl TranslateProvider for TransmartProvider {
             method: "POST",
             url: "https://transmart.qq.com/api/imt".to_string(),
             body: Some(body),
-            headers: vec![(
-                "Content-Type".to_string(),
-                "application/json".to_string(),
-            )],
+            headers: vec![("Content-Type".to_string(), "application/json".to_string())],
         }
     }
 
@@ -549,9 +561,9 @@ impl TranslateProvider for TransmartProvider {
         }
 
         // auto_translation 为译文数组（与 text_list 逐项对应），按顺序拼接。
-        let segments = v["auto_translation"]
-            .as_array()
-            .ok_or_else(|| TranslateError::ParseError("missing auto_translation array".to_string()))?;
+        let segments = v["auto_translation"].as_array().ok_or_else(|| {
+            TranslateError::ParseError("missing auto_translation array".to_string())
+        })?;
         let mut translated = String::new();
         for seg in segments {
             if let Some(part) = seg.as_str() {
@@ -654,7 +666,9 @@ impl TranslateProvider for BingProvider {
         let token = executor.execute(&Self::build_auth_request())?;
         let token = token.trim();
         if token.is_empty() {
-            return Err(TranslateError::Auth("Bing edge auth 返回空 token".to_string()));
+            return Err(TranslateError::Auth(
+                "Bing edge auth 返回空 token".to_string(),
+            ));
         }
 
         // 第二步：带 Bearer token POST 翻译，复用 parse_response 解析译文。
@@ -836,7 +850,13 @@ impl TranslateProvider for BaiduFieldProvider {
 
         // 每次请求生成随机 salt 防重放（百度领域翻译 API 文档要求）。
         let salt = uuid::Uuid::new_v4().simple().to_string();
-        let sign = baidu_field_sign(&self.app_id, &req.text, &salt, &self.field, &self.secret_key);
+        let sign = baidu_field_sign(
+            &self.app_id,
+            &req.text,
+            &salt,
+            &self.field,
+            &self.secret_key,
+        );
 
         // domain 参数承载领域（field）；q/appid 走 percent-encode。
         let body = format!(
@@ -1198,11 +1218,14 @@ fn parse_youdao_basic(basic: &serde_json::Value) -> DictEntry {
 /// 识别规则：取首个空白前的 token，若以英文字母+点号结尾（如 `n.`/`vt.`/`adj.`）视为词性，
 /// 其余作为该词性下的释义；无可识别词性时 pos 留空、整条作为释义。
 /// 同一词性的多条释义合并到同一分组，保持出现顺序。
-fn group_definitions_by_pos(explains: &[&str]) -> Vec<PosDefinition> {
+pub(crate) fn group_definitions_by_pos(explains: &[&str]) -> Vec<PosDefinition> {
     let mut groups: Vec<PosDefinition> = Vec::new();
     for explain in explains {
         let (pos, meaning) = split_pos_prefix(explain);
-        match groups.iter_mut().find(|g| g.pos.as_deref() == pos.as_deref()) {
+        match groups
+            .iter_mut()
+            .find(|g| g.pos.as_deref() == pos.as_deref())
+        {
             Some(group) => group.meanings.push(meaning),
             None => groups.push(PosDefinition {
                 pos,
@@ -1232,30 +1255,28 @@ fn is_pos_token(token: &str) -> bool {
     matches!(token.strip_suffix('.'), Some(body) if !body.is_empty() && body.chars().all(|c| c.is_ascii_alphabetic()))
 }
 
-// ECDICT 英汉词典（pot-app.com/api/dict POST，免 key，pot 自建公共服务）
+// ECDICT 英汉词典（本地 SQLite 词库，免 key、零网络）
 
-/// ECDICT 词典 provider（pot-app.com/api/dict POST，免 key）。
+/// ECDICT 词典 provider（本地 SQLite 词库，免 key、零网络）。
 ///
-/// 端点（pot 自建公共服务，按公开接口形态独立实现，不参考任何第三方源码）：
-/// `POST https://pot-app.com/api/dict`，JSON body `{"word":"..."}`，
-/// 响应为 ECDICT 数据库行：`{word, phonetic, translation, definition, exchange, ...}`。
-/// - 音标取 `phonetic`。
-/// - `translation`（英汉释义，多词性按换行分隔）按词性前缀分组为释义。
-/// - `exchange`（如 `s:glaciers/p:glacial`）解析为词形列表（取各项 `:` 后的值）。
+/// 取代原 `pot-app.com/api/dict` 远程接口：词库随应用打包为本地 SQLite，
+/// 查词全程走 `EcdictDb::lookup`（只读本地查询），不发任何网络请求。
+/// 因此 override `translate` 直接查本地库、忽略注入的 `executor`；
+/// `build_request`/`parse_response` 为不可达占位（override 后永不被调用）。
 ///
-/// pot 自建公共服务、随对方改版即可能失效，标 is_unofficial=true（同 lingva 处理）。
-pub struct EcdictProvider;
-
-impl EcdictProvider {
-    /// 构造 ECDICT provider（无凭据）。
-    pub fn new() -> Self {
-        Self
-    }
+/// - 命中：返回 `Dict`（音标 / 按词性分组释义 / 词形变化）。
+/// - 未命中（未收录或空词条）：返回 `ParseError`（明确提示，不 panic）。
+/// - 本地库不可用：`lookup` 返回 `Network` 错误，上层按源不可用处理。
+///
+/// 词库本地、不依赖任何第三方在线接口，故 `is_unofficial=false`。
+pub struct EcdictProvider {
+    db: Arc<EcdictDb>,
 }
 
-impl Default for EcdictProvider {
-    fn default() -> Self {
-        Self::new()
+impl EcdictProvider {
+    /// 用本地词典 DAO 构造 ECDICT provider（无凭据）。
+    pub fn new(db: Arc<EcdictDb>) -> Self {
+        Self { db }
     }
 }
 
@@ -1265,59 +1286,33 @@ impl TranslateProvider for EcdictProvider {
             id: "ecdict",
             name: "ECDICT 英汉词典",
             needs_key: false,
-            is_unofficial: true,
+            is_unofficial: false,
         }
     }
 
-    fn build_request(&self, req: &TranslateRequest) -> ProviderHttpRequest {
-        // ECDICT 只查英文词，待查词置于 JSON body 的 word 字段；
-        // 用 serde_json 构造自动正确转义（避免手拼 JSON 注入风险）。
-        let body = serde_json::json!({ "word": req.text }).to_string();
-
-        ProviderHttpRequest {
-            method: "POST",
-            url: "https://pot-app.com/api/dict".to_string(),
-            body: Some(body),
-            headers: vec![(
-                "Content-Type".to_string(),
-                "application/json".to_string(),
-            )],
-        }
+    fn build_request(&self, _req: &TranslateRequest) -> ProviderHttpRequest {
+        // 本地源 override 了 translate，此方法不可达；返占位以满足 trait 契约。
+        unreachable!("EcdictProvider 走本地词典查询，build_request 不应被调用")
     }
 
-    fn parse_response(&self, raw: &str) -> Result<TranslateResponse, TranslateError> {
-        let v: serde_json::Value =
-            serde_json::from_str(raw).map_err(|e| TranslateError::ParseError(e.to_string()))?;
+    fn parse_response(&self, _raw: &str) -> Result<TranslateResponse, TranslateError> {
+        // 本地源 override 了 translate，此方法不可达；返占位以满足 trait 契约。
+        unreachable!("EcdictProvider 走本地词典查询，parse_response 不应被调用")
+    }
 
-        // 未收录/非词时 word 与 translation 均空，视为无结果（ParseError，不 panic）。
-        let translation = v["translation"].as_str().unwrap_or("").trim();
-        if translation.is_empty() {
-            return Err(TranslateError::ParseError(
+    fn translate(
+        &self,
+        req: &TranslateRequest,
+        _executor: &dyn HttpExecutor,
+    ) -> Result<TranslateResponse, TranslateError> {
+        // 本地词库查询，忽略 executor（零网络）。未命中映射为 ParseError，
+        // 与原远程源「未收录」语义一致，让上层据此提示用户。
+        match self.db.lookup(&req.text)? {
+            Some(entry) => Ok(TranslateResponse::Dict { entry }),
+            None => Err(TranslateError::ParseError(
                 "ECDICT 未收录该词或返回空词条".to_string(),
-            ));
+            )),
         }
-
-        let phonetic = v["phonetic"]
-            .as_str()
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .map(str::to_string);
-
-        // translation 各行为一条释义，按词性前缀分组。
-        let explains: Vec<&str> = translation.lines().map(str::trim).filter(|l| !l.is_empty()).collect();
-        let definitions = group_definitions_by_pos(&explains);
-
-        let inflections = parse_ecdict_exchange(v["exchange"].as_str().unwrap_or(""));
-
-        Ok(TranslateResponse::Dict {
-            entry: DictEntry {
-                phonetic,
-                definitions,
-                examples: vec![],
-                audio: None,
-                inflections,
-            },
-        })
     }
 }
 
@@ -1325,7 +1320,7 @@ impl TranslateProvider for EcdictProvider {
 ///
 /// 格式（ECDICT 约定）：`类型:值` 以 `/` 分隔，如 `s:glaciers/p:glacial/3:glaciates`。
 /// 取各项 `:` 后的值作为词形；无 `:` 的项原样保留。空串返回空列表。
-fn parse_ecdict_exchange(exchange: &str) -> Vec<String> {
+pub(crate) fn parse_ecdict_exchange(exchange: &str) -> Vec<String> {
     exchange
         .split('/')
         .filter_map(|item| {
@@ -1641,7 +1636,12 @@ impl TranslateProvider for TencentProvider {
 ///
 /// 抽为纯函数：对固定 secret/timestamp/payload 可断言确定 Authorization，使签名可单测验证。
 /// `timestamp` 为 Unix 秒；CanonicalHeaders 固定含 content-type/host/x-tc-action（与实际发送头一致）。
-pub fn tencent_tc3_sign(secret_id: &str, secret_key: &str, payload: &str, timestamp: i64) -> String {
+pub fn tencent_tc3_sign(
+    secret_id: &str,
+    secret_key: &str,
+    payload: &str,
+    timestamp: i64,
+) -> String {
     use sha2::{Digest, Sha256};
 
     let date = unix_secs_to_utc_date(timestamp);
@@ -1655,16 +1655,14 @@ pub fn tencent_tc3_sign(secret_id: &str, secret_key: &str, payload: &str, timest
     );
     let signed_headers = "content-type;host;x-tc-action";
     let hashed_payload = format!("{:x}", Sha256::digest(payload.as_bytes()));
-    let canonical_request = format!(
-        "POST\n/\n\n{canonical_headers}\n{signed_headers}\n{hashed_payload}"
-    );
+    let canonical_request =
+        format!("POST\n/\n\n{canonical_headers}\n{signed_headers}\n{hashed_payload}");
 
     // 步骤 2：StringToSign。
     let credential_scope = format!("{date}/{TENCENT_SERVICE}/tc3_request");
     let hashed_canonical = format!("{:x}", Sha256::digest(canonical_request.as_bytes()));
-    let string_to_sign = format!(
-        "TC3-HMAC-SHA256\n{timestamp}\n{credential_scope}\n{hashed_canonical}"
-    );
+    let string_to_sign =
+        format!("TC3-HMAC-SHA256\n{timestamp}\n{credential_scope}\n{hashed_canonical}");
 
     // 步骤 3：三层密钥派生。
     let secret_date = hmac_sha256(format!("TC3{secret_key}").as_bytes(), date.as_bytes());
@@ -1939,7 +1937,10 @@ impl TranslateProvider for VolcengineProvider {
             body: Some(body),
             headers: vec![
                 ("Authorization".to_string(), authorization),
-                ("Content-Type".to_string(), VOLCENGINE_CONTENT_TYPE.to_string()),
+                (
+                    "Content-Type".to_string(),
+                    VOLCENGINE_CONTENT_TYPE.to_string(),
+                ),
                 ("Host".to_string(), VOLCENGINE_HOST.to_string()),
                 ("X-Date".to_string(), x_date),
                 ("X-Content-Sha256".to_string(), payload_hash),
@@ -2003,8 +2004,7 @@ pub fn volcengine_sigv4_sign(
     let payload_hash = to_hex_lower(&sha256_digest(payload.as_bytes()));
 
     // 步骤 1：CanonicalRequest（POST、根路径、固定 query、签名头集按字母序）。
-    let canonical_query =
-        format!("Action={VOLCENGINE_ACTION}&Version={VOLCENGINE_VERSION}");
+    let canonical_query = format!("Action={VOLCENGINE_ACTION}&Version={VOLCENGINE_VERSION}");
     let canonical_headers = format!(
         "content-type:{VOLCENGINE_CONTENT_TYPE}\nhost:{VOLCENGINE_HOST}\nx-content-sha256:{payload_hash}\nx-date:{x_date}\n"
     );
@@ -2016,8 +2016,7 @@ pub fn volcengine_sigv4_sign(
     // 步骤 2：StringToSign。
     let credential_scope = format!("{short_date}/{region}/{VOLCENGINE_SERVICE}/request");
     let hashed_canonical = to_hex_lower(&sha256_digest(canonical_request.as_bytes()));
-    let string_to_sign =
-        format!("HMAC-SHA256\n{x_date}\n{credential_scope}\n{hashed_canonical}");
+    let string_to_sign = format!("HMAC-SHA256\n{x_date}\n{credential_scope}\n{hashed_canonical}");
 
     // 步骤 3：四层密钥派生（首层直接用 secretAccessKey，无 "AWS4" 前缀，火山特有）。
     let k_date = hmac_sha256(secret_access_key.as_bytes(), short_date.as_bytes());
@@ -2903,7 +2902,9 @@ fn map_chatglm_error(code: &str, msg: &str) -> TranslateError {
         "1001" | "1002" | "1003" | "1004" => {
             TranslateError::Auth(format!("ChatGLM 鉴权失败 {code}: {msg}"))
         }
-        "1302" | "1303" | "1305" => TranslateError::RateLimit(format!("ChatGLM 频率超限 {code}: {msg}")),
+        "1302" | "1303" | "1305" => {
+            TranslateError::RateLimit(format!("ChatGLM 频率超限 {code}: {msg}"))
+        }
         "1112" | "1113" => TranslateError::Quota(format!("ChatGLM 余额不足 {code}: {msg}")),
         _ => TranslateError::ServerError(format!("ChatGLM 错误 {code}: {msg}")),
     }
@@ -3040,7 +3041,11 @@ fn build_gemini_body(messages: &[ChatMessage]) -> String {
         .filter(|m| m.role != "system")
         .map(|m| {
             // Gemini 的 content role 取 user/model；assistant 归一为 model。
-            let role = if m.role == "assistant" { "model" } else { "user" };
+            let role = if m.role == "assistant" {
+                "model"
+            } else {
+                "user"
+            };
             serde_json::json!({ "role": role, "parts": [{ "text": m.content }] })
         })
         .collect();
@@ -3106,11 +3111,11 @@ mod tests {
         );
 
         assert!(
-            build_provider("lingva", &[]).is_ok(),
+            build_provider("lingva", &[], None).is_ok(),
             "build_provider(\"lingva\") 应成功"
         );
         assert!(
-            build_provider("mymemory", &[]).is_err(),
+            build_provider("mymemory", &[], None).is_err(),
             "build_provider(\"mymemory\") 应返回未知源错误"
         );
     }
@@ -3129,9 +3134,7 @@ mod tests {
 
         assert_eq!(http_req.method, "GET");
         assert!(
-            http_req
-                .url
-                .starts_with("https://lingva.ml/api/v1/"),
+            http_req.url.starts_with("https://lingva.ml/api/v1/"),
             "URL 应为 Lingva 端点，实际：{}",
             http_req.url
         );
@@ -3160,7 +3163,7 @@ mod tests {
         let cap = LingvaProvider::new().capability();
         assert_eq!(cap.id, "lingva");
         assert!(!cap.needs_key);
-        assert!(build_provider("lingva", &[]).is_ok());
+        assert!(build_provider("lingva", &[], None).is_ok());
     }
 
     #[test]
@@ -3175,7 +3178,7 @@ mod tests {
 
     #[test]
     fn build_provider_baidu_missing_required_fields_returns_err() {
-        let result = build_provider("baidu", &[]);
+        let result = build_provider("baidu", &[], None);
         assert!(result.is_err(), "百度缺凭据应返回 Err");
         if let Err(err) = result {
             assert!(
@@ -3191,7 +3194,7 @@ mod tests {
             ("app_id".to_string(), "test_app_id".to_string()),
             ("secret_key".to_string(), "test_secret".to_string()),
         ];
-        let result = build_provider("baidu", &creds);
+        let result = build_provider("baidu", &creds, None);
         assert!(result.is_ok(), "百度全字段应成功");
         assert_eq!(result.unwrap().capability().id, "baidu");
     }
@@ -3199,14 +3202,14 @@ mod tests {
     #[test]
     fn build_provider_google_with_api_key_succeeds() {
         let creds = vec![("api_key".to_string(), "test_key".to_string())];
-        let result = build_provider("google", &creds);
+        let result = build_provider("google", &creds, None);
         assert!(result.is_ok(), "google 有 key 应成功");
         assert_eq!(result.unwrap().capability().id, "google");
     }
 
     #[test]
     fn build_provider_deepl_free_missing_auth_key_returns_err() {
-        let result = build_provider("deepl_free", &[]);
+        let result = build_provider("deepl_free", &[], None);
         assert!(result.is_err(), "deepl_free 缺 auth_key 应返回 Err");
         if let Err(err) = result {
             assert!(
@@ -3219,14 +3222,14 @@ mod tests {
     #[test]
     fn build_provider_deepl_free_with_auth_key_succeeds() {
         let creds = vec![("auth_key".to_string(), "test_auth_key".to_string())];
-        let result = build_provider("deepl_free", &creds);
+        let result = build_provider("deepl_free", &creds, None);
         assert!(result.is_ok(), "deepl_free 有 auth_key 应成功");
         assert_eq!(result.unwrap().capability().id, "deepl_free");
     }
 
     #[test]
     fn build_provider_unknown_id_returns_err() {
-        let result = build_provider("nonexistent_provider", &[]);
+        let result = build_provider("nonexistent_provider", &[], None);
         assert!(result.is_err(), "未知 id 应返回 Err");
         if let Err(err) = result {
             assert!(!err.is_empty(), "Err 消息不应为空");
@@ -3240,7 +3243,7 @@ mod tests {
             ("app_id".to_string(), " 12345 ".to_string()),
             ("secret_key".to_string(), " mysecret ".to_string()),
         ];
-        let provider = build_provider("baidu", &creds).expect("带空格凭据应成功构造");
+        let provider = build_provider("baidu", &creds, None).expect("带空格凭据应成功构造");
 
         let req = super::super::TranslateRequest {
             text: "hello".to_string(),
@@ -3324,7 +3327,9 @@ mod tests {
 
         // 多分句：拼接各分句 result[0][i][0]（实测 Google 不在分句间补空格，原样拼接）。
         let multi = provider
-            .parse_response(r#"[[["Hello","你好",null,null,2],["World","世界",null,null,2]],null,"zh-CN"]"#)
+            .parse_response(
+                r#"[[["Hello","你好",null,null,2],["World","世界",null,null,2]],null,"zh-CN"]"#,
+            )
             .expect("多分句应解析成功");
         assert_eq!(plain_text(&multi), "HelloWorld");
 
@@ -3357,7 +3362,7 @@ mod tests {
         assert_eq!(cap.id, "google_free");
         assert_eq!(cap.name, "Google（免费）");
         assert!(!cap.needs_key);
-        assert!(build_provider("google_free", &[]).is_ok());
+        assert!(build_provider("google_free", &[], None).is_ok());
     }
 
     #[test]
@@ -3478,7 +3483,7 @@ mod tests {
         let cap = YandexProvider::new().capability();
         assert_eq!(cap.id, "yandex");
         assert!(!cap.needs_key);
-        assert!(build_provider("yandex", &[]).is_ok());
+        assert!(build_provider("yandex", &[], None).is_ok());
     }
 
     #[test]
@@ -3567,8 +3572,8 @@ mod tests {
         );
 
         // auto_translation 全空串拼接后为空 → ParseError。
-        let empty = provider
-            .parse_response(r#"{"header":{"ret_code":"succ"},"auto_translation":["",""]}"#);
+        let empty =
+            provider.parse_response(r#"{"header":{"ret_code":"succ"},"auto_translation":["",""]}"#);
         assert!(
             matches!(empty, Err(TranslateError::ParseError(_))),
             "全空译文应返回 ParseError，实际：{empty:?}"
@@ -3588,7 +3593,7 @@ mod tests {
         let cap = TransmartProvider::new().capability();
         assert_eq!(cap.id, "transmart");
         assert!(!cap.needs_key);
-        assert!(build_provider("transmart", &[]).is_ok());
+        assert!(build_provider("transmart", &[], None).is_ok());
     }
 
     #[test]
@@ -3608,7 +3613,7 @@ mod tests {
             ("app_id".to_string(), "   ".to_string()),
             ("secret_key".to_string(), "valid_key".to_string()),
         ];
-        let result = build_provider("baidu", &creds);
+        let result = build_provider("baidu", &creds, None);
         assert!(
             result.is_err(),
             "全空白 app_id trim 后为空应视同缺失，返回 Err"
@@ -3736,7 +3741,11 @@ mod tests {
             "token 步失败应返回 Network 错误，实际：{err:?}"
         );
         // token 步失败后不应再发翻译请求。
-        assert_eq!(exec.seen_urls.borrow().len(), 1, "token 步失败应短路、不发翻译请求");
+        assert_eq!(
+            exec.seen_urls.borrow().len(),
+            1,
+            "token 步失败应短路、不发翻译请求"
+        );
     }
 
     #[test]
@@ -3804,13 +3813,16 @@ mod tests {
         let cap = BingProvider::new().capability();
         assert_eq!(cap.id, "bing");
         assert!(!cap.needs_key);
-        assert!(build_provider("bing", &[]).is_ok());
+        assert!(build_provider("bing", &[], None).is_ok());
     }
 
     #[test]
     fn registry_contains_bing_keyless() {
         let reg = registry();
-        let b = reg.iter().find(|c| c.id == "bing").expect("注册表应含 bing");
+        let b = reg
+            .iter()
+            .find(|c| c.id == "bing")
+            .expect("注册表应含 bing");
         assert!(!b.needs_key, "bing 应为免 key 源");
     }
 
@@ -3902,7 +3914,9 @@ mod tests {
 
         // 成功响应：trans_result 各 dst 拼接。
         let ok = provider
-            .parse_response(r#"{"from":"en","to":"zh","trans_result":[{"src":"hello","dst":"你好"}]}"#)
+            .parse_response(
+                r#"{"from":"en","to":"zh","trans_result":[{"src":"hello","dst":"你好"}]}"#,
+            )
             .expect("含 trans_result.dst 应解析成功");
         assert_eq!(plain_text(&ok), "你好");
 
@@ -3938,7 +3952,7 @@ mod tests {
                 "sk_secret_must_not_leak".to_string(),
             ),
         ];
-        let result = build_provider("baidu_field", &creds);
+        let result = build_provider("baidu_field", &creds, None);
         assert!(result.is_err(), "缺 field 应返回 Err");
         if let Err(err) = result {
             assert!(
@@ -3955,7 +3969,7 @@ mod tests {
             ("secret_key".to_string(), "sk1".to_string()),
             ("field".to_string(), "it".to_string()),
         ];
-        let result = build_provider("baidu_field", &creds);
+        let result = build_provider("baidu_field", &creds, None);
         assert!(result.is_ok(), "百度专业全字段应成功");
         assert_eq!(result.unwrap().capability().id, "baidu_field");
     }
@@ -3999,7 +4013,11 @@ mod tests {
         // 边界：恰好 20 字符仍用全文（<=20）。
         let exactly20 = "12345678901234567890";
         assert_eq!(exactly20.chars().count(), 20);
-        assert_eq!(youdao_truncate(exactly20), exactly20, "恰好 20 字符应用全文");
+        assert_eq!(
+            youdao_truncate(exactly20),
+            exactly20,
+            "恰好 20 字符应用全文"
+        );
 
         // 21 字符触发截断：前10 + "21" + 后10。
         assert_eq!(
@@ -4064,7 +4082,9 @@ mod tests {
 
         // 成功响应：translation 数组拼接（errorCode=0）。
         let ok = provider
-            .parse_response(r#"{"errorCode":"0","query":"hello","translation":["你好"],"l":"en2zh-CHS"}"#)
+            .parse_response(
+                r#"{"errorCode":"0","query":"hello","translation":["你好"],"l":"en2zh-CHS"}"#,
+            )
             .expect("含 translation 应解析成功");
         assert_eq!(plain_text(&ok), "你好");
 
@@ -4094,7 +4114,7 @@ mod tests {
     fn build_provider_youdao_missing_required_fields_returns_err() {
         // 缺 app_secret 应报错。
         let creds = vec![("app_key".to_string(), "ak1".to_string())];
-        let result = build_provider("youdao", &creds);
+        let result = build_provider("youdao", &creds, None);
         assert!(result.is_err(), "缺 app_secret 应返回 Err");
     }
 
@@ -4104,7 +4124,7 @@ mod tests {
             ("app_key".to_string(), "ak1".to_string()),
             ("app_secret".to_string(), "as1".to_string()),
         ];
-        let result = build_provider("youdao", &creds);
+        let result = build_provider("youdao", &creds, None);
         assert!(result.is_ok(), "有道全字段应成功");
         assert_eq!(result.unwrap().capability().id, "youdao");
     }
@@ -4166,8 +4186,7 @@ mod tests {
 
         // body 为合法 JSON，含 source（数组）、trans_type=en2zh、request_id。
         let body = http_req.body.expect("彩云为 POST，应有 body");
-        let parsed: serde_json::Value =
-            serde_json::from_str(&body).expect("body 应为合法 JSON");
+        let parsed: serde_json::Value = serde_json::from_str(&body).expect("body 应为合法 JSON");
         assert_eq!(
             parsed["source"][0], "hello",
             "source 应为含原文的数组，实际：{body}"
@@ -4221,7 +4240,7 @@ mod tests {
         // 缺 token 必填字段应报错，且错误消息不含任何字段值（安全约定 TV2-F5-A01）。
         // 传一个错拼 key 的脏密钥值：token 仍缺失走缺字段路径，坐实错误消息不泄露该脏值。
         let creds = vec![("toke".to_string(), "tok_secret_must_not_leak".to_string())];
-        let result = build_provider("caiyun", &creds);
+        let result = build_provider("caiyun", &creds, None);
         assert!(result.is_err(), "缺 token 应返回 Err");
         if let Err(err) = result {
             assert!(
@@ -4234,7 +4253,7 @@ mod tests {
     #[test]
     fn build_provider_caiyun_with_token_succeeds() {
         let creds = vec![("token".to_string(), "tok123".to_string())];
-        let result = build_provider("caiyun", &creds);
+        let result = build_provider("caiyun", &creds, None);
         assert!(result.is_ok(), "彩云有 token 应成功");
         assert_eq!(result.unwrap().capability().id, "caiyun");
     }
@@ -4285,8 +4304,7 @@ mod tests {
 
         // body 为合法 JSON，含 from/to/apikey/src_text。
         let body = http_req.body.expect("小牛为 POST，应有 body");
-        let parsed: serde_json::Value =
-            serde_json::from_str(&body).expect("body 应为合法 JSON");
+        let parsed: serde_json::Value = serde_json::from_str(&body).expect("body 应为合法 JSON");
         assert_eq!(parsed["from"], "en", "from 应为 en，实际：{body}");
         assert_eq!(parsed["to"], "zh", "to 应为 zh，实际：{body}");
         assert_eq!(
@@ -4305,8 +4323,7 @@ mod tests {
         assert_eq!(plain_text(&ok), "你好");
 
         // 错误响应（error_code 13001 apikey 错误）→ map_niutrans_error 归为 Auth。
-        let err =
-            provider.parse_response(r#"{"error_code":"13001","error_msg":"apikey error"}"#);
+        let err = provider.parse_response(r#"{"error_code":"13001","error_msg":"apikey error"}"#);
         assert!(
             matches!(err, Err(TranslateError::Auth(_))),
             "13001 apikey 错误应归一为 Auth，实际：{err:?}"
@@ -4333,7 +4350,7 @@ mod tests {
         // 缺 apikey 必填字段应报错，且错误消息不含任何字段值（安全约定 TV2-F5-A01）。
         // 传一个错拼 key 的脏密钥值：apikey 仍缺失走缺字段路径，坐实错误消息不泄露该脏值。
         let creds = vec![("apike".to_string(), "key_secret_must_not_leak".to_string())];
-        let result = build_provider("niutrans", &creds);
+        let result = build_provider("niutrans", &creds, None);
         assert!(result.is_err(), "缺 apikey 应返回 Err");
         if let Err(err) = result {
             assert!(
@@ -4346,7 +4363,7 @@ mod tests {
     #[test]
     fn build_provider_niutrans_with_apikey_succeeds() {
         let creds = vec![("apikey".to_string(), "apikey789".to_string())];
-        let result = build_provider("niutrans", &creds);
+        let result = build_provider("niutrans", &creds, None);
         assert!(result.is_ok(), "小牛有 apikey 应成功");
         assert_eq!(result.unwrap().capability().id, "niutrans");
     }
@@ -4381,7 +4398,8 @@ mod tests {
         );
 
         // timestamp=1700000000 对应 UTC 日期 2023-11-14；credential scope 用该 date。
-        let expected = "TC3-HMAC-SHA256 Credential=AKIDtest_secret_id_123/2023-11-14/tmt/tc3_request, \
+        let expected =
+            "TC3-HMAC-SHA256 Credential=AKIDtest_secret_id_123/2023-11-14/tmt/tc3_request, \
 SignedHeaders=content-type;host;x-tc-action, \
 Signature=cc913306276069356aef21567e4670d036b69e1fd30eb24e17d7c536ed7decaf";
         assert_eq!(
@@ -4441,10 +4459,7 @@ Signature=cc913306276069356aef21567e4670d036b69e1fd30eb24e17d7c536ed7decaf";
             "应含 X-TC-Region 头，实际：{:?}",
             http_req.headers
         );
-        assert!(
-            header("X-TC-Timestamp").is_some(),
-            "应含 X-TC-Timestamp 头"
-        );
+        assert!(header("X-TC-Timestamp").is_some(), "应含 X-TC-Timestamp 头");
         let auth = header("Authorization").expect("应含 Authorization 头");
         assert!(
             auth.starts_with("TC3-HMAC-SHA256 Credential=secret_id_1/"),
@@ -4453,8 +4468,7 @@ Signature=cc913306276069356aef21567e4670d036b69e1fd30eb24e17d7c536ed7decaf";
 
         // body 为合法 JSON，含 SourceText/Source/Target。
         let body = http_req.body.expect("腾讯为 POST，应有 body");
-        let parsed: serde_json::Value =
-            serde_json::from_str(&body).expect("body 应为合法 JSON");
+        let parsed: serde_json::Value = serde_json::from_str(&body).expect("body 应为合法 JSON");
         assert_eq!(parsed["SourceText"], "hello", "body 应含 SourceText");
         assert_eq!(parsed["Source"], "en", "body 应含 Source=en");
         assert_eq!(parsed["Target"], "zh", "body 应含 Target=zh");
@@ -4516,7 +4530,7 @@ Signature=cc913306276069356aef21567e4670d036b69e1fd30eb24e17d7c536ed7decaf";
                 "sk_secret_must_not_leak".to_string(),
             ),
         ];
-        let result = build_provider("tencent", &creds);
+        let result = build_provider("tencent", &creds, None);
         assert!(result.is_err(), "缺 secret_key 应返回 Err");
         if let Err(err) = result {
             assert!(
@@ -4532,7 +4546,7 @@ Signature=cc913306276069356aef21567e4670d036b69e1fd30eb24e17d7c536ed7decaf";
             ("secret_id".to_string(), "sid1".to_string()),
             ("secret_key".to_string(), "sk1".to_string()),
         ];
-        let result = build_provider("tencent", &creds);
+        let result = build_provider("tencent", &creds, None);
         assert!(result.is_ok(), "腾讯全字段应成功");
         assert_eq!(result.unwrap().capability().id, "tencent");
     }
@@ -4631,7 +4645,9 @@ Signature=cc913306276069356aef21567e4670d036b69e1fd30eb24e17d7c536ed7decaf";
 
         // 成功响应：取 Data.Translated。
         let ok = provider
-            .parse_response(r#"{"Code":"200","Data":{"WordCount":"5","Translated":"你好"},"RequestId":"r1"}"#)
+            .parse_response(
+                r#"{"Code":"200","Data":{"WordCount":"5","Translated":"你好"},"RequestId":"r1"}"#,
+            )
             .expect("含 Data.Translated 应解析成功");
         assert_eq!(plain_text(&ok), "你好");
 
@@ -4671,7 +4687,7 @@ Signature=cc913306276069356aef21567e4670d036b69e1fd30eb24e17d7c536ed7decaf";
                 "as_secret_must_not_leak".to_string(),
             ),
         ];
-        let result = build_provider("alibaba", &creds);
+        let result = build_provider("alibaba", &creds, None);
         assert!(result.is_err(), "缺 accesskey_secret 应返回 Err");
         if let Err(err) = result {
             assert!(
@@ -4687,7 +4703,7 @@ Signature=cc913306276069356aef21567e4670d036b69e1fd30eb24e17d7c536ed7decaf";
             ("accesskey_id".to_string(), "aid1".to_string()),
             ("accesskey_secret".to_string(), "as1".to_string()),
         ];
-        let result = build_provider("alibaba", &creds);
+        let result = build_provider("alibaba", &creds, None);
         assert!(result.is_ok(), "阿里全字段应成功");
         assert_eq!(result.unwrap().capability().id, "alibaba");
     }
@@ -4713,8 +4729,7 @@ Signature=cc913306276069356aef21567e4670d036b69e1fd30eb24e17d7c536ed7decaf";
     // 计算（非 pot 源码），固定 access_key/secret/region/payload/timestamp 下手算核对。
     #[test]
     fn volcengine_sigv4_signature_deterministic() {
-        let payload =
-            r#"{"SourceLanguage":"en","TargetLanguage":"zh","TextList":["hello"]}"#;
+        let payload = r#"{"SourceLanguage":"en","TargetLanguage":"zh","TextList":["hello"]}"#;
         let auth = volcengine_sigv4_sign(
             "AKLTtest_access_key_id_123",
             "test_secret_access_key_abc",
@@ -4747,8 +4762,7 @@ Signature=dac06f9e1be8667102fc1dfe025834cc9da68f2359b28084891b8e03ee332a61";
     // parse_response 取 TranslationList[].Translation；错误响应→TranslateError。
     #[test]
     fn volcengine_build_and_parse() {
-        let provider =
-            VolcengineProvider::new("access_id_1", "access_secret_1", "cn-north-1");
+        let provider = VolcengineProvider::new("access_id_1", "access_secret_1", "cn-north-1");
         let req = TranslateRequest {
             text: "hello".to_string(),
             source_lang: Lang::new("en"),
@@ -4758,8 +4772,7 @@ Signature=dac06f9e1be8667102fc1dfe025834cc9da68f2359b28084891b8e03ee332a61";
 
         assert_eq!(http_req.method, "POST");
         assert_eq!(
-            http_req.url,
-            "https://open.volcengineapi.com/?Action=TranslateText&Version=2020-06-01",
+            http_req.url, "https://open.volcengineapi.com/?Action=TranslateText&Version=2020-06-01",
             "URL 应为火山翻译端点，实际：{}",
             http_req.url
         );
@@ -4795,10 +4808,15 @@ Signature=dac06f9e1be8667102fc1dfe025834cc9da68f2359b28084891b8e03ee332a61";
 
         // body 为合法 JSON，含 SourceLanguage/TargetLanguage/TextList。
         let body = http_req.body.expect("火山为 POST，应有 body");
-        let parsed: serde_json::Value =
-            serde_json::from_str(&body).expect("body 应为合法 JSON");
-        assert_eq!(parsed["SourceLanguage"], "en", "body 应含 SourceLanguage=en");
-        assert_eq!(parsed["TargetLanguage"], "zh", "body 应含 TargetLanguage=zh");
+        let parsed: serde_json::Value = serde_json::from_str(&body).expect("body 应为合法 JSON");
+        assert_eq!(
+            parsed["SourceLanguage"], "en",
+            "body 应含 SourceLanguage=en"
+        );
+        assert_eq!(
+            parsed["TargetLanguage"], "zh",
+            "body 应含 TargetLanguage=zh"
+        );
         assert_eq!(
             parsed["TextList"][0], "hello",
             "body TextList[0] 应为待译文本"
@@ -4858,7 +4876,7 @@ Signature=dac06f9e1be8667102fc1dfe025834cc9da68f2359b28084891b8e03ee332a61";
                 "sak_secret_must_not_leak".to_string(),
             ),
         ];
-        let result = build_provider("volcengine", &creds);
+        let result = build_provider("volcengine", &creds, None);
         assert!(result.is_err(), "缺 secret_access_key 应返回 Err");
         if let Err(err) = result {
             assert!(
@@ -4875,7 +4893,7 @@ Signature=dac06f9e1be8667102fc1dfe025834cc9da68f2359b28084891b8e03ee332a61";
             ("access_key_id".to_string(), "akid1".to_string()),
             ("secret_access_key".to_string(), "sak1".to_string()),
         ];
-        let result = build_provider("volcengine", &creds);
+        let result = build_provider("volcengine", &creds, None);
         assert!(result.is_ok(), "火山全必填字段应成功");
         assert_eq!(result.unwrap().capability().id, "volcengine");
     }
@@ -5079,7 +5097,7 @@ Signature=dac06f9e1be8667102fc1dfe025834cc9da68f2359b28084891b8e03ee332a61";
     // build_provider 缺必填字段（OpenAI apiKey）应明确报错，不含字段值。
     #[test]
     fn build_provider_openai_missing_fields_returns_err() {
-        let result = build_provider("openai", &[]);
+        let result = build_provider("openai", &[], None);
         assert!(result.is_err(), "openai 缺 apiKey 应返回 Err");
         if let Err(err) = result {
             assert!(err.contains("未配置"), "错误应提示未配置：{err}");
@@ -5099,7 +5117,7 @@ Signature=dac06f9e1be8667102fc1dfe025834cc9da68f2359b28084891b8e03ee332a61";
         // build_provider 返回的 Ok 内层 Box<dyn TranslateProvider> 不实现 Debug，
         // 故不能用 unwrap_err；提取错误字符串（应为 Err）。
         let err_of = |provider_id: &str, creds: &[(String, String)]| -> String {
-            match build_provider(provider_id, creds) {
+            match build_provider(provider_id, creds, None) {
                 Ok(_) => panic!("{provider_id} 缺必填字段应返回 Err，却得到 Ok"),
                 Err(e) => e,
             }
@@ -5139,7 +5157,7 @@ Signature=dac06f9e1be8667102fc1dfe025834cc9da68f2359b28084891b8e03ee332a61";
     #[test]
     fn build_provider_ollama_with_model_succeeds() {
         let creds = vec![("model".to_string(), "llama3".to_string())];
-        let result = build_provider("ollama", &creds);
+        let result = build_provider("ollama", &creds, None);
         assert!(result.is_ok(), "ollama 有 model 应成功");
         assert_eq!(result.unwrap().capability().id, "ollama");
     }
@@ -5343,42 +5361,83 @@ Signature=dac06f9e1be8667102fc1dfe025834cc9da68f2359b28084891b8e03ee332a61";
         }
     }
 
-    // 对齐 acceptance TV4-F2-A01：build_request 端点/方法/body 正确；
-    // parse_response 把 ECDICT 英汉词条解析为 Dict（音标/按词性分组释义/词形）。
-    #[test]
-    fn ecdict_build_and_parse_dict() {
-        let provider = EcdictProvider::new();
-        let req = TranslateRequest {
-            text: "glacier".to_string(),
+    /// 建一个临时 ECDICT 库并写入给定行，返回 (TempDir 守卫, 库路径)。
+    /// 守卫必须持有到测试结束，否则 TempDir drop 删库致查询失败。
+    fn ecdict_fixture(
+        rows: &[(&str, &str, &str, &str)],
+    ) -> (tempfile::TempDir, std::path::PathBuf) {
+        use rusqlite::Connection;
+        let dir = tempfile::TempDir::new().expect("临时目录");
+        let path = dir.path().join("ecdict.db");
+        let conn = Connection::open(&path).expect("建库");
+        conn.execute_batch(
+            "CREATE TABLE ecdict (word TEXT NOT NULL, phonetic TEXT, translation TEXT, exchange TEXT);\
+             CREATE INDEX idx_ecdict_lower_word ON ecdict (LOWER(word));",
+        )
+        .expect("建表");
+        for (word, phonetic, translation, exchange) in rows {
+            conn.execute(
+                "INSERT INTO ecdict (word, phonetic, translation, exchange) VALUES (?1, ?2, ?3, ?4)",
+                [word, phonetic, translation, exchange],
+            )
+            .expect("插入");
+        }
+        (dir, path)
+    }
+
+    /// 计数型假执行器：记录被调用次数，用于断言本地词典路径不走网络。
+    struct CountingExecutor {
+        calls: std::cell::Cell<u32>,
+    }
+
+    impl CountingExecutor {
+        fn new() -> Self {
+            Self {
+                calls: std::cell::Cell::new(0),
+            }
+        }
+        fn call_count(&self) -> u32 {
+            self.calls.get()
+        }
+    }
+
+    // Cell 非 Sync，但单测单线程使用、不跨线程共享，为测试桩显式实现。
+    unsafe impl Sync for CountingExecutor {}
+
+    impl HttpExecutor for CountingExecutor {
+        fn execute(&self, _req: &ProviderHttpRequest) -> Result<String, TranslateError> {
+            self.calls.set(self.calls.get() + 1);
+            Ok(String::new())
+        }
+    }
+
+    fn ecdict_req(text: &str) -> TranslateRequest {
+        TranslateRequest {
+            text: text.to_string(),
             source_lang: Lang::new("en"),
             target_lang: Lang::new("zh"),
-        };
-        let http_req = provider.build_request(&req);
+        }
+    }
 
-        assert_eq!(http_req.method, "POST");
-        assert_eq!(
-            http_req.url, "https://pot-app.com/api/dict",
-            "URL 应为 pot-app dict 端点，实际：{}",
-            http_req.url
-        );
-        let body = http_req.body.as_deref().expect("ECDICT POST 应带 body");
-        assert!(
-            body.contains("glacier"),
-            "body 应携带待查词 glacier，实际：{body}"
-        );
+    // 对齐 acceptance TV4-F2-A01（本地化）：命中本地词典返回 Dict 且不发任何网络请求。
+    #[test]
+    fn ecdict_translate_hits_local_db_without_network() {
+        use std::sync::Arc;
+        let (_dir, path) = ecdict_fixture(&[(
+            "glacier",
+            "ˈɡleɪʃər",
+            "n. 冰川，冰河\nvt. 测试动词义",
+            "s:glaciers/p:glacial",
+        )]);
+        let provider = EcdictProvider::new(Arc::new(super::super::ecdict_db::EcdictDb::new(path)));
+        let exec = CountingExecutor::new();
 
-        // 录制响应：ECDICT 行结构（word/phonetic/translation 按词性分行/exchange 词形）。
-        let raw = r#"{
-            "word": "glacier",
-            "phonetic": "ˈɡleɪʃər",
-            "translation": "n. 冰川，冰河\nvt. 测试动词义",
-            "exchange": "s:glaciers/p:glacial"
-        }"#;
-        let resp = provider.parse_response(raw).expect("ECDICT 词条应解析为 Dict");
+        let resp = provider
+            .translate(&ecdict_req("glacier"), &exec)
+            .expect("命中应返回 Dict");
         let entry = dict_entry(&resp);
 
-        assert_eq!(entry.phonetic.as_deref(), Some("ˈɡleɪʃər"), "应取 phonetic");
-        // translation 按词性前缀（n./vt.）分组。
+        assert_eq!(entry.phonetic.as_deref(), Some("ˈɡleɪʃər"), "应取音标");
         let noun = entry
             .definitions
             .iter()
@@ -5389,47 +5448,41 @@ Signature=dac06f9e1be8667102fc1dfe025834cc9da68f2359b28084891b8e03ee332a61";
             "名词释义应含「冰川」，实际：{:?}",
             noun.meanings
         );
-        let verb = entry
-            .definitions
-            .iter()
-            .find(|d| d.pos.as_deref() == Some("vt."))
-            .expect("应含及物动词词性分组");
-        assert!(
-            verb.meanings.iter().any(|m| m.contains("测试动词义")),
-            "动词释义应含「测试动词义」，实际：{:?}",
-            verb.meanings
-        );
-        // exchange 解析为词形列表。
         assert!(
             entry.inflections.iter().any(|i| i == "glaciers"),
-            "词形应含复数 glaciers，实际：{:?}",
+            "词形应含 glaciers，实际：{:?}",
             entry.inflections
         );
+        assert_eq!(exec.call_count(), 0, "本地词典查询不应触发任何 HTTP 调用");
     }
 
     #[test]
-    fn ecdict_parse_invalid_json_returns_parse_error() {
-        let provider = EcdictProvider::new();
-        let err = provider.parse_response("not json");
+    fn ecdict_translate_miss_returns_parse_error_without_network() {
+        use std::sync::Arc;
+        let (_dir, path) = ecdict_fixture(&[("glacier", "", "n. 冰川", "")]);
+        let provider = EcdictProvider::new(Arc::new(super::super::ecdict_db::EcdictDb::new(path)));
+        let exec = CountingExecutor::new();
+
+        let err = provider.translate(&ecdict_req("notarealword"), &exec);
         assert!(
-            matches!(err, Err(TranslateError::ParseError(_))),
-            "非法 JSON 应返回 ParseError，实际：{err:?}"
+            matches!(&err, Err(TranslateError::ParseError(msg)) if !msg.is_empty()),
+            "未命中应返回带提示的 ParseError，实际：{err:?}"
+        );
+        assert_eq!(exec.call_count(), 0, "未命中也不应触发 HTTP 调用");
+    }
+
+    #[test]
+    fn build_provider_ecdict_without_db_returns_err_not_panic() {
+        let result = build_provider("ecdict", &[], None);
+        assert_eq!(
+            result.err().as_deref(),
+            Some("ecdict 本地词典库未就绪"),
+            "无本地库时 build_provider(\"ecdict\") 应返回 Err 而非 panic"
         );
     }
 
     #[test]
-    fn ecdict_parse_empty_word_returns_parse_error() {
-        let provider = EcdictProvider::new();
-        // 无 word/translation 的空响应（非词或未收录）应报 ParseError，不 panic。
-        let err = provider.parse_response(r#"{"word":"","translation":""}"#);
-        assert!(
-            matches!(err, Err(TranslateError::ParseError(_))),
-            "空词条应返回 ParseError，实际：{err:?}"
-        );
-    }
-
-    #[test]
-    fn registry_contains_ecdict_free_unofficial() {
+    fn registry_contains_ecdict_free_official_local() {
         let reg = registry();
         let e = reg
             .iter()
@@ -5437,12 +5490,8 @@ Signature=dac06f9e1be8667102fc1dfe025834cc9da68f2359b28084891b8e03ee332a61";
             .expect("注册表应含 ecdict");
         assert!(!e.needs_key, "ecdict 应为免 key 源");
         assert!(
-            e.is_unofficial,
-            "ecdict 为 pot 自建公共服务，is_unofficial 应为 true"
-        );
-        assert!(
-            build_provider("ecdict", &[]).is_ok(),
-            "build_provider(\"ecdict\") 应免 key 成功"
+            !e.is_unofficial,
+            "ecdict 已本地化、不依赖第三方接口，is_unofficial 应为 false"
         );
     }
 
@@ -5554,7 +5603,7 @@ Signature=dac06f9e1be8667102fc1dfe025834cc9da68f2359b28084891b8e03ee332a61";
     #[test]
     fn build_provider_youdao_dict_missing_required_fields_returns_err() {
         let creds = vec![("app_key".to_string(), "ak1".to_string())];
-        let result = build_provider("youdao_dict", &creds);
+        let result = build_provider("youdao_dict", &creds, None);
         assert!(result.is_err(), "缺 app_secret 应返回 Err");
     }
 
@@ -5580,13 +5629,13 @@ Signature=dac06f9e1be8667102fc1dfe025834cc9da68f2359b28084891b8e03ee332a61";
 
     #[test]
     fn build_provider_rejects_delisted_bing_dict_and_cambridge() {
-        let bing_err = build_provider("bing_dict", &[]).err();
+        let bing_err = build_provider("bing_dict", &[], None).err();
         assert_eq!(
             bing_err.as_deref(),
             Some("未知翻译 provider：bing_dict"),
             "bing_dict 已下架，build_provider 应返回未知源 Err"
         );
-        let cambridge_err = build_provider("cambridge", &[]).err();
+        let cambridge_err = build_provider("cambridge", &[], None).err();
         assert_eq!(
             cambridge_err.as_deref(),
             Some("未知翻译 provider：cambridge"),

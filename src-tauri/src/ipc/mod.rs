@@ -23,6 +23,13 @@ pub mod update;
 /// 开库与 `app.manage(...)` 注册由 S04 启动管道负责，本模块只声明类型。
 pub struct AppDb(pub std::sync::Mutex<Option<rusqlite::Connection>>);
 
+/// Tauri 托管状态：本地 ECDICT 词典 DAO（只读、`Arc` 共享、无需 `Mutex`）。
+///
+/// `EcdictDb` 内部每次 `lookup` 临时只读开库、无可变状态，故用 `Arc` 直接跨命令
+/// 共享即可（与 `AppDb` 需 `Mutex` 包裹可变连接不同）。库文件缺失时 `lookup`
+/// 返回错误而非 panic，因此即便资源未打包，状态仍可安全注册。
+pub struct EcdictDbState(pub std::sync::Arc<crate::translate::ecdict_db::EcdictDb>);
+
 /// 取出受管连接并执行闭包；数据库不可用时返回统一错误，不 panic。
 ///
 /// 设计意图：把"lock → Option 解包 → 调闭包"三步封装为一处，

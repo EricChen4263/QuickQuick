@@ -191,14 +191,17 @@ fn ipc_settings_get_translate_providers_contains_lingva_not_mymemory() {
     );
 }
 
-/// TV1-F1-A03：持久化的旧值 mymemory（已移除）被 get 迁移回退为 lingva（设计文档§六）
+/// TV1-F1-A03：持久化的旧值 mymemory（已移除）被 get 迁移回退为默认源 google_free（设计文档§六）
 #[test]
-fn ipc_settings_get_selected_provider_migrates_legacy_mymemory_to_lingva() {
+fn ipc_settings_get_selected_provider_migrates_legacy_mymemory_to_default() {
     let settings_path = tmp_settings_path();
     std::fs::write(&settings_path, r#"{"selected_provider":"mymemory"}"#)
         .expect("写入旧 settings 应成功");
 
     let loaded = get_selected_provider_impl(&settings_path).expect("get 应成功");
 
-    assert_eq!(loaded, "lingva", "旧值 mymemory 应迁移回退为 lingva");
+    assert_eq!(
+        loaded, "google_free",
+        "旧值 mymemory 应迁移回退为默认源 google_free"
+    );
 }

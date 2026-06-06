@@ -157,13 +157,14 @@ fn provider_contract_parse_response_returns_error_on_missing_field() {
 /// 后续每新增一个源，此数随之增长，届时同步更新预期值。
 /// TV4-F2 新增词典源 ecdict（免 key）+ youdao_dict（需 key），19 → 21。
 /// TV4-F3 新增 bing_dict（免 key 非官方）+ cambridge（免 key 网页抓取），21 → 23（pot 全集）。
+/// 翻译源改造下架 bing_dict + cambridge，23 → 21。
 #[test]
-fn static_registry_lists_twenty_three_providers() {
+fn static_registry_lists_twenty_one_providers() {
     // Arrange + Act
     let providers = registry();
 
     // Assert
-    assert_eq!(providers.len(), 23, "注册表应恰好包含 23 家 provider");
+    assert_eq!(providers.len(), 21, "注册表应恰好包含 21 家 provider");
 }
 
 #[test]
@@ -241,7 +242,11 @@ fn static_registry_keyed_providers_need_key() {
     // Assert：在免 key 集合内的 needs_key=false，其余 needs_key=true。
     for cap in providers.iter() {
         if keyless_ids.contains(&cap.id) {
-            assert!(!cap.needs_key, "免 key 源 '{}' 应为 needs_key=false", cap.id);
+            assert!(
+                !cap.needs_key,
+                "免 key 源 '{}' 应为 needs_key=false",
+                cap.id
+            );
         } else {
             assert!(cap.needs_key, "provider '{}' 应为 needs_key=true", cap.id);
         }

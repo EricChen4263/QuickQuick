@@ -179,6 +179,7 @@ pub fn run() {
         ])
         .setup(|app| {
             setup_app_db(app);
+            setup_ecdict_db(app);
             let capture_state = init_capture_state(app);
             // 提前克隆 Arc，让 capture_state 的所有权移交 manage 之前完成
             let paused = Arc::clone(&capture_state.paused);
@@ -224,6 +225,24 @@ fn setup_app_db(app: &mut tauri::App) {
     app.manage(ipc::AppDb(Mutex::new(conn_opt)));
 }
 
+/// 构造本地 ECDICT 词典 DAO 并注册为 Tauri 状态。
+///
+/// 库文件随应用打包于 `resources/ecdict.db`（见 tauri.conf.json 的 bundle.resources）。
+/// 经 `resource_dir()` 解析其绝对路径；解析失败仅 eprintln 记录、用空路径占位注册，
+/// 不 panic——`EcdictDb::lookup` 在库缺失时返回错误，前端按「源不可用」处理。
+fn setup_ecdict_db(app: &mut tauri::App) {
+    let db_path = match app.path().resource_dir() {
+        Ok(dir) => dir.join("resources/ecdict.db"),
+        Err(e) => {
+            eprintln!("[QuickQuick] 无法解析资源目录，ECDICT 本地词典将不可用: {e}");
+            std::path::PathBuf::new()
+        }
+    };
+    app.manage(ipc::EcdictDbState(Arc::new(
+        translate::ecdict_db::EcdictDb::new(db_path),
+    )));
+}
+
 /// 用 `LocalKeyProvider` 开库；密钥/库迁移失败时做一次性重置（备份旧库 + 旧 master.key 后重建）。
 ///
 /// 触发重置的两类失败（设计 §四#4）：
@@ -257,7 +276,10 @@ fn is_resettable_open_error(err: &str) -> bool {
 }
 
 /// 执行一次性重置：备份旧库 + 旧 master.key，用新 LocalKeyProvider 重建空库。
-fn reset_and_reopen(dir: &std::path::Path, db_path: &std::path::Path) -> Option<rusqlite::Connection> {
+fn reset_and_reopen(
+    dir: &std::path::Path,
+    db_path: &std::path::Path,
+) -> Option<rusqlite::Connection> {
     if db_path.exists() {
         if let Err(e) = db::backup_corrupt_file(db_path) {
             eprintln!("[QuickQuick] 旧库备份失败，放弃重置: {e}");
@@ -410,7 +432,10 @@ fn spawn_update_watcher(app: tauri::AppHandle) {
 
     let already_ready = Arc::new(AtomicBool::new(false));
     tauri::async_runtime::spawn(async move {
-        tokio::time::sleep(std::time::Duration::from_secs(UPDATE_FIRST_CHECK_DELAY_SECS)).await;
+        tokio::time::sleep(std::time::Duration::from_secs(
+            UPDATE_FIRST_CHECK_DELAY_SECS,
+        ))
+        .await;
         loop {
             let enabled = read_auto_update_enabled(&app);
             if ipc::update::should_check(enabled, already_ready.load(Ordering::Relaxed)) {
@@ -454,7 +479,10 @@ async fn run_one_update_check(
     };
     match updater.check().await {
         Ok(Some(update)) => {
-            eprintln!("update_watcher: 发现可用更新 {}，开始静默下载", update.version);
+            eprintln!(
+                "update_watcher: 发现可用更新 {}，开始静默下载",
+                update.version
+            );
             // 复用 update 域的下载安装薄封装；成功后内部 emit update://ready 并置位去重。
             ipc::update::download_install_for_watcher(app, update, already_ready).await;
         }
