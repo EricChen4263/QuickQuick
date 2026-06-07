@@ -10,9 +10,12 @@ title: 剪贴板富文本（HTML）保真（对应设计文档 quickquick-richte
 source_doc: docs/design/quickquick-richtext-fidelity.md（§一 决策 / §四 任务 / §五 安全）
 frozen_at: 2026-06-07T00:00:00Z
 criteria_freeze: RT1-criteria@2026-06-07
+strategy_freeze: STRATEGY@2026-06-07   # 引用 docs/STRATEGY.md 当前值；与其不一致 → freeze-lint C3 拦
+serves_goals: [G1, G4]                 # 本版服务：G1 剪贴板复制保真（富文本还原）、G4 隐私安全（DOMPurify/XSS 红线）
 
-# 无 docs/STRATEGY.md → 战略层不启用。
-# 本环境无 scripts/freeze-lint.sh（历史版本亦无）→ 织三网由编排器手工核对：
+# 战略层已启用（docs/STRATEGY.md 存在）：版本经 serves_goals 向上锚定战略目标，
+#   freeze-lint C1 失锚 / C2 悬空锚 / C3 过期锚 三道硬门禁在冻结时机检。
+# 织三网已由 scripts/freeze-lint.sh 机制强制（不再靠编排器手工核对）：
 #   coverage_check 每 covered 类别有匹配 category 验收项、无空洞；每 objective 项有可执行 verify；
 #   每项有 source_anchor；arboard GUI 读写 / CGEvent 粘贴 headless 不可验项归 manual_confirm 并标 collect_env。
 # hints 注入：sentinel 脏值证否(TV2)、交付前实跑全量(TV3)、排序确定性、rtk proxy 取原始证据(V6)、防截断交付序。
