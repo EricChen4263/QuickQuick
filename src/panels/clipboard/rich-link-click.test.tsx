@@ -63,6 +63,25 @@ describe("富文本预览链接点击委托", () => {
     expect(clickEvent.defaultPrevented).toBe(true);
   });
 
+  it("rich_link_click_logs_error_when_open_rejects", async () => {
+    const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    mockOpenExternalUrl.mockRejectedValueOnce(new Error("ACL denied"));
+    renderRich();
+    const anchor = document.querySelector(".preview-content a") as HTMLElement;
+
+    const clickEvent = new MouseEvent("click", { bubbles: true, cancelable: true });
+    fireEvent(anchor, clickEvent);
+    // 等待被吞前的微任务队列：rejection 应被 .catch 捕获并记日志，而非静默
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(consoleErrorSpy).toHaveBeenCalledWith(
+      "[QuickQuick] 打开外部链接失败:",
+      expect.any(Error)
+    );
+    consoleErrorSpy.mockRestore();
+  });
+
   it("rich_link_click_ignores_non_link_target", () => {
     renderRich();
     const bold = document.querySelector(".preview-content #b") as HTMLElement;

@@ -6,7 +6,7 @@ parent: RT1-F2
 children: []
 created: 2026-06-07T00:00:00Z
 status: 通过
-commit: PENDING
+commit: 24b4723
 acceptance_ids: [RT1-F2-S03]
 evidence:
   - src/panels/clipboard/rich-link.test.ts
@@ -47,5 +47,9 @@ pnpm exec tsc --noEmit
 ## 全量
 pnpm test 482 passed（57 文件）；cargo test 531 passed/0 failed（含 boot_smoke 守卫，加插件后能编译）；tsc 0 错。连跑 3 次无 flaky。
 
+## 打回修复 #1 复验（opener scope + 错误不静默）
+- 新增 `rich_link_click_logs_error_when_open_rejects` 命中；删 `.catch` 变异 → 该测试如期 RED（判别力真）。
+- cargo test 531/0 failed（capability 改后 boot_smoke 反序列化守卫过）、pnpm 483 passed、连跑 4 次无 flaky、tsc 0 错。原 3 个 S03 核心测试回归全绿。
+
 ## 结论
-RT1-F2-S03 PASS。git status 开工/结束逐行一致（cp 还原无残留）。
+RT1-F2-S03 PASS（含打回 #1 修复复验）。opener ACL scope 真机放行归 RT1-M01。git status 开工/结束逐行一致（cp 还原无残留）。

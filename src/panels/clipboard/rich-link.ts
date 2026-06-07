@@ -52,5 +52,8 @@ export function handleRichLinkClick(event: ReactMouseEvent<HTMLElement>): void {
     return;
   }
   event.preventDefault();
-  void openExternalUrl(url);
+  // openUrl 的 rejection（如 ACL 拒绝）必须显式记日志，不可静默吞，否则真机点链接"没反应"无从诊断。
+  openExternalUrl(url).catch((err: unknown) => {
+    console.error("[QuickQuick] 打开外部链接失败:", err);
+  });
 }
