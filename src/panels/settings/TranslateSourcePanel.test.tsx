@@ -32,8 +32,25 @@ const mockGetProviderCredentials = vi.mocked(getProviderCredentials);
 const mockSetProviderCredentials = vi.mocked(setProviderCredentials);
 
 const PROVIDERS: Provider[] = [
-  { id: "mymemory", name: "MyMemory", needsKey: false, isUnofficial: true },
-  { id: "baidu", name: "百度翻译", needsKey: true, isUnofficial: false },
+  { id: "mymemory", name: "MyMemory", needsKey: false, needsConfig: false, isUnofficial: true },
+  { id: "baidu", name: "百度翻译", needsKey: true, needsConfig: true, isUnofficial: false },
+];
+
+// Ollama 型：本地无鉴权（needsKey=false）但有必填配置字段（needsConfig=true）。
+const OLLAMA: Provider = {
+  id: "ollama",
+  name: "Ollama",
+  needsKey: false,
+  needsConfig: true,
+  isUnofficial: false,
+};
+
+const OLLAMA_SCHEMA: CredentialField[] = [
+  { key: "model", label: "模型", isSecret: false, required: true },
+];
+
+const OLLAMA_CREDENTIALS_EMPTY: CredentialValue[] = [
+  { key: "model", value: null, isSet: false },
 ];
 
 const BAIDU_SCHEMA: CredentialField[] = [
@@ -220,6 +237,63 @@ describe("TranslateSourcePanel 配置按钮（解耦）", () => {
     await waitFor(() => {
       expect(cfgBtn.classList.contains("open")).toBe(true);
     });
+  });
+});
+
+describe("TranslateSourcePanel 可配置无 key 源（needsConfig）", () => {
+  it("config_button_shows_for_configurable_keyless_source", async () => {
+    // Ollama needsKey=false 但 needsConfig=true → 应渲染「配置」按钮。
+    mockGetTranslateProviders.mockResolvedValue([OLLAMA]);
+    mockGetSelectedProvider.mockResolvedValue("mymemory");
+    mockGetProviderCredentialSchema.mockResolvedValue(OLLAMA_SCHEMA);
+    mockGetProviderCredentials.mockResolvedValue(OLLAMA_CREDENTIALS_EMPTY);
+
+    render(<TranslateSourcePanel />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Ollama")).toBeInTheDocument();
+    });
+
+    const ollamaCard = screen.getByText("Ollama").closest(".src-card");
+    expect(ollamaCard).not.toBeNull();
+    expect(ollamaCard!.querySelector(".src-cfg-btn")).not.toBeNull();
+  });
+
+  it("badge_shows_pending_for_unconfigured_ollama", async () => {
+    // needsConfig 未配 → 徽标「待配置」。
+    mockGetTranslateProviders.mockResolvedValue([OLLAMA]);
+    mockGetSelectedProvider.mockResolvedValue("mymemory");
+    mockGetProviderCredentialSchema.mockResolvedValue(OLLAMA_SCHEMA);
+    mockGetProviderCredentials.mockResolvedValue(OLLAMA_CREDENTIALS_EMPTY);
+
+    render(<TranslateSourcePanel />);
+
+    await waitFor(() => {
+      expect(screen.getByText("待配置")).toBeInTheDocument();
+    });
+  });
+
+  it("no_config_button_for_keyless_no_config_source", async () => {
+    // needsConfig=false → 无配置按钮、徽标「无需配置」。
+    const plain: Provider = {
+      id: "lingva",
+      name: "Lingva",
+      needsKey: false,
+      needsConfig: false,
+      isUnofficial: true,
+    };
+    mockGetTranslateProviders.mockResolvedValue([plain]);
+    mockGetSelectedProvider.mockResolvedValue("mymemory");
+
+    render(<TranslateSourcePanel />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Lingva")).toBeInTheDocument();
+    });
+
+    const card = screen.getByText("Lingva").closest(".src-card");
+    expect(card!.querySelector(".src-cfg-btn")).toBeNull();
+    expect(screen.getByText("无需配置")).toBeInTheDocument();
   });
 });
 

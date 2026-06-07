@@ -56,17 +56,18 @@ function ProviderCard({
   onSelect,
   onConfigure,
 }: ProviderCardProps) {
+  // 判据为「是否可配置」（needsConfig）而非「是否要 key」：Ollama 无 key 但有必填字段也需配置。
   const badgeClass = isSelected
     ? "badge default"
-    : provider.needsKey
+    : provider.needsConfig
       ? isConfigured ? "badge ok" : "badge need"
       : "badge ok";
 
   const badgeLabel = isSelected
     ? "默认"
-    : provider.needsKey
+    : provider.needsConfig
       ? isConfigured ? "已配置" : "待配置"
-      : "无需 Key";
+      : "无需配置";
 
   return (
     <div className="src-card">
@@ -90,7 +91,7 @@ function ProviderCard({
           aria-label={provider.name}
         />
       </div>
-      {provider.needsKey && (
+      {provider.needsConfig && (
         <button
           type="button"
           className={`src-cfg-btn${isExpanded ? " open" : ""}`}
@@ -129,10 +130,10 @@ function TranslateSourcePanel() {
       schemas: Record<string, CredentialField[]>,
       cancelled: { current: boolean }
     ) => {
-      const needsKeyProviders = providerList.filter((p) => p.needsKey);
+      const configurableProviders = providerList.filter((p) => p.needsConfig);
 
       const results = await Promise.all(
-        needsKeyProviders.map(async (p) => {
+        configurableProviders.map(async (p) => {
           try {
             const credentials: CredentialValue[] = await getProviderCredentials(p.id);
             const schema = schemas[p.id] ?? [];
@@ -160,9 +161,9 @@ function TranslateSourcePanel() {
       ]);
       if (cancelled.current) return;
 
-      const needsKeyProviders = providerList.filter((p) => p.needsKey);
+      const configurableProviders = providerList.filter((p) => p.needsConfig);
       const schemaEntries = await Promise.all(
-        needsKeyProviders.map(async (p) => {
+        configurableProviders.map(async (p) => {
           try {
             const schema = await getProviderCredentialSchema(p.id);
             return [p.id, schema] as [string, CredentialField[]];

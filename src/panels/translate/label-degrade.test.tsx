@@ -46,8 +46,8 @@ const mockGetProviderCredentials = vi.mocked(getProviderCredentials);
 
 /** 非官方免 key 源（lingva）与官方 keyed 源（baidu）混合列表 */
 const MIXED_PROVIDERS: Provider[] = [
-  { id: "lingva", name: "Lingva", needsKey: false, isUnofficial: true },
-  { id: "baidu", name: "百度翻译", needsKey: true, isUnofficial: false },
+  { id: "lingva", name: "Lingva", needsKey: false, needsConfig: false, isUnofficial: true },
+  { id: "baidu", name: "百度翻译", needsKey: true, needsConfig: true, isUnofficial: false },
 ];
 
 describe("nonofficial_source_label_and_degrade_hint", () => {

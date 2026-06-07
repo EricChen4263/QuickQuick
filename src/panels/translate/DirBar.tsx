@@ -12,7 +12,7 @@ interface DirBarProps {
   providers: Provider[];
   selectedProviderId: string;
   onProviderChange: (id: string) => void;
-  /** 已完整配置凭据的 provider id 集合；needsKey 源仅在此集合内时才可选 */
+  /** 已完整配置凭据的 provider id 集合；可配置源（needsConfig）仅在此集合内时才可选 */
   configuredIds?: Set<string>;
 }
 
@@ -40,14 +40,14 @@ function DirBar({
   onProviderChange,
   configuredIds = new Set(),
 }: DirBarProps) {
-  // 翻译源选项：needsKey 源仅在已配置凭据时可选，否则禁用；
+  // 翻译源选项：可配置源（needsConfig，含 Ollama 等无 key 但有必填字段）仅在已配置时可选，否则禁用；
   // 非官方源在名称后加「⚠ 非官方」标注，提示其随对方改版可能失效（设计文档§三.决策3）。
   const providerOptions = useMemo<SelectOption[]>(
     () =>
       providers.map((p) => ({
         value: p.id,
         label: p.isUnofficial ? `${p.name}  ⚠ 非官方` : p.name,
-        disabled: p.needsKey && !configuredIds.has(p.id),
+        disabled: p.needsConfig && !configuredIds.has(p.id),
       })),
     [providers, configuredIds]
   );

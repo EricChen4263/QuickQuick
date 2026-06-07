@@ -83,8 +83,8 @@ const mockSetImageThreshold = vi.mocked(setImageThreshold);
 
 const MOCK_HOTKEYS = { history: "CmdOrCtrl+Shift+H", translate: "CmdOrCtrl+Shift+T" };
 const MOCK_PROVIDERS = [
-  { id: "google", name: "Google 翻译", needsKey: false, isUnofficial: true },
-  { id: "deepl", name: "DeepL", needsKey: true, isUnofficial: false },
+  { id: "google", name: "Google 翻译", needsKey: false, needsConfig: false, isUnofficial: true },
+  { id: "deepl", name: "DeepL", needsKey: true, needsConfig: true, isUnofficial: false },
 ];
 const MOCK_EXCLUDE_LIST = ["Xcode", "Terminal"];
 
@@ -401,14 +401,14 @@ describe("settings-page", () => {
       expect(screen.getByText("Google 翻译")).toBeInTheDocument();
     });
 
-    // 初始选中 google → google 显示 "默认"，DeepL needsKey=true → "待配置"
+    // 初始选中 google → google 显示 "默认"，DeepL needsConfig=true → "待配置"
     expect(screen.getByText("默认")).toBeInTheDocument();
     expect(screen.getByText("待配置")).toBeInTheDocument();
 
-    // 选择 DeepL 后：DeepL 变为选中显示"默认"，Google(needsKey=false)显示"无需 Key"
+    // 选择 DeepL 后：DeepL 变为选中显示"默认"，Google(needsConfig=false)显示"无需配置"
     await user.click(screen.getByRole("radio", { name: "DeepL" }));
     await waitFor(() => {
-      expect(screen.getByText("无需 Key")).toBeInTheDocument();
+      expect(screen.getByText("无需配置")).toBeInTheDocument();
     });
     // DeepL 此时是选中态，显示"默认"（之前"待配置"消失）
     expect(screen.getByText("默认")).toBeInTheDocument();

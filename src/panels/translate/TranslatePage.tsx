@@ -73,16 +73,17 @@ function TranslatePage({ seed }: TranslatePageProps) {
   }, []);
 
   /**
-   * 对每个 needsKey provider 并行取 schema + credentials，计算 configuredIds。
+   * 对每个可配置 provider（needsConfig）并行取 schema + credentials，计算 configuredIds。
+   * 判据为 needsConfig 而非 needsKey：Ollama 无 key 但有必填字段也需纳入，否则 DirBar 漏解禁。
    * providerList 由调用方传入，避免重复 fetch。
    */
   const fetchConfiguredIds = useCallback(
     async (providerList: Provider[], cancelled: { current: boolean }) => {
-      const needsKeyProviders = providerList.filter((p) => p.needsKey);
-      if (needsKeyProviders.length === 0) return;
+      const configurableProviders = providerList.filter((p) => p.needsConfig);
+      if (configurableProviders.length === 0) return;
 
       const results = await Promise.all(
-        needsKeyProviders.map(async (p) => {
+        configurableProviders.map(async (p) => {
           try {
             const [schema, credentials] = await Promise.all([
               getProviderCredentialSchema(p.id),

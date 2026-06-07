@@ -8,7 +8,7 @@ import type {
 } from "../../ipc/ipc-client";
 
 const PROVIDERS: Provider[] = [
-  { id: "google", name: "Google", needsKey: false, isUnofficial: false },
+  { id: "google", name: "Google", needsKey: false, needsConfig: false, isUnofficial: false },
 ];
 
 const PLAIN_RESULT: TranslatePlainResult = {

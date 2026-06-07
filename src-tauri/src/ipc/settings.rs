@@ -62,7 +62,13 @@ pub struct HotkeyDto {
 pub struct ProviderDto {
     pub id: String,
     pub name: String,
+    /// 是否需要 API Key（apiKey 语义）。仅表示有无密钥字段，不代表是否可配置。
     pub needs_key: bool,
+    /// 是否有可配置字段（凭据 schema 非空，序列化为 camelCase `needsConfig`）。
+    ///
+    /// 独立于 needs_key：Ollama 本地无鉴权（needs_key=false）但有必填 model 字段，
+    /// needs_config=true，前端据此显示「配置」按钮——否则用户无法填必填字段致源不可用。
+    pub needs_config: bool,
     /// 是否为非官方/自建接口（序列化为 camelCase `isUnofficial`）。
     /// 前端据此渲染「非官方」标注与失败降级提示（设计文档§三.决策3）。
     pub is_unofficial: bool,
@@ -188,6 +194,8 @@ pub fn get_translate_providers_impl() -> Vec<ProviderDto> {
             id: cap.id.to_string(),
             name: cap.name.to_string(),
             needs_key: cap.needs_key,
+            // 可配置 = 凭据 schema 非空（含 Ollama 等无 key 但有必填字段的源）。
+            needs_config: !credential_schema(cap.id).is_empty(),
             is_unofficial: cap.is_unofficial,
         })
         .collect()
@@ -1224,5 +1232,45 @@ mod tests {
         assert!(find("bing").is_unofficial, "bing 应标注非官方");
         assert!(!find("baidu").is_unofficial, "baidu 为官方源");
         assert!(!find("google").is_unofficial, "google 官方源");
+    }
+
+    // needs_config = 凭据 schema 非空，作为「是否可配置」的判据，独立于 needs_key（apiKey 语义）。
+    // Ollama needs_key=false 但有必填 model 字段 → needs_config=true，前端据此显示「配置」按钮。
+    #[test]
+    fn provider_dto_needs_config_true_for_ollama_and_keyed() {
+        let dtos = get_translate_providers_impl();
+        let find = |id: &str| {
+            dtos.iter()
+                .find(|d| d.id == id)
+                .unwrap_or_else(|| panic!("DTO 列表应含 {id}"))
+        };
+        // Ollama：无 apiKey（needs_key=false）但有必填 model → 可配置。
+        assert!(
+            !find("ollama").needs_key,
+            "ollama 本地无鉴权，needs_key=false"
+        );
+        assert!(
+            find("ollama").needs_config,
+            "ollama 有必填 model 字段，应可配置"
+        );
+        // 需 key 源仍可配置（有 apiKey 等字段）。
+        assert!(find("baidu").needs_config, "baidu 有凭据字段，应可配置");
+        assert!(find("openai").needs_config, "openai 有凭据字段，应可配置");
+    }
+
+    // 无凭据 schema 的免 key 源（google_free/lingva）→ needs_config=false，前端徽标「无需配置」。
+    #[test]
+    fn provider_dto_needs_config_false_for_keyless_sources() {
+        let dtos = get_translate_providers_impl();
+        let find = |id: &str| {
+            dtos.iter()
+                .find(|d| d.id == id)
+                .unwrap_or_else(|| panic!("DTO 列表应含 {id}"))
+        };
+        assert!(
+            !find("google_free").needs_config,
+            "google_free 无凭据字段，不可配置"
+        );
+        assert!(!find("lingva").needs_config, "lingva 无凭据字段，不可配置");
     }
 }

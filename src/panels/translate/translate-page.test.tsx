@@ -89,8 +89,8 @@ describe("translate-page", () => {
     mockListTranslateHistory.mockResolvedValue(MOCK_HISTORY);
     // provider fetch 必须返回有效值，否则 TranslatePage 挂载时 reject 会写 console.error 干扰断言
     mockGetTranslateProviders.mockResolvedValue([
-      { id: "lingva", name: "Lingva · 默认", needsKey: false, isUnofficial: true },
-      { id: "baidu", name: "百度翻译", needsKey: true, isUnofficial: false },
+      { id: "lingva", name: "Lingva · 默认", needsKey: false, needsConfig: false, isUnofficial: true },
+      { id: "baidu", name: "百度翻译", needsKey: true, needsConfig: true, isUnofficial: false },
     ]);
     mockGetSelectedProvider.mockResolvedValue("lingva");
     mockSetSelectedProvider.mockResolvedValue(undefined);
@@ -531,7 +531,7 @@ describe("translate-page", () => {
     expect(txScroll!.querySelector("[role='alert']")).not.toBeNull();
   });
 
-  it("①: 挂载时对 needsKey provider 取凭据，已配置的 provider 在 DirBar 中不 disabled", async () => {
+  it("①: 挂载时对 needsConfig provider 取凭据，已配置的 provider 在 DirBar 中不 disabled", async () => {
     // baidu 已配置
     mockGetProviderCredentials.mockResolvedValue([
       { key: "app_id", value: "my_id", isSet: true },
@@ -551,7 +551,7 @@ describe("translate-page", () => {
     });
   });
 
-  it("①: 挂载时 needsKey provider 未配置 → DirBar 中该 option disabled", async () => {
+  it("①: 挂载时 needsConfig provider 未配置 → DirBar 中该 option disabled", async () => {
     // 默认 beforeEach 返回 isSet=false（未配置）
     const user = userEvent.setup();
     render(<TranslatePage />);

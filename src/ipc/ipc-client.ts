@@ -70,7 +70,14 @@ export interface TranslateHistoryItem {
 export interface Provider {
   id: string;
   name: string;
+  /** 是否需要 API Key（apiKey 语义）；仅表示有无密钥字段，不代表是否可配置。 */
   needsKey: boolean;
+  /**
+   * 是否有可配置字段（凭据 schema 非空）。
+   * 独立于 needsKey：Ollama 本地无鉴权（needsKey=false）但有必填字段，needsConfig=true，
+   * 前端据此显示「配置」按钮、纳入 configuredIds 判定，否则源不可用。
+   */
+  needsConfig: boolean;
   /** 是否为非官方/自建接口；前端据此渲染「非官方」标注与失败降级提示（设计文档§三.决策3）。 */
   isUnofficial: boolean;
 }

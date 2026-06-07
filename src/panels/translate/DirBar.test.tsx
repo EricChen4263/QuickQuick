@@ -8,15 +8,22 @@ import type { Provider } from "../../ipc/ipc-client";
 // 故 isUnofficial 统一置 false 避免标注后缀污染 option 的精确 name 匹配；
 // 标注渲染由 label-degrade.test.tsx 用独立夹具覆盖。
 const MOCK_PROVIDERS: Provider[] = [
-  { id: "mymemory", name: "MyMemory · 默认", needsKey: false, isUnofficial: false },
-  { id: "baidu", name: "百度翻译", needsKey: true, isUnofficial: false },
-  { id: "deepl", name: "DeepL Free", needsKey: false, isUnofficial: false },
+  { id: "mymemory", name: "MyMemory · 默认", needsKey: false, needsConfig: false, isUnofficial: false },
+  { id: "baidu", name: "百度翻译", needsKey: true, needsConfig: true, isUnofficial: false },
+  { id: "deepl", name: "DeepL Free", needsKey: false, needsConfig: false, isUnofficial: false },
 ];
 
 const PROVIDERS_WITH_NEEDS_KEY: Provider[] = [
-  { id: "mymemory", name: "MyMemory · 默认", needsKey: false, isUnofficial: false },
-  { id: "baidu", name: "百度翻译", needsKey: true, isUnofficial: false },
-  { id: "deepl-free", name: "DeepL Free", needsKey: true, isUnofficial: false },
+  { id: "mymemory", name: "MyMemory · 默认", needsKey: false, needsConfig: false, isUnofficial: false },
+  { id: "baidu", name: "百度翻译", needsKey: true, needsConfig: true, isUnofficial: false },
+  { id: "deepl-free", name: "DeepL Free", needsKey: true, needsConfig: true, isUnofficial: false },
+];
+
+// Ollama 型：本地无鉴权（needsKey=false）但有必填配置字段（needsConfig=true）。
+// 未配置时也必须 disable——DirBar 解禁判据应为 needsConfig 而非 needsKey。
+const PROVIDERS_WITH_KEYLESS_CONFIG: Provider[] = [
+  { id: "mymemory", name: "MyMemory · 默认", needsKey: false, needsConfig: false, isUnofficial: false },
+  { id: "ollama", name: "Ollama", needsKey: false, needsConfig: true, isUnofficial: false },
 ];
 
 /** 默认 props 工厂：减少各用例重复装配 onXxx mock */
@@ -133,7 +140,7 @@ describe("DirBar", () => {
     expect(screen.getByRole("button", { name: "翻译源" })).toBeInTheDocument();
   });
 
-  it("needsKey 源未配置时 option 标记 aria-disabled，needsKey=false 的不标", async () => {
+  it("needsConfig 源未配置时 option 标记 aria-disabled，needsConfig=false 的不标", async () => {
     const user = userEvent.setup();
     renderDirBar({ providers: PROVIDERS_WITH_NEEDS_KEY });
 
@@ -143,7 +150,7 @@ describe("DirBar", () => {
     expect(screen.getByRole("option", { name: "DeepL Free" })).toHaveAttribute("aria-disabled", "true");
   });
 
-  it("selectedProviderId 为 needsKey 源时 trigger 正确显示当前值且不崩", () => {
+  it("selectedProviderId 为 needsConfig 源时 trigger 正确显示当前值且不崩", () => {
     renderDirBar({ providers: PROVIDERS_WITH_NEEDS_KEY, selectedProviderId: "baidu" });
 
     expect(screen.getByRole("button", { name: "翻译源" })).toHaveTextContent("百度翻译");
@@ -155,7 +162,7 @@ describe("DirBar", () => {
     expect(screen.queryByRole("button", { name: "交换语言方向" })).not.toBeInTheDocument();
   });
 
-  it("①: needsKey=true 且在 configuredIds 中 → option 不 disabled", async () => {
+  it("①: needsConfig=true 且在 configuredIds 中 → option 不 disabled", async () => {
     const user = userEvent.setup();
     renderDirBar({ providers: PROVIDERS_WITH_NEEDS_KEY, configuredIds: new Set(["baidu"]) });
 
@@ -163,7 +170,7 @@ describe("DirBar", () => {
     expect(screen.getByRole("option", { name: "百度翻译" })).toHaveAttribute("aria-disabled", "false");
   });
 
-  it("①: needsKey=true 且不在 configuredIds 中 → option disabled", async () => {
+  it("①: needsConfig=true 且不在 configuredIds 中 → option disabled", async () => {
     const user = userEvent.setup();
     renderDirBar({ providers: PROVIDERS_WITH_NEEDS_KEY, configuredIds: new Set<string>() });
 
@@ -171,12 +178,28 @@ describe("DirBar", () => {
     expect(screen.getByRole("option", { name: "百度翻译" })).toHaveAttribute("aria-disabled", "true");
   });
 
-  it("①: needsKey=false 的 option 无论 configuredIds → 不 disabled", async () => {
+  it("①: needsConfig=false 的 option 无论 configuredIds → 不 disabled", async () => {
     const user = userEvent.setup();
     renderDirBar({ providers: PROVIDERS_WITH_NEEDS_KEY, configuredIds: new Set<string>() });
 
     await user.click(screen.getByRole("button", { name: "翻译源" }));
     expect(screen.getByRole("option", { name: "MyMemory · 默认" })).toHaveAttribute("aria-disabled", "false");
+  });
+
+  it("无 key 但 needsConfig 源未配置 → option disabled（Ollama）", async () => {
+    const user = userEvent.setup();
+    renderDirBar({ providers: PROVIDERS_WITH_KEYLESS_CONFIG, configuredIds: new Set<string>() });
+
+    await user.click(screen.getByRole("button", { name: "翻译源" }));
+    expect(screen.getByRole("option", { name: "Ollama" })).toHaveAttribute("aria-disabled", "true");
+  });
+
+  it("无 key 但 needsConfig 源已配置 → option 不 disabled（Ollama）", async () => {
+    const user = userEvent.setup();
+    renderDirBar({ providers: PROVIDERS_WITH_KEYLESS_CONFIG, configuredIds: new Set(["ollama"]) });
+
+    await user.click(screen.getByRole("button", { name: "翻译源" }));
+    expect(screen.getByRole("option", { name: "Ollama" })).toHaveAttribute("aria-disabled", "false");
   });
 
   it("点击 disabled 翻译源 option 不触发 onProviderChange", async () => {
