@@ -104,6 +104,8 @@ pub fn register_plugins<R: Runtime>(builder: tauri::Builder<R>) -> tauri::Builde
         ))
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
+        // RT1-F2-S03：富文本预览链接点击走系统默认浏览器，防 webview 自身导航把 app 顶掉。
+        .plugin(tauri_plugin_opener::init())
 }
 
 /// 启动 Tauri 应用。

@@ -1,5 +1,6 @@
 import type { ClipItem } from "../ipc/ipc-client";
 import { sanitizeRichHtml } from "../panels/clipboard/sanitize-html";
+import { handleRichLinkClick } from "../panels/clipboard/rich-link";
 
 interface PopoverPreviewProps {
   item: ClipItem | null;
@@ -31,6 +32,7 @@ function TextContent({ item }: { item: ClipItem }) {
     return (
       <div
         className="popover-preview-content"
+        onClick={handleRichLinkClick}
         dangerouslySetInnerHTML={{ __html: sanitizeRichHtml(item.htmlContent) }}
       />
     );

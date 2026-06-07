@@ -8,6 +8,7 @@ import { useEffect, useState } from "react";
 import { copyClipToClipboard, getClipImageOriginal, type ClipItem } from "../../ipc/ipc-client";
 import EmptyState from "../../components/EmptyState";
 import { sanitizeRichHtml } from "./sanitize-html";
+import { handleRichLinkClick } from "./rich-link";
 
 interface ClipPreviewProps {
   item: ClipItem | null;
@@ -217,6 +218,7 @@ function PreviewContent({ item }: { item: ClipItem }) {
     return (
       <div
         className="preview-content"
+        onClick={handleRichLinkClick}
         dangerouslySetInnerHTML={{ __html: sanitizeRichHtml(item.htmlContent) }}
       />
     );
