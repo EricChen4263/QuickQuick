@@ -6,7 +6,7 @@ parent: RT1-F2
 children: []
 created: 2026-06-07T00:00:00Z
 status: 通过
-commit: 24b4723
+commit: 800ee36
 acceptance_ids: [RT1-F2-S03]
 evidence:
   - src/panels/clipboard/rich-link.test.ts
