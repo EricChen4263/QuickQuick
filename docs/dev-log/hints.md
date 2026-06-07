@@ -24,6 +24,13 @@
 - **证否「密钥不泄露」必须用非空 sentinel 脏值**（TV2 复盘 TV2-RETRO-1）：断言密钥/token/apikey 不出现在请求/输出/日志/错误消息时，凭据字段要填入**可识别的非空脏值**（如 `"SENTINEL_DEADBEEF"`）再断言 `!contains(sentinel)`；用空值/空串占位是**恒真假绿**（空值本就不会出现在任何输出里）。F2 缺字段测试曾用空凭据被 reviewer 抓。TV3 LLM apiKey、TV4 词典 key 同理。〔已全局落地 2026-06-06：`code-standards` SKILL.md §8 测试〕
 - **复杂签名确定性测试须独立复算锚定**（TV2 [仅观察]）：TC3/HMAC-SHA1/SigV4 等签名源，别只「本实现算一次断言等于自己」（循环论证，写错也绿）——用独立工具（Python 按厂商官方文档手算）算出参照向量，断言锚定**具体 hex/Base64 常量**。TV2 三源已照此做并经 codex 异构裁判复核。
 
+### RT1 富文本 / Tauri 插件本地约定
+
+- **Tauri 插件 `allow-X` 权限常无 scope，运行时静默 ACL 拒**（RT1-RETRO-2，2026-06-07 实锤）：opener 的 `opener:allow-open-url` 注释写明"enables the open_url command **without any pre-configured scope**"——只放行命令、无 URL scope，运行时所有 URL 被 ACL 拒、`openUrl` 抛错。需配套 scope 权限：opener 用 `opener:allow-default-urls`（放行 http/https/mailto/tel）。**加任何 Tauri 插件命令权限后，查 `src-tauri/gen/schemas/acl-manifests.json` 看该命令是否还需 scope 权限，别只加 `allow-<command>`。** 此类 ACL 缺陷单测/前端 mock 测不到（scope 只在真机运行时生效），归 manual_confirm。
+- **异步 IPC/插件调用别 `void` 吞错**：`void openExternalUrl(url)` 把 rejection 静默吞掉，真机失败表现为"没反应"难诊断；改 `.catch((err: unknown) => console.error("[QuickQuick] …失败:", err))`，真机控制台可见。
+- **富文本预览忠实渲染源 HTML 颜色**：源 HTML 自带的文字色（如为浅底设计的近黑正文）会原样渲染，暗色预览下可能低对比——已知、当前保持忠实（方案 C）；若要改走"预览固定浅底卡片"（邮件客户端式）。捕获/存储/还原本身保真无损（预览能显红/绿强调色即证），颜色粘贴丢失多为目标 app（备忘录规范化 / Obsidian→MD 无色）接收限制，对照"直接浏览器→目标"可自证非本工具问题。
+- **arboard 3.6.1 三平台原生 HTML 读写**：`clipboard.get().html().ok()` 读 / `clipboard.set().html(h, Some(plain))` 写（带纯文本兜底），macOS/Windows(CF_HTML 自动处理)/Linux(X11+Wayland) 全实现，跨平台富文本零新依赖零 cfg 分支。
+
 ### v6 自动更新本地约定
 
 - **前端事件监听**：用 `import { listen } from "@tauri-apps/api/event"`，惯例见 `src/App.tsx`、`TranslateSourcePanel.tsx:204`。事件名常量集中定义（如 `TRANSLATE_HISTORY_CHANGED_EVENT`），update 事件用 `update://ready`。

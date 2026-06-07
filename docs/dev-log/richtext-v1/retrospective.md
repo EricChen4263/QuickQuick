@@ -8,7 +8,7 @@ created: 2026-06-07T00:00:00Z
 status: 已归档
 commit: 0222931
 author: orchestrator
-promoted: []
+promoted: [RT1-RETRO-2]   # RT1-RETRO-1 待下版启动落地（全局规范需批准）；RT1-RETRO-2 已落项目 hints.md
 ---
 
 # 版本复盘 · RT1 剪贴板富文本（HTML）保真
@@ -34,10 +34,22 @@ promoted: []
 | 预存在失败中途暴露、归属不清 | 开版未跑基线，`tests/traffic_light.rs::traffic_light_position_returns_centered_coords` 在 S01 tester 时才暴露 FAIL（实为版本外 commit eff3f36 改窗口几何 12→15/38→44px 漏改的 stale 集成测试）；耗费多轮辨认"是不是我引入的" | **[晋升机制]** | **RT1-RETRO-1**：通用编排经验——**版本启动第一步先跑一次全量测试基线，记录"开版即绿/已知预存在失败清单"**，使版本内任何失败可立即归因（本版 vs 预存在），预存在失败当场决定"先修基线再开版 or 标记隔离"。去向：goal-dev-workflow 规范 §版本启动（+ 可即时落项目 hints.md）。待批准全局落地 |
 | 留痕 commit 占位不统一 | 某 review.md 被 reviewer 写成 `commit: WIP` 而非约定的 `PENDING`，回填脚本未匹配到、编排器 grep 补正 | [一次性] | 编排器已 grep 兜底补正；个例，暂不机制化（若 reviewer 反复用非约定占位，转 [晋升机制]：reviewer 契约明确占位用 PENDING） |
 
+### 4. 裁决后 RT1-M01 真机验证派生（manual_confirm 的价值兑现）
+RT1-M01 真机往返抓到 2 个**单测/前端 mock/ACL 都测不到、只在真机暴露**的运行时缺陷，派生修复 RT1-F2-S03（裁决后，不回溯改 done）：
+| 现象 | 根因 | 处置标签 | 晋升去向 |
+|---|---|---|---|
+| 富文本预览点 `<a href>` 劫持 app webview、退不回 | 渲染可点链接后未拦截 webview 默认导航 | [一次性]（本功能特有，S03 已修：opener 外部打开 + 事件委托 + scheme 白名单） | 已闭环，无需机制化 |
+| opener 接入后点链接"没反应" | `opener:allow-open-url` 只放行命令、**无 URL scope**，运行时 ACL 静默拒，错误被 `void` 吞 | **[晋升机制]** RT1-RETRO-2 | 项目 hints.md（Tauri 本地知识）：opener/类似插件的 `allow-X` 权限常无 scope，需配套 scope 权限（如 `allow-default-urls`）；且异步 IPC/插件调用别 `void` 吞错，加 `.catch(console.error)` 便于真机诊断 |
+| 文字颜色粘贴到备忘录/Obsidian 丢失 | 目标 app 接收限制（备忘录规范化、Obsidian→MD 无色）；对照测试证直接浏览器→备忘录同样丢色 | [一次性] | 非缺陷，我们已忠实搬运（预览显色证明捕获完整）；无需动作 |
+| 暗色预览下浅底来源 HTML 的近黑正文低对比 | 忠实渲染源指定文字色（源为浅底设计）；非数据问题 | [仅观察] | 用户 2026-06-07 选方案 C（保持忠实）defer；未来若要改可走"预览固定浅底卡片"（邮件客户端式），已记 hints。不阻塞 |
+
+**正向经验（[仅观察]）**：本版客观验收 + 异构裁判全过、producer 条件性通过，但真机 RT1-M01 仍抓到 2 个运行时缺陷（链接劫持、opener ACL scope）——**印证 manual_confirm 不可省**，GUI/插件/ACL 类运行时行为单测与前端 mock 天然测不到，真机目测是最后一道真防线。
+
 ## 二、晋升分流
 | 通用性 | 条目 | 去向 |
 |---|---|---|
 | 通用 | RT1-RETRO-1 开版基线测试快照 | goal-dev-workflow 规范 §版本启动（待批准全局落地）；可即时落项目 hints.md |
+| 项目特定（Tauri） | RT1-RETRO-2 opener/插件 `allow-X` 无 scope 需配 scope 权限 + 异步插件调用别 void 吞错 | 项目 docs/dev-log/hints.md（本版即时落地，见 promoted） |
 
 ## 三、晋升回路（下一版启动前执行）
 1. 下一版启动须读本文件 `[晋升机制]` 未落地项：**RT1-RETRO-1**（开版基线测试快照）——按通用性落地（全局 goal-dev 规范需用户批准；项目本地可即时落 hints.md），落地后回填 `promoted: [RT1-RETRO-1]`。

@@ -216,7 +216,8 @@ pending:
     assertion: "真机：从浏览器复制带格式内容→历史条目保存为 richtext 且预览区显示加粗/颜色/表格等格式；点「粘贴到前台」到富文本编辑器(Word/备忘录/邮件)格式还原；点「复制」后到富文本编辑器粘贴带格式；粘到纯文本编辑器自动退纯文本(兜底)；纯 RTF 源(如 macOS TextEdit)按设计退纯文本"
     source_anchor: docs/design/quickquick-richtext-fidelity.md§一.决策1-3 + §七(粘贴兜底)
     collect_env: real_device
-    evidence_ref: docs/dev-log/richtext-v1/manual-richtext-roundtrip.png（待采）
+    evidence_ref: 真机目测确认（用户截图：QuickQuick 预览红/绿文字+链接+表格+代码块全保留；备忘录/Obsidian 粘贴保留格式；链接点击外部浏览器打开）
     added_at: 2026-06-07T00:00:00Z
-    status: 待采证
-    note: "捕获(get().html)/还原(set().html)/复制 IPC 均 objective 单测覆盖纯逻辑；arboard GUI 读写 + CGEvent 粘贴注入 headless 采不了，需真机往返目测。不阻塞 RT1 done。"
+    confirmed_at: 2026-06-07T12:50:00Z
+    status: 已确认
+    note: "真机往返确认通过：① 捕获+预览保真（QuickQuick 预览红色/绿色文字、绿色超链接、红色行内代码、表格、代码块全显示，证明带色 HTML 完整捕获/存储/渲染）；② 粘贴到富文本编辑器保留格式；③ 链接点击经 RT1-F2-S03 修复后在系统浏览器打开（opener allow-default-urls scope）；④ 纯文本编辑器(VSCode)退纯文本兜底正确。文字颜色在备忘录/Obsidian 粘贴时丢失=目标 app 接收限制（备忘录规范化、Obsidian→Markdown 无色），对照测试已证直接浏览器→备忘录同样丢色，非 QuickQuick 缺陷，已忠实搬运（honor HTML 色的 Mail/Docs/浏览器可正常显色）。"
