@@ -15,3 +15,4 @@ tsconfig.tsbuildinfo
 /src-tauri/resources/ecdict.db
 /src-tauri/ecdict.csv
 ecdict.csv
+__pycache__/

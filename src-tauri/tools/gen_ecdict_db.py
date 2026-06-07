@@ -21,6 +21,11 @@ import sqlite3
 import sys
 from pathlib import Path
 
+# Windows CI 上 Python 默认 stdout 编码为 cp1252，无法输出中文日志会抛 UnicodeEncodeError
+# 致脚本 exit 1（即便 db 已写完）。强制 stdout 用 utf-8 保证跨平台中文日志不崩。
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8")
+
 # CSV 列名（与 skywind3000/ECDICT ecdict.csv 表头一致），只取这 4 个。
 KEPT_COLUMNS = ("word", "phonetic", "translation", "exchange")
 

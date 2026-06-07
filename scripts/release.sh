@@ -37,6 +37,7 @@ readonly TAURI_CONF="src-tauri/tauri.conf.json"
 readonly CARGO_TOML="src-tauri/Cargo.toml"
 readonly CARGO_LOCK="src-tauri/Cargo.lock"
 readonly CRATE_NAME="quickquick"
+readonly CHANGELOG="CHANGELOG.md"
 
 # 统一红色错误退出，给可定位的失败信息（错误处理在边界完成）。
 die() {
@@ -82,6 +83,13 @@ preflight() {
     || die "目标版本 $VERSION 低于当前 ${current}，不允许降版"
 
   git tag -l "v$VERSION" | grep -q . && die "tag v$VERSION 已存在" || true
+
+  # CHANGELOG 门禁：本版必须在 CHANGELOG.md 有对应 `## v<version>` 段，
+  # 否则 release.yml 抽不到更新内容、Release 正文只剩安装指南。把"每次写进去"变硬门禁。
+  [[ -f "$CHANGELOG" ]] || die "缺少 $CHANGELOG，发版前先在 $CHANGELOG 写 v$VERSION 更新内容"
+  grep -qE "^## v${VERSION//./\\.}([[:space:]]|$)" "$CHANGELOG" \
+    || die "$CHANGELOG 缺 v$VERSION 段，发版前先在 $CHANGELOG 写 v$VERSION 更新内容"
+
   echo "预检通过：$current → ${VERSION}（分支 ${branch}，工作树干净）"
 }
 

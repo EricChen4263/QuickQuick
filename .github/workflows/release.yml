@@ -66,6 +66,8 @@ jobs:
       # 真库与源 CSV 均不入 git（见 .gitignore），故每次发布在 CI 现生成。
       - name: 生成 ECDICT 本地词库
         shell: bash
+        env:
+          PYTHONUTF8: "1"   # 双保险：强制 Python utf-8 模式，避免 Windows cp1252 输出中文日志崩
         run: |
           set -euo pipefail
           ECDICT_SHA="bc015ed2e24a7abef49fc6dbbb7fe32c1dadaf8b"
@@ -74,6 +76,41 @@ jobs:
           curl -fsSL "$CSV_URL" -o ecdict.csv
           python3 src-tauri/tools/gen_ecdict_db.py ecdict.csv src-tauri/resources/ecdict.db
           test -s src-tauri/resources/ecdict.db || { echo "::error::ecdict.db 生成为空"; exit 1; }
+
+      # 组装 Release 正文：抽 CHANGELOG 里 `## <tag>` 段（到下一个 ^## 终止、裁首尾空行）
+      # 拼到顶部，再接分语言安装指南。纯 awk 抽取（不依赖 BSD/GNU sed 差异），
+      # mac/win 通用走 bash；抽取为空时回退占位串避免空 body。
+      - name: 组装 Release 正文（CHANGELOG 本版段 + 安装指南）
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          changelog="$(awk -v tag="## ${tag}" '
+            index($0, tag) == 1 && (length($0) == length(tag) || substr($0, length(tag)+1, 1) ~ /[[:space:]]/) { capture = 1; next }
+            capture && /^## / { exit }
+            capture { lines[n++] = $0 }
+            END {
+              start = 0; end = n - 1
+              while (start < n && lines[start] ~ /^[[:space:]]*$/) start++
+              while (end >= start && lines[end] ~ /^[[:space:]]*$/) end--
+              for (i = start; i <= end; i++) print lines[i]
+            }
+          ' CHANGELOG.md)"
+          if [ -z "$changelog" ]; then
+            changelog="（本版未在 CHANGELOG.md 找到 ## ${tag} 段 / No CHANGELOG entry for ${tag}.）"
+          fi
+          guide="$(cat .github/release-install-guide.md)"
+          {
+            echo "RELEASE_BODY<<__RELEASE_BODY_EOF__"
+            echo "## 本版更新 / What's New (${tag})"
+            echo ""
+            echo "$changelog"
+            echo ""
+            echo "---"
+            echo ""
+            echo "$guide"
+            echo "__RELEASE_BODY_EOF__"
+          } >> "$GITHUB_ENV"
 
       - uses: tauri-apps/tauri-action@v0
         env:
@@ -87,21 +124,6 @@ jobs:
           releaseDraft: true
           prerelease: false
           args: ${{ matrix.args }}
-          releaseBody: |
-            ## Install / 安装
-
-            > Unsigned build — your OS will warn on first launch. Steps below clear it (one-time).
-            > 未签名构建——首次打开会被系统拦，按下面一次性放行即可。
-
-            **macOS** (`.dmg`)
-            1. Open the `.dmg` and drag QuickQuick to Applications. / 打开 `.dmg`，把 QuickQuick 拖进"应用程序"。
-            2. First launch: right-click the app → **Open** → **Open** (don't double-click). / 首次打开：右键应用 →"打开"→"打开"（别直接双击）。
-            3. If still blocked, run in Terminal: `xattr -cr /Applications/QuickQuick.app` / 仍被拦就在终端跑：`xattr -cr /Applications/QuickQuick.app`
-            4. macOS will ask for **Accessibility** permission for global paste — grant it in System Settings › Privacy & Security › Accessibility. / macOS 会为"自动粘贴"申请**辅助功能**权限，到 系统设置›隐私与安全性›辅助功能 里授权。
-
-            **Windows** (`.exe` / `.msi`)
-            1. Run the installer. SmartScreen may show "Windows protected your PC". / 运行安装包，可能弹 SmartScreen"已保护你的电脑"。
-            2. Click **More info** → **Run anyway**. / 点"更多信息"→"仍要运行"。
-
-            ---
-            **Default hotkeys / 默认热键**：History `Cmd/Ctrl+Shift+V` · Translate `Cmd/Ctrl+Shift+T`（可在设置里改键 / rebindable in Settings）
+          # 正文在上一步「组装 Release 正文」里拼好写入 $GITHUB_ENV：
+          # CHANGELOG 本版段（更新内容）+ 分语言安装指南（.github/release-install-guide.md）。
+          releaseBody: ${{ env.RELEASE_BODY }}
