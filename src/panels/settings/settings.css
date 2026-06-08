@@ -5,10 +5,10 @@
  * 因这些类仅设置页使用，放组件层是错误分层。
  */
 
-/* 设置页根布局：左侧 184px 子项导航 + 右侧内容区 */
+/* 设置页根布局：左侧 160px 子项导航 + 右侧内容区 */
 .set-page {
   display: grid;
-  grid-template-columns: 210px minmax(0, 1fr);
+  grid-template-columns: 160px minmax(0, 1fr);
   gap: 18px;
   height: 100%;
   min-height: 0;
@@ -36,7 +36,7 @@
   display: flex;
   align-items: center;
   gap: 9px;
-  padding: 9px 12px;
+  padding: 9px 10px;
   border-radius: var(--r);
   color: var(--muted);
   font-size: 13px;
