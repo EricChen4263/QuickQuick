@@ -12,7 +12,7 @@
 1. 运行安装包，可能弹 SmartScreen“已保护你的电脑”。
 2. 点“更多信息”→“仍要运行”。
 
-**默认热键**：历史 `Cmd/Ctrl+Shift+V` · 翻译 `Cmd/Ctrl+Shift+T`（可在设置里改键）。
+**默认热键**：历史 `Cmd/Ctrl+Shift+C` · 翻译 `Cmd/Ctrl+Shift+T`（可在设置里改键）。
 
 ---
 
@@ -30,4 +30,4 @@
 1. Run the installer. SmartScreen may show "Windows protected your PC".
 2. Click **More info** → **Run anyway**.
 
-**Default hotkeys**: History `Cmd/Ctrl+Shift+V` · Translate `Cmd/Ctrl+Shift+T` (rebindable in Settings).
+**Default hotkeys**: History `Cmd/Ctrl+Shift+C` · Translate `Cmd/Ctrl+Shift+T` (rebindable in Settings).

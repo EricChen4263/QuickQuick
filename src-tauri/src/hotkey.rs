@@ -57,7 +57,7 @@ impl Default for HotkeyConfig {
     fn default() -> Self {
         Self {
             // 默认值来自设计文档§一，与验收项 V0-F2-A01 严格对齐
-            history_accelerator: "CmdOrCtrl+Shift+V".to_string(),
+            history_accelerator: "CmdOrCtrl+Shift+C".to_string(),
             translate_accelerator: "CmdOrCtrl+Shift+T".to_string(),
         }
     }

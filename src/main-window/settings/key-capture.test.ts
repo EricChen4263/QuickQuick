@@ -153,7 +153,7 @@ describe("keyEventToAccelerator", () => {
   });
 
   describe("多修饰键组合场景", () => {
-    it("CmdOrCtrl+Shift+V（默认历史键）", () => {
+    it("CmdOrCtrl+Shift+V（编码器：Meta+Shift+V → 加速键串）", () => {
       const result = keyEventToAccelerator(makeEvent("KeyV", { metaKey: true, shiftKey: true }));
       expect(result).toBe("CmdOrCtrl+Shift+V");
     });

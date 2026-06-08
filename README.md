@@ -14,7 +14,7 @@ A cross-platform (macOS + Windows) tray utility: **clipboard history** + **trans
 ### 功能
 - **剪贴板历史**：自动记录文本 / 图片；**富文本（HTML）保真**——捕获、预览、粘贴与复制都保留格式（加粗 / 颜色 / 列表 / 表格 / 链接），粘到纯文本编辑器自动退纯文本。本地历史落库加密（SQLCipher + AES-256-GCM / Argon2id）。
 - **翻译**：多源——免 key（Lingva / Google）+ 需 key 机翻（百度 / 腾讯 / 阿里 / 火山等）+ LLM 对话翻译（OpenAI / Ollama / ChatGLM / Gemini）+ 内置离线词典（ECDICT）/ 有道词典（音标 / 释义）。
-- **默认热键**：剪贴板 `Cmd/Ctrl+Shift+V` · 翻译 `Cmd/Ctrl+Shift+T`（可在设置里改键）。
+- **默认热键**：剪贴板 `Cmd/Ctrl+Shift+C` · 翻译 `Cmd/Ctrl+Shift+T`（可在设置里改键）。
 
 ### 安装
 预编译安装包见每个 [GitHub Release](../../releases)。构建**未签名**，首次打开会被系统拦，按下面一次性放行即可。
@@ -68,7 +68,7 @@ Tray-resident; a global hotkey pops a panel; the main window holds settings and 
 ### Features
 - **Clipboard history**: auto-captures text / images; **rich-text (HTML) fidelity** — capture, preview, paste and copy all preserve formatting (bold / color / lists / tables / links), and fall back to plain text in plain-text editors. Local history is encrypted at rest (SQLCipher + AES-256-GCM / Argon2id).
 - **Translation**: multi-source — free (Lingva / Google) + key-based MT (Baidu / Tencent / Alibaba / Volcengine…) + LLM chat (OpenAI / Ollama / ChatGLM / Gemini) + a built-in offline dictionary (ECDICT) / 有道 (phonetics / definitions).
-- **Default hotkeys**: clipboard `Cmd/Ctrl+Shift+V` · translate `Cmd/Ctrl+Shift+T` (rebindable in Settings).
+- **Default hotkeys**: clipboard `Cmd/Ctrl+Shift+C` · translate `Cmd/Ctrl+Shift+T` (rebindable in Settings).
 
 ### Install
 Pre-built installers are attached to each [GitHub Release](../../releases). Builds are **unsigned**, so the OS warns on first launch — clear it once with the steps below.

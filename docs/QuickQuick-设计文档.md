@@ -22,7 +22,7 @@ QuickQuick 是一个跨平台桌面小工具，托盘常驻 + 全局热键弹窗
 | v1 范围 | Phase 0 骨架 / 1 文本剪贴板 / 2 翻译核心 / 3 图片+富文本+收藏+筛选+App排除+加密+改键UI |
 | v2 范围 | 跨机同步（数据层 v1 即预埋 UUID+时间戳+可变状态时间戳+墓碑） |
 
-**默认热键**：历史 = `Cmd/Ctrl+Shift+V`、翻译 = `Cmd/Ctrl+Shift+T`，**必须可改键**。
+**默认热键**：历史 = `Cmd/Ctrl+Shift+C`、翻译 = `Cmd/Ctrl+Shift+T`，**必须可改键**。
 
 ---
 
@@ -184,7 +184,7 @@ Azure Translator / LibreTranslate 自建 / OpenAI 兼容 LLM = 接口留口、**
 | + | 关闭行为 | 失焦即隐 + Esc + 选中后自动关 | — |
 
 - **焦点恢复路径**：唤起前记录前台 app（mac `NSWorkspace.frontmostApplication` / Win foreground window）→ 选中条目时隐面板 → 激活原 app → 等其到前台 → 模拟粘贴。
-- **预热窗口**：启动即建好面板 webview、平时隐藏，热键只 show + 重定位 + 聚焦，瞬开无延迟。历史面板与翻译面板共用这一个预热 webview，按 `Cmd+Shift+V` / `Cmd+Shift+T` 路由到不同视图。
+- **预热窗口**：启动即建好面板 webview、平时隐藏，热键只 show + 重定位 + 聚焦，瞬开无延迟。历史面板与翻译面板共用这一个预热 webview，按 `Cmd+Shift+C` / `Cmd+Shift+T` 路由到不同视图。
 - **键盘流**：弹出焦点在搜索框，输入即实时过滤；↑↓ 移动高亮不离搜索框；Enter 粘贴；Cmd+1~9 快选前九条。
 
 ---

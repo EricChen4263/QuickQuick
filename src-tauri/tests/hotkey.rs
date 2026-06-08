@@ -40,7 +40,7 @@ fn hotkey_defaults_and_rebind() {
     // Assert 默认值
     assert_eq!(
         config.get_accelerator(HotkeyAction::History),
-        "CmdOrCtrl+Shift+V",
+        "CmdOrCtrl+Shift+C",
         "历史热键默认值不符"
     );
     assert_eq!(
@@ -102,7 +102,7 @@ fn hotkey_rebind_translate_isolates_field() {
     // Assert：History 字段保持默认，未被串改
     assert_eq!(
         config.get_accelerator(HotkeyAction::History),
-        "CmdOrCtrl+Shift+V",
+        "CmdOrCtrl+Shift+C",
         "rebind Translate 不应影响 History 字段"
     );
 }

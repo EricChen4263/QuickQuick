@@ -807,8 +807,8 @@ mod tests {
         assert!(!history.is_empty(), "history 热键不应为空");
         assert!(!translate.is_empty(), "translate 热键不应为空");
         assert_eq!(
-            history, "CmdOrCtrl+Shift+V",
-            "history 热键应为 CmdOrCtrl+Shift+V"
+            history, "CmdOrCtrl+Shift+C",
+            "history 热键应为 CmdOrCtrl+Shift+C"
         );
         assert_eq!(
             translate, "CmdOrCtrl+Shift+T",
@@ -822,8 +822,8 @@ mod tests {
         let config = hotkey::HotkeyConfig::default();
         assert_eq!(
             config.get_accelerator(hotkey::HotkeyAction::History),
-            "CmdOrCtrl+Shift+V",
-            "history 热键默认值应为 CmdOrCtrl+Shift+V"
+            "CmdOrCtrl+Shift+C",
+            "history 热键默认值应为 CmdOrCtrl+Shift+C"
         );
         assert_eq!(
             config.get_accelerator(hotkey::HotkeyAction::Translate),

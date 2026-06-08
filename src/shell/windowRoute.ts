@@ -5,7 +5,7 @@
  * 按触发热键类型路由到不同视图（§八(3)）。
  */
 
-/** 热键触发类型：history = Cmd/Ctrl+Shift+V，translate = Cmd/Ctrl+Shift+T */
+/** 热键触发类型：history = Cmd/Ctrl+Shift+C，translate = Cmd/Ctrl+Shift+T */
 export type HotkeyTrigger = "history" | "translate";
 
 /** 预热窗口当前显示的视图 */

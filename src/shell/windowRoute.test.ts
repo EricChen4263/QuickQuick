@@ -3,7 +3,7 @@ import { resolveRoute, type HotkeyTrigger, type WindowView } from "./windowRoute
 
 // V0-F2-A03: 预热窗口按 V/T 路由历史/翻译不同视图（路由纯逻辑）
 describe("window-route", () => {
-  it("window_route_by_hotkey: CmdOrCtrl+Shift+V 路由到 history 视图", () => {
+  it("window_route_by_hotkey: CmdOrCtrl+Shift+C 路由到 history 视图", () => {
     // Arrange
     const trigger: HotkeyTrigger = "history";
 
