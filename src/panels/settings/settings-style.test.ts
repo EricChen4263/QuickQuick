@@ -12,6 +12,6 @@ describe("settings.css layout contract", () => {
   it("keeps the secondary settings menu compact", () => {
     const css = readSettingsCss();
 
-    expect(css).toMatch(/grid-template-columns:\s*160px\s+minmax\(0,\s*1fr\)/);
+    expect(css).toMatch(/grid-template-columns:\s*128px\s+minmax\(0,\s*1fr\)/);
   });
 });

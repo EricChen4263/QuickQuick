@@ -53,7 +53,7 @@ function SectionContent({ section }: { section: SettingsSection }) {
   return <AboutPanel />;
 }
 
-/** 设置页根组件：左侧 184px 子项导航 + 右侧内容区 */
+/** 设置页根组件：左侧紧凑子项导航 + 右侧内容区 */
 function SettingsPage() {
   const [activeSection, setActiveSection] = useState<SettingsSection>("general");
   const sections = settingsSections();
