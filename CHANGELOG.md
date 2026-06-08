@@ -3,6 +3,34 @@
 本项目每个发布版本的更新内容。排版约定：每版先一整段**中文**，分隔线后一整段 **English**（分语言成段，不行内混排）。
 发版时 `release.yml` 会自动抽取对应 `## v<版本>` 段拼到 GitHub Release 顶部；`release.sh` 预检要求新版在此有对应段，否则阻断发版。
 
+## v0.3.2
+
+### 🖥️ macOS 辅助功能与粘贴（重要修复）
+- 修复「粘贴到前台」失效：此前 release 的 App 仅带链接器残缺签名（identifier 随机、资源未密封），macOS 辅助功能授权无法生效，`AXIsProcessTrusted()` 始终返回 false。现已对 App 做正经 ad-hoc 代码签名（identifier=com.quickquick.app、密封资源、绑定 Info.plist），授权辅助功能后即可自动粘贴。
+- **已知限制**：ad-hoc 签名无稳定身份，**每次自动更新到新版本后，需到「系统设置›隐私与安全性›辅助功能」重新勾选 QuickQuick 一次**（彻底免重授需 Apple Developer ID 签名，后续评估）。
+- 降级提示横幅新增「打开辅助功能设置」按钮，一键直达授权页；并补无障碍 `role="status"`。
+
+### 📋 剪贴板
+- 修复：「请手动粘贴」降级提示横幅出现时会把左右两栏布局挤塌成单栏的问题，现固定为顶部整行横幅，不影响列表/详情两栏。
+
+### ⌨️ 热键与设置
+- 剪贴板历史默认热键改为 `Cmd/Ctrl+Shift+C`（翻译仍为 `Cmd/Ctrl+Shift+T`，均可在设置里改键）。
+- 收窄设置页二级菜单，视觉更紧凑。
+
+---
+
+### 🖥️ macOS Accessibility & Paste (important fix)
+- Fixed "paste to foreground" not working: the released app previously carried only the linker's incomplete ad-hoc signature (random identifier, resources unsealed), so macOS Accessibility couldn't take effect and `AXIsProcessTrusted()` always returned false. The app is now properly ad-hoc code-signed (identifier=com.quickquick.app, sealed resources, bound Info.plist), so auto-paste works once Accessibility is granted.
+- **Known limitation**: ad-hoc signatures have no stable identity, so **after each auto-update you must re-enable QuickQuick once under System Settings › Privacy & Security › Accessibility** (a fully re-grant-free experience requires an Apple Developer ID signature — under evaluation).
+- The fallback notice banner now has an "Open Accessibility Settings" button for one-tap access, plus an accessibility `role="status"`.
+
+### 📋 Clipboard
+- Fixed: the "paste manually" fallback banner used to collapse the two-column layout into a single column; it's now a fixed full-width top banner that no longer disturbs the list/detail columns.
+
+### ⌨️ Hotkeys & Settings
+- Default clipboard-history hotkey changed to `Cmd/Ctrl+Shift+C` (translation stays `Cmd/Ctrl+Shift+T`; both rebindable in Settings).
+- Tightened the settings sub-menu for a more compact look.
+
 ## v0.3.1
 
 ### 🌐 翻译

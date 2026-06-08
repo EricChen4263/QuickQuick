@@ -24,6 +24,7 @@ A cross-platform (macOS + Windows) tray utility: **clipboard history** + **trans
 2. 首次打开：**右键**应用 →"打开"→"打开"（别直接双击）。
 3. 仍被拦？终端跑：`xattr -cr /Applications/QuickQuick.app`
 4. 按提示授予**辅助功能**权限（自动粘贴需要）：系统设置›隐私与安全性›辅助功能。
+   > ⚠️ 当前为 ad-hoc 签名构建：**每次自动更新到新版本后，需回到此处重新勾选 QuickQuick 一次**，否则"粘贴到前台"会退化为"已复制、请手动粘贴"。App 内降级提示有「打开辅助功能设置」按钮可一键直达。
 
 **Windows（`.exe` / `.msi`）**
 1. 运行安装包，可能弹 SmartScreen"已保护你的电脑"。
@@ -78,6 +79,7 @@ Pre-built installers are attached to each [GitHub Release](../../releases). Buil
 2. First launch: **right-click** the app → **Open** → **Open** (don't double-click).
 3. Still blocked? Run in Terminal: `xattr -cr /Applications/QuickQuick.app`
 4. Grant **Accessibility** when asked (needed for auto-paste): System Settings › Privacy & Security › Accessibility.
+   > ⚠️ This is an ad-hoc-signed build: **after each auto-update you must re-enable QuickQuick here once**, otherwise "paste to foreground" degrades to "copied — paste manually". The in-app fallback notice has an "Open Accessibility Settings" button for one tap.
 
 **Windows (`.exe` / `.msi`)**
 1. Run the installer. SmartScreen may show "Windows protected your PC".

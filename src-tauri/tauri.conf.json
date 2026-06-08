@@ -34,6 +34,9 @@
     "active": true,
     "targets": "all",
     "createUpdaterArtifacts": true,
+    "macOS": {
+      "signingIdentity": "-"
+    },
     "resources": {
       "resources/ecdict.db": "resources/ecdict.db"
     },

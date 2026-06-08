@@ -348,6 +348,75 @@ describe("clipboard-page", () => {
     });
   });
 
+  it("clipboard-page: write_back_only 降级横幅含「打开辅助功能设置」按钮，点击触发 openAccessibilitySettings", async () => {
+    mockListClipItems.mockResolvedValue(MOCK_ITEMS);
+    mockPasteToFront.mockResolvedValue({ outcome: "write_back_only" });
+    const user = userEvent.setup();
+    render(<ClipboardPage />);
+
+    await waitFor(() => {
+      expect(screen.getAllByText("Hello World").length).toBeGreaterThanOrEqual(1);
+    });
+
+    // 触发 write_back_only 降级
+    const previewRegion = screen.getByRole("region", { name: "预览" });
+    const pasteBtn = within(previewRegion).getByRole("button", { name: "粘贴到前台" });
+    await user.click(pasteBtn);
+
+    // 降级横幅出现后，定位其内的「打开辅助功能设置」按钮
+    const banner = (await screen.findByText(/已复制到剪贴板/)).closest('[role="status"]') as HTMLElement;
+    expect(banner).not.toBeNull();
+    const openSettingsBtn = within(banner).getByRole("button", { name: "打开辅助功能设置" });
+
+    // Act：点击按钮
+    await user.click(openSettingsBtn);
+
+    // Assert：openAccessibilitySettings 被调用
+    await waitFor(() => {
+      expect(mockOpenAccessibilitySettings).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("clipboard-page: write_back_only 降级横幅有 role=status（非紧急异步状态消息）", async () => {
+    mockListClipItems.mockResolvedValue(MOCK_ITEMS);
+    mockPasteToFront.mockResolvedValue({ outcome: "write_back_only" });
+    const user = userEvent.setup();
+    render(<ClipboardPage />);
+
+    await waitFor(() => {
+      expect(screen.getAllByText("Hello World").length).toBeGreaterThanOrEqual(1);
+    });
+
+    const previewRegion = screen.getByRole("region", { name: "预览" });
+    const pasteBtn = within(previewRegion).getByRole("button", { name: "粘贴到前台" });
+    await user.click(pasteBtn);
+
+    const banner = (await screen.findByText(/已复制到剪贴板/)).closest('[role="status"]');
+    expect(banner).not.toBeNull();
+  });
+
+  it("clipboard-page: write_back_only 降级提示渲染在列表栏之前（顶部整行横幅，不挤塌两栏布局）", async () => {
+    mockListClipItems.mockResolvedValue(MOCK_ITEMS);
+    mockPasteToFront.mockResolvedValue({ outcome: "write_back_only" });
+    const user = userEvent.setup();
+    const { container } = render(<ClipboardPage />);
+
+    await waitFor(() => {
+      expect(screen.getAllByText("Hello World").length).toBeGreaterThanOrEqual(1);
+    });
+
+    const previewRegion = screen.getByRole("region", { name: "预览" });
+    const pasteBtn = within(previewRegion).getByRole("button", { name: "粘贴到前台" });
+    await user.click(pasteBtn);
+
+    const pasteMsg = await screen.findByText(/已复制到剪贴板/);
+    const listCol = container.querySelector(".clip-list-col");
+    expect(listCol).not.toBeNull();
+    // pasteMsg 必须在列表栏之前：DOCUMENT_POSITION_FOLLOWING(4) 表示 listCol 在 pasteMsg 之后
+    const relation = pasteMsg.compareDocumentPosition(listCol as Node);
+    expect(relation & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
   it("clipboard-page: pasteToFront IPC reject 时显示操作错误提示", async () => {
     mockListClipItems.mockResolvedValue(MOCK_ITEMS);
     mockPasteToFront.mockRejectedValue(new Error("paste IPC 失败"));
@@ -483,5 +552,68 @@ describe("clipboard-page", () => {
     await waitFor(() => {
       expect(mockListClipItems).toHaveBeenCalledTimes(2);
     });
+  });
+});
+
+// 边界探测（tester 补充，2026-06-08）
+
+describe("clipboard-page: 边界探测 - 横幅 DOM 顺序", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockDeleteClipItem.mockResolvedValue(undefined);
+    mockToggleFavoriteClip.mockResolvedValue(undefined);
+    mockPasteToFront.mockResolvedValue({ outcome: "full_paste" });
+    mockOpenAccessibilitySettings.mockResolvedValue(undefined);
+  });
+
+  it("边界：opError 和 pasteMsg 同时出现时，两者均在 listCol 之前，opError 在 pasteMsg 之前", async () => {
+    // 通过先触发 toggleFavoriteClip reject（产生 opError），再触发 write_back_only（产生 pasteMsg）
+    mockListClipItems.mockResolvedValue(MOCK_ITEMS);
+    mockToggleFavoriteClip.mockRejectedValue(new Error("IPC 失败"));
+    mockPasteToFront.mockResolvedValue({ outcome: "write_back_only" });
+    const user = userEvent.setup();
+    const { container } = render(<ClipboardPage />);
+
+    await waitFor(() => {
+      expect(screen.getAllByText("Hello World").length).toBeGreaterThanOrEqual(1);
+    });
+
+    // 先触发 opError
+    const favoriteButtons = screen.getAllByRole("button", { name: /收藏/ });
+    await user.click(favoriteButtons[0]);
+    await waitFor(() => {
+      expect(screen.getByRole("alert")).toBeInTheDocument();
+    });
+
+    // 再触发 pasteMsg（需要 toggleFavoriteClip 改回成功以便 paste 按钮可操作）
+    mockToggleFavoriteClip.mockResolvedValue(undefined);
+    mockPasteToFront.mockResolvedValue({ outcome: "write_back_only" });
+    const previewRegion = screen.getByRole("region", { name: "预览" });
+    const pasteBtn = within(previewRegion).getByRole("button", { name: "粘贴到前台" });
+    await user.click(pasteBtn);
+
+    const pasteMsgEl = await screen.findByText(/已复制到剪贴板/);
+    const opErrorEl = screen.getByRole("alert");
+    const listCol = container.querySelector(".clip-list-col") as Node;
+
+    // 两条横幅都在 listCol 之前
+    expect(pasteMsgEl.compareDocumentPosition(listCol) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(opErrorEl.compareDocumentPosition(listCol) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+
+    // opError 在 pasteMsg 之前（opError 之后是 pasteMsg：DOCUMENT_POSITION_FOLLOWING）
+    expect(opErrorEl.compareDocumentPosition(pasteMsgEl) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("边界：pasteMsg 为 null 时不渲染降级提示横幅", async () => {
+    // 初始状态（未触发 write_back_only），横幅不存在
+    mockListClipItems.mockResolvedValue(MOCK_ITEMS);
+    mockPasteToFront.mockResolvedValue({ outcome: "full_paste" });
+    render(<ClipboardPage />);
+
+    await waitFor(() => {
+      expect(screen.getAllByText("Hello World").length).toBeGreaterThanOrEqual(1);
+    });
+
+    expect(screen.queryByText(/已复制到剪贴板/)).not.toBeInTheDocument();
   });
 });

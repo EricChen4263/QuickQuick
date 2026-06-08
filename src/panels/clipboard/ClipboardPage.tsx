@@ -193,7 +193,9 @@ function ClipboardPage({ onTranslateItem }: ClipboardPageProps) {
     try {
       const result = await pasteToFront(item.id);
       if (result.outcome === "write_back_only") {
-        setPasteMsg("已复制到剪贴板，请手动粘贴（未授权辅助功能）");
+        setPasteMsg(
+          "已复制到剪贴板，请手动粘贴。未获辅助功能授权；若已授权（如刚更新过版本），请重新授权后重试。",
+        );
       }
     } catch {
       setOpError("粘贴失败，请稍后重试");
@@ -220,6 +222,21 @@ function ClipboardPage({ onTranslateItem }: ClipboardPageProps) {
           style={{ gridColumn: "1 / -1", padding: "8px 12px", color: "var(--danger)", background: "var(--surface)" }}
         >
           {opError}
+        </div>
+      )}
+      {pasteMsg !== null && (
+        <div
+          role="status"
+          style={{ gridColumn: "1 / -1", display: "flex", alignItems: "center", gap: 12, padding: "8px 12px", fontSize: 12, color: "var(--muted)", background: "var(--surface)" }}
+        >
+          <span>{pasteMsg}</span>
+          <button
+            type="button"
+            onClick={() => { void handleOpenSystemSettings(); }}
+            style={{ flexShrink: 0, padding: "4px 10px", fontSize: 12, color: "var(--fg)", background: "var(--surface-2)", border: "1px solid var(--border)", borderRadius: 6, cursor: "pointer" }}
+          >
+            打开辅助功能设置
+          </button>
         </div>
       )}
       <div className="clip-list-col">
@@ -264,13 +281,6 @@ function ClipboardPage({ onTranslateItem }: ClipboardPageProps) {
           )}
         </div>
       </div>
-      {pasteMsg !== null && (
-        <div
-          style={{ gridColumn: "1 / -1", padding: "8px 12px", fontSize: 12, color: "var(--muted)", background: "var(--surface)" }}
-        >
-          {pasteMsg}
-        </div>
-      )}
       <ClipPreview
         item={highlightedClipItem}
         onToggleFavorite={handleToggleFavorite}
