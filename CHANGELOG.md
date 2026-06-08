@@ -3,6 +3,16 @@
 本项目每个发布版本的更新内容。排版约定：每版先一整段**中文**，分隔线后一整段 **English**（分语言成段，不行内混排）。
 发版时 `release.yml` 会自动抽取对应 `## v<版本>` 段拼到 GitHub Release 顶部；`release.sh` 预检要求新版在此有对应段，否则阻断发版。
 
+## v0.3.3
+
+### 📋 剪贴板
+- 修复：全局热键唤起的快捷弹窗不显示新捕获的内容——此前打开弹窗后再复制 / 截图，弹窗列表停在打开时的旧快照，新项不出现。现弹窗与主窗口一致订阅剪贴板变化事件，新内容实时刷新进列表（隐藏期捕获的项也会在下次唤起时就位）。
+
+---
+
+### 📋 Clipboard
+- Fixed: the quick popover (opened by the global hotkey) didn't show newly captured items — after opening it, anything you copied or screenshotted wouldn't appear because its list was frozen at open time. The popover now subscribes to clipboard-change events just like the main window, so new content refreshes into the list in real time (items captured while it's hidden are ready the next time you open it).
+
 ## v0.3.2
 
 ### 🖥️ macOS 辅助功能与粘贴（重要修复）

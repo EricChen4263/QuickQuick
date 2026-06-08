@@ -2,6 +2,8 @@ import { useState, useEffect, useMemo, useRef } from "react";
 import type { ClipItem } from "../ipc/ipc-client";
 import { listClipItems, pasteToFront, hideAndReturnFocus, copyClipToClipboard } from "../ipc/ipc-client";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { listen } from "@tauri-apps/api/event";
+import { CLIPBOARD_CHANGED_EVENT } from "../ipc/events";
 import { filterClipBySearch, groupClipItems } from "./grouping";
 import { advanceSelection } from "./keyboard-nav";
 import { PopoverList } from "./PopoverList";
@@ -51,6 +53,40 @@ export default function ClipPopoverApp() {
       .catch((err: unknown) => {
         setLoadError(err instanceof Error ? err.message : String(err));
       });
+  }, []);
+
+  // 订阅后端 clipboard-changed 事件，有新条目或条目置顶时重新拉取列表。
+  // 弹窗窗口常驻（hide/show 复用、组件不重挂载），无此订阅则列表停在打开时的旧快照。
+  // 采用与 ClipboardPage 相同的 cancelled+unlisten 范式，防止卸载后泄漏。
+  // 只 setItems，不抢占用户当前选中：选中项校正交由下方 useEffect 处理
+  // （选中项还在则保留、不在了回第一项）。
+  useEffect(() => {
+    const cancelled = { current: false };
+    let unlisten: (() => void) | undefined;
+    listen(CLIPBOARD_CHANGED_EVENT, () => {
+      listClipItems()
+        .then((loaded) => {
+          if (cancelled.current) return;
+          setItems(loaded);
+        })
+        .catch((err: unknown) => {
+          console.error("[clip-popover] clipboard-changed 刷新失败:", err);
+        });
+    })
+      .then((fn) => {
+        if (cancelled.current) {
+          fn();
+        } else {
+          unlisten = fn;
+        }
+      })
+      .catch((err: unknown) => {
+        console.error("[clip-popover] clipboard-changed 监听注册失败:", err);
+      });
+    return () => {
+      cancelled.current = true;
+      unlisten?.();
+    };
   }, []);
 
   // 每次窗口获得焦点时：聚焦输入框、重置搜索、选中回第一项

@@ -13,6 +13,12 @@ vi.mock("../panels/translate/browser-api", () => ({
   writeToClipboard: vi.fn(),
 }));
 
+// ClipPopoverApp 订阅 clipboard-changed（@tauri-apps/api/event.listen）；
+// 测试环境无 Tauri 运行时，mock 为空 unlisten。
+vi.mock("@tauri-apps/api/event", () => ({
+  listen: vi.fn().mockResolvedValue(() => {}),
+}));
+
 const mockHide = vi.fn();
 
 // 捕获 onFocusChanged 回调，供测试手动触发 focused=true/false
@@ -38,6 +44,16 @@ const mockPasteToFront = vi.mocked(pasteToFront);
 const mockWriteToClipboard = vi.mocked(writeToClipboard);
 const mockHideAndReturnFocus = vi.mocked(hideAndReturnFocus);
 const mockCopyClipToClipboard = vi.mocked(copyClipToClipboard);
+
+/**
+ * 刷空 microtask 队列：用于验证"某副作用不发生"的负断言。
+ * 连刷数轮覆盖 IPC 的 .then/.catch 链深度，不用挂钟 setTimeout（慢 CI 下会 flaky）。
+ */
+async function flushMicrotasks(): Promise<void> {
+  for (let i = 0; i < 5; i++) {
+    await Promise.resolve();
+  }
+}
 
 const ITEMS = [
   { id: "id1", content: "first item", kind: "text" as const, isFavorite: false, lastModifiedUtc: Date.now() },
@@ -158,7 +174,9 @@ describe("ClipPopoverApp 键盘动作", () => {
 
     fireEvent.keyDown(input, { key: "Enter", altKey: true });
 
-    await new Promise((r) => setTimeout(r, 50));
+    // 验证"某事不发生"：刷 microtask 队列让任何待决 IPC .then 链耗尽，
+    // 不依赖挂钟时间（避免慢 CI 下 flaky）。
+    await flushMicrotasks();
     expect(mockCopyClipToClipboard).not.toHaveBeenCalled();
     expect(mockHide).not.toHaveBeenCalled();
   });
@@ -198,7 +216,8 @@ describe("ClipPopoverApp 键盘动作", () => {
       expect(mockPasteToFront).toHaveBeenCalledWith("id1");
     });
 
-    await new Promise((r) => setTimeout(r, 50));
+    // 验证 reject 后不调 hide：刷 microtask 队列让 .catch 链耗尽，不依赖挂钟时间。
+    await flushMicrotasks();
     expect(mockHide).not.toHaveBeenCalled();
     expect(consoleError).toHaveBeenCalled();
 
