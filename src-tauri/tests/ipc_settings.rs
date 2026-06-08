@@ -11,10 +11,11 @@
 use quickquick_lib::hotkey::{HotkeyAction, HotkeyError, HotkeyRegistrar};
 use quickquick_lib::ipc::settings::{
     get_exclude_list_impl, get_hotkeys_impl, get_selected_provider_impl,
-    get_translate_providers_impl, set_exclude_list_impl, set_hotkey_impl,
-    set_selected_provider_impl,
+    get_translate_providers_impl, set_exclude_list_impl, set_hotkey_impl, set_hotkey_runtime_impl,
+    set_selected_provider_impl, RuntimeHotkeyRegistrar,
 };
 use std::path::PathBuf;
+use std::sync::Mutex;
 
 /// fake registrar：总是成功注册（用于测试正常改键路径）
 struct AlwaysOkRegistrar;
@@ -37,6 +38,52 @@ impl HotkeyRegistrar for ConflictRegistrar {
         } else {
             Ok(())
         }
+    }
+}
+
+/// fake runtime registrar：记录命令层真实注册/注销顺序，避免启动 Tauri GUI。
+#[derive(Default)]
+struct RecordingRuntimeRegistrar {
+    events: Mutex<Vec<String>>,
+    failing_key: Option<String>,
+}
+
+impl RecordingRuntimeRegistrar {
+    fn new(failing_key: Option<&str>) -> Self {
+        Self {
+            events: Mutex::new(Vec::new()),
+            failing_key: failing_key.map(str::to_string),
+        }
+    }
+
+    fn events(&self) -> Vec<String> {
+        self.events.lock().expect("events lock 应可用").clone()
+    }
+}
+
+impl RuntimeHotkeyRegistrar for RecordingRuntimeRegistrar {
+    fn register_action_shortcut(
+        &self,
+        action: HotkeyAction,
+        accelerator: &str,
+    ) -> Result<(), String> {
+        self.events
+            .lock()
+            .expect("events lock 应可用")
+            .push(format!("register:{action:?}:{accelerator}"));
+        if self.failing_key.as_deref() == Some(accelerator) {
+            Err(format!("runtime register failed: {accelerator}"))
+        } else {
+            Ok(())
+        }
+    }
+
+    fn unregister(&self, accelerator: &str) -> Result<(), String> {
+        self.events
+            .lock()
+            .expect("events lock 应可用")
+            .push(format!("unregister:{accelerator}"));
+        Ok(())
     }
 }
 
@@ -81,6 +128,29 @@ fn ipc_settings_set_hotkey_then_get_returns_new_value() {
     // Assert：history 已更新，translate 仍是默认值
     assert_eq!(dto.history, "CmdOrCtrl+Shift+H", "history 键应已更新");
     assert_eq!(dto.translate, "CmdOrCtrl+Shift+T", "translate 键应保持默认");
+    assert_eq!(dto.main, "CmdOrCtrl+Shift+M", "main 键应保持默认");
+}
+
+/// V4-F1-A03：set_hotkey 改 main 后 get_hotkeys 读回新值
+#[test]
+fn ipc_settings_set_main_hotkey_then_get_returns_new_value() {
+    let hotkey_path = tmp_hotkey_path();
+    let registrar = AlwaysOkRegistrar;
+
+    // Act：改 main 键
+    set_hotkey_impl(
+        HotkeyAction::Main,
+        "CmdOrCtrl+Shift+Q",
+        &hotkey_path,
+        &registrar,
+    )
+    .expect("set_hotkey main 应成功");
+
+    // Assert
+    let dto = get_hotkeys_impl(&hotkey_path).expect("get_hotkeys 应成功");
+    assert_eq!(dto.history, "CmdOrCtrl+Shift+C", "history 键应保持默认");
+    assert_eq!(dto.translate, "CmdOrCtrl+Shift+T", "translate 键应保持默认");
+    assert_eq!(dto.main, "CmdOrCtrl+Shift+Q", "main 键应已更新");
 }
 
 /// V4-F1-A03：set_hotkey 两动作设同一 accelerator → 冲突拒绝
@@ -114,6 +184,66 @@ fn ipc_settings_set_hotkey_conflict_rejected() {
     assert!(
         err_msg.contains("已被占用") || err_msg.contains("冲突"),
         "错误信息应含冲突语义，实际: {err_msg}"
+    );
+}
+
+#[test]
+fn ipc_settings_runtime_register_failure_keeps_config_and_old_shortcut() {
+    let hotkey_path = tmp_hotkey_path();
+    set_hotkey_impl(
+        HotkeyAction::Main,
+        "CmdOrCtrl+Shift+O",
+        &hotkey_path,
+        &AlwaysOkRegistrar,
+    )
+    .expect("先行写入旧 main 热键应成功");
+    let runtime = RecordingRuntimeRegistrar::new(Some("CmdOrCtrl+Shift+N"));
+
+    let result = set_hotkey_runtime_impl(
+        HotkeyAction::Main,
+        "CmdOrCtrl+Shift+N",
+        &hotkey_path,
+        &runtime,
+    );
+
+    assert!(result.is_err(), "运行时注册失败应返回 Err");
+    let dto = get_hotkeys_impl(&hotkey_path).expect("失败后配置仍应可读");
+    assert_eq!(dto.main, "CmdOrCtrl+Shift+O", "不应保存失败的新 main 热键");
+    assert_eq!(
+        runtime.events(),
+        vec!["register:Main:CmdOrCtrl+Shift+N"],
+        "注册失败时不应注销旧热键"
+    );
+}
+
+#[test]
+fn ipc_settings_runtime_same_accelerator_is_noop() {
+    let hotkey_path = tmp_hotkey_path();
+    set_hotkey_impl(
+        HotkeyAction::History,
+        "CmdOrCtrl+Shift+O",
+        &hotkey_path,
+        &AlwaysOkRegistrar,
+    )
+    .expect("先行写入旧 history 热键应成功");
+    let runtime = RecordingRuntimeRegistrar::default();
+
+    set_hotkey_runtime_impl(
+        HotkeyAction::History,
+        "CmdOrCtrl+Shift+O",
+        &hotkey_path,
+        &runtime,
+    )
+    .expect("保存同一个热键应 no-op 成功");
+
+    let dto = get_hotkeys_impl(&hotkey_path).expect("no-op 后配置仍应可读");
+    assert_eq!(
+        dto.history, "CmdOrCtrl+Shift+O",
+        "原 history 热键应保持不变"
+    );
+    assert!(
+        runtime.events().is_empty(),
+        "no-op 不应调用运行时 register/unregister"
     );
 }
 

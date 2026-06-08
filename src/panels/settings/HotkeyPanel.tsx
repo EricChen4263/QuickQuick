@@ -5,6 +5,12 @@ import { keyEventToAccelerator } from "../../main-window/settings/key-capture";
 import PanelHeader from "./PanelHeader";
 import SettingGroup from "./SettingGroup";
 
+interface HotkeyRowConfig {
+  action: HotkeyAction;
+  label: string;
+  description: string;
+}
+
 interface HotkeyRowProps {
   action: HotkeyAction;
   label: string;
@@ -12,6 +18,30 @@ interface HotkeyRowProps {
   currentValue: string;
   occupiedValues: string[];
   onSaved: () => void;
+}
+
+const HOTKEY_ROWS: HotkeyRowConfig[] = [
+  {
+    action: "history",
+    label: "剪贴板历史",
+    description: "唤出剪贴板历史面板",
+  },
+  {
+    action: "translate",
+    label: "翻译选中",
+    description: "翻译当前选中文字",
+  },
+  {
+    action: "main",
+    label: "应用主界面",
+    description: "打开并聚焦 QuickQuick 主窗口",
+  },
+];
+
+function occupiedValuesFor(action: HotkeyAction, hotkeys: Hotkeys): string[] {
+  return HOTKEY_ROWS.filter((row) => row.action !== action).map(
+    (row) => hotkeys[row.action]
+  );
 }
 
 /** kbd 芯片组：按 + 分段渲染每段为一个 <kbd> */
@@ -165,7 +195,7 @@ function HotkeyRow({
   );
 }
 
-/** 热键子项面板：加载热键配置，渲染 history + translate 两行编辑 */
+/** 热键子项面板：加载热键配置，渲染所有可配置热键行 */
 function HotkeyPanel() {
   const [hotkeys, setHotkeys] = useState<Hotkeys | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -207,22 +237,17 @@ function HotkeyPanel() {
     <div>
       <PanelHeader title="热键" subtitle="自定义全局快捷键，与其他应用冲突时可修改" />
       <SettingGroup>
-        <HotkeyRow
-          action="history"
-          label="剪贴板历史"
-          description="唤出剪贴板历史面板"
-          currentValue={hotkeys.history}
-          occupiedValues={[hotkeys.translate]}
-          onSaved={handleSaved}
-        />
-        <HotkeyRow
-          action="translate"
-          label="翻译选中"
-          description="翻译当前选中文字"
-          currentValue={hotkeys.translate}
-          occupiedValues={[hotkeys.history]}
-          onSaved={handleSaved}
-        />
+        {HOTKEY_ROWS.map((row) => (
+          <HotkeyRow
+            key={row.action}
+            action={row.action}
+            label={row.label}
+            description={row.description}
+            currentValue={hotkeys[row.action]}
+            occupiedValues={occupiedValuesFor(row.action, hotkeys)}
+            onSaved={handleSaved}
+          />
+        ))}
       </SettingGroup>
     </div>
   );

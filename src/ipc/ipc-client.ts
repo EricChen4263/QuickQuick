@@ -86,10 +86,11 @@ export interface Provider {
 export interface Hotkeys {
   history: string;
   translate: string;
+  main: string;
 }
 
 /** 热键动作类型，与 Rust HotkeyAction 的合法字符串值对齐。 */
-export type HotkeyAction = "history" | "translate";
+export type HotkeyAction = "history" | "translate" | "main";
 
 /**
  * 将 invoke 的 reject 值（通常是 Rust 返回的 String）重抛为 Error。
@@ -162,7 +163,7 @@ export async function listTranslateHistory(): Promise<TranslateHistoryItem[]> {
   }
 }
 
-/** 读取热键配置，返回 { history, translate }。 */
+/** 读取热键配置，返回 { history, translate, main }。 */
 export async function getHotkeys(): Promise<Hotkeys> {
   try {
     return await invoke<Hotkeys>("get_hotkeys");
@@ -174,7 +175,7 @@ export async function getHotkeys(): Promise<Hotkeys> {
 /**
  * 将指定动作改绑到新加速键（含冲突检测）。
  *
- * @param action - 热键动作："history" | "translate"
+ * @param action - 热键动作："history" | "translate" | "main"
  * @param accelerator - 加速键字符串，如 "CmdOrCtrl+Shift+H"
  */
 export async function setHotkey(

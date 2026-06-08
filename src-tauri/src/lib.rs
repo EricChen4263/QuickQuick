@@ -119,7 +119,7 @@ pub fn register_plugins<R: Runtime>(builder: tauri::Builder<R>) -> tauri::Builde
 /// - 打开加密数据库并通过 `app.manage(AppDb(...))` 注册为 Tauri 状态
 /// - 启动剪贴板轮询后台线程（500ms 间隔）
 /// - 读取并应用自启动偏好（`apply_autostart_preference`）
-/// - 注册全局热键（history / translate），从持久化文件读取，失败时仅记录不 panic
+/// - 注册全局热键（history / translate / main），从持久化文件读取，失败时仅记录不 panic
 /// - 构建系统托盘菜单
 /// - 监听主窗口失焦事件 → 自动隐藏
 ///
@@ -581,10 +581,11 @@ fn register_frontmost_observer(_shared: Arc<frontmost::LastExternalApp>) {}
 ///
 /// 此映射是纯函数，与运行时解耦，可在单测中直接验证。
 /// 标签值必须与前端 popover 窗口的 `label` 字段严格一致。
-pub fn popover_label_for_action(action: hotkey::HotkeyAction) -> &'static str {
+pub fn popover_label_for_action(action: hotkey::HotkeyAction) -> Option<&'static str> {
     match action {
-        hotkey::HotkeyAction::History => "clip-popover",
-        hotkey::HotkeyAction::Translate => "trans-popover",
+        hotkey::HotkeyAction::History => Some("clip-popover"),
+        hotkey::HotkeyAction::Translate => Some("trans-popover"),
+        hotkey::HotkeyAction::Main => None,
     }
 }
 
@@ -598,16 +599,26 @@ pub fn register_action_shortcut(
     action: hotkey::HotkeyAction,
     accelerator: &str,
 ) -> Result<(), tauri_plugin_global_shortcut::Error> {
-    let label = popover_label_for_action(action);
     let handle_cb = handle.clone();
-    handle
-        .global_shortcut()
-        .on_shortcut(accelerator, move |_app, _shortcut, _event| {
-            popover::trigger_popover(&handle_cb, label);
-        })
+    match popover_label_for_action(action) {
+        Some(label) => {
+            handle
+                .global_shortcut()
+                .on_shortcut(accelerator, move |_app, _shortcut, _event| {
+                    popover::trigger_popover(&handle_cb, label);
+                })
+        }
+        None => {
+            handle
+                .global_shortcut()
+                .on_shortcut(accelerator, move |_app, _shortcut, _event| {
+                    tray::show_and_focus_window(&handle_cb);
+                })
+        }
+    }
 }
 
-/// 注册全局热键（history / translate）。
+/// 注册全局热键（history / translate / main）。
 ///
 /// 热键值优先从 `app_config_dir()/hotkey.json` 读取持久化配置，
 /// 文件不存在或读取失败时回退 `HotkeyConfig::default()`，
@@ -629,6 +640,7 @@ fn register_hotkeys(handle: &tauri::AppHandle) {
     for action in [
         hotkey::HotkeyAction::History,
         hotkey::HotkeyAction::Translate,
+        hotkey::HotkeyAction::Main,
     ] {
         let key = config.get_accelerator(action).to_string();
         if let Err(e) = register_action_shortcut(handle, action, &key) {
@@ -780,7 +792,7 @@ mod tests {
         let label = popover_label_for_action(hotkey::HotkeyAction::History);
 
         // Assert
-        assert_eq!(label, "clip-popover");
+        assert_eq!(label, Some("clip-popover"));
     }
 
     /// Translate 动作应映射到 trans-popover 标签
@@ -790,7 +802,17 @@ mod tests {
         let label = popover_label_for_action(hotkey::HotkeyAction::Translate);
 
         // Assert
-        assert_eq!(label, "trans-popover");
+        assert_eq!(label, Some("trans-popover"));
+    }
+
+    /// Main 动作不映射到 popover，应走主窗口显示逻辑
+    #[test]
+    fn popover_label_for_main_action_returns_none() {
+        // Arrange & Act
+        let label = popover_label_for_action(hotkey::HotkeyAction::Main);
+
+        // Assert
+        assert_eq!(label, None);
     }
 
     /// 冒烟测试：验证 HotkeyConfig 默认值非空且与设计文档约定一致（A04 后端侧）
@@ -802,10 +824,12 @@ mod tests {
         // Act
         let history = config.get_accelerator(hotkey::HotkeyAction::History);
         let translate = config.get_accelerator(hotkey::HotkeyAction::Translate);
+        let main = config.get_accelerator(hotkey::HotkeyAction::Main);
 
-        // Assert: 两字段非空且等于设计文档规定值
+        // Assert: 三字段非空且等于设计文档规定值
         assert!(!history.is_empty(), "history 热键不应为空");
         assert!(!translate.is_empty(), "translate 热键不应为空");
+        assert!(!main.is_empty(), "main 热键不应为空");
         assert_eq!(
             history, "CmdOrCtrl+Shift+C",
             "history 热键应为 CmdOrCtrl+Shift+C"
@@ -814,6 +838,7 @@ mod tests {
             translate, "CmdOrCtrl+Shift+T",
             "translate 热键应为 CmdOrCtrl+Shift+T"
         );
+        assert_eq!(main, "CmdOrCtrl+Shift+M", "main 热键应为 CmdOrCtrl+Shift+M");
     }
 
     /// 验证热键默认值符合设计文档要求
@@ -829,6 +854,11 @@ mod tests {
             config.get_accelerator(hotkey::HotkeyAction::Translate),
             "CmdOrCtrl+Shift+T",
             "translate 热键默认值应为 CmdOrCtrl+Shift+T"
+        );
+        assert_eq!(
+            config.get_accelerator(hotkey::HotkeyAction::Main),
+            "CmdOrCtrl+Shift+M",
+            "main 热键默认值应为 CmdOrCtrl+Shift+M"
         );
     }
 

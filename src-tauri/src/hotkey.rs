@@ -16,6 +16,8 @@ pub enum HotkeyAction {
     History,
     /// 呼出翻译面板
     Translate,
+    /// 打开并聚焦应用主界面
+    Main,
 }
 
 /// 热键相关错误
@@ -44,21 +46,39 @@ pub trait HotkeyRegistrar {
     fn register(&self, accelerator: &str) -> Result<(), HotkeyError>;
 }
 
-/// 热键配置：保存两个动作各自的加速键字符串
+fn default_history_accelerator() -> String {
+    "CmdOrCtrl+Shift+C".to_string()
+}
+
+fn default_translate_accelerator() -> String {
+    "CmdOrCtrl+Shift+T".to_string()
+}
+
+fn default_main_accelerator() -> String {
+    "CmdOrCtrl+Shift+M".to_string()
+}
+
+/// 热键配置：保存各动作各自的加速键字符串
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HotkeyConfig {
     /// 历史面板热键
+    #[serde(default = "default_history_accelerator")]
     history_accelerator: String,
     /// 翻译面板热键
+    #[serde(default = "default_translate_accelerator")]
     translate_accelerator: String,
+    /// 应用主界面热键
+    #[serde(default = "default_main_accelerator")]
+    main_accelerator: String,
 }
 
 impl Default for HotkeyConfig {
     fn default() -> Self {
         Self {
             // 默认值来自设计文档§一，与验收项 V0-F2-A01 严格对齐
-            history_accelerator: "CmdOrCtrl+Shift+C".to_string(),
-            translate_accelerator: "CmdOrCtrl+Shift+T".to_string(),
+            history_accelerator: default_history_accelerator(),
+            translate_accelerator: default_translate_accelerator(),
+            main_accelerator: default_main_accelerator(),
         }
     }
 }
@@ -69,6 +89,25 @@ impl HotkeyConfig {
         match action {
             HotkeyAction::History => &self.history_accelerator,
             HotkeyAction::Translate => &self.translate_accelerator,
+            HotkeyAction::Main => &self.main_accelerator,
+        }
+    }
+
+    /// 在调用方已经完成运行时注册校验后，更新指定动作的加速键字符串。
+    ///
+    /// 此函数不做系统注册尝试；命令层运行时改键需要先注册新键、保存配置、
+    /// 再注销旧键，不能复用会二次注册的 `rebind`。
+    pub(crate) fn set_accelerator(&mut self, action: HotkeyAction, accelerator: &str) {
+        match action {
+            HotkeyAction::History => {
+                self.history_accelerator = accelerator.to_string();
+            }
+            HotkeyAction::Translate => {
+                self.translate_accelerator = accelerator.to_string();
+            }
+            HotkeyAction::Main => {
+                self.main_accelerator = accelerator.to_string();
+            }
         }
     }
 
@@ -86,18 +125,15 @@ impl HotkeyConfig {
         accelerator: &str,
         registrar: &dyn HotkeyRegistrar,
     ) -> Result<(), HotkeyError> {
+        if self.get_accelerator(action) == accelerator {
+            return Ok(());
+        }
+
         // 先试注册；失败则提前返回，保证配置不变
         registrar.register(accelerator)?;
 
         // 注册成功后才写入内存配置
-        match action {
-            HotkeyAction::History => {
-                self.history_accelerator = accelerator.to_string();
-            }
-            HotkeyAction::Translate => {
-                self.translate_accelerator = accelerator.to_string();
-            }
-        }
+        self.set_accelerator(action, accelerator);
         Ok(())
     }
 

@@ -4,8 +4,8 @@
 //! 单测只测 impl 函数（传显式路径 + fake registrar），命令层把错误映射为 String。
 //!
 //! 命令清单（前端通过 invoke 对应命令名调用，命名与 A09/S05 前端对齐）：
-//! - `get_hotkeys`              — 读 HotkeyConfig，返回 { history, translate }
-//! - `set_hotkey`               — load → rebind（冲突返回 Err）→ save
+//! - `get_hotkeys`              — 读 HotkeyConfig，返回 { history, translate, main }
+//! - `set_hotkey`               — load → runtime register new → save → unregister old
 //! - `get_exclude_list`         — 读 AppSettings.excluded_apps
 //! - `set_exclude_list`         — 写 AppSettings.excluded_apps 并 save
 //! - `get_translate_providers`  — 返回 registry() 映射的 ProviderDto 列表
@@ -34,7 +34,7 @@ use tauri::{AppHandle, Emitter, Manager, State};
 use std::collections::HashMap;
 
 use crate::autostart::AutostartConfig;
-use crate::hotkey::{HotkeyAction, HotkeyConfig, HotkeyError, HotkeyRegistrar};
+use crate::hotkey::{HotkeyAction, HotkeyConfig, HotkeyRegistrar};
 use crate::ipc::translate::resolve_provider_or_fallback;
 use crate::settings::AppSettings;
 use crate::translate::credential::{
@@ -52,6 +52,7 @@ use crate::CaptureState;
 pub struct HotkeyDto {
     pub history: String,
     pub translate: String,
+    pub main: String,
 }
 
 /// 翻译 provider 能力 DTO（返回给前端）。
@@ -85,21 +86,22 @@ const SELECTED_PROVIDER_CHANGED_EVENT: &str = "selected-provider-changed";
 
 /// 将 `action` 字符串解析为 `HotkeyAction`。
 ///
-/// 只接受 "history" / "translate" 两个合法值，其余返回 Err。
+/// 只接受 "history" / "translate" / "main" 三个合法值，其余返回 Err。
 /// 集中在此处做边界校验，impl 函数不再重复处理。
 fn parse_action(action: &str) -> Result<HotkeyAction, String> {
     match action {
         "history" => Ok(HotkeyAction::History),
         "translate" => Ok(HotkeyAction::Translate),
+        "main" => Ok(HotkeyAction::Main),
         other => Err(format!(
-            "未知 action：{other}，合法值为 history / translate"
+            "未知 action：{other}，合法值为 history / translate / main"
         )),
     }
 }
 
 /// `get_hotkeys` 的纯函数实现，可在测试中直接调用。
 ///
-/// 从 `hotkey_path` 加载（文件不存在则用默认值），将两个动作的加速键封装为 DTO 返回。
+/// 从 `hotkey_path` 加载（文件不存在则用默认值），将三个动作的加速键封装为 DTO 返回。
 ///
 /// # Errors
 /// 文件存在但内容不合法（JSON 损坏）时返回错误字符串。
@@ -113,6 +115,7 @@ pub fn get_hotkeys_impl(hotkey_path: &Path) -> Result<HotkeyDto, String> {
     Ok(HotkeyDto {
         history: config.get_accelerator(HotkeyAction::History).to_string(),
         translate: config.get_accelerator(HotkeyAction::Translate).to_string(),
+        main: config.get_accelerator(HotkeyAction::Main).to_string(),
     })
 }
 
@@ -140,6 +143,63 @@ pub fn set_hotkey_impl(
         .rebind(action, accelerator, registrar)
         .map_err(|e| e.to_string())?;
     config.save(hotkey_path).map_err(|e| e.to_string())
+}
+
+/// 命令层运行时热键注册器：封装真实 Tauri global shortcut 和测试 fake。
+pub trait RuntimeHotkeyRegistrar {
+    /// 注册指定动作的新热键，并绑定动作对应的真实回调。
+    ///
+    /// # Errors
+    /// 当 OS 或本应用已有注册占用该热键时返回错误字符串。
+    fn register_action_shortcut(
+        &self,
+        action: HotkeyAction,
+        accelerator: &str,
+    ) -> Result<(), String>;
+
+    /// 注销指定热键。调用方会忽略注销失败以避免丢失已保存的新键。
+    ///
+    /// # Errors
+    /// 当底层 global shortcut API 注销失败时返回错误字符串。
+    fn unregister(&self, accelerator: &str) -> Result<(), String>;
+}
+
+/// `set_hotkey` 的运行时安全实现，可在测试中直接注入 fake runtime。
+///
+/// 顺序刻意保持为：读旧键 → old==new no-op → 注册新键 → 保存配置 → 注销旧键。
+/// 这样新键被其他应用占用时，失败发生在保存和注销之前，旧配置与旧热键都不会丢。
+/// 保存失败时会尽量注销刚注册的新键，避免运行时留下未持久化的临时绑定。
+///
+/// # Errors
+/// - 新键运行时注册失败：配置不变，旧键不注销
+/// - 文件读写失败：返回对应错误字符串
+pub fn set_hotkey_runtime_impl(
+    action: HotkeyAction,
+    accelerator: &str,
+    hotkey_path: &Path,
+    runtime: &dyn RuntimeHotkeyRegistrar,
+) -> Result<(), String> {
+    let mut config = if hotkey_path.exists() {
+        HotkeyConfig::load(hotkey_path).map_err(|e| e.to_string())?
+    } else {
+        HotkeyConfig::default()
+    };
+
+    let old_accelerator = config.get_accelerator(action).to_string();
+    if old_accelerator == accelerator {
+        return Ok(());
+    }
+
+    runtime.register_action_shortcut(action, accelerator)?;
+
+    config.set_accelerator(action, accelerator);
+    if let Err(e) = config.save(hotkey_path) {
+        let _ = runtime.unregister(accelerator);
+        return Err(e.to_string());
+    }
+
+    let _ = runtime.unregister(&old_accelerator);
+    Ok(())
 }
 
 /// `get_exclude_list` 的纯函数实现，可在测试中直接调用。
@@ -269,27 +329,31 @@ pub(crate) fn resolve_config_dir(app: &AppHandle) -> Result<std::path::PathBuf, 
     Ok(dir)
 }
 
-/// 系统热键注册器：通过 Tauri global shortcut API 向 OS 注册热键。
-///
-/// 生产运行时使用；测试侧注入 fake 实现，无需启动 GUI。
-struct SystemHotkeyRegistrar<'a> {
+/// Tauri 运行时热键注册器：通过 global shortcut API 注册热键并绑定回调。
+struct TauriRuntimeHotkeyRegistrar<'a> {
     app: &'a AppHandle,
 }
 
-impl HotkeyRegistrar for SystemHotkeyRegistrar<'_> {
-    fn register(&self, accelerator: &str) -> Result<(), HotkeyError> {
+impl RuntimeHotkeyRegistrar for TauriRuntimeHotkeyRegistrar<'_> {
+    fn register_action_shortcut(
+        &self,
+        action: HotkeyAction,
+        accelerator: &str,
+    ) -> Result<(), String> {
+        crate::register_action_shortcut(self.app, action, accelerator)
+            .map_err(|e| format!("热键运行时注册失败: {e}"))
+    }
+
+    fn unregister(&self, accelerator: &str) -> Result<(), String> {
         use tauri_plugin_global_shortcut::GlobalShortcutExt;
-        // is_registered 返回 bool；已注册则视为冲突，拒绝改绑。
-        // 仅做冲突检测，不实际绑定回调（回调在 lib.rs setup 阶段统一绑定）。
-        if self.app.global_shortcut().is_registered(accelerator) {
-            Err(HotkeyError::AlreadyInUse)
-        } else {
-            Ok(())
-        }
+        self.app
+            .global_shortcut()
+            .unregister(accelerator)
+            .map_err(|e| format!("热键运行时注销失败: {e}"))
     }
 }
 
-/// Tauri 命令：读取热键配置，返回 { history, translate }。
+/// Tauri 命令：读取热键配置，返回 { history, translate, main }。
 #[tauri::command]
 pub fn get_hotkeys(app: AppHandle) -> Result<HotkeyDto, String> {
     let path = resolve_config_path(&app, "hotkey.json")?;
@@ -298,36 +362,14 @@ pub fn get_hotkeys(app: AppHandle) -> Result<HotkeyDto, String> {
 
 /// Tauri 命令：将指定动作改绑到新加速键（含冲突检测 + 运行时即时应用）。
 ///
-/// 流程：读出旧键（用于注销）→ 持久化新键 → 注销旧键 → 注册新键并绑回调。
-/// 持久化失败时直接返回 Err，运行时状态不改动，保证一致性。
-/// 运行时注册失败时，持久化已完成，重启后新键仍会生效，但会把错误反馈给前端。
+/// 流程：读出旧键 → 注册新键并绑回调 → 持久化新键 → 注销旧键。
+/// 运行时注册失败时直接返回 Err，配置不写、旧键不卸，避免外部占用导致热键丢失。
 #[tauri::command]
 pub fn set_hotkey(app: AppHandle, action: String, accelerator: String) -> Result<(), String> {
-    use tauri_plugin_global_shortcut::GlobalShortcutExt;
-
     let hotkey_action = parse_action(&action)?;
     let path = resolve_config_path(&app, "hotkey.json")?;
-
-    // 读出旧加速键，供后续注销使用
-    let old_accelerator = get_hotkeys_impl(&path).ok().map(|dto| match hotkey_action {
-        HotkeyAction::History => dto.history,
-        HotkeyAction::Translate => dto.translate,
-    });
-
-    // 持久化新键（含冲突检测），失败直接返回，运行时不动
-    let registrar = SystemHotkeyRegistrar { app: &app };
-    set_hotkey_impl(hotkey_action, &accelerator, &path, &registrar)?;
-
-    // 注销旧键；「未注册」不视为错误（静默忽略），其他错误也仅记录
-    if let Some(old) = old_accelerator {
-        if old != accelerator {
-            let _ = app.global_shortcut().unregister(old.as_str());
-        }
-    }
-
-    // 注册新键并绑 popover 回调；失败映射为 String 返回前端
-    crate::register_action_shortcut(&app, hotkey_action, &accelerator)
-        .map_err(|e| format!("热键运行时注册失败（持久化已完成，重启后生效）: {e}"))
+    let runtime = TauriRuntimeHotkeyRegistrar { app: &app };
+    set_hotkey_runtime_impl(hotkey_action, &accelerator, &path, &runtime)
 }
 
 /// Tauri 命令：读取排除名单。

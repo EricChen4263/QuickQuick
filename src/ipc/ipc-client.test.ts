@@ -176,7 +176,11 @@ describe("listTranslateHistory", () => {
 
 describe("getHotkeys", () => {
   it("使用正确命令名调用 invoke 并透传热键配置", async () => {
-    const hotkeys: Hotkeys = { history: "CmdOrCtrl+Shift+H", translate: "CmdOrCtrl+Shift+T" };
+    const hotkeys: Hotkeys = {
+      history: "CmdOrCtrl+Shift+H",
+      translate: "CmdOrCtrl+Shift+T",
+      main: "CmdOrCtrl+Shift+M",
+    };
     mockInvoke.mockResolvedValueOnce(hotkeys);
 
     const result = await getHotkeys();
@@ -206,6 +210,17 @@ describe("setHotkey", () => {
     expect(mockInvoke).toHaveBeenCalledWith("set_hotkey", {
       action: "translate",
       accelerator: "CmdOrCtrl+T",
+    });
+  });
+
+  it("main action 参数正确传递", async () => {
+    mockInvoke.mockResolvedValueOnce(undefined);
+
+    await setHotkey("main", "CmdOrCtrl+M");
+
+    expect(mockInvoke).toHaveBeenCalledWith("set_hotkey", {
+      action: "main",
+      accelerator: "CmdOrCtrl+M",
     });
   });
 

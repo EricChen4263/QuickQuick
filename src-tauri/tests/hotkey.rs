@@ -48,6 +48,11 @@ fn hotkey_defaults_and_rebind() {
         "CmdOrCtrl+Shift+T",
         "翻译热键默认值不符"
     );
+    assert_eq!(
+        config.get_accelerator(HotkeyAction::Main),
+        "CmdOrCtrl+Shift+M",
+        "主界面热键默认值不符"
+    );
 
     // Act：rebind History 到新键（用总是成功的 fake registrar）
     let registrar = AlwaysOkRegistrar;
@@ -79,6 +84,11 @@ fn hotkey_defaults_and_rebind() {
         "CmdOrCtrl+Shift+T",
         "load 回的 Translate 键应未变"
     );
+    assert_eq!(
+        loaded.get_accelerator(HotkeyAction::Main),
+        "CmdOrCtrl+Shift+M",
+        "load 回的 Main 键应保持默认"
+    );
 }
 
 /// V0-F2-A01（补）：rebind Translate 只改 Translate 字段，History 字段保持默认不变
@@ -104,6 +114,76 @@ fn hotkey_rebind_translate_isolates_field() {
         config.get_accelerator(HotkeyAction::History),
         "CmdOrCtrl+Shift+C",
         "rebind Translate 不应影响 History 字段"
+    );
+    assert_eq!(
+        config.get_accelerator(HotkeyAction::Main),
+        "CmdOrCtrl+Shift+M",
+        "rebind Translate 不应影响 Main 字段"
+    );
+}
+
+/// 旧 hotkey.json 只有 history/translate 字段时，load 应补齐 main 默认值
+#[test]
+fn hotkey_load_legacy_config_without_main_uses_default_main() {
+    // Arrange
+    let dir = tempdir().expect("创建临时目录失败");
+    let config_path = dir.path().join("hotkey.json");
+    std::fs::write(
+        &config_path,
+        r#"{
+  "history_accelerator": "CmdOrCtrl+Shift+H",
+  "translate_accelerator": "CmdOrCtrl+Shift+Y"
+}"#,
+    )
+    .expect("写入旧配置失败");
+
+    // Act
+    let loaded = HotkeyConfig::load(&config_path).expect("旧配置 load 应成功");
+
+    // Assert
+    assert_eq!(
+        loaded.get_accelerator(HotkeyAction::History),
+        "CmdOrCtrl+Shift+H",
+        "旧配置 history 应保留"
+    );
+    assert_eq!(
+        loaded.get_accelerator(HotkeyAction::Translate),
+        "CmdOrCtrl+Shift+Y",
+        "旧配置 translate 应保留"
+    );
+    assert_eq!(
+        loaded.get_accelerator(HotkeyAction::Main),
+        "CmdOrCtrl+Shift+M",
+        "旧配置缺 main 时应补默认值"
+    );
+}
+
+/// rebind Main 只改 Main 字段，History/Translate 字段保持不变
+#[test]
+fn hotkey_rebind_main_isolates_field() {
+    // Arrange
+    let mut config = HotkeyConfig::default();
+    let registrar = AlwaysOkRegistrar;
+
+    // Act
+    let result = config.rebind(HotkeyAction::Main, "CmdOrCtrl+Shift+Q", &registrar);
+
+    // Assert
+    assert!(result.is_ok(), "Main rebind 应成功：{:?}", result);
+    assert_eq!(
+        config.get_accelerator(HotkeyAction::Main),
+        "CmdOrCtrl+Shift+Q",
+        "rebind 后 Main 热键应更新"
+    );
+    assert_eq!(
+        config.get_accelerator(HotkeyAction::History),
+        "CmdOrCtrl+Shift+C",
+        "rebind Main 不应影响 History 字段"
+    );
+    assert_eq!(
+        config.get_accelerator(HotkeyAction::Translate),
+        "CmdOrCtrl+Shift+T",
+        "rebind Main 不应影响 Translate 字段"
     );
 }
 

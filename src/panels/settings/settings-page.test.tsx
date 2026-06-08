@@ -81,7 +81,11 @@ const mockCleanupHistory = vi.mocked(cleanupHistory);
 const mockGetImageThreshold = vi.mocked(getImageThreshold);
 const mockSetImageThreshold = vi.mocked(setImageThreshold);
 
-const MOCK_HOTKEYS = { history: "CmdOrCtrl+Shift+H", translate: "CmdOrCtrl+Shift+T" };
+const MOCK_HOTKEYS = {
+  history: "CmdOrCtrl+Shift+H",
+  translate: "CmdOrCtrl+Shift+T",
+  main: "CmdOrCtrl+Shift+M",
+};
 const MOCK_PROVIDERS = [
   { id: "google", name: "Google 翻译", needsKey: false, needsConfig: false, isUnofficial: true },
   { id: "deepl", name: "DeepL", needsKey: true, needsConfig: true, isUnofficial: false },
@@ -154,9 +158,9 @@ describe("settings-page", () => {
     const nav = screen.getByRole("navigation", { name: "设置子项" });
     await user.click(within(nav).getByRole("button", { name: "热键" }));
 
-    // 等待热键数据加载完成（两行「修改」按钮出现）
+    // 等待热键数据加载完成（三行「修改」按钮出现）
     await waitFor(() => {
-      expect(screen.getAllByRole("button", { name: "修改" })).toHaveLength(2);
+      expect(screen.getAllByRole("button", { name: "修改" })).toHaveLength(3);
     });
 
     // Act：点击第一行「修改」进入录制模式
@@ -186,7 +190,7 @@ describe("settings-page", () => {
     await user.click(within(nav).getByRole("button", { name: "热键" }));
 
     await waitFor(() => {
-      expect(screen.getAllByRole("button", { name: "修改" })).toHaveLength(2);
+      expect(screen.getAllByRole("button", { name: "修改" })).toHaveLength(3);
     });
 
     // Act：点击第一行「修改」进入录制模式
@@ -204,6 +208,59 @@ describe("settings-page", () => {
     await waitFor(() => {
       expect(mockSetHotkey).toHaveBeenCalledWith("history", "CmdOrCtrl+Shift+Y");
     });
+  });
+
+  it("settings-page: 热键面板——渲染应用主界面热键行并保存 main action", async () => {
+    // Arrange
+    const user = userEvent.setup();
+    render(<SettingsPage />);
+
+    const nav = screen.getByRole("navigation", { name: "设置子项" });
+    await user.click(within(nav).getByRole("button", { name: "热键" }));
+
+    await waitFor(() => {
+      expect(screen.getAllByRole("button", { name: "修改" })).toHaveLength(3);
+    });
+    expect(screen.getByText("应用主界面")).toBeInTheDocument();
+    expect(screen.getByText("打开并聚焦 QuickQuick 主窗口")).toBeInTheDocument();
+
+    // Act：第三行 Main 热键改成不冲突键
+    const editButtons = screen.getAllByRole("button", { name: "修改" });
+    await user.click(editButtons[2]);
+    const captureArea = screen.getByRole("button", { name: "录制中…请按下快捷键" });
+    fireEvent.keyDown(captureArea, { code: "KeyQ", metaKey: true, shiftKey: true });
+    await user.click(screen.getByRole("button", { name: "保存" }));
+
+    // Assert
+    await waitFor(() => {
+      expect(mockSetHotkey).toHaveBeenCalledWith("main", "CmdOrCtrl+Shift+Q");
+    });
+  });
+
+  it("settings-page: 热键面板——main 行捕获 history 键显示已被占用且不调用 setHotkey", async () => {
+    // Arrange
+    const user = userEvent.setup();
+    render(<SettingsPage />);
+
+    const nav = screen.getByRole("navigation", { name: "设置子项" });
+    await user.click(within(nav).getByRole("button", { name: "热键" }));
+
+    await waitFor(() => {
+      expect(screen.getAllByRole("button", { name: "修改" })).toHaveLength(3);
+    });
+
+    // Act：第三行 Main 捕获与 history 相同的键
+    const editButtons = screen.getAllByRole("button", { name: "修改" });
+    await user.click(editButtons[2]);
+    const captureArea = screen.getByRole("button", { name: "录制中…请按下快捷键" });
+    fireEvent.keyDown(captureArea, { code: "KeyH", metaKey: true, shiftKey: true });
+    await user.click(screen.getByRole("button", { name: "保存" }));
+
+    // Assert
+    await waitFor(() => {
+      expect(screen.getByText("已被占用")).toBeInTheDocument();
+    });
+    expect(mockSetHotkey).not.toHaveBeenCalled();
   });
 
   it("settings-page: 隐私面板——添加一项后列表出现该项且调 setExcludeList(含该项)", async () => {
@@ -424,11 +481,11 @@ describe("settings-page", () => {
     await user.click(within(nav).getByRole("button", { name: "热键" }));
 
     await waitFor(() => {
-      expect(screen.getAllByRole("button", { name: "修改" })).toHaveLength(2);
+      expect(screen.getAllByRole("button", { name: "修改" })).toHaveLength(3);
     });
 
-    // 两行都有「修改」按钮，当前无「保存」按钮（未进录制模式）
-    expect(screen.getAllByRole("button", { name: "修改" })).toHaveLength(2);
+    // 三行都有「修改」按钮，当前无「保存」按钮（未进录制模式）
+    expect(screen.getAllByRole("button", { name: "修改" })).toHaveLength(3);
     expect(screen.queryByRole("button", { name: "保存" })).not.toBeInTheDocument();
     // 无旧版 input（已移除手打改键）
     expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
@@ -443,7 +500,7 @@ describe("settings-page", () => {
     await user.click(within(nav).getByRole("button", { name: "热键" }));
 
     await waitFor(() => {
-      expect(screen.getAllByRole("button", { name: "修改" })).toHaveLength(2);
+      expect(screen.getAllByRole("button", { name: "修改" })).toHaveLength(3);
     });
 
     // Act：点击第一行「修改」进入录制模式
@@ -451,16 +508,16 @@ describe("settings-page", () => {
     await user.click(editButtons[0]);
 
     // 录制模式中：「修改」消失、出现录制中按钮
-    expect(screen.queryAllByRole("button", { name: "修改" })).toHaveLength(1);
+    expect(screen.queryAllByRole("button", { name: "修改" })).toHaveLength(2);
     const captureArea = screen.getByRole("button", { name: "录制中…请按下快捷键" });
     expect(captureArea).toBeInTheDocument();
 
     // 按 Esc 取消
     fireEvent.keyDown(captureArea, { code: "Escape" });
 
-    // 退出录制模式：「修改」按钮恢复为 2，录制中按钮消失
+    // 退出录制模式：「修改」按钮恢复为 3，录制中按钮消失
     await waitFor(() => {
-      expect(screen.getAllByRole("button", { name: "修改" })).toHaveLength(2);
+      expect(screen.getAllByRole("button", { name: "修改" })).toHaveLength(3);
     });
     expect(screen.queryByRole("button", { name: "录制中…请按下快捷键" })).not.toBeInTheDocument();
   });
@@ -474,7 +531,7 @@ describe("settings-page", () => {
     await user.click(within(nav).getByRole("button", { name: "热键" }));
 
     await waitFor(() => {
-      expect(screen.getAllByRole("button", { name: "修改" })).toHaveLength(2);
+      expect(screen.getAllByRole("button", { name: "修改" })).toHaveLength(3);
     });
 
     // Act：进入录制模式但不按有效键
@@ -620,7 +677,7 @@ describe("settings-page", () => {
     await user.click(within(nav).getByRole("button", { name: "热键" }));
 
     await waitFor(() => {
-      expect(screen.getAllByRole("button", { name: "修改" })).toHaveLength(2);
+      expect(screen.getAllByRole("button", { name: "修改" })).toHaveLength(3);
     });
 
     expect(screen.queryByText("回车粘贴")).not.toBeInTheDocument();

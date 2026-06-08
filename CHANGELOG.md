@@ -3,6 +3,18 @@
 本项目每个发布版本的更新内容。排版约定：每版先一整段**中文**，分隔线后一整段 **English**（分语言成段，不行内混排）。
 发版时 `release.yml` 会自动抽取对应 `## v<版本>` 段拼到 GitHub Release 顶部；`release.sh` 预检要求新版在此有对应段，否则阻断发版。
 
+## v0.3.4
+
+### ⌨️ 热键
+- 新增「应用主界面」全局热键，默认 `Cmd/Ctrl+Shift+M`，可在设置页与剪贴板历史、翻译热键一起修改。
+- 改键流程更稳健：运行时注册新热键成功后才保存配置并注销旧热键；如果新热键被系统或其他应用占用，旧配置和旧热键都会保留。
+
+---
+
+### ⌨️ Hotkeys
+- Added a global hotkey for the main app window, defaulting to `Cmd/Ctrl+Shift+M`, configurable alongside clipboard history and translation hotkeys in Settings.
+- Made rebinding safer: QuickQuick now registers the new hotkey before saving config and unregistering the old one, so conflicts keep the existing shortcut intact.
+
 ## v0.3.3
 
 ### 📋 剪贴板
