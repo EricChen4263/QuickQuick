@@ -75,6 +75,30 @@ body {
   font-size: 13px;
 }
 
+/* 列表/预览滚动条：贴合深色毛玻璃，去 WKWebView 默认白色滚动条 */
+.popover-list::-webkit-scrollbar,
+.popover-preview::-webkit-scrollbar {
+  width: 8px;
+}
+
+.popover-list::-webkit-scrollbar-track,
+.popover-preview::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.popover-list::-webkit-scrollbar-thumb,
+.popover-preview::-webkit-scrollbar-thumb {
+  background: color-mix(in oklch, var(--muted) 40%, transparent);
+  border-radius: 999px;
+  background-clip: padding-box;
+  border: 2px solid transparent;
+}
+
+.popover-list::-webkit-scrollbar-thumb:hover,
+.popover-preview::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in oklch, var(--muted) 60%, transparent);
+}
+
 /* 分组标题 */
 .popover-group-header {
   padding: 6px 12px 3px;

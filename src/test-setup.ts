@@ -13,3 +13,9 @@ if (jsdomWindow?.localStorage != null) {
     configurable: true,
   });
 }
+
+// jsdom 不实现 Element.scrollIntoView；组件 effect 会调用它，全局补桩防渲染期抛错。
+// 需断言调用次数的测试须在 beforeEach 覆盖为 vi.fn()（本无操作桩非 vi.fn()，clearAllMocks 不会重置它）。
+if (typeof Element.prototype.scrollIntoView !== "function") {
+  Element.prototype.scrollIntoView = () => undefined;
+}

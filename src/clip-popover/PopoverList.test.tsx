@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { PopoverList } from "./PopoverList";
 import type { ClipGroups } from "./grouping";
@@ -20,6 +20,11 @@ function makeItem(id: string, overrides: Partial<ClipItem> = {}): ClipItem {
 }
 
 const noop = () => undefined;
+
+// jsdom 未实现 scrollIntoView，组件 effect 会调用它；全局桩避免渲染期抛错
+beforeEach(() => {
+  Element.prototype.scrollIntoView = vi.fn();
+});
 
 describe("PopoverList 分组渲染", () => {
   it("三组均有条目时渲染收藏/今天/更早三个标题", () => {
@@ -90,5 +95,55 @@ describe("PopoverList 分组渲染", () => {
 
     expect(row1).toHaveAttribute("aria-selected", "true");
     expect(row2).toHaveAttribute("aria-selected", "false");
+  });
+});
+
+describe("PopoverList 选中行滚动跟随", () => {
+  it("初次渲染时把选中行滚入可视区（block: nearest）", () => {
+    const groups: ClipGroups = {
+      favorites: [],
+      today: [makeItem("t1"), makeItem("t2")],
+      earlier: [],
+    };
+
+    render(<PopoverList groups={groups} selectedId="t2" onSelect={noop} />);
+
+    const selectedRow = screen
+      .getAllByRole("option")
+      .find((r) => r.getAttribute("aria-selected") === "true");
+    expect(selectedRow?.scrollIntoView).toHaveBeenCalledWith({ block: "nearest" });
+  });
+
+  it("selectedId 变化时滚动到新的选中行", () => {
+    const groups: ClipGroups = {
+      favorites: [],
+      today: [makeItem("t1"), makeItem("t2"), makeItem("t3")],
+      earlier: [],
+    };
+
+    const { rerender } = render(
+      <PopoverList groups={groups} selectedId="t1" onSelect={noop} />,
+    );
+    vi.clearAllMocks();
+
+    rerender(<PopoverList groups={groups} selectedId="t3" onSelect={noop} />);
+
+    const newSelectedRow = screen
+      .getAllByRole("option")
+      .find((r) => r.getAttribute("aria-selected") === "true");
+    expect(newSelectedRow?.textContent).toContain("content-t3");
+    expect(newSelectedRow?.scrollIntoView).toHaveBeenCalledWith({ block: "nearest" });
+  });
+
+  it("无选中项（selectedId=null）时不触发滚动", () => {
+    const groups: ClipGroups = {
+      favorites: [],
+      today: [makeItem("t1")],
+      earlier: [],
+    };
+
+    render(<PopoverList groups={groups} selectedId={null} onSelect={noop} />);
+
+    expect(Element.prototype.scrollIntoView).not.toHaveBeenCalled();
   });
 });

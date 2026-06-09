@@ -1,3 +1,4 @@
+import { useEffect, useRef } from "react";
 import type { ClipItem } from "../ipc/ipc-client";
 import { KindIcon } from "../components/KindIcon";
 import type { ClipGroups } from "./grouping";
@@ -101,6 +102,14 @@ function PopoverGroup({
 export function PopoverList({ groups, selectedId, onSelect }: PopoverListProps) {
   const { favorites, today, earlier } = groups;
   const isEmpty = favorites.length === 0 && today.length === 0 && earlier.length === 0;
+  const listRef = useRef<HTMLDivElement>(null);
+
+  // 键盘 ↑/↓ 改 selectedId 后，把选中行滚入可视区（block:nearest 只在越界时滚动，不打断已可见项）
+  useEffect(() => {
+    if (selectedId === null) return;
+    const selectedRow = listRef.current?.querySelector('[aria-selected="true"]');
+    selectedRow?.scrollIntoView({ block: "nearest" });
+  }, [selectedId]);
 
   if (isEmpty) {
     return (
@@ -111,7 +120,7 @@ export function PopoverList({ groups, selectedId, onSelect }: PopoverListProps) 
   }
 
   return (
-    <div role="listbox" aria-label="剪贴板历史" className="popover-list">
+    <div ref={listRef} role="listbox" aria-label="剪贴板历史" className="popover-list">
       <PopoverGroup label="收藏" items={favorites} selectedId={selectedId} onSelect={onSelect} />
       <PopoverGroup label="今天" items={today} selectedId={selectedId} onSelect={onSelect} />
       <PopoverGroup label="更早" items={earlier} selectedId={selectedId} onSelect={onSelect} />
