@@ -386,8 +386,8 @@ describe("settings-page", () => {
     const nav = screen.getByRole("navigation", { name: "设置子项" });
     await user.click(within(nav).getByRole("button", { name: "关于" }));
 
-    // Assert：关于页显示应用名
-    expect(screen.getByText("QuickQuick")).toBeInTheDocument();
+    // Assert：关于页显示应用名（文本被 brand-accent span 拆分，按可访问名命中）
+    expect(screen.getByRole("heading", { level: 2, name: "QuickQuick" })).toBeInTheDocument();
   });
 
   it("settings-page: 通用面板渲染三个 switch（开机自启动/托盘常驻/自动检查更新）默认均为 on", () => {
@@ -431,19 +431,31 @@ describe("settings-page", () => {
     expect(screen.getByRole("button", { name: "清理…" })).toBeInTheDocument();
   });
 
-  it("settings-page: 关于面板含 .logo-mark SVG 图标区与版本号", async () => {
+  it("settings-page: 关于面板 logo 块渲染应用 icon 图片而非内联 SVG", async () => {
     const user = userEvent.setup();
     render(<SettingsPage />);
 
     const nav = screen.getByRole("navigation", { name: "设置子项" });
     await user.click(within(nav).getByRole("button", { name: "关于" }));
 
-    // 版本号文字可见（从 getVersion 读取，非硬编码）
-    await waitFor(() => {
-      expect(screen.getByText(/v0\.0\.1/)).toBeInTheDocument();
-    });
-    // h2 标题 QuickQuick
-    expect(screen.getByRole("heading", { level: 2, name: "QuickQuick" })).toBeInTheDocument();
+    // logo 块渲染 <img alt="QuickQuick">，不再有内联 svg
+    const logoImg = screen.getByRole("img", { name: "QuickQuick" });
+    expect(logoImg.tagName).toBe("IMG");
+    expect(logoImg.closest(".logo-mark")?.querySelector("svg")).toBeNull();
+  });
+
+  it("settings-page: 关于面板应用名套标题栏 brand-accent 样式（Quick 高亮）", async () => {
+    const user = userEvent.setup();
+    render(<SettingsPage />);
+
+    const nav = screen.getByRole("navigation", { name: "设置子项" });
+    await user.click(within(nav).getByRole("button", { name: "关于" }));
+
+    // h2 整体读出 QuickQuick，且前半「Quick」用 .brand-accent span 高亮
+    const heading = screen.getByRole("heading", { level: 2, name: "QuickQuick" });
+    const accent = heading.querySelector("span.brand-accent");
+    expect(accent).not.toBeNull();
+    expect(accent?.textContent).toBe("Quick");
   });
 
   it("settings-page: 翻译源面板——每个 provider 渲染 .src-card 结构（设计系统重塑）", async () => {
@@ -683,7 +695,7 @@ describe("settings-page", () => {
     expect(screen.queryByText("回车粘贴")).not.toBeInTheDocument();
   });
 
-  it("settings-page: 关于面板版本号从 getVersion 读取（非硬编码 v1.0.0）", async () => {
+  it("settings-page: 关于面板版本号从 getVersion 读取（非硬编码 v1.0.0），且不含 Tauri", async () => {
     const user = userEvent.setup();
     render(<SettingsPage />);
 
@@ -691,8 +703,9 @@ describe("settings-page", () => {
     await user.click(within(nav).getByRole("button", { name: "关于" }));
 
     await waitFor(() => {
-      expect(screen.getByText(/v0\.0\.1 · Tauri 2\.0/)).toBeInTheDocument();
+      expect(screen.getByText(/v0\.0\.1/)).toBeInTheDocument();
     });
     expect(screen.queryByText(/v1\.0\.0/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Tauri/)).not.toBeInTheDocument();
   });
 });

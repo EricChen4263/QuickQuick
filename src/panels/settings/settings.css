@@ -209,21 +209,19 @@
   padding: 20px 0 8px;
 }
 
-/* logo 标志块：accent 色圆角方块，内嵌 SVG 图标 */
+/* logo 标志块：60px 圆角块承载应用 icon 图片（icon 自带蓝色背景，不再叠 accent 底色） */
 .about .logo-mark {
   width: 60px;
   height: 60px;
   border-radius: 15px;
   margin: 0 auto 14px;
-  display: grid;
-  place-items: center;
-  background: var(--accent);
-  color: white;
 }
 
-.about .logo-mark svg {
-  width: 32px;
-  height: 32px;
+.about .logo-mark img {
+  width: 60px;
+  height: 60px;
+  border-radius: 15px;
+  object-fit: cover;
 }
 
 .about h2 {
