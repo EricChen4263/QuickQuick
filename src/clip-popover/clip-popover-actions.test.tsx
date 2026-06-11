@@ -153,7 +153,8 @@ describe("ClipPopoverApp 键盘动作", () => {
     });
   });
 
-  it("图片条目按 Alt+Enter：copyClipToClipboard 和 hide 均不被调用", async () => {
+  // 图片复制已落地（后端取原图 PNG 解码后 set_image），图片条目 Alt+Enter 也走 copyClipToClipboard。
+  it("图片条目按 Alt+Enter：调 copyClipToClipboard(图片 id) 并 hide", async () => {
     render(<ClipPopoverApp />);
 
     await waitFor(() => {
@@ -174,11 +175,10 @@ describe("ClipPopoverApp 键盘动作", () => {
 
     fireEvent.keyDown(input, { key: "Enter", altKey: true });
 
-    // 验证"某事不发生"：刷 microtask 队列让任何待决 IPC .then 链耗尽，
-    // 不依赖挂钟时间（避免慢 CI 下 flaky）。
-    await flushMicrotasks();
-    expect(mockCopyClipToClipboard).not.toHaveBeenCalled();
-    expect(mockHide).not.toHaveBeenCalled();
+    await waitFor(() => {
+      expect(mockCopyClipToClipboard).toHaveBeenCalledWith("id-img");
+      expect(mockHide).toHaveBeenCalled();
+    });
   });
 
   it("按 Esc 调 hideAndReturnFocus 关闭窗口并还焦", async () => {

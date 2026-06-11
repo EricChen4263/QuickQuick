@@ -54,6 +54,18 @@ pub trait PasteBackend {
 
     /// 向前台应用发送模拟粘贴（macOS: Cmd+V CGEvent）。
     fn send_paste(&mut self);
+
+    /// 将图片（裸 RGBA 字节）写入剪贴板，与 `write_with_marker` 并列。
+    ///
+    /// 图片不套私有 UTI marker 回读确认机制：macOS 写图后系统会重编码为 TIFF，
+    /// 回读字节不等于写入字节，marker 回读对图片无意义；写回去重由 image_hash 兜底。
+    ///
+    /// 返回 `Result`（不内部吞错）：写入失败时调用方必须**跳过 send_paste**——
+    /// 否则会把前台旧剪贴板内容粘出去（与文本路径 `write_and_confirm` 失败即不粘的语义对齐）。
+    ///
+    /// # Errors
+    /// arboard `set_image` 失败时返回错误字符串。
+    fn write_image(&mut self, width: usize, height: usize, rgba: &[u8]) -> Result<(), String>;
 }
 
 /// 焦点恢复步骤枚举（A17）。

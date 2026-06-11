@@ -69,6 +69,11 @@ impl PasteBackend for FakePasteBackend {
     fn send_paste(&mut self) {
         self.send_paste_call_count += 1;
     }
+
+    fn write_image(&mut self, _width: usize, _height: usize, _rgba: &[u8]) -> Result<(), String> {
+        // onboarding 测试不涉及图片写入，返回 Ok 满足 trait
+        Ok(())
+    }
 }
 
 /// A11（accessibility_onboarding_degrade）未授权分支——

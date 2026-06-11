@@ -64,6 +64,11 @@ impl PasteBackend for FakePasteBackend {
     fn send_paste(&mut self) {
         self.paste_sent_at_count = Some(self.count);
     }
+
+    fn write_image(&mut self, _width: usize, _height: usize, _rgba: &[u8]) -> Result<(), String> {
+        // 文本路径测试不涉及图片写入，返回 Ok 满足 trait
+        Ok(())
+    }
 }
 
 /// A15（paste_waits_changecount）：

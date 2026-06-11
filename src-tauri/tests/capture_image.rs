@@ -285,6 +285,46 @@ fn rgba_to_png_bad_length_returns_none() {
     assert!(result.is_none(), "字节长度不符时应返回 None");
 }
 
+// png_to_rgba 系列（复制/粘贴写回剪贴板用：PNG BLOB → arboard 需要的裸 RGBA）
+
+/// rgba_to_png 编码的 PNG 经 png_to_rgba 解回，宽高与逐字节 RGBA 无损还原
+#[test]
+fn png_to_rgba_roundtrips_known_pixels() {
+    use quickquick_lib::clipboard::{png_to_rgba, rgba_to_png_for_test};
+
+    // 2×1 图：像素0=红不透明(255,0,0,255)，像素1=半透明绿(0,255,0,128)，
+    // 含非 255 alpha 以验证 alpha 通道不被丢弃。
+    let width = 2usize;
+    let height = 1usize;
+    let original_rgba = vec![255, 0, 0, 255, 0, 255, 0, 128];
+    let png = rgba_to_png_for_test(width, height, &original_rgba).expect("编码已知小图应成功");
+
+    let (decoded_w, decoded_h, decoded_rgba) = png_to_rgba(&png).expect("解码自编码 PNG 应成功");
+
+    assert_eq!(decoded_w, width, "解码宽度应为 2");
+    assert_eq!(decoded_h, height, "解码高度应为 1");
+    assert_eq!(
+        decoded_rgba, original_rgba,
+        "RGBA 字节应与原图逐字节相等（含首像素 255,0,0,255 与半透明 alpha 128）"
+    );
+}
+
+/// 非法字节 → Err（不 panic），错误信息说明 PNG 解码失败
+#[test]
+fn png_to_rgba_invalid_bytes_returns_err() {
+    use quickquick_lib::clipboard::png_to_rgba;
+
+    let not_a_png = vec![0x00, 0x01, 0x02, 0x03];
+
+    let result = png_to_rgba(&not_a_png);
+
+    assert!(result.is_err(), "非法字节应返回 Err");
+    assert!(
+        result.unwrap_err().contains("PNG 解码失败"),
+        "错误信息应说明 PNG 解码失败"
+    );
+}
+
 // capture_and_ingest 系列
 
 /// 图文快照 → clip_items 含 1 文本行 + 1 图片行，clip_images 有 1 行

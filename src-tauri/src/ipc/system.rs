@@ -11,7 +11,8 @@
 //! - trusted=true：写回剪贴板 → 隐藏 clip-popover/main 窗口 → hide app 让出前台
 //!   → 固定等待 FOCUS_YIELD_WAIT_MS → Cmd+V 注入 → 返回 "full_paste"
 //! - trusted=false 或超时：仅写回剪贴板 → 返回 "write_back_only"
-//! - 图片条目：拒绝，返回错误
+//! - 图片条目：取原图 PNG 解码为 RGBA → set_image 写回；trusted 时同样走完整粘贴路径，
+//!   原图已不可用（降级剥离）时返回错误
 //!
 //! 焦点编排（FocusStep 序列）：
 //! - HidePanel：hide clip-popover（或 main）
@@ -25,7 +26,7 @@ use tauri::{Manager, State};
 
 use std::sync::Arc;
 
-use crate::clipboard::CapturedItem;
+use crate::clipboard::{png_to_rgba, CapturedItem, ClipboardPayload};
 use crate::db::{self, DbError};
 use crate::frontmost::LastExternalApp;
 use crate::ipc::{with_db, AppDb};
@@ -110,16 +111,20 @@ pub fn cleanup_history_impl(conn: &Connection) -> Result<CleanupResultDto, DbErr
     })
 }
 
-/// 从 DB 按 id 取条目内容，校验类型，构造 CapturedItem。
+/// 从 DB 按 id 取条目内容，校验类型，构造写回剪贴板的 `ClipboardPayload`。
 ///
-/// 图片条目（kind="image"）返回错误（arboard 图片格式转换留后续）。
+/// - text/richtext 条目：组 `Text(CapturedItem{text,html})`。
+/// - image 条目：按 clip_item_id 查 `clip_images` 原图 PNG BLOB，非空则 `png_to_rgba`
+///   解码为 `Image{width,height,rgba}`；无原图/空 BLOB（降级剥离原图后）返回 Err，
+///   语义为"图片原图已不可用，无法写回剪贴板"。
+///
 /// id 为空或条目不存在时返回错误。
 ///
 /// # Errors
 /// - id 为空
 /// - 条目不存在或已软删
-/// - 条目类型为 "image"
-pub fn fetch_paste_item(conn: &Connection, id: &str) -> Result<CapturedItem, DbError> {
+/// - image 条目原图不可用（无原图行 / 空 BLOB / PNG 解码失败）
+pub fn fetch_paste_item(conn: &Connection, id: &str) -> Result<ClipboardPayload, DbError> {
     if id.trim().is_empty() {
         return Err(DbError::Other("id 不能为空".to_string()));
     }
@@ -143,26 +148,59 @@ pub fn fetch_paste_item(conn: &Connection, id: &str) -> Result<CapturedItem, DbE
         row.ok_or_else(|| DbError::Other("条目不存在或已删除".to_string()))?;
 
     if kind == "image" {
-        return Err(DbError::Other("图片条目暂不支持写回剪贴板".to_string()));
+        return fetch_image_payload(conn, id);
     }
 
-    Ok(CapturedItem {
+    Ok(ClipboardPayload::Text(CapturedItem {
         text: content,
         html,
+    }))
+}
+
+/// 按 clip_item_id 取关联 clip_images 的原图 PNG BLOB，解码为 `Image` 载荷。
+///
+/// 抽出独立函数以降低 `fetch_paste_item` 的嵌套层级与长度。
+/// 原图不存在、BLOB 为空（降级剥离原图）或 PNG 解码失败时返回 Err，
+/// 语义统一为"图片原图已不可用，无法写回剪贴板"。
+///
+/// # Errors
+/// 无关联原图行 / 原图 BLOB 为空 / PNG 解码失败。
+fn fetch_image_payload(conn: &Connection, clip_item_id: &str) -> Result<ClipboardPayload, DbError> {
+    // clip_item_id 无 UNIQUE 约束，理论上可命中多行；加确定性排序兜底取最新一行，
+    // 避免同值并列时取序不定（last_modified_utc 同毫秒并列时再以 rowid DESC 稳定）。
+    let png: Option<Vec<u8>> = conn
+        .query_row(
+            "SELECT original FROM clip_images
+             WHERE clip_item_id = ?1 AND is_deleted = 0
+             ORDER BY last_modified_utc DESC, rowid DESC
+             LIMIT 1",
+            rusqlite::params![clip_item_id],
+            |row| row.get::<_, Option<Vec<u8>>>(0),
+        )
+        .optional()
+        .map_err(DbError::Sqlite)?
+        .flatten();
+
+    let png = png.filter(|bytes| !bytes.is_empty()).ok_or_else(|| {
+        DbError::Other("图片原图已不可用，无法写回剪贴板".to_string())
+    })?;
+
+    let (width, height, rgba) = png_to_rgba(&png).map_err(DbError::Other)?;
+    Ok(ClipboardPayload::Image {
+        width,
+        height,
+        rgba,
     })
 }
 
-/// 复制命令取数：按 id 取 text + html_content，组装 CapturedItem（纯函数，可测）。
+/// 复制命令取数：与 `fetch_paste_item` 同逻辑，返回写回剪贴板的 `ClipboardPayload`。
 ///
-/// 与 `fetch_paste_item` 取数逻辑等价（共用同一 SELECT），但语义独立于复制域：
-/// 复制只需内容、不涉及粘贴的 trusted/焦点编排。两者保持独立函数便于各自演进。
-/// 图片条目（kind="image"）返回错误；id 为空或条目不存在时返回错误。
+/// 语义独立于复制域：复制只需内容、不涉及粘贴的 trusted/焦点编排。
+/// 两者保持独立函数便于各自演进；当前复制与粘贴的取数规则一致，故委托。
 ///
 /// # Errors
-/// - id 为空
-/// - 条目不存在或已软删
-/// - 条目类型为 "image"
-pub fn fetch_clip_for_copy(conn: &Connection, id: &str) -> Result<CapturedItem, DbError> {
+/// 同 `fetch_paste_item`。
+pub fn fetch_clip_for_copy(conn: &Connection, id: &str) -> Result<ClipboardPayload, DbError> {
     fetch_paste_item(conn, id)
 }
 
@@ -191,6 +229,32 @@ pub fn paste_orchestrate(
     match perform_paste_or_degrade(probe, backend, item) {
         Ok(outcome) => map_outcome(&outcome).to_string(),
         Err(_timeout) => "write_back_only".to_string(),
+    }
+}
+
+/// 编排图片粘贴：write_image → 仅在写入成功且 trusted 时 send_paste（可测纯逻辑）。
+///
+/// 与 `paste_orchestrate` 一样不含窗口 hide（OS 边界），仅封装"写图 → 探针决策 → 注入"。
+/// 关键不变量（C1）：`write_image` 返回 Err 时**绝不** send_paste——否则会把前台旧剪贴板
+/// 内容粘出去（与文本路径 `write_and_confirm` 失败即不粘对齐）。写图成功且未授权时仅写回。
+///
+/// 返回 "full_paste"（写图成功 + trusted + 已 send_paste）或 "write_back_only"（写图失败 / 未授权）。
+pub fn paste_image_orchestrate(
+    probe: &impl AccessibilityProbe,
+    backend: &mut dyn PasteBackend,
+    width: usize,
+    height: usize,
+    rgba: &[u8],
+) -> String {
+    if backend.write_image(width, height, rgba).is_err() {
+        // 写图失败：剪贴板内容未更新，注入会粘出旧内容，故跳过 send_paste。
+        return "write_back_only".to_string();
+    }
+    if probe.is_trusted() {
+        backend.send_paste();
+        "full_paste".to_string()
+    } else {
+        "write_back_only".to_string()
     }
 }
 
@@ -411,7 +475,7 @@ fn hide_app(_app: &tauri::AppHandle) {}
 ///
 /// trusted=true 分支：写回 → hide 窗口 → 等待 100ms → Cmd+V → 返回 "full_paste"。
 /// trusted=false 或超时：仅写回 → 返回 "write_back_only"。
-/// 图片条目返回 Err。
+/// 图片原图已不可用（降级剥离）时返回 Err。
 #[tauri::command]
 pub fn paste_to_front(
     state: State<'_, AppDb>,
@@ -419,54 +483,67 @@ pub fn paste_to_front(
     app: tauri::AppHandle,
     id: String,
 ) -> Result<PasteResultDto, String> {
-    let item = with_db(&state, |conn| {
+    let payload = with_db(&state, |conn| {
         fetch_paste_item(conn, &id).map_err(|e| e.to_string())
     })?;
 
     // 读取观察者记录的"最近外部前台 app" pid（方案 B），供粘贴时显式激活目标。
     let target_pid = last_external.get();
-    let outcome = run_paste_with_backend(&app, &item, target_pid);
+    let outcome = run_paste_with_backend(&app, &payload, target_pid);
 
     Ok(PasteResultDto { outcome })
 }
 
-/// 薄封装：新建 arboard 剪贴板并把条目写入系统剪贴板（含富文本分支）。
+/// 薄封装：新建 arboard 剪贴板并把载荷写入系统剪贴板（文本/图片两态）。
 ///
 /// arboard 实写属 GUI 副作用、不进自动化（归 RT1-M01 manual_confirm）；
 /// 取数+组装的可测逻辑在 `fetch_clip_for_copy`，本函数只做系统写入。
-/// 复用 `macos_paste::write_item_to_clipboard` 保证复制与粘贴的写入行为一致。
+/// - `Text`：复用 `macos_paste::write_item_to_clipboard`（保证复制/粘贴写入行为一致）。
+/// - `Image`：复用 `macos_paste::write_image_to_clipboard`（arboard set_image）。
 ///
 /// # Errors
 /// arboard 初始化或写入失败时返回错误字符串。
-fn write_clip_to_system_clipboard(item: &CapturedItem) -> Result<(), String> {
+fn write_clip_to_system_clipboard(payload: &ClipboardPayload) -> Result<(), String> {
     let mut clipboard =
         arboard::Clipboard::new().map_err(|e| format!("剪贴板初始化失败: {e}"))?;
-    crate::macos_paste::write_item_to_clipboard(&mut clipboard, item)
+    match payload {
+        ClipboardPayload::Text(item) => {
+            crate::macos_paste::write_item_to_clipboard(&mut clipboard, item)
+        }
+        ClipboardPayload::Image {
+            width,
+            height,
+            rgba,
+        } => crate::macos_paste::write_image_to_clipboard(&mut clipboard, *width, *height, rgba),
+    }
 }
 
 /// Tauri 命令：按 id 把条目（富文本带 html）写入系统剪贴板（RT1-F1-S04）。
 ///
 /// 与 `paste_to_front` 的区别：仅写回剪贴板，不做 trusted 探测 / 焦点编排 / Cmd+V 注入，
 /// 供前端"复制"按钮调用（F2 改前端接入此命令替代 navigator.clipboard.writeText）。
-/// 有非空 html 时写富文本（HTML + 纯文本兜底），否则写纯文本。图片条目返回 Err。
+/// 文本条目有非空 html 时写富文本（HTML + 纯文本兜底），否则写纯文本；图片条目写图（set_image）。
+/// 图片原图已不可用（降级剥离）时返回 Err。
 #[tauri::command]
 pub fn copy_clip_to_clipboard(state: State<'_, AppDb>, id: String) -> Result<(), String> {
-    let item = with_db(&state, |conn| {
+    let payload = with_db(&state, |conn| {
         fetch_clip_for_copy(conn, &id).map_err(|e| e.to_string())
     })?;
-    write_clip_to_system_clipboard(&item)
+    write_clip_to_system_clipboard(&payload)
 }
 
-/// 构造平台后端/probe，执行粘贴编排（含 trusted 分支的窗口 hide）。
+/// 构造平台后端/probe，按载荷分流执行粘贴编排（含 trusted 分支的窗口 hide）。
 ///
 /// 拆出独立函数以降低 paste_to_front 函数体长度，cfg 分流在此隔离。
 ///
-/// trusted 分支：write_and_confirm 确认写入 → hide 窗口 → send_paste → "full_paste"。
-/// write_and_confirm 失败（Timeout）或未授权：write_with_marker → "write_back_only"。
+/// - Text 臂：write_and_confirm 确认写入（marker 回读）→ hide 窗口 → send_paste → "full_paste"；
+///   失败（Timeout）或未授权 → write_with_marker → "write_back_only"。
+/// - Image 臂：write_image 写图（不套 marker 回读）→ trusted ? (hide → send_paste → "full_paste")
+///   : "write_back_only"。
 #[cfg(target_os = "macos")]
 fn run_paste_with_backend(
     app: &tauri::AppHandle,
-    item: &CapturedItem,
+    payload: &ClipboardPayload,
     target_pid: Option<i32>,
 ) -> String {
     use crate::macos_paste::{MacOsAccessibilityProbe, MacOsPasteBackend};
@@ -480,17 +557,75 @@ fn run_paste_with_backend(
         }
     };
 
-    if probe.is_trusted() {
-        match paste::write_and_confirm(&mut backend, item) {
-            Ok(()) => {
-                hide_and_restore_focus(app, target_pid);
-                backend.send_paste();
-                "full_paste".to_string()
-            }
-            Err(_) => "write_back_only".to_string(),
+    match payload {
+        ClipboardPayload::Text(item) => {
+            paste_text_with_backend(app, &probe, &mut backend, item, target_pid)
         }
-    } else {
+        ClipboardPayload::Image {
+            width,
+            height,
+            rgba,
+        } => paste_image_with_backend(
+            app,
+            &probe,
+            &mut backend,
+            *width,
+            *height,
+            rgba,
+            target_pid,
+        ),
+    }
+}
+
+/// Text 臂粘贴：write_and_confirm（marker 回读）→ trusted 时 hide+send_paste。
+///
+/// 拆出以降低 `run_paste_with_backend` 的嵌套与长度。语义见调用方文档。
+#[cfg(target_os = "macos")]
+fn paste_text_with_backend(
+    app: &tauri::AppHandle,
+    probe: &impl AccessibilityProbe,
+    backend: &mut crate::macos_paste::MacOsPasteBackend,
+    item: &CapturedItem,
+    target_pid: Option<i32>,
+) -> String {
+    if !probe.is_trusted() {
         backend.write_with_marker(item);
+        return "write_back_only".to_string();
+    }
+    match paste::write_and_confirm(backend, item) {
+        Ok(()) => {
+            hide_and_restore_focus(app, target_pid);
+            backend.send_paste();
+            "full_paste".to_string()
+        }
+        Err(_) => "write_back_only".to_string(),
+    }
+}
+
+/// Image 臂粘贴：write_image 写图（无 marker 回读）→ trusted 时 hide+send_paste。
+///
+/// 为何图片不套 marker 回读确认：macOS 写图后系统重编码为 TIFF，回读字节不等值，
+/// marker 机制对图片无意义；arboard set_image 同步写入，写回去重由 image_hash 兜底。
+#[cfg(target_os = "macos")]
+#[allow(clippy::too_many_arguments)]
+fn paste_image_with_backend(
+    app: &tauri::AppHandle,
+    probe: &impl AccessibilityProbe,
+    backend: &mut crate::macos_paste::MacOsPasteBackend,
+    width: usize,
+    height: usize,
+    rgba: &[u8],
+    target_pid: Option<i32>,
+) -> String {
+    if backend.write_image(width, height, rgba).is_err() {
+        // C1：写图失败时剪贴板未更新，跳过 send_paste 避免粘出前台旧内容。
+        return "write_back_only".to_string();
+    }
+    if probe.is_trusted() {
+        hide_and_restore_focus(app, target_pid);
+        backend.send_paste();
+        "full_paste".to_string()
+    } else {
         "write_back_only".to_string()
     }
 }
@@ -498,7 +633,7 @@ fn run_paste_with_backend(
 #[cfg(not(target_os = "macos"))]
 fn run_paste_with_backend(
     app: &tauri::AppHandle,
-    item: &CapturedItem,
+    payload: &ClipboardPayload,
     _target_pid: Option<i32>,
 ) -> String {
     use crate::macos_paste::FallbackAccessibilityProbe;
@@ -514,7 +649,15 @@ fn run_paste_with_backend(
     };
     let _ = app;
 
-    paste_orchestrate(&probe, &mut backend, item)
+    // 非 macOS：probe 恒 false，仅写回不注入粘贴（图片走与文本对齐的 C1-安全编排）。
+    match payload {
+        ClipboardPayload::Text(item) => paste_orchestrate(&probe, &mut backend, item),
+        ClipboardPayload::Image {
+            width,
+            height,
+            rgba,
+        } => paste_image_orchestrate(&probe, &mut backend, *width, *height, rgba),
+    }
 }
 
 #[cfg(test)]
@@ -540,10 +683,44 @@ mod tests {
                  text_hash         TEXT,
                  is_favorite       INTEGER NOT NULL DEFAULT 0,
                  html_content      TEXT
+             );
+             CREATE TABLE IF NOT EXISTS clip_images (
+                 id                TEXT PRIMARY KEY NOT NULL,
+                 clip_item_id      TEXT REFERENCES clip_items(id) ON DELETE CASCADE,
+                 thumbnail         BLOB,
+                 original          BLOB,
+                 original_present  INTEGER NOT NULL DEFAULT 0,
+                 image_hash        TEXT,
+                 created_utc       INTEGER NOT NULL,
+                 last_modified_utc INTEGER NOT NULL,
+                 is_deleted        INTEGER NOT NULL DEFAULT 0,
+                 deleted_at_utc    INTEGER,
+                 is_favorite       INTEGER NOT NULL DEFAULT 0
              );",
         )
         .expect("建测试表失败");
         conn
+    }
+
+    /// 造一条 image clip_item + 关联 clip_images 行（原图为给定 PNG BLOB）。
+    ///
+    /// 返回 clip_item id。`original` 传空 Vec 可模拟降级剥离原图后的空 BLOB。
+    fn insert_image_clip(conn: &Connection, original: &[u8]) -> String {
+        let item_id = "img-item-1".to_string();
+        conn.execute(
+            "INSERT INTO clip_items (id, content, kind, created_utc, last_modified_utc)
+             VALUES (?1, '', 'image', 1, 1)",
+            rusqlite::params![item_id],
+        )
+        .expect("插入 image clip_item 失败");
+        conn.execute(
+            "INSERT INTO clip_images
+                 (id, clip_item_id, original, original_present, created_utc, last_modified_utc)
+             VALUES ('img-1', ?1, ?2, 1, 1, 1)",
+            rusqlite::params![item_id, original],
+        )
+        .expect("插入 clip_images 失败");
+        item_id
     }
 
     struct FakeProbe {
@@ -560,6 +737,10 @@ mod tests {
         text: Option<String>,
         send_paste_called: bool,
         freeze_count: bool,
+        /// 为 true 时 write_image 返回 Err，模拟 arboard set_image 失败（C1）
+        write_image_fails: bool,
+        /// write_image 是否被调用过
+        write_image_called: bool,
     }
     impl FakeBackend {
         fn trusted_normal() -> Self {
@@ -568,6 +749,8 @@ mod tests {
                 text: None,
                 send_paste_called: false,
                 freeze_count: false,
+                write_image_fails: false,
+                write_image_called: false,
             }
         }
         fn frozen_count() -> Self {
@@ -576,6 +759,15 @@ mod tests {
                 text: None,
                 send_paste_called: false,
                 freeze_count: true,
+                write_image_fails: false,
+                write_image_called: false,
+            }
+        }
+        /// 写图必失败的后端，用于 C1：验证写图失败时不 send_paste。
+        fn image_write_fails() -> Self {
+            Self {
+                write_image_fails: true,
+                ..Self::trusted_normal()
             }
         }
     }
@@ -594,6 +786,19 @@ mod tests {
         }
         fn send_paste(&mut self) {
             self.send_paste_called = true;
+        }
+        fn write_image(
+            &mut self,
+            _width: usize,
+            _height: usize,
+            _rgba: &[u8],
+        ) -> Result<(), String> {
+            self.write_image_called = true;
+            if self.write_image_fails {
+                Err("模拟 set_image 失败".to_string())
+            } else {
+                Ok(())
+            }
         }
     }
 
@@ -668,6 +873,48 @@ mod tests {
         );
     }
 
+    /// T5b：fetch_paste_item — image 条目有原图 → 返回 Image 载荷，锚定宽高
+    #[test]
+    fn fetch_paste_item_image_with_original_returns_image_payload() {
+        use crate::clipboard::{rgba_to_png_for_test, ClipboardPayload};
+
+        let conn = make_test_conn();
+        // 2×1 已知小图：像素0=红、像素1=绿
+        let rgba = vec![255, 0, 0, 255, 0, 255, 0, 255];
+        let png = rgba_to_png_for_test(2, 1, &rgba).expect("编码已知小图应成功");
+        let item_id = insert_image_clip(&conn, &png);
+
+        let payload = fetch_paste_item(&conn, &item_id).expect("有原图的 image 条目应返回 Ok");
+
+        match payload {
+            ClipboardPayload::Image {
+                width,
+                height,
+                rgba: decoded,
+            } => {
+                assert_eq!(width, 2, "解码宽度应为 2");
+                assert_eq!(height, 1, "解码高度应为 1");
+                assert_eq!(decoded, rgba, "解码 RGBA 应与原图逐字节相等");
+            }
+            ClipboardPayload::Text(_) => panic!("image 条目应返回 Image 载荷，而非 Text"),
+        }
+    }
+
+    /// T5c：fetch_paste_item — image 条目原图为空 BLOB（降级剥离）→ 返回 Err
+    #[test]
+    fn fetch_paste_item_image_empty_original_returns_err() {
+        let conn = make_test_conn();
+        let item_id = insert_image_clip(&conn, &[]); // 空 BLOB 模拟降级剥离
+
+        let result = fetch_paste_item(&conn, &item_id);
+
+        assert!(result.is_err(), "原图为空时应返回 Err");
+        assert!(
+            result.unwrap_err().to_string().contains("原图已不可用"),
+            "错误信息应说明原图已不可用"
+        );
+    }
+
     /// T6：map_outcome — FullPasteDone 映射 "full_paste"
     #[test]
     fn map_outcome_full_paste_done_returns_full_paste() {
@@ -723,5 +970,88 @@ mod tests {
 
         assert_eq!(outcome, "write_back_only", "超时应映射 write_back_only");
         assert!(!backend.send_paste_called, "超时不应调用 send_paste");
+    }
+
+    /// C1①：paste_image_orchestrate — 写图失败 → 不调 send_paste，返回 write_back_only
+    #[test]
+    fn paste_image_orchestrate_write_fails_skips_send_paste() {
+        let probe = FakeProbe { trusted: true };
+        let mut backend = FakeBackend::image_write_fails();
+        let rgba = vec![0u8; 4]; // 1×1 占位
+
+        let outcome = paste_image_orchestrate(&probe, &mut backend, 1, 1, &rgba);
+
+        assert_eq!(
+            outcome, "write_back_only",
+            "写图失败应返回 write_back_only"
+        );
+        assert!(backend.write_image_called, "应尝试过 write_image");
+        assert!(
+            !backend.send_paste_called,
+            "写图失败时绝不能 send_paste（否则粘出前台旧内容）"
+        );
+    }
+
+    /// C1②：paste_image_orchestrate — 写图成功 + trusted → send_paste 被调用，返回 full_paste
+    #[test]
+    fn paste_image_orchestrate_write_ok_trusted_sends_paste() {
+        let probe = FakeProbe { trusted: true };
+        let mut backend = FakeBackend::trusted_normal();
+        let rgba = vec![0u8; 4];
+
+        let outcome = paste_image_orchestrate(&probe, &mut backend, 1, 1, &rgba);
+
+        assert_eq!(outcome, "full_paste", "写图成功+trusted 应返回 full_paste");
+        assert!(backend.write_image_called, "应调用 write_image");
+        assert!(backend.send_paste_called, "写图成功+trusted 应调用 send_paste");
+    }
+
+    /// C1③：paste_image_orchestrate — 写图成功但未授权 → 仅写回，不 send_paste
+    #[test]
+    fn paste_image_orchestrate_write_ok_untrusted_skips_send_paste() {
+        let probe = FakeProbe { trusted: false };
+        let mut backend = FakeBackend::trusted_normal();
+        let rgba = vec![0u8; 4];
+
+        let outcome = paste_image_orchestrate(&probe, &mut backend, 1, 1, &rgba);
+
+        assert_eq!(
+            outcome, "write_back_only",
+            "未授权应返回 write_back_only"
+        );
+        assert!(backend.write_image_called, "应调用 write_image");
+        assert!(!backend.send_paste_called, "未授权不应 send_paste");
+    }
+
+    /// 缺口 B：fetch_paste_item — 文本条目返回 Text 载荷，html 透传正确
+    #[test]
+    fn fetch_paste_item_text_returns_text_payload_with_html() {
+        use crate::clipboard::ClipboardPayload;
+
+        let conn = make_test_conn();
+        // 直接插入带 html 的富文本条目（content + html_content 都非空）
+        conn.execute(
+            "INSERT INTO clip_items
+                 (id, content, kind, created_utc, last_modified_utc, html_content)
+             VALUES ('txt-1', 'plain text', 'text', 1, 1, '<b>plain text</b>')",
+            [],
+        )
+        .expect("插入富文本条目失败");
+
+        let payload = fetch_paste_item(&conn, "txt-1").expect("文本条目应返回 Ok");
+
+        match payload {
+            ClipboardPayload::Text(item) => {
+                assert_eq!(item.text, "plain text", "纯文本字段应透传");
+                assert_eq!(
+                    item.html.as_deref(),
+                    Some("<b>plain text</b>"),
+                    "html 应原样透传"
+                );
+            }
+            ClipboardPayload::Image { .. } => {
+                panic!("文本条目应返回 Text 载荷，而非 Image")
+            }
+        }
     }
 }

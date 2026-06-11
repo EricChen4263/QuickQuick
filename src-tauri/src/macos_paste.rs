@@ -39,10 +39,37 @@ pub(crate) fn write_item_to_clipboard(
     }
 }
 
+/// 将图片（裸 RGBA 字节）写入 arboard 剪贴板。
+///
+/// arboard `set_image` 接收 `ImageData{width,height,bytes}`，bytes 为 RGBA 裸字节
+/// （与捕获侧 `get_image()` 读到的格式一致）；用 `Cow::Borrowed` 借用入参字节，
+/// 避免对大图做无谓全量克隆（set_image 同步消费、不需要更长生命周期）。
+/// 抽出供 macOS / fallback 两个后端复用，镜像 `write_item_to_clipboard` 的错误处理。
+///
+/// # Errors
+/// arboard `set_image` 失败时返回错误字符串（由调用方按需降级，不 panic）。
+pub(crate) fn write_image_to_clipboard(
+    clipboard: &mut arboard::Clipboard,
+    width: usize,
+    height: usize,
+    rgba: &[u8],
+) -> Result<(), String> {
+    use std::borrow::Cow;
+    let image_data = arboard::ImageData {
+        width,
+        height,
+        bytes: Cow::Borrowed(rgba),
+    };
+    clipboard.set_image(image_data).map_err(|e| e.to_string())
+}
+
 // macOS 平台实现
 #[cfg(target_os = "macos")]
 mod macos_impl {
-    use super::{write_item_to_clipboard, AccessibilityProbe, CapturedItem, PasteBackend};
+    use super::{
+        write_image_to_clipboard, write_item_to_clipboard, AccessibilityProbe, CapturedItem,
+        PasteBackend,
+    };
 
     // AXIsProcessTrusted 声明：链接 ApplicationServices 框架，最小化依赖
     // 依据：https://developer.apple.com/documentation/applicationservices/axisprocesstrusted
@@ -172,13 +199,23 @@ mod macos_impl {
                 post_key(false);
             }
         }
+
+        /// 将图片（裸 RGBA 字节）写入剪贴板（arboard set_image），返回写入结果。
+        ///
+        /// 失败时返回 Err（不吞错），让调用方据此跳过 send_paste；图片无 marker 回读确认（见 trait 文档）。
+        fn write_image(&mut self, width: usize, height: usize, rgba: &[u8]) -> Result<(), String> {
+            write_image_to_clipboard(&mut self.clipboard, width, height, rgba)
+        }
     }
 }
 
 // 非 macOS 降级实现
 #[cfg(not(target_os = "macos"))]
 mod fallback_impl {
-    use super::{write_item_to_clipboard, AccessibilityProbe, CapturedItem, PasteBackend};
+    use super::{
+        write_image_to_clipboard, write_item_to_clipboard, AccessibilityProbe, CapturedItem,
+        PasteBackend,
+    };
 
     /// 非 macOS 平台降级探针：is_trusted() 永远返回 false。
     ///
@@ -237,6 +274,13 @@ mod fallback_impl {
 
         fn send_paste(&mut self) {
             // 非 mac 降级：no-op；运行时由 probe=false 拦截，不会到达此处
+        }
+
+        /// 将图片（裸 RGBA 字节）写入剪贴板（arboard set_image），返回写入结果。
+        ///
+        /// 失败时返回 Err（不吞错），让调用方据此跳过 send_paste；图片无 marker 回读确认（见 trait 文档）。
+        fn write_image(&mut self, width: usize, height: usize, rgba: &[u8]) -> Result<(), String> {
+            write_image_to_clipboard(&mut self.clipboard, width, height, rgba)
         }
     }
 }

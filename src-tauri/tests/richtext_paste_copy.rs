@@ -6,9 +6,17 @@
 //!
 //! arboard set().html 实写系统剪贴板属 GUI 副作用，不在自动化覆盖（归 RT1-M01 manual_confirm）。
 
-use quickquick_lib::clipboard::CapturedItem;
+use quickquick_lib::clipboard::{CapturedItem, ClipboardPayload};
 use quickquick_lib::db;
 use quickquick_lib::ipc::system::{fetch_clip_for_copy, fetch_paste_item};
+
+/// 从 ClipboardPayload 取出文本载荷的 CapturedItem；非 Text 变体（本测试不构造图片）panic。
+fn expect_text(payload: ClipboardPayload) -> CapturedItem {
+    match payload {
+        ClipboardPayload::Text(item) => item,
+        ClipboardPayload::Image { .. } => panic!("文本条目应返回 Text 载荷，而非 Image"),
+    }
+}
 
 /// 构造临时加密库路径（测试结束随 TempDir 清理）。
 fn temp_db() -> (tempfile::TempDir, std::path::PathBuf) {
@@ -36,7 +44,7 @@ fn fetch_paste_item_includes_html() {
     let rich_id = ingest_item(&conn, "hello", Some("<b>hello</b>"));
     let plain_id = ingest_item(&conn, "plain text", None);
 
-    let rich = fetch_paste_item(&conn, &rich_id).expect("取富文本条目失败");
+    let rich = expect_text(fetch_paste_item(&conn, &rich_id).expect("取富文本条目失败"));
     assert_eq!(rich.text, "hello", "纯文本字段应保留");
     assert_eq!(
         rich.html.as_deref(),
@@ -44,7 +52,7 @@ fn fetch_paste_item_includes_html() {
         "富文本条目应带回原 html"
     );
 
-    let plain = fetch_paste_item(&conn, &plain_id).expect("取纯文本条目失败");
+    let plain = expect_text(fetch_paste_item(&conn, &plain_id).expect("取纯文本条目失败"));
     assert_eq!(plain.html, None, "纯文本条目 html 应为 None");
 }
 
@@ -55,7 +63,7 @@ fn copy_clip_assembles_text_and_html() {
     let rich_id = ingest_item(&conn, "world", Some("<i>world</i>"));
     let plain_id = ingest_item(&conn, "just text", None);
 
-    let rich = fetch_clip_for_copy(&conn, &rich_id).expect("取富文本条目失败");
+    let rich = expect_text(fetch_clip_for_copy(&conn, &rich_id).expect("取富文本条目失败"));
     assert_eq!(rich.text, "world", "纯文本字段应保留");
     assert_eq!(
         rich.html.as_deref(),
@@ -63,7 +71,7 @@ fn copy_clip_assembles_text_and_html() {
         "富文本条目应带回原 html"
     );
 
-    let plain = fetch_clip_for_copy(&conn, &plain_id).expect("取纯文本条目失败");
+    let plain = expect_text(fetch_clip_for_copy(&conn, &plain_id).expect("取纯文本条目失败"));
     assert_eq!(plain.text, "just text", "纯文本字段应保留");
     assert_eq!(plain.html, None, "纯文本条目 html 应为 None");
 }

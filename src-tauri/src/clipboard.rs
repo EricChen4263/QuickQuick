@@ -86,6 +86,27 @@ pub struct CapturedItem {
     pub html: Option<String>,
 }
 
+/// 复制/粘贴写回剪贴板的载荷，区分文本与图片两态。
+///
+/// 为何不直接扩 `CapturedItem`：后者是捕获/入库链路（ingest、db、pipeline）
+/// 广泛复用的核心结构，只承载 text+html。复制/粘贴是写回剪贴板的边界场景，
+/// 图片需携带宽高与裸 RGBA 字节——单独建模避免把图片字段污染进入库主路径，
+/// 也让写剪贴板的两条分支（文本走 set/html，图片走 set_image）类型清晰。
+#[derive(Debug, Clone, PartialEq)]
+pub enum ClipboardPayload {
+    /// 文本载荷（含可选 HTML 富文本），写回走 arboard set_text / set_html。
+    Text(CapturedItem),
+    /// 图片载荷（裸 RGBA 字节），写回走 arboard set_image。
+    Image {
+        /// 图片宽度（像素）
+        width: usize,
+        /// 图片高度（像素）
+        height: usize,
+        /// 裸 RGBA 像素字节，len = width * height * 4
+        rgba: Vec<u8>,
+    },
+}
+
 /// 单次捕获结果枚举，区分文本条目与图片条目。
 ///
 /// 同一次复制可能既含文本也含图片（混合格式），`poll_once_with_policy`
@@ -162,6 +183,25 @@ fn rgba_to_png(width: usize, height: usize, rgba: &[u8]) -> Option<Vec<u8>> {
 #[doc(hidden)]
 pub fn rgba_to_png_for_test(width: usize, height: usize, rgba: &[u8]) -> Option<Vec<u8>> {
     rgba_to_png(width, height, rgba)
+}
+
+/// 将 PNG 字节解码为 (宽, 高, RGBA 字节)。
+///
+/// 复制/粘贴图片到剪贴板时，DB 里存的是 PNG BLOB，而 arboard `set_image`
+/// 需要的是裸 RGBA 字节（与捕获侧 `get_image()` 读到的 RGBA 一致），
+/// 故写回前需把 PNG 解码回 RGBA。本函数为纯函数、无副作用，便于单测。
+///
+/// 解码失败（非法字节、非图片数据等）返回带原因的错误字符串，不 panic——
+/// 调用方（IPC 取数层）据此向前端报"图片无法写回剪贴板"。
+///
+/// # Errors
+/// PNG 解析失败时返回 `Err(String)`，包含 `image` crate 的原始错误说明。
+pub fn png_to_rgba(png: &[u8]) -> Result<(usize, usize, Vec<u8>), String> {
+    let img = image::load_from_memory(png).map_err(|e| format!("PNG 解码失败：{e}"))?;
+    let rgba = img.to_rgba8();
+    let width = rgba.width() as usize;
+    let height = rgba.height() as usize;
+    Ok((width, height, rgba.into_raw()))
 }
 
 /// 将快照的文本/图片字段拆分为 `Vec<CapturedClip>`。

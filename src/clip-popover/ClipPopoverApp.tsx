@@ -159,9 +159,7 @@ export default function ClipPopoverApp() {
     if (e.key === "Enter" && e.altKey) {
       e.preventDefault();
       if (selectedItem === null) return;
-      // 图片条目无文本/HTML 可写，做 no-op
-      if (selectedItem.kind === "image") return;
-      // 走后端 IPC 按 id 取 text+html 写系统剪贴板，保真富文本格式（替代仅写纯文本的 writeToClipboard）。
+      // 走后端 IPC 按 id 取内容写系统剪贴板：文本保真富文本格式，图片解码原图 PNG 后写 set_image。
       copyClipToClipboard(selectedItem.id)
         .then(() => getCurrentWindow().hide())
         .catch((err: unknown) => {
