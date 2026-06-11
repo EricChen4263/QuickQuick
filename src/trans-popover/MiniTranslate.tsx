@@ -1,4 +1,5 @@
 import React from "react";
+import { ActionBar } from "../components/ActionBar";
 import type { TranslateResult } from "../ipc/ipc-client";
 
 interface MiniTranslateProps {
@@ -23,17 +24,17 @@ function MiniTranslate({ result, onCopy, onSpeak, onExpand }: MiniTranslateProps
         {result.translated}
       </div>
 
-      <div className="mini-actions">
-        <button type="button" className="mini-btn" aria-label="复制" onClick={onCopy}>
+      <ActionBar variant="glass" className="mini-actions">
+        <button type="button" className="btn" aria-label="复制" onClick={onCopy}>
           复制
         </button>
-        <button type="button" className="mini-btn" aria-label="朗读" onClick={onSpeak}>
+        <button type="button" className="btn" aria-label="朗读" onClick={onSpeak}>
           朗读
         </button>
-        <button type="button" className="mini-btn" aria-label="展开" onClick={onExpand}>
+        <button type="button" className="btn" aria-label="展开" onClick={onExpand}>
           展开
         </button>
-      </div>
+      </ActionBar>
     </div>
   );
 }

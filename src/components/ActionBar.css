@@ -1,0 +1,59 @@
+/* 公共底部互动条「条壳」：只管布局，按钮样式由各页公共 .btn/.icon-btn 类负责 */
+.qq-action-bar {
+  display: flex;
+  align-items: center;
+  flex: none;
+  box-sizing: border-box;
+  border-top: 1px solid;
+}
+
+/* glass 皮：透明融入毛玻璃弹窗，细分割线 */
+.qq-action-bar--glass {
+  background: transparent;
+  padding: 7px 14px;
+  gap: 8px;
+  border-top-color: color-mix(in oklch, var(--glass-border) 44%, transparent);
+}
+
+/* surface 皮：主窗半透明面板，较厚 padding */
+.qq-action-bar--surface {
+  background: color-mix(in oklch, var(--surface-2) 62%, var(--surface));
+  padding: 16px 20px;
+  gap: 8px;
+  border-top-color: color-mix(in oklch, var(--border) 48%, transparent);
+}
+
+.qq-action-bar--align-start {
+  justify-content: flex-start;
+}
+
+.qq-action-bar--align-end {
+  justify-content: flex-end;
+}
+
+.qq-action-bar--align-between {
+  justify-content: space-between;
+}
+
+/* 快捷键提示：从 clip-popover 提升为公共，数值照搬原 popover.css */
+.qq-action-bar-hint {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.qq-kbd {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1px 5px;
+  border-radius: 4px;
+  border: 1px solid color-mix(in oklch, var(--border) 76%, transparent);
+  background: var(--surface-2);
+  font-family: var(--font);
+  font-size: 10.5px;
+  color: var(--muted);
+  line-height: 1.4;
+}

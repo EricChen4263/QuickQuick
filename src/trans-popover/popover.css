@@ -44,28 +44,10 @@ body {
   word-break: break-word;
 }
 
-.mini-actions {
-  display: flex;
-  gap: 6px;
-  flex-shrink: 0;
-}
-
-.mini-btn {
+/* 操作行复用公共 ActionBar(glass)；三按钮等宽铺满（原 mini-btn flex:1 居中） */
+.mini-actions .btn {
   flex: 1;
-  padding: 6px 0;
-  font-size: 12px;
-  color: var(--fg);
-  background: var(--surface-2);
-  border: 1px solid color-mix(in oklch, var(--border) 76%, transparent);
-  border-radius: var(--r-sm);
-  cursor: pointer;
-  transition: background 0.12s;
-}
-
-.mini-btn:hover {
-  background: var(--accent-soft);
-  color: var(--accent);
-  border-color: var(--accent-line);
+  justify-content: center;
 }
 
 .mini-status {

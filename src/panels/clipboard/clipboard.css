@@ -274,15 +274,8 @@
   object-fit: contain;
 }
 
-/* 底部操作栏：复制/删除等按钮行 */
+/* 底部操作栏：复用公共 ActionBar(surface)，仅保留响应式裁剪安全属性 */
 .preview-actions {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 16px 20px;
-  border-top: 1px solid color-mix(in oklch, var(--border) 48%, transparent);
-  background: color-mix(in oklch, var(--surface-2) 62%, var(--surface));
-  flex-wrap: nowrap;
   min-width: 0;
   overflow: hidden;
 }

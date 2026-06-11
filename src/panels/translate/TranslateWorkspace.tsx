@@ -1,4 +1,5 @@
 import type { TranslateResult, Provider } from "../../ipc/ipc-client";
+import { ActionBar } from "../../components/ActionBar";
 import { availableActions, resolveTranslateAction } from "../../translate/translate-actions";
 import DirBar from "./DirBar";
 import DictEntryView from "./DictEntryView";
@@ -93,7 +94,7 @@ function TranslateWorkspace({
           spellCheck={false}
         />
 
-        <div className="tx-cta">
+        <ActionBar variant="surface" className="tx-cta">
           <button
             className="btn btn-primary"
             onClick={() => onTranslate()}
@@ -102,7 +103,7 @@ function TranslateWorkspace({
             {isLoading ? "翻译中…" : "翻译"}
           </button>
           <span className="meta">{charCount} 字符</span>
-        </div>
+        </ActionBar>
 
         {error !== null && (
           <div className="tx-result">
@@ -141,7 +142,7 @@ function TranslateWorkspace({
               <div className="tx-out">{result.translated}</div>
             )}
 
-            <div className="tx-actions">
+            <ActionBar variant="surface" className="tx-actions">
               {actions
                 .filter((action) => action !== "save_history")
                 .map((action) => {
@@ -158,7 +159,7 @@ function TranslateWorkspace({
                     </button>
                   );
                 })}
-            </div>
+            </ActionBar>
           </div>
         )}
       </div>

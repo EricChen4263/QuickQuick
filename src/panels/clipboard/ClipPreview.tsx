@@ -7,6 +7,7 @@
 import { useEffect, useState } from "react";
 import { copyClipToClipboard, getClipImageOriginal, type ClipItem } from "../../ipc/ipc-client";
 import EmptyState from "../../components/EmptyState";
+import { ActionBar } from "../../components/ActionBar";
 import { sanitizeRichHtml } from "./sanitize-html";
 import { handleRichLinkClick } from "./rich-link";
 
@@ -159,7 +160,7 @@ function PreviewActions({ item, onToggleFavorite, onDelete, onCopy, onPasteToFro
   }
 
   return (
-    <div className="preview-actions">
+    <ActionBar variant="surface" className="preview-actions">
       <button
         className="btn btn-primary"
         type="button"
@@ -205,7 +206,7 @@ function PreviewActions({ item, onToggleFavorite, onDelete, onCopy, onPasteToFro
       >
         {TrashIcon}
       </button>
-    </div>
+    </ActionBar>
   );
 }
 

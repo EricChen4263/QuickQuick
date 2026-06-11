@@ -102,11 +102,16 @@
   box-shadow: 0 0 0 3px var(--accent-soft);
 }
 
-/* 翻译 CTA 行：按钮左对齐，字符数推到右侧 */
+/* 翻译 CTA 行：复用 ActionBar(surface) 统一按钮容器语言，
+   但此处在输入区下方、非窗口底部固定条，去掉变体自带的顶分割线与外 padding */
 .tx-cta {
   margin-top: 12px;
-  display: flex;
-  align-items: center;
+}
+
+.tx-cta.qq-action-bar {
+  border-top: none;
+  padding: 0;
+  /* 恢复原 CTA 行 10px 间距（surface 默认 8px 偏窄） */
   gap: 10px;
 }
 
@@ -257,12 +262,16 @@
   height: 34px;
 }
 
-/* 译文操作按钮行 */
+/* 译文操作按钮行：复用 ActionBar(surface)；它在 .tx-result 卡片内，
+   去掉变体的顶分割线与外 padding，保留卡片内布局节奏 */
 .tx-actions {
   margin-top: 14px;
-  display: flex;
-  gap: 8px;
   flex-wrap: wrap;
+}
+
+.tx-actions.qq-action-bar {
+  border-top: none;
+  padding: 0;
 }
 
 /* 历史侧栏：头部固定 + 列表可滚动

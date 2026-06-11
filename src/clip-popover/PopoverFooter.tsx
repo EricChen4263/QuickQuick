@@ -1,22 +1,16 @@
+import { ActionBar, ActionBarHint } from "../components/ActionBar";
+
 /**
  * Popover 底部快捷键提示条（静态展示）。
- * B2 会接入真实键盘事件，此处只提供视觉占位。
+ * 复用公共 ActionBar 条壳（glass 皮），className 局部恢复 18px 呼吸感。
  */
 export function PopoverFooter() {
   return (
-    <footer className="popover-footer">
-      <span className="popover-footer-hint">
-        <kbd>↵</kbd> 粘贴
-      </span>
-      <span className="popover-footer-hint">
-        <kbd>⌥↵</kbd> 复制
-      </span>
-      <span className="popover-footer-hint">
-        <kbd>↑↓</kbd> 选择
-      </span>
-      <span className="popover-footer-hint">
-        <kbd>esc</kbd> 关闭
-      </span>
-    </footer>
+    <ActionBar variant="glass" as="footer" className="popover-footer">
+      <ActionBarHint kbd="↵" label="粘贴" />
+      <ActionBarHint kbd="⌥↵" label="复制" />
+      <ActionBarHint kbd="↑↓" label="选择" />
+      <ActionBarHint kbd="esc" label="关闭" />
+    </ActionBar>
   );
 }
