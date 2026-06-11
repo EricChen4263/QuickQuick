@@ -3,6 +3,26 @@
 本项目每个发布版本的更新内容。排版约定：每版先一整段**中文**，分隔线后一整段 **English**（分语言成段，不行内混排）。
 发版时 `release.yml` 会自动抽取对应 `## v<版本>` 段拼到 GitHub Release 顶部；`release.sh` 预检要求新版在此有对应段，否则阻断发版。
 
+## v0.3.5
+
+### 📋 剪贴板
+- 图片条目现在可以「复制」和「一键粘贴到前台」了——此前图片项点这两个按钮无反应（仅文本/富文本可用）。复制会把原图写入系统剪贴板，已授辅助功能权限时「粘贴到前台」会直接把图片粘进前台应用，未授权则退化为仅写回剪贴板、需手动 `Cmd/Ctrl+V`。
+- 快捷弹窗用方向键选择条目时，列表会跟随高亮自动滚动，选中项不再滚出可视区；同时自定义了弹窗滚动条配色，与整体风格统一。
+
+### 🎨 界面
+- 统一了全应用底部操作条的样式：快捷弹窗、迷你翻译、翻译页、剪贴板预览等处的底部按钮条现在共用同一套视觉规范（高度、间距、分割线、对齐一致）。
+- 关于页改版：换上应用图标、名称与标题栏对齐，移除了 Tauri 默认标记。
+
+---
+
+### 📋 Clipboard
+- Image entries can now be **Copied** and **Pasted to the foreground** — previously these two buttons did nothing for images (text/rich-text only). Copy writes the original image to the system clipboard; with Accessibility permission granted, "Paste to foreground" pastes the image straight into the frontmost app, otherwise it falls back to writing the clipboard only (paste manually with `Cmd/Ctrl+V`).
+- When navigating the quick popover with arrow keys, the list now auto-scrolls to follow the highlight so the selected item never scrolls out of view; the popover scrollbar was also restyled to match the overall look.
+
+### 🎨 Interface
+- Unified the styling of bottom action bars across the app: the quick popover, mini translate, translate page, and clipboard preview now share one visual spec (consistent height, spacing, dividers, and alignment).
+- Redesigned the About page: now uses the app icon, aligns the name with the title bar, and removes the default Tauri branding.
+
 ## v0.3.4
 
 ### ⌨️ 热键
