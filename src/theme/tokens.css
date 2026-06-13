@@ -4,6 +4,11 @@
  * auto 模式由 themeStore.ts 写 data-theme，不用 @media prefers-color-scheme 驱动主题切换。
  */
 :root {
+  /* 让原生滚动条/表单控件跟随主题。WebView 不看 data-theme，缺这行时一律按浅色渲染：
+     macOS 上「系统设置→外观→显示滚动条=始终」（或插了鼠标）时会常驻浅色滚动条，
+     压在暗色 UI 上就是刺眼白条；暗色主题须显式声明 dark 才匹配。 */
+  color-scheme: light;
+
   --bg:      oklch(96.5% 0.004 250);
   --surface: oklch(99% 0.002 250);
   --fg:      oklch(24% 0.015 250);
@@ -34,6 +39,8 @@
 }
 
 [data-theme="dark"] {
+  color-scheme: dark;
+
   --bg:      oklch(17.5% 0.006 250);
   --surface: oklch(21.5% 0.008 250);
   --fg:      oklch(95% 0.004 250);
