@@ -111,6 +111,8 @@
 .tx-cta.qq-action-bar {
   border-top: none;
   padding: 0;
+  /* 非底部固定条，去掉 surface 皮自带的深色底 */
+  background: transparent;
   /* 恢复原 CTA 行 10px 间距（surface 默认 8px 偏窄） */
   gap: 10px;
 }
@@ -272,6 +274,8 @@
 .tx-actions.qq-action-bar {
   border-top: none;
   padding: 0;
+  /* 卡片内操作行，去掉 surface 皮自带的深色底 */
+  background: transparent;
 }
 
 /* 历史侧栏：头部固定 + 列表可滚动
