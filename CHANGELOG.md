@@ -3,6 +3,18 @@
 本项目每个发布版本的更新内容。排版约定：每版先一整段**中文**，分隔线后一整段 **English**（分语言成段，不行内混排）。
 发版时 `release.yml` 会自动抽取对应 `## v<版本>` 段拼到 GitHub Release 顶部；`release.sh` 预检要求新版在此有对应段，否则阻断发版。
 
+## v0.3.6
+
+### 🎨 界面（修复）
+- 修复暗色模式下滚动条显示为白色：在「系统设置›外观›显示滚动条=始终」或外接鼠标的 Mac 上，列表与面板的滚动条此前一律渲染成刺眼的浅色、不跟随主题。现滚动条会跟随亮/暗主题正确着色。
+- 翻译页去掉两处多余的深色背景块：原文输入框下方的「翻译」按钮行、以及译文卡片内的「复制/朗读」按钮行，此前各多出一块与面板不一致的深色矩形，现已透明融入。
+
+---
+
+### 🎨 Interface (fixes)
+- Fixed scrollbars showing up white in dark mode: on Macs with "System Settings › Appearance › Show scroll bars = Always" (or a mouse plugged in), list and panel scrollbars were previously rendered in a glaring light color that ignored the theme. Scrollbars now follow the light/dark theme correctly.
+- Removed two stray dark background blocks on the translate page: the "Translate" button row below the source input and the "Copy/Read aloud" button row inside the result card each had an extra dark rectangle that clashed with the panel; they now blend in transparently.
+
 ## v0.3.5
 
 ### 📋 剪贴板
