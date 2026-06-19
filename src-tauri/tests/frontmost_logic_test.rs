@@ -9,7 +9,8 @@
 //! 只能 GUI 实测，不在此文件覆盖。
 
 use quickquick_lib::frontmost::{
-    activation_decision, should_record_pid, ActivationDecision, LastExternalApp,
+    activation_decision, should_hide_after_focus_recheck, should_record_hwnd, should_record_pid,
+    ActivationDecision, LastExternalApp,
 };
 
 /// should_record_pid：候选 pid 等于自身 pid 时不记录（自己激活自己无意义）。
@@ -93,6 +94,52 @@ fn activation_decision_nonpositive_falls_back() {
         activation_decision(Some(0)),
         ActivationDecision::FallbackHide,
         "pid=0 应降级而非激活无效目标"
+    );
+}
+
+/// should_record_hwnd（Windows 前台捕获）：有效 hwnd 且属于外部进程时应记录。
+#[test]
+fn should_record_hwnd_accepts_external_window() {
+    // hwnd 非 0 且其所属 pid 不等于自身 pid → 记录
+    assert!(
+        should_record_hwnd(0x1234, 5678, 1234),
+        "外部进程的有效窗口句柄应被记录"
+    );
+}
+
+/// should_record_hwnd：hwnd 为 0（无前台窗口）时不记录。
+#[test]
+fn should_record_hwnd_rejects_zero_hwnd() {
+    assert!(
+        !should_record_hwnd(0, 5678, 1234),
+        "hwnd=0 表示无前台窗口，不应记录"
+    );
+}
+
+/// should_record_hwnd：窗口属于自身进程时不记录（自己激活自己粘贴无意义）。
+#[test]
+fn should_record_hwnd_rejects_own_process() {
+    assert!(
+        !should_record_hwnd(0x1234, 1234, 1234),
+        "属于自身进程的窗口不应记录"
+    );
+}
+
+/// should_hide_after_focus_recheck（Windows 失焦延迟复检）：复检仍失焦 → 应隐藏。
+#[test]
+fn should_hide_after_focus_recheck_hides_when_still_unfocused() {
+    assert!(
+        should_hide_after_focus_recheck(false),
+        "延迟复检后仍未聚焦应执行隐藏"
+    );
+}
+
+/// should_hide_after_focus_recheck：复检已重新聚焦 → 不隐藏（滤掉瞬时假失焦）。
+#[test]
+fn should_hide_after_focus_recheck_skips_when_refocused() {
+    assert!(
+        !should_hide_after_focus_recheck(true),
+        "延迟复检后已重新聚焦应跳过隐藏（瞬时假失焦）"
     );
 }
 

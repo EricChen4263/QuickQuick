@@ -630,7 +630,136 @@ fn paste_image_with_backend(
     }
 }
 
-#[cfg(not(target_os = "macos"))]
+/// Windows：写回剪贴板 → 还焦到捕获的外部窗口 → SendInput Ctrl+V（完整粘贴）。
+///
+/// probe 恒 trusted（Windows 无辅助功能授权概念），故走完整路径：
+/// write_and_confirm（轮询剪贴板序号确认写入）→ hide popover → SetForegroundWindow 还焦
+/// → 固定等待 → send_paste。`target_pid`（macOS pid）在 Windows 无意义，忽略；
+/// 还焦目标从托管的 `LastExternalHwnd` 取。
+#[cfg(target_os = "windows")]
+fn run_paste_with_backend(
+    app: &tauri::AppHandle,
+    payload: &ClipboardPayload,
+    _target_pid: Option<i32>,
+) -> String {
+    use crate::windows_paste::{WindowsAccessibilityProbe, WindowsPasteBackend};
+
+    let probe = WindowsAccessibilityProbe;
+    let mut backend = match WindowsPasteBackend::new() {
+        Ok(b) => b,
+        Err(e) => {
+            eprintln!("[run_paste_with_backend] 后端初始化失败: {e}");
+            return "write_back_only".to_string();
+        }
+    };
+    let target_hwnd = app
+        .try_state::<Arc<crate::frontmost::LastExternalHwnd>>()
+        .and_then(|state| state.get());
+
+    match payload {
+        ClipboardPayload::Text(item) => {
+            paste_text_with_backend_windows(app, &probe, &mut backend, item, target_hwnd)
+        }
+        ClipboardPayload::Image {
+            width,
+            height,
+            rgba,
+        } => paste_image_with_backend_windows(
+            app,
+            &probe,
+            &mut backend,
+            *width,
+            *height,
+            rgba,
+            target_hwnd,
+        ),
+    }
+}
+
+/// Windows Text 臂：write_and_confirm（序号确认）→ 还焦 → send_paste。
+///
+/// 对称于 macOS `paste_text_with_backend`，但还焦走 `hide_and_restore_focus_windows`
+/// （SetForegroundWindow），且 probe 恒 trusted。
+#[cfg(target_os = "windows")]
+fn paste_text_with_backend_windows(
+    app: &tauri::AppHandle,
+    probe: &impl AccessibilityProbe,
+    backend: &mut crate::windows_paste::WindowsPasteBackend,
+    item: &CapturedItem,
+    target_hwnd: Option<isize>,
+) -> String {
+    if !probe.is_trusted() {
+        backend.write_with_marker(item);
+        return "write_back_only".to_string();
+    }
+    match paste::write_and_confirm(backend, item) {
+        Ok(()) => {
+            if hide_and_restore_focus_windows(app, target_hwnd) {
+                backend.send_paste();
+                "full_paste".to_string()
+            } else {
+                "write_back_only".to_string()
+            }
+        }
+        Err(_) => "write_back_only".to_string(),
+    }
+}
+
+/// Windows Image 臂：write_image（无 marker 回读）→ 还焦 → send_paste。
+///
+/// 对称于 macOS `paste_image_with_backend`；写图失败时跳过 send_paste（C1，避免粘旧内容）。
+#[cfg(target_os = "windows")]
+#[allow(clippy::too_many_arguments)]
+fn paste_image_with_backend_windows(
+    app: &tauri::AppHandle,
+    probe: &impl AccessibilityProbe,
+    backend: &mut crate::windows_paste::WindowsPasteBackend,
+    width: usize,
+    height: usize,
+    rgba: &[u8],
+    target_hwnd: Option<isize>,
+) -> String {
+    if backend.write_image(width, height, rgba).is_err() {
+        return "write_back_only".to_string();
+    }
+    if probe.is_trusted() && hide_and_restore_focus_windows(app, target_hwnd) {
+        backend.send_paste();
+        "full_paste".to_string()
+    } else {
+        "write_back_only".to_string()
+    }
+}
+
+/// Windows：hide popover/main → SetForegroundWindow 还焦 → 固定等待焦点转移完成。
+///
+/// 对称于 macOS `hide_and_restore_focus`，但还焦用 `SetForegroundWindow(hwnd)`
+/// 把焦点交回唤起时捕获的外部窗口（`hide_popover_window` 仅隐藏自身窗口、不交焦点）。
+/// 返回是否成功把焦点交回目标窗口：`target_hwnd` 为 Some 且 `SetForegroundWindow` 成功才 `true`；
+/// 为 None（未捕获到）或还焦失败时返回 `false`——调用方据此跳过 `send_paste`、仅写回，
+/// 避免在焦点未交回目标窗口时把 Ctrl+V 注入到当前任意活跃窗口。
+/// 等待复用 `FOCUS_YIELD_WAIT_MS`：让焦点转移自然完成后再 send_paste，避免 Ctrl+V 落空。
+#[cfg(target_os = "windows")]
+fn hide_and_restore_focus_windows(app: &tauri::AppHandle, target_hwnd: Option<isize>) -> bool {
+    use windows_sys::Win32::UI::WindowsAndMessaging::SetForegroundWindow;
+
+    hide_popover_window(app);
+
+    let Some(hwnd) = target_hwnd else {
+        return false;
+    };
+
+    // SetForegroundWindow 把焦点交回目标窗口；返回 0 表示失败（如目标已关闭），降级记录。
+    let ok = unsafe { SetForegroundWindow(hwnd as _) } != 0;
+    if !ok {
+        eprintln!("[paste_to_front] SetForegroundWindow 失败（目标窗口可能已关闭），降级仅写回");
+    }
+
+    std::thread::sleep(std::time::Duration::from_millis(FOCUS_YIELD_WAIT_MS));
+    ok
+}
+
+/// Linux 等其余非 macOS/非 Windows 平台：probe 恒 false，仅写回不注入粘贴（保留 Fallback）。
+#[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
 fn run_paste_with_backend(
     app: &tauri::AppHandle,
     payload: &ClipboardPayload,
@@ -649,7 +778,7 @@ fn run_paste_with_backend(
     };
     let _ = app;
 
-    // 非 macOS：probe 恒 false，仅写回不注入粘贴（图片走与文本对齐的 C1-安全编排）。
+    // 仅写回不注入粘贴（图片走与文本对齐的 C1-安全编排）。
     match payload {
         ClipboardPayload::Text(item) => paste_orchestrate(&probe, &mut backend, item),
         ClipboardPayload::Image {

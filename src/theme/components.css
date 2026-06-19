@@ -373,3 +373,52 @@
  * .set-h/.set-sub/.set-group/.set-row 已迁移至 panels/settings/settings.css，
  * 因这些类仅设置页使用，不属于通用组件层。
  */
+
+/* Windows：原生标题栏被后端关掉，前端自绘栏须自带窗口控制按钮。
+   左 padding 收回（106px 是给 macOS 红绿灯留的，Windows 无），
+   品牌文字与按钮区分列两端。不改上方 .qq-titlebar 已校准的 macOS 数值。 */
+.qq-titlebar--win {
+  padding-left: 14px;
+  padding-right: 0;
+  justify-content: space-between;
+}
+
+/* 品牌区占满除按钮外的剩余空间：承载拖动 hit-test，把窗口控制按钮挤到最右侧，
+   避免按钮覆盖品牌文字、并让整条标题栏（按钮以外）均可拖动移窗。 */
+.qq-titlebar-brand {
+  flex: 1;
+  min-width: 0;
+}
+
+/* 窗口控制按钮容器：贴右侧，不参与拖动（容器本身不带 drag-region）。 */
+.qq-titlebar-controls {
+  display: flex;
+  align-items: stretch;
+  height: 100%;
+}
+
+/* 单个窗口控制按钮：Segoe MDL2 图标字体渲染最小化/最大化/关闭字形。 */
+.qq-titlebar-btn {
+  width: 46px;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: transparent;
+  color: var(--fg);
+  font-family: "Segoe MDL2 Assets", "Segoe Fluent Icons", sans-serif;
+  font-size: 10px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.qq-titlebar-btn:hover {
+  background: color-mix(in oklch, var(--fg) 10%, transparent);
+}
+
+/* 关闭按钮悬停用警示红，对齐 Windows 原生标题栏行为。 */
+.qq-titlebar-btn--close:hover {
+  background: #c42b1c;
+  color: #fff;
+}

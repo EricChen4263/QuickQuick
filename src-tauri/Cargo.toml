@@ -80,6 +80,20 @@ objc2-foundation = { version = "0.3", features = [
 ] }
 block2 = "0.6"
 
+# Windows 粘贴注入与前台捕获（Bug 修复：Windows 粘贴落空）。
+# 版本对齐 Cargo.lock 已锁定的 windows-sys 0.61，避免新增下载。
+# - KeyboardAndMouse：SendInput / VK_CONTROL / VK_V 合成 Ctrl+V
+# - DataExchange：GetClipboardSequenceNumber 读剪贴板变化计数（对齐 macOS changeCount）
+# - WindowsAndMessaging：GetForegroundWindow / SetForegroundWindow / GetWindowThreadProcessId
+# - Foundation：HWND 等基础类型
+[target.'cfg(target_os = "windows")'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_System_DataExchange",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
 [features]
 default = ["custom-protocol"]
 custom-protocol = ["tauri/custom-protocol"]

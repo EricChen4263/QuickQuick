@@ -73,6 +73,10 @@ pub fn trigger_popover(handle: &tauri::AppHandle, label: &str) {
     if let Err(e) = window.set_position(position) {
         eprintln!("[QuickQuick] {label} set_position 失败: {e}");
     }
+    // Windows：show 前快照当前外部前台窗口，供粘贴还焦时 SetForegroundWindow 还原。
+    // 一旦 show 自己的窗口，前台就成了 QuickQuick，再取就晚了。
+    #[cfg(target_os = "windows")]
+    crate::frontmost::capture_foreground_window(handle);
     if let Err(e) = window.show() {
         eprintln!("[QuickQuick] {label} show 失败: {e}");
         return;

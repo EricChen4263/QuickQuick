@@ -98,6 +98,9 @@ pub(crate) fn show_and_focus_window(app: &tauri::AppHandle) {
         eprintln!("[QuickQuick] 托盘：找不到 main 窗口");
         return;
     };
+    // Windows：show 前快照当前外部前台窗口，供粘贴还焦时 SetForegroundWindow 还原。
+    #[cfg(target_os = "windows")]
+    crate::frontmost::capture_foreground_window(app);
     if let Err(e) = window.show() {
         eprintln!("[QuickQuick] 托盘：显示窗口失败: {e}");
         return;

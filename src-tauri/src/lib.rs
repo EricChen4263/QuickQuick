@@ -31,6 +31,8 @@ pub mod settings;
 pub mod translate;
 mod tray;
 mod window_pos;
+#[cfg(target_os = "windows")]
+pub mod windows_paste;
 
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -505,6 +507,12 @@ fn setup_frontmost_tracking(app: &tauri::App) {
     let shared = Arc::new(frontmost::LastExternalApp::new());
     register_frontmost_observer(Arc::clone(&shared));
     app.manage(shared);
+
+    // Windows：还焦走 SetForegroundWindow(hwnd)，需托管最近外部窗口句柄。
+    // 由唤起点（popover/tray show 前）写入、粘贴命令读取。非 Windows 不托管，
+    // try_state 返回 None 零开销。
+    #[cfg(target_os = "windows")]
+    app.manage(Arc::new(frontmost::LastExternalHwnd::new()));
 }
 
 /// macOS：注册 NSWorkspace 应用激活通知观察者，记录最近一个非自身前台 app 的 pid。
@@ -745,6 +753,51 @@ fn reposition_traffic_lights(_window: &tauri::WebviewWindow) {}
 /// 托盘「退出」菜单直接调用 `app_handle().exit(0)`，不经过此事件，两者解耦。
 ///
 /// `stay_in_tray` 通过 `Arc<AtomicBool>` 传入，运行时 IPC 改值即刻生效。
+/// 主窗口失焦时执行隐藏或退出（依 `stay_in_tray`）。
+///
+/// `stay_in_tray == true` 隐藏窗口，否则退出应用——这是失焦行为的最终语义。
+/// macOS/Linux 直接调用此函数；Windows 经延迟复检后才调用（见下方 cfg 分支）。
+fn apply_main_window_unfocus(win: &tauri::WebviewWindow, stay_in_tray: &Arc<AtomicBool>) {
+    if stay_in_tray.load(Ordering::Relaxed) {
+        let _ = win.hide();
+    } else {
+        win.app_handle().exit(0);
+    }
+}
+
+/// 非 Windows：失焦即按 `stay_in_tray` 立即隐藏/退出（保持原有行为）。
+#[cfg(not(target_os = "windows"))]
+fn handle_main_window_unfocus(win: &tauri::WebviewWindow, stay_in_tray: &Arc<AtomicBool>) {
+    apply_main_window_unfocus(win, stay_in_tray);
+}
+
+/// Windows：失焦延迟复检后再决定是否隐藏，滤掉 WebView2 内部点击的瞬时假失焦。
+///
+/// WebView2 点击其内部元素会让主窗口产生瞬时 `Focused(false)`、随即又聚焦回来；
+/// 立即隐藏会造成"点一下面板就消失"。这里 spawn 短线程延迟复检 `is_focused()`，
+/// 仍为 false（`should_hide_after_focus_recheck`）才执行原隐藏/退出，否则跳过。
+///
+/// 用 `WebviewWindow::run_on_main_thread` 把隐藏/退出派回主线程执行（窗口操作须主线程）。
+#[cfg(target_os = "windows")]
+fn handle_main_window_unfocus(win: &tauri::WebviewWindow, stay_in_tray: &Arc<AtomicBool>) {
+    /// 失焦后复检前的延迟（毫秒）：足以越过 WebView2 内部点击的瞬时失焦窗口。
+    const FOCUS_RECHECK_DELAY_MS: u64 = 150;
+
+    let win = win.clone();
+    let stay_in_tray = Arc::clone(stay_in_tray);
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(FOCUS_RECHECK_DELAY_MS));
+        let is_focused = win.is_focused().unwrap_or(false);
+        if !frontmost::should_hide_after_focus_recheck(is_focused) {
+            return;
+        }
+        let win_for_main = win.clone();
+        let _ = win.run_on_main_thread(move || {
+            apply_main_window_unfocus(&win_for_main, &stay_in_tray)
+        });
+    });
+}
+
 fn setup_main_window_behavior(
     app: &mut tauri::App,
     stay_in_tray: Arc<AtomicBool>,
@@ -758,14 +811,17 @@ fn setup_main_window_behavior(
     #[cfg(target_os = "macos")]
     reposition_traffic_lights(&window);
 
+    // Windows：tauri.conf 的 decorations 无法按平台配置，运行时关掉原生标题栏，
+    // 让前端自绘栏（见 TitleBar.tsx）成为唯一标题栏，消除双标题栏。失败仅记录不 panic。
+    #[cfg(target_os = "windows")]
+    if let Err(e) = window.set_decorations(false) {
+        eprintln!("[QuickQuick] Windows 关闭原生标题栏失败: {e}");
+    }
+
     let win = window.clone();
     window.on_window_event(move |event| match event {
         WindowEvent::Focused(false) => {
-            if stay_in_tray.load(Ordering::Relaxed) {
-                let _ = win.hide();
-            } else {
-                win.app_handle().exit(0);
-            }
+            handle_main_window_unfocus(&win, &stay_in_tray);
         }
         WindowEvent::CloseRequested { api, .. } if stay_in_tray.load(Ordering::Relaxed) => {
             api.prevent_close();
