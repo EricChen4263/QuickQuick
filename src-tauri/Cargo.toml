@@ -1,6 +1,6 @@
 [package]
 name = "quickquick"
-version = "0.3.6"
+version = "0.3.7"
 description = "QuickQuick - 剪贴板历史与翻译工具"
 authors = ["QuickQuick"]
 edition = "2021"
