@@ -3,6 +3,20 @@
 本项目每个发布版本的更新内容。排版约定：每版先一整段**中文**，分隔线后一整段 **English**（分语言成段，不行内混排）。
 发版时 `release.yml` 会自动抽取对应 `## v<版本>` 段拼到 GitHub Release 顶部；`release.sh` 预检要求新版在此有对应段，否则阻断发版。
 
+## v0.3.7
+
+### 🪟 Windows（修复）
+- 修复主界面出现两个标题栏：此前 Windows 上系统原生标题栏与应用自绘标题栏同时显示。现 Windows 关闭原生标题栏，统一为单条自绘标题栏，并补上最小化 / 最大化 / 关闭按钮。
+- 修复点击主界面窗口直接消失：此前在窗口内部点击会被误判为失焦而隐藏到托盘。现仅在真正切换到别的应用时才隐藏，窗口内点击、拖动标题栏移窗均正常。
+- 修复「粘贴到前台」在 Windows 上无效：此前只把内容写入剪贴板、不会真正粘贴。现 Windows 也会在唤起时记录前台窗口，粘贴时把焦点交回该窗口并模拟 Ctrl+V，直接粘进前台应用；还焦失败时退化为仅写回剪贴板、需手动粘贴。
+
+---
+
+### 🪟 Windows (fixes)
+- Fixed the main window showing two title bars: previously the native Windows title bar and the app's custom title bar were both displayed. Windows now hides the native title bar and uses a single custom one, with minimize / maximize / close buttons added.
+- Fixed the main window vanishing on click: clicking inside the window was previously misread as losing focus and hidden to the tray. It now hides only when you actually switch to another app; clicking inside and dragging the title bar to move the window both work correctly.
+- Fixed "Paste to foreground" doing nothing on Windows: previously it only wrote to the clipboard without actually pasting. Windows now records the foreground window on activation, returns focus to it and simulates Ctrl+V on paste, pasting straight into the frontmost app; if focus restore fails it falls back to writing the clipboard only (paste manually).
+
 ## v0.3.6
 
 ### 🎨 界面（修复）
