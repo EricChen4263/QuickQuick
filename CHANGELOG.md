@@ -3,6 +3,16 @@
 本项目每个发布版本的更新内容。排版约定：每版先一整段**中文**，分隔线后一整段 **English**（分语言成段，不行内混排）。
 发版时 `release.yml` 会自动抽取对应 `## v<版本>` 段拼到 GitHub Release 顶部；`release.sh` 预检要求新版在此有对应段，否则阻断发版。
 
+## v0.3.8
+
+### 🪟 Windows（修复）
+- 修复自绘标题栏的最小化 / 最大化 / 关闭按钮点击无反应：根因是应用 capabilities 未授予对应窗口权限，按钮的窗口控制调用被 Tauri ACL 静默拒绝（按钮本身没问题）。现补齐 minimize / toggle-maximize / close 权限，三个按钮恢复可用。
+
+---
+
+### 🪟 Windows (fixes)
+- Fixed the minimize / maximize / close buttons on the custom title bar doing nothing when clicked: the app's capabilities did not grant the matching window permissions, so the buttons' window-control calls were silently rejected by Tauri's ACL (the buttons themselves were fine). The minimize / toggle-maximize / close permissions are now granted and all three buttons work again.
+
 ## v0.3.7
 
 ### 🪟 Windows（修复）
