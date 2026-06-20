@@ -14,4 +14,15 @@ describe("capabilities/default.json ACL 授权", () => {
 
     expect(config.permissions).toContain("core:window:allow-start-dragging");
   });
+
+  it("permissions 数组包含最小化/最大化/关闭窗口权限（Windows 自绘标题栏按钮依赖这些窗口 JS API，缺权限会被 ACL 静默拒绝）", () => {
+    const configPath = resolve(process.cwd(), "src-tauri/capabilities/default.json");
+    const config = JSON.parse(readFileSync(configPath, "utf-8")) as {
+      permissions: string[];
+    };
+
+    expect(config.permissions).toContain("core:window:allow-minimize");
+    expect(config.permissions).toContain("core:window:allow-toggle-maximize");
+    expect(config.permissions).toContain("core:window:allow-close");
+  });
 });
