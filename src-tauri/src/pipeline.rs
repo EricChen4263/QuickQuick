@@ -185,7 +185,11 @@ impl ClipboardBackend for ArboardBackend {
             html,
             image,
             has_self_marker: false,
-            is_concealed: false,
+            // arboard 抽象不暴露平台类型集合，故敏感标记直连平台层读取：
+            // macOS 读 NSPasteboard 类型集合（ConcealedType / TransientType），
+            // Windows 读 ExcludeClipboardContentFromMonitorProcessing /
+            // CanIncludeInClipboardHistory。判定逻辑在 pasteboard_meta 的纯谓词里。
+            is_concealed: crate::pasteboard_meta::read_is_concealed(),
             source_app: None,
         }
     }

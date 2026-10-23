@@ -52,9 +52,11 @@ pub struct RawImageData {
 ///
 /// `is_concealed`：OS 平台的敏感/一次性标记（二者合并为"敏感"语义）：
 /// - macOS：`org.nspasteboard.ConcealedType` 或 `org.nspasteboard.TransientType`
-/// - Windows：`ExcludeClipboardContentFromMonitorProcessing` 格式
+/// - Windows：`ExcludeClipboardContentFromMonitorProcessing` 格式存在，
+///   或 `CanIncludeInClipboardHistory` 的 DWORD 值为 0
 ///
-/// OS 后端置位；逻辑层不分析内容，只读取此布尔（设计§三#6）。
+/// OS 后端置位（判定与平台取值都在 [`crate::pasteboard_meta`]）；
+/// 逻辑层不分析内容，只读取此布尔（设计§三#6）。
 ///
 /// `source_app`：复制动作的来源应用标识（OS 后端提供，如 bundle ID），
 /// 供 App 排除名单匹配；后端无法获取时为 `None`。

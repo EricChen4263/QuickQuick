@@ -23,6 +23,7 @@ pub mod keyprovider;
 pub mod macos_paste;
 pub mod onboarding;
 pub mod paste;
+pub mod pasteboard_meta;
 pub mod pipeline;
 mod popover;
 pub mod portable;
