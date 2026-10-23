@@ -22,7 +22,7 @@ use crate::clipboard::{
 };
 use crate::db::{self, IngestOutcome};
 use crate::keyprovider::KeyProvider;
-use crate::pasteboard_meta::LastExternalSourceApp;
+use crate::pasteboard_meta::PasteboardMetaReader;
 use crate::privacy::CapturePolicy;
 
 /// FNV-1a 64-bit 素数（与 db.rs text_hash 使用同一常量，保证跨模块算法一致）
@@ -64,31 +64,35 @@ pub struct ArboardBackend {
     last_hash: Mutex<u64>,
     /// 单调递增的变化计数
     count: Mutex<u64>,
-    /// 最近一个外部前台应用身份（macOS 主线程观察者写入），用于来源应用排除名单匹配
-    source_app: Arc<LastExternalSourceApp>,
+    /// 平台标记读取策略。
+    ///
+    /// 为什么不是直接调 `read_pasteboard_meta`：macOS 的 `NSPasteboard` 跨线程并发
+    /// 调用会 SIGSEGV，必须由注入的读取器负责把读取搬到主线程（见 `pasteboard_meta` 文档）。
+    meta_reader: Arc<dyn PasteboardMetaReader>,
     /// 最近一次 `read` 采集到的来源应用完整身份，供 `source_app_identity` 复用。
     ///
-    /// 缓存一次而不是重复读平台层：Windows 侧读身份需要打开剪贴板，
-    /// 同一次捕获没必要开合两次。
+    /// 缓存一次而不是重复读平台层：读取要跨主线程派发（macOS）或开合剪贴板（Windows），
+    /// 同一次捕获没必要读两遍。
     last_source_app: Mutex<Option<SourceApp>>,
 }
 
 impl ArboardBackend {
     /// 创建 ArboardBackend 实例。
     ///
-    /// `source_app` 与主线程的应用激活观察者共享同一份身份记录：观察者写、本后端读。
+    /// `meta_reader` 决定平台标记在哪个线程读：macOS 传主线程派发实现，
+    /// Windows/其它平台传就地读实现（见 `lib.rs` 的 `build_meta_reader`）。
     ///
     /// # Errors
     /// arboard::Clipboard::new() 在无 GUI 环境（headless CI）可能失败，
     /// 调用方应优雅降级（eprintln，不 panic）。
     #[must_use = "ArboardBackend::new 返回 Result，忽略它会导致初始化失败被静默丢弃"]
-    pub fn new(source_app: Arc<LastExternalSourceApp>) -> Result<Self, String> {
+    pub fn new(meta_reader: Arc<dyn PasteboardMetaReader>) -> Result<Self, String> {
         let clipboard = arboard::Clipboard::new().map_err(|e| format!("剪贴板初始化失败：{e}"))?;
         Ok(Self {
             clipboard: Mutex::new(clipboard),
             last_hash: Mutex::new(0),
             count: Mutex::new(0),
-            source_app,
+            meta_reader,
             last_source_app: Mutex::new(None),
         })
     }
@@ -195,11 +199,11 @@ impl ClipboardBackend for ArboardBackend {
             bytes: img_data.bytes.into_owned(),
         });
 
-        // arboard 抽象不暴露平台类型集合，故标记直连平台层读取：
+        // arboard 抽象不暴露平台类型集合，故标记经注入的读取器取：
         // 敏感（macOS ConcealedType / TransientType；Windows 两个剪贴板格式）、
         // 自产标记（macOS 私有 UTI；Windows 写入门闩）、来源应用身份。
-        // 三者都来自这一次平台读取，描述的是同一份内容。
-        let meta = crate::pasteboard_meta::read_pasteboard_meta(&self.source_app);
+        // 三者来自同一次读取，描述的是同一份内容；macOS 上该读取在主线程执行。
+        let meta = self.meta_reader.read();
         let source_app = meta.source_app.clone();
         *self
             .last_source_app

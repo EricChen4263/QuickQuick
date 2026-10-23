@@ -325,6 +325,30 @@ fn reset_and_reopen(
     }
 }
 
+/// 选择平台标记读取策略。
+///
+/// macOS：`NSPasteboard` 跨线程并发调用会 SIGSEGV（本仓库隔离探针实测必崩），
+/// 故必须把读取投递到主线程串行执行，轮询线程只拿快照。
+/// 其余平台：Win32 剪贴板 API 允许跨线程，就地读还能保留"一次开合读完全部标记"的优化。
+fn build_meta_reader(
+    handle: &tauri::AppHandle,
+    source_app: Arc<pasteboard_meta::LastExternalSourceApp>,
+) -> Arc<dyn pasteboard_meta::PasteboardMetaReader> {
+    #[cfg(target_os = "macos")]
+    {
+        Arc::new(pasteboard_meta::MainThreadMetaReader::new(
+            handle.clone(),
+            source_app,
+        ))
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = handle;
+        Arc::new(pasteboard_meta::DirectMetaReader::new(source_app))
+    }
+}
+
 /// 启动剪贴板轮询后台线程（500ms 间隔）。
 ///
 /// 线程持有 AppHandle，每次迭代通过 state::<AppDb>() 取得数据库锁后写入。
@@ -332,6 +356,8 @@ fn reset_and_reopen(
 /// `paused` 和 `skip_sensitive` 在每次迭代通过 `Relaxed` load 读取，运行时生效。
 /// `source_app` 与主线程的应用激活观察者共享：观察者写身份，本线程只读，
 /// 用于排除名单的 bundle id / 显示名匹配。
+///
+/// 平台标记读取经 [`build_meta_reader`] 选择线程策略（macOS 必须主线程）。
 ///
 /// # 为什么不在线程内 panic
 /// 后台线程崩溃不会影响主线程，但会导致轮询静默停止；
@@ -343,7 +369,8 @@ fn start_clipboard_poll(
     exclude_list: Arc<RwLock<privacy::ExcludeList>>,
     source_app: Arc<pasteboard_meta::LastExternalSourceApp>,
 ) {
-    let backend = match pipeline::ArboardBackend::new(source_app) {
+    let meta_reader = build_meta_reader(&handle, source_app);
+    let backend = match pipeline::ArboardBackend::new(meta_reader) {
         Ok(b) => b,
         Err(e) => {
             eprintln!("[QuickQuick] 剪贴板后端初始化失败，轮询不启动: {e}");

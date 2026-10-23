@@ -182,7 +182,9 @@ pub trait ClipboardBackend {
     /// 返回本次变化的来源应用完整身份（bundle id + 本地化显示名）。
     ///
     /// 默认 `None`：测试后端与不提供应用身份的平台无需实现。
-    /// 生产后端应在 [`ClipboardBackend::read`] 之后调用本方法，两处读到的是同一次复制。
+    /// 生产后端实现的是**缓存读取**：身份在 [`ClipboardBackend::read`] 里随平台元数据
+    /// 一次取回并缓存，本方法只返回缓存值，故必须在同一次 `read` 之后调用
+    /// （`poll_once_with_policy` 的调用顺序保证了这一点）。
     ///
     /// 为什么不放进 [`ClipboardSnapshot`]：该结构被跨 crate 的测试直接穷尽构造，
     /// 新增字段会连带破坏所有构造点；身份作为独立的可选通道更小侵入。

@@ -12,23 +12,87 @@
 //! - Windows：剪贴板格式 `ExcludeClipboardContentFromMonitorProcessing` 存在，
 //!   或 `CanIncludeInClipboardHistory` 的 DWORD 值为 0，即视为敏感。
 //!
-//! 来源应用身份也按平台分流（见 [`read_source_app_identity`]）：
+//! 来源应用身份（见 [`read_pasteboard_meta`]）：
 //! - macOS：读主线程 `NSWorkspace` 应用激活观察者记录的身份，本模块只读那份记录。
 //!   不在轮询线程直接调 `NSWorkspace.frontmostApplication()`——AppKit 的前台状态在
 //!   非主线程读取是 stale 的，该结论已在 `ipc/system.rs` 的还焦编排里实测确认。
 //! - Windows：读剪贴板所有者窗口所属进程的可执行文件名。
 //!
 //! 本模块只回答"平台是否声明了标记 / 剪贴板归谁写"，不做任何内容启发式分析。
+//!
+//! # 为什么 macOS 上必须把平台读取搬到主线程
+//!
+//! `NSPasteboard` **不是线程安全的**：同一进程内两个线程同时调
+//! `NSPasteboard::types()` 会 SIGSEGV（本机隔离探针实测 3/3 崩溃，单线程读从不崩）。
+//! 而本仓库的剪贴板轮询跑在后台线程、每次变化都要读类型集合；同时主线程有 AppKit
+//! run loop 与其它 pasteboard 访问，两者一撞就是**整个 app 崩溃**，不是丢一次捕获。
+//!
+//! 所以平台读取被抽成可注入的 [`PasteboardMetaReader`]：
+//! - macOS 用 [`MainThreadMetaReader`]，把读取投递到主线程串行执行并阻塞等待结果，
+//!   轮询线程只拿到一份 [`PasteboardMeta`] 快照；
+//! - Windows 用 [`DirectMetaReader`] 就地读——Win32 剪贴板 API 本身允许跨线程调用，
+//!   就地读还能保留"一次开合剪贴板读完全部标记"的优化。
+//!
+//! # 残留风险（未消除，⚠️ 已实测复现，不是理论担忧）
+//!
+//! 本改动只把**元数据读取**搬到了主线程。轮询线程仍会通过 arboard 读正文
+//! （`get_text` / `get_html` / `get_image`，见 `pipeline::ArboardBackend::change_count`
+//! 与 `read`），写回路径（arboard 写入 + 本模块的 [`mark_self_write`]）也在调用它的
+//! 线程上直接碰 `NSPasteboard`。
+//!
+//! 隔离探针实测（本机 aarch64 macOS，200 次循环）：让一个线程调
+//! `NSPasteboard.types()`、另一个线程跑 `arboard::Clipboard::get_text()`，
+//! **3/3 次进程崩溃**（SIGSEGV / SIGTRAP）。也就是说：把 `types()` 挪走之后，
+//! 「后台线程经 arboard 读正文」与「主线程 AppKit 活动」并发仍会崩。
+//!
+//! 因此本模块的主线程派发只能理解为"消掉了已知必崩的那条元数据读取路径"，
+//! **不等于**"消除了跨线程 pasteboard 访问"。根治要按路线图 Phase 3：
+//! 换掉 arboard、直连 `NSPasteboard`，并把全部访问（轮询读正文、写回、元数据）
+//! 串行化到同一线程（或用 `changeCount` 取代内容哈希轮询以大幅降低访问频率）。
 
 // 写入门闩只在 macOS 之外的生产路径使用（macOS 有真实私有类型标记），
 // 但测试构建也要编译它来覆盖 arm/consume 语义。
 #[cfg(any(test, not(target_os = "macos")))]
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
+use std::sync::{mpsc, Arc, Mutex};
 
 // 来源应用身份定义在 clipboard 模块（它是剪贴板快照的类型），此处重导出，
-// 使 `read_source_app_identity` 的返回类型在本模块公开可见。
+// 使 `read_pasteboard_meta` 的返回类型在本模块公开可见。
 pub use crate::clipboard::SourceApp;
+
+/// 读取失败日志的节流间隔：同类失败每 N 次记一条。
+///
+/// 轮询每 500ms 一次，失败若逐条打印会刷爆日志；节流的目的是让维护者
+/// 仍能看出"读取在持续失败"，而不是把日志变成噪声。
+const READ_FAILURE_LOG_EVERY: u64 = 100;
+
+/// 等待主线程完成一次平台读取的超时。
+///
+/// 取 300ms：正常主线程读取是微秒级，留两个数量级余量即可；
+/// 主线程恰好卡在别处时也不能让轮询线程无限期挂住（超时按降级值处理并留痕）。
+const MAIN_THREAD_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(300);
+
+/// 累计的平台读取失败次数（跨线程累加，仅用于日志节流）。
+static READ_FAILURE_COUNT: AtomicU64 = AtomicU64::new(0);
+
+/// 第 `count` 次失败是否该落一条日志（首次立即记，之后按间隔节流）。
+///
+/// 拆成纯函数以便直接断言节流曲线，不必去捕获 stderr。
+fn should_log_failure(count: u64) -> bool {
+    count == 1 || count.is_multiple_of(READ_FAILURE_LOG_EVERY)
+}
+
+/// 记录一次平台读取失败：首次立即记，之后每 [`READ_FAILURE_LOG_EVERY`] 次记一条。
+///
+/// 为什么要留痕：全降级路径此前完全静默，用户与维护者无法区分
+/// "平台读失败（敏感过滤实际没生效）"和"这份内容确实不敏感"。
+fn log_read_failure(stage: &str, detail: &str) {
+    let count = READ_FAILURE_COUNT.fetch_add(1, AtomicOrdering::Relaxed) + 1;
+    if should_log_failure(count) {
+        eprintln!("[pasteboard_meta] 平台标记读取失败（累计 {count} 次，{stage}）：{detail}");
+    }
+}
 
 /// macOS 敏感内容类型：密码管理器填充、一次性口令等会显式置此类型。
 pub const CONCEALED_TYPE: &str = "org.nspasteboard.ConcealedType";
@@ -184,18 +248,167 @@ impl LastExternalSourceApp {
     }
 }
 
+/// 平台剪贴板元数据的读取策略。
+///
+/// 抽成 trait 是因为**同一个读取动作在两个平台上必须跑在不同线程**：
+/// macOS 的 `NSPasteboard` 跨线程并发调用会崩（见模块文档），必须回主线程；
+/// Windows 的剪贴板 API 允许跨线程，就地读更省（一次开合读完所有标记）。
+/// 让 [`crate::pipeline::ArboardBackend`] 依赖这个抽象，而不是自己决定线程。
+pub trait PasteboardMetaReader: Send + Sync {
+    /// 读取一次平台元数据；失败返回全降级值而不是 panic。
+    fn read(&self) -> PasteboardMeta;
+}
+
+/// 就地读取实现（Windows 与非 macOS 平台）。
+///
+/// 直接在当前线程调 [`read_pasteboard_meta`]：这些平台的剪贴板 API 支持跨线程，
+/// 且读来源应用身份需要打开剪贴板，就地读可以一次开合读完全部标记。
+pub struct DirectMetaReader {
+    /// 最近外部前台应用身份（macOS 之外一般为空，Windows 走剪贴板所有者）
+    tracker: Arc<LastExternalSourceApp>,
+}
+
+impl DirectMetaReader {
+    /// 用给定的应用身份记录构造读取器。
+    #[must_use]
+    pub fn new(tracker: Arc<LastExternalSourceApp>) -> Self {
+        Self { tracker }
+    }
+}
+
+impl PasteboardMetaReader for DirectMetaReader {
+    fn read(&self) -> PasteboardMeta {
+        read_pasteboard_meta(&self.tracker)
+    }
+}
+
+/// 待投递到主线程执行的读取任务。
+type PasteboardMetaTask = Box<dyn FnOnce() -> PasteboardMeta + Send + 'static>;
+
+/// 把"读一次平台元数据"投递到指定线程执行并等待结果的执行器。
+///
+/// 抽成 trait 的唯一目的是让主线程派发这条路径**可被探针覆盖**：
+/// 生产用 [`TauriMainThreadDispatch`]（真主线程），
+/// 验证时注入"单一线程串行执行"的实现，复现同一不变量（所有 `NSPasteboard` 调用同线程）。
+pub trait MetaDispatch: Send + Sync {
+    /// 派发任务并等待结果；派发失败或等待超时返回 `None`（由调用方降级）。
+    fn dispatch(&self, task: PasteboardMetaTask) -> Option<PasteboardMeta>;
+}
+
+/// 生产派发器：投递到 Tauri 主线程（AppKit run loop 所在线程）并阻塞等待。
+///
+/// 与 `popover.rs` 里的 `on_main_thread_blocking` 同构（`run_on_main_thread` +
+/// `mpsc::recv_timeout`，已在主线程时就地执行避免自死锁），区别只在回传的是
+/// [`PasteboardMeta`] 而不是 `bool`，故在本模块内独立实现，不复用/改动 `popover.rs`。
+pub struct TauriMainThreadDispatch {
+    app: tauri::AppHandle,
+}
+
+impl TauriMainThreadDispatch {
+    /// 用应用句柄构造派发器。
+    #[must_use]
+    pub fn new(app: tauri::AppHandle) -> Self {
+        Self { app }
+    }
+}
+
+impl MetaDispatch for TauriMainThreadDispatch {
+    fn dispatch(&self, task: PasteboardMetaTask) -> Option<PasteboardMeta> {
+        // 已在主线程：就地执行。若仍走派发，主线程会阻塞等待自己，必然超时。
+        if is_main_thread() {
+            return Some(task());
+        }
+
+        let (tx, rx) = mpsc::channel::<PasteboardMeta>();
+        if let Err(e) = self.app.run_on_main_thread(move || {
+            // 接收端可能已超时放弃，发送失败不值得记录
+            let _ = tx.send(task());
+        }) {
+            log_read_failure("主线程派发", &format!("run_on_main_thread 失败：{e}"));
+            return None;
+        }
+
+        match rx.recv_timeout(MAIN_THREAD_READ_TIMEOUT) {
+            Ok(meta) => Some(meta),
+            Err(_) => {
+                log_read_failure(
+                    "主线程派发",
+                    &format!("等待超时（{}ms）", MAIN_THREAD_READ_TIMEOUT.as_millis()),
+                );
+                None
+            }
+        }
+    }
+}
+
+/// 主线程读取器（macOS 生产实现）。
+///
+/// 把平台读取投递到主线程执行，轮询线程只拿到一份快照——
+/// 这样进程内所有 `NSPasteboard::types()` 调用都发生在同一线程上。
+pub struct MainThreadMetaReader<D: MetaDispatch = TauriMainThreadDispatch> {
+    dispatch: D,
+    tracker: Arc<LastExternalSourceApp>,
+}
+
+impl MainThreadMetaReader<TauriMainThreadDispatch> {
+    /// 用 Tauri 应用句柄构造（生产路径）。
+    #[must_use]
+    pub fn new(app: tauri::AppHandle, tracker: Arc<LastExternalSourceApp>) -> Self {
+        Self {
+            dispatch: TauriMainThreadDispatch::new(app),
+            tracker,
+        }
+    }
+}
+
+impl<D: MetaDispatch> MainThreadMetaReader<D> {
+    /// 用自定义派发器构造。
+    ///
+    /// 生产路径请用 [`MainThreadMetaReader::new`]；本构造器主要用于验证
+    /// "所有读取串行到同一线程"这条不变量（探针注入单线程派发器）。
+    #[must_use]
+    pub fn with_dispatch(dispatch: D, tracker: Arc<LastExternalSourceApp>) -> Self {
+        Self { dispatch, tracker }
+    }
+}
+
+impl<D: MetaDispatch + 'static> PasteboardMetaReader for MainThreadMetaReader<D> {
+    fn read(&self) -> PasteboardMeta {
+        let tracker = Arc::clone(&self.tracker);
+        let task: PasteboardMetaTask = Box::new(move || read_pasteboard_meta(&tracker));
+        // 派发失败/超时：全降级值（不 panic、不阻塞调用方），失败原因已在派发器里留痕
+        self.dispatch.dispatch(task).unwrap_or_default()
+    }
+}
+
+/// 当前线程是否就是 macOS 主线程。
+///
+/// 非 macOS 不存在这个区分（[`MainThreadMetaReader`] 也不会在这些平台被构造），
+/// 故返回 `false` 让派发逻辑走正常路径。
+#[cfg(target_os = "macos")]
+fn is_main_thread() -> bool {
+    objc2::MainThreadMarker::new().is_some()
+}
+
+#[cfg(not(target_os = "macos"))]
+fn is_main_thread() -> bool {
+    false
+}
+
 /// 从 Windows 可执行文件完整路径取应用名（去目录与 `.exe` 后缀）。
 ///
 /// 用户在该输入框里写的是人类可读名称（如 `1Password`），而 Win32 只给得到
 /// `C:\...\1Password.exe`，故统一裁剪成主干名再参与不区分大小写的匹配。
+/// 后缀比较不区分大小写（`.exe`/`.EXE`/`.Exe` 都剥），用 `rsplit_once('.')`
+/// 而不是按字节切尾部，避免非 ASCII 文件名切在 UTF-8 字符边界上 panic。
 /// 纯函数，可在 macOS 开发机上单测。
 #[must_use]
 pub fn windows_executable_stem(path: &str) -> Option<String> {
     let file_name = path.rsplit(['\\', '/']).next()?.trim();
-    let without_ext = file_name
-        .strip_suffix(".exe")
-        .or_else(|| file_name.strip_suffix(".EXE"))
-        .unwrap_or(file_name);
+    let without_ext = match file_name.rsplit_once('.') {
+        Some((stem, extension)) if extension.eq_ignore_ascii_case("exe") => stem,
+        _ => file_name,
+    };
     let stem = without_ext.trim();
     (!stem.is_empty()).then(|| stem.to_owned())
 }
@@ -269,14 +482,22 @@ mod macos_ffi {
     use objc2_app_kit::NSPasteboard;
     use objc2_foundation::{NSArray, NSData, NSString};
 
-    use super::SELF_MARKER_TYPE;
+    use super::{log_read_failure, SELF_MARKER_TYPE};
 
     /// 读取 `NSPasteboard.generalPasteboard()` 当前声明的全部类型名。
     ///
     /// 只收集字符串，不判断含义——判定交给纯谓词层。
-    /// 剪贴板为空或无类型时返回空 Vec。
+    /// **调用方必须保证本函数在 macOS 主线程执行**（见模块文档：`NSPasteboard`
+    /// 跨线程并发调用会 SIGSEGV），生产路径由 [`super::MainThreadMetaReader`] 保证。
+    ///
+    /// `types()` 返回 `None` 时留痕后再降级为空集合：`None` 既可能是"剪贴板确实没有数据"，
+    /// 也可能是读取失败，API 本身不给区分，故日志措辞如实说明两种可能。
     pub(super) fn pasteboard_type_names() -> Vec<String> {
         let Some(types) = NSPasteboard::generalPasteboard().types() else {
+            log_read_failure(
+                "macOS NSPasteboard.types()",
+                "返回 nil（空剪贴板或读取失败，API 不区分）",
+            );
             return Vec::new();
         };
         types.to_vec().iter().map(|name| name.to_string()).collect()
@@ -315,7 +536,10 @@ mod windows_ffi {
     };
     use windows_sys::Win32::UI::WindowsAndMessaging::GetWindowThreadProcessId;
 
-    use super::{is_concealed_windows_signals, WIN_CAN_INCLUDE_HISTORY_FORMAT, WIN_EXCLUDE_FORMAT};
+    use super::{
+        is_concealed_windows_signals, log_read_failure, WIN_CAN_INCLUDE_HISTORY_FORMAT,
+        WIN_EXCLUDE_FORMAT,
+    };
 
     /// 剪贴板打开守卫：持有期间剪贴板保持打开，析构时必定 `CloseClipboard`。
     ///
@@ -384,10 +608,20 @@ mod windows_ffi {
         let has_self_marker = super::consume_self_write_latch();
 
         let exclude_id = register_format(WIN_EXCLUDE_FORMAT);
+        if exclude_id == 0 {
+            log_read_failure(
+                "Windows RegisterClipboardFormat(ExcludeClipboardContentFromMonitorProcessing)",
+                "注册/查询格式失败，拿不到格式 ID",
+            );
+        }
         let exclude_present =
             exclude_id != 0 && unsafe { IsClipboardFormatAvailable(exclude_id) } != 0;
 
         let Some(_guard) = ClipboardGuard::open() else {
+            log_read_failure(
+                "Windows OpenClipboard",
+                "剪贴板被其他进程占用，本轮只保留格式可用性判断",
+            );
             return super::PasteboardMeta {
                 is_concealed: is_concealed_windows_signals(exclude_present, None),
                 has_self_marker,
@@ -396,6 +630,12 @@ mod windows_ffi {
         };
 
         let history_id = register_format(WIN_CAN_INCLUDE_HISTORY_FORMAT);
+        if history_id == 0 {
+            log_read_failure(
+                "Windows RegisterClipboardFormat(CanIncludeInClipboardHistory)",
+                "注册/查询格式失败，DWORD 语义本轮不可用",
+            );
+        }
         super::PasteboardMeta {
             is_concealed: is_concealed_windows_signals(
                 exclude_present,
@@ -463,6 +703,10 @@ mod windows_ffi {
 
 #[cfg(test)]
 mod tests {
+    //! 本模块的单测**一律不触碰真实 `NSPasteboard`**：测试跑在 libtest 各自的工作线程上，
+    //! 多个测试并发调 `types()` 会 SIGSEGV（本机实测必崩）。平台 FFI 读取路径由一次性
+    //! 隔离探针验证（跑完即删），不留在常驻测试里——否则任何后续新增测试都可能重新引入崩溃。
+
     use super::*;
 
     #[test]
@@ -573,24 +817,6 @@ mod tests {
         );
     }
 
-    /// macOS FFI 取值层的只读冒烟：能连上 pasteboard server 时，
-    /// 收集到的每个类型名都必须是非空字符串（空名说明 FFI 取值/转换写错了）。
-    ///
-    /// 只读、不写、不清理剪贴板，故可在开发机直接跑；无 GUI 会话时
-    /// `types()` 返回 None，此时得到空集合，断言同样成立。
-    #[cfg(target_os = "macos")]
-    #[test]
-    fn pasteboard_type_names_are_non_empty_when_readable() {
-        // Act
-        let names = macos_ffi::pasteboard_type_names();
-
-        // Assert
-        assert!(
-            names.iter().all(|name| !name.trim().is_empty()),
-            "收集到的类型名不应为空字符串，实际为 {names:?}"
-        );
-    }
-
     #[test]
     fn windows_executable_stem_strips_directory_and_extension() {
         // Arrange：Win32 只给得到完整路径
@@ -687,6 +913,133 @@ mod tests {
             got.primary_identifier().as_deref(),
             Some("com.1password.1password"),
             "快照单值标识应优先取 bundle id"
+        );
+    }
+    /// 测试用派发器：记录被派发的任务数，回传一个合成结果。
+    ///
+    /// 故意**不执行**传入的任务：任务体是真实平台读取，执行会把 `NSPasteboard`
+    /// 调用带到测试线程上（见模块测试注释）。这里只验证"读取器把活交给了派发器、
+    /// 并把派发器的结果原样返回"这一契约。
+    struct RecordingDispatch {
+        calls: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+        reply: PasteboardMeta,
+    }
+
+    impl RecordingDispatch {
+        /// 构造并返回（派发器, 计数句柄）：句柄与派发器共享同一计数，
+        /// 便于把派发器所有权交给读取器后仍能读回调用次数。
+        fn replying(
+            reply: PasteboardMeta,
+        ) -> (Self, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+            let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            (
+                Self {
+                    calls: std::sync::Arc::clone(&calls),
+                    reply,
+                },
+                calls,
+            )
+        }
+    }
+
+    impl MetaDispatch for RecordingDispatch {
+        fn dispatch(&self, _task: PasteboardMetaTask) -> Option<PasteboardMeta> {
+            self.calls.fetch_add(1, AtomicOrdering::SeqCst);
+            Some(self.reply.clone())
+        }
+    }
+
+    /// 测试用派发器：模拟派发失败/等待超时。
+    struct FailingDispatch;
+
+    impl MetaDispatch for FailingDispatch {
+        fn dispatch(&self, _task: PasteboardMetaTask) -> Option<PasteboardMeta> {
+            None
+        }
+    }
+
+    #[test]
+    fn main_thread_reader_delegates_to_dispatch_and_returns_its_result() {
+        // Arrange：派发器会回传一个可识别的合成结果
+        let reply = PasteboardMeta {
+            is_concealed: true,
+            has_self_marker: false,
+            source_app: Some(SourceApp {
+                bundle_id: Some("com.1password.1password".to_owned()),
+                display_name: Some("1Password".to_owned()),
+            }),
+        };
+        let (dispatch, _calls) = RecordingDispatch::replying(reply.clone());
+        let reader =
+            MainThreadMetaReader::with_dispatch(dispatch, Arc::new(LastExternalSourceApp::new()));
+
+        // Act
+        let meta = reader.read();
+
+        // Assert：读取走的是派发器，且返回派发器的结果而不是自己另读一遍
+        assert_eq!(meta, reply, "读取器应原样返回被派发任务的结果");
+    }
+
+    #[test]
+    fn main_thread_reader_dispatches_exactly_once_per_read() {
+        // Arrange：计数句柄与派发器共享，派发器所有权交给读取器
+        let (dispatch, calls) = RecordingDispatch::replying(PasteboardMeta::default());
+        let reader =
+            MainThreadMetaReader::with_dispatch(dispatch, Arc::new(LastExternalSourceApp::new()));
+
+        // Act
+        let _ = reader.read();
+
+        // Assert
+        assert_eq!(
+            calls.load(AtomicOrdering::SeqCst),
+            1,
+            "一次读取只应派发一次"
+        );
+    }
+
+    #[test]
+    fn main_thread_reader_degrades_to_default_when_dispatch_fails() {
+        // Arrange：派发失败（主线程忙/已退出）
+        let reader = MainThreadMetaReader::with_dispatch(
+            FailingDispatch,
+            Arc::new(LastExternalSourceApp::new()),
+        );
+
+        // Act
+        let meta = reader.read();
+
+        // Assert：降级为全空值，不 panic、不阻塞
+        assert_eq!(meta, PasteboardMeta::default(), "派发失败必须降级为默认值");
+        assert!(!meta.is_concealed && !meta.has_self_marker);
+    }
+
+    #[test]
+    fn read_failure_logging_is_throttled_but_never_silent_at_first() {
+        // Assert：首次必记（否则用户永远看不到读失败）
+        assert!(should_log_failure(1), "首次失败必须留痕");
+        // Assert：中间不刷屏
+        for count in 2..READ_FAILURE_LOG_EVERY {
+            assert!(!should_log_failure(count), "第 {count} 次不应记录");
+        }
+        // Assert：按间隔周期性复述，避免长期静默
+        assert!(should_log_failure(READ_FAILURE_LOG_EVERY));
+        assert!(should_log_failure(READ_FAILURE_LOG_EVERY * 2));
+        assert!(!should_log_failure(READ_FAILURE_LOG_EVERY + 1));
+    }
+
+    #[test]
+    fn log_read_failure_advances_counter() {
+        // Arrange
+        let before = READ_FAILURE_COUNT.load(AtomicOrdering::Relaxed);
+
+        // Act
+        log_read_failure("测试阶段", "测试细节");
+
+        // Assert：留痕路径确实被走到（只断言递增，避免与并行测试争抢精确值）
+        assert!(
+            READ_FAILURE_COUNT.load(AtomicOrdering::Relaxed) > before,
+            "每次失败都应累加计数"
         );
     }
 }
