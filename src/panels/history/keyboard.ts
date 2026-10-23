@@ -86,6 +86,107 @@ export function isDirectPickAllowed(query: string, modifiers: KeyboardModifiers)
 }
 
 /**
+ * 文本编辑结果：编辑后的完整值与编辑后的光标位置（均按 UTF-16 码元计）。
+ */
+export interface TextEdit {
+  value: string;
+  caret: number;
+}
+
+/**
+ * 词边界分隔符：空白与常见中英文标点。
+ * 删词只做到「按空白/标点切分」，不做真正的分词。
+ */
+const WORD_SEPARATOR_PATTERN =
+  /[\s、。，．；：！？…—～·「」『』（）【】《》〈〉“”‘’,.;:!?/\\()[\]{}"'`]/;
+
+/**
+ * 把光标位置收敛到 [0, length]，防止调用方传入越界值。
+ */
+function clampCaret(caret: number, length: number): number {
+  if (caret < 0) return 0;
+  return Math.min(caret, length);
+}
+
+/**
+ * 删除光标前的一个「词」（对应 ⌃W，readline/vim 语义）。
+ * 先跳过紧邻光标前的连续分隔符，再吃掉一整段非分隔符：
+ * - 英文按空格与标点切分，`"hello world|"` → `"hello |"`；
+ * - 中文按标点切分，`"你好，世界|"` → `"你好，|"`；
+ * - 光标在开头时原样返回。
+ *
+ * @param value - 当前输入框内容
+ * @param caret - 当前光标位置
+ * @returns 编辑后的内容与光标位置
+ */
+export function applyDeleteWord(value: string, caret: number): TextEdit {
+  const from = clampCaret(caret, value.length);
+  let start = from;
+  while (start > 0 && WORD_SEPARATOR_PATTERN.test(value[start - 1])) start--;
+  while (start > 0 && !WORD_SEPARATOR_PATTERN.test(value[start - 1])) start--;
+  return { value: value.slice(0, start) + value.slice(from), caret: start };
+}
+
+/**
+ * 删除光标前的一个字符（对应 ⌃H，等价 Backspace）。
+ * 代理对（emoji 等）整对删除，避免留下半个码元。
+ *
+ * @param value - 当前输入框内容
+ * @param caret - 当前光标位置
+ * @returns 编辑后的内容与光标位置
+ */
+export function applyDeleteChar(value: string, caret: number): TextEdit {
+  const from = clampCaret(caret, value.length);
+  if (from === 0) {
+    return { value, caret: 0 };
+  }
+  const previous = value.charCodeAt(from - 1);
+  const isLowSurrogate = previous >= 0xdc00 && previous <= 0xdfff;
+  const isSurrogatePair =
+    isLowSurrogate && from >= 2 && value.charCodeAt(from - 2) >= 0xd800 && value.charCodeAt(from - 2) <= 0xdbff;
+  const start = isSurrogatePair ? from - 2 : from - 1;
+  return { value: value.slice(0, start) + value.slice(from), caret: start };
+}
+
+/**
+ * vim 风格控制键 → 列表移动方向（Maccy 同款键位）。
+ * `⌃N` / `⌃J` 下移一条，`⌃P` / `⌃K` 上移一条。
+ *
+ * @param key - 小写化的按键字符（如 event.key.toLowerCase()）
+ * @returns 移动方向，非移动键返回 null
+ */
+export function ctrlMoveDirection(key: string): "ArrowUp" | "ArrowDown" | null {
+  switch (key) {
+    case "n":
+    case "j":
+      return "ArrowDown";
+    case "p":
+    case "k":
+      return "ArrowUp";
+    default:
+      return null;
+  }
+}
+
+/**
+ * 列表首条索引。空列表返回 -1（无有效条目）。
+ *
+ * @param count - 当前可见条目总数
+ */
+export function firstIndex(count: number): number {
+  return count === 0 ? -1 : 0;
+}
+
+/**
+ * 列表末条索引。空列表返回 -1（无有效条目）。
+ *
+ * @param count - 当前可见条目总数
+ */
+export function lastIndex(count: number): number {
+  return count === 0 ? -1 : count - 1;
+}
+
+/**
  * 根据方向键计算下一个高亮索引。
  * 结果 clamp 在 [0, count-1]，边界不越界。
  * count=0 时返回 -1，表示列表为空、无有效高亮。

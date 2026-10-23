@@ -6,8 +6,147 @@ import {
   isImeComposing,
   directPickIndex,
   isDirectPickAllowed,
+  applyDeleteWord,
+  applyDeleteChar,
+  ctrlMoveDirection,
+  firstIndex,
+  lastIndex,
 } from "./keyboard";
 import type { HistoryItem } from "./search";
+
+// P2-2 键盘模型：vim 风格移动键映射
+describe("ctrlMoveDirection", () => {
+  it("⌃N / ⌃J 映射为下移", () => {
+    expect(ctrlMoveDirection("n")).toBe("ArrowDown");
+    expect(ctrlMoveDirection("j")).toBe("ArrowDown");
+  });
+
+  it("⌃P / ⌃K 映射为上移", () => {
+    expect(ctrlMoveDirection("p")).toBe("ArrowUp");
+    expect(ctrlMoveDirection("k")).toBe("ArrowUp");
+  });
+
+  it("非移动键返回 null", () => {
+    expect(ctrlMoveDirection("w")).toBeNull();
+    expect(ctrlMoveDirection("ArrowDown")).toBeNull();
+    expect(ctrlMoveDirection("")).toBeNull();
+  });
+});
+
+describe("firstIndex / lastIndex", () => {
+  it("非空列表首条为 0、末条为 count-1", () => {
+    expect(firstIndex(4)).toBe(0);
+    expect(lastIndex(4)).toBe(3);
+  });
+
+  it("单条列表首末都是 0", () => {
+    expect(firstIndex(1)).toBe(0);
+    expect(lastIndex(1)).toBe(0);
+  });
+
+  it("空列表返回 -1（无有效条目）", () => {
+    expect(firstIndex(0)).toBe(-1);
+    expect(lastIndex(0)).toBe(-1);
+  });
+});
+
+// P2-2 ⌃W：按空白/标点切词，删除光标前一个词
+describe("applyDeleteWord", () => {
+  it("光标在末尾时删掉最后一个英文单词", () => {
+    // Arrange & Act
+    const edit = applyDeleteWord("hello world", 11);
+    // Assert
+    expect(edit).toEqual({ value: "hello ", caret: 6 });
+  });
+
+  it("光标在中间时只删光标前的词，光标后内容保留", () => {
+    // Arrange & Act：光标落在 "hello" 之后
+    const edit = applyDeleteWord("hello world", 5);
+    // Assert
+    expect(edit).toEqual({ value: " world", caret: 0 });
+  });
+
+  it("光标在开头时原样返回", () => {
+    // Arrange & Act
+    const edit = applyDeleteWord("hello world", 0);
+    // Assert
+    expect(edit).toEqual({ value: "hello world", caret: 0 });
+  });
+
+  it("末尾连续空白一并吃掉（readline 语义）", () => {
+    // Arrange & Act
+    const edit = applyDeleteWord("hello world   ", 14);
+    // Assert
+    expect(edit).toEqual({ value: "hello ", caret: 6 });
+  });
+
+  it("中文按标点切词：只删「世界」，保留前面的逗号", () => {
+    // Arrange & Act
+    const edit = applyDeleteWord("你好，世界", 5);
+    // Assert
+    expect(edit).toEqual({ value: "你好，", caret: 3 });
+  });
+
+  it("中英混排：删除光标前的中文段", () => {
+    // Arrange & Act
+    const edit = applyDeleteWord("abc 中文", 6);
+    // Assert
+    expect(edit).toEqual({ value: "abc ", caret: 4 });
+  });
+
+  it("整段都是分隔符时全部删光，光标落到 0", () => {
+    // Arrange & Act
+    const edit = applyDeleteWord("   ", 3);
+    // Assert
+    expect(edit).toEqual({ value: "", caret: 0 });
+  });
+
+  it("光标越界时按内容长度收敛", () => {
+    // Arrange & Act：caret 远大于长度
+    const edit = applyDeleteWord("hello", 99);
+    // Assert
+    expect(edit).toEqual({ value: "", caret: 0 });
+  });
+});
+
+// P2-2 ⌃H：删除光标前一个字符（等价 Backspace）
+describe("applyDeleteChar", () => {
+  it("光标在中间时删掉光标前那个字符", () => {
+    // Arrange & Act
+    const edit = applyDeleteChar("abcd", 2);
+    // Assert：删掉 "b" → "acd"，光标停在 1
+    expect(edit).toEqual({ value: "acd", caret: 1 });
+  });
+
+  it("光标在末尾时删掉最后一个字符", () => {
+    const edit = applyDeleteChar("abcd", 4);
+    expect(edit).toEqual({ value: "abc", caret: 3 });
+  });
+
+  it("光标在开头时原样返回", () => {
+    const edit = applyDeleteChar("abcd", 0);
+    expect(edit).toEqual({ value: "abcd", caret: 0 });
+  });
+
+  it("代理对（emoji）整对删除，不留半个码元", () => {
+    // Arrange："a😀" 共 3 个 UTF-16 码元
+    const edit = applyDeleteChar("a😀", 3);
+    // Assert
+    expect(edit).toEqual({ value: "a", caret: 1 });
+  });
+
+  it("光标紧跟在单个普通字符后：不误删前面的代理对", () => {
+    // Arrange：caret=1 表示删除 "a"
+    const edit = applyDeleteChar("a😀", 1);
+    // Assert
+    expect(edit).toEqual({ value: "😀", caret: 0 });
+  });
+
+  it("光标越界时按内容长度收敛", () => {
+    const edit = applyDeleteChar("abcd", 99);
+    expect(edit).toEqual({ value: "abc", caret: 3 });
+  });
+});
 
 // P2-3 数字直达：1–9 → 第 1–9 条，0 → 第 10 条，序号越界返回 null
 describe("directPickIndex", () => {

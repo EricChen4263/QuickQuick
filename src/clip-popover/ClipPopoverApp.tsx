@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useRef } from "react";
+import { useState, useEffect, useLayoutEffect, useMemo, useRef } from "react";
 import type { ClipItem } from "../ipc/ipc-client";
 import { listClipItems, pasteToFront, hideAndReturnFocus, copyClipToClipboard } from "../ipc/ipc-client";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -6,7 +6,17 @@ import { listen } from "@tauri-apps/api/event";
 import { CLIPBOARD_CHANGED_EVENT } from "../ipc/events";
 import { filterClipBySearch, groupClipItems } from "./grouping";
 import { advanceSelection } from "./keyboard-nav";
-import { isImeComposing, directPickIndex, isDirectPickAllowed } from "../panels/history/keyboard";
+import {
+  isImeComposing,
+  directPickIndex,
+  isDirectPickAllowed,
+  applyDeleteWord,
+  applyDeleteChar,
+  ctrlMoveDirection,
+  firstIndex,
+  lastIndex,
+  type TextEdit,
+} from "../panels/history/keyboard";
 import { PopoverList } from "./PopoverList";
 import { PopoverPreview } from "./PopoverPreview";
 import { PopoverFooter } from "./PopoverFooter";
@@ -36,8 +46,10 @@ const DIGIT_KEY_PATTERN = /^[0-9]$/;
  *   - selectedId: 当前选中条目 ID
  *
  * 键盘交互（由 search input 的 onKeyDown 处理）：
- *   - ↑ / ↓：在 visibleFlatList 中移动选中项（advanceSelection）
+ *   - ↑ / ↓、⌃N/⌃J（下）与 ⌃P/⌃K（上）：在 visibleFlatList 中移动选中项（advanceSelection）
+ *   - ⌘↑ / ⌘↓：跳到第一条 / 最后一条
  *   - 1–0：搜索框为空且无修饰键时数字直达，选中并粘贴第 1–10 条
+ *   - ⌃W 删前一个词、⌃H 删前一个字符、⌃U 清空搜索框
  *   - Enter：pasteToFront(selectedId) 成功后 hide 窗口
  *   - Alt+Enter：copyClipToClipboard(selectedItem.id) 成功后 hide 窗口（富文本保真）
  *   - Esc：关闭窗口并把焦点还给上一个外部 app（hideAndReturnFocus）
@@ -54,6 +66,17 @@ export default function ClipPopoverApp() {
   const visibleFlatListRef = useRef<ClipItem[]>([]);
   // 数字直达的高亮反馈定时器；同一时刻只允许一个待取用
   const directPickTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // 文本编辑后待恢复的光标位置（受控 input 重渲染会把光标推到末尾）
+  const pendingCaretRef = useRef<number | null>(null);
+
+  // 受控 input 的 value 一旦变化，React 会把光标移到末尾；
+  // ⌃W/⌃H/⌃U 编辑后必须把光标恢复到编辑位置，否则连续删词会跳回行尾。
+  useLayoutEffect(() => {
+    const caret = pendingCaretRef.current;
+    if (caret === null) return;
+    pendingCaretRef.current = null;
+    inputRef.current?.setSelectionRange(caret, caret);
+  }, [query]);
 
   /** 取消尚未触发的数字直达取用（Esc 关窗、组件卸载时调用，避免关窗后又粘一次） */
   function cancelPendingDirectPick(): void {
@@ -199,6 +222,96 @@ export default function ClipPopoverApp() {
     return true;
   }
 
+  /** ⌘↑ 跳第一条、⌘↓ 跳最后一条 */
+  function handleEdgeJumpKey(e: React.KeyboardEvent<HTMLInputElement>, flatIds: string[]): boolean {
+    if (!e.metaKey) return false;
+    let targetIndex: number;
+    if (e.key === "ArrowUp") targetIndex = firstIndex(flatIds.length);
+    else if (e.key === "ArrowDown") targetIndex = lastIndex(flatIds.length);
+    else return false;
+    e.preventDefault();
+    // 空列表没有可跳转目标，但按键仍归面板（不落回输入框默认行为）
+    if (targetIndex < 0) return true;
+    setSelectedId(flatIds[targetIndex]);
+    return true;
+  }
+
+  /**
+   * 列表移动：↑↓ 与 vim 风格 ⌃N/⌃J 下移、⌃P/⌃K 上移（Maccy 同款键位）。
+   * 带 ⌘ 的组合（⌘↑↓）由 handleEdgeJumpKey 接管，不在此处理。
+   */
+  function handleMoveKey(e: React.KeyboardEvent<HTMLInputElement>, flatIds: string[]): boolean {
+    if (e.metaKey || e.altKey) return false;
+    let direction: "ArrowUp" | "ArrowDown" | null = null;
+    if (e.key === "ArrowUp" || e.key === "ArrowDown") {
+      direction = e.key;
+    } else if (e.ctrlKey) {
+      direction = ctrlMoveDirection(e.key.toLowerCase());
+    }
+    if (direction === null) return false;
+    e.preventDefault();
+    setSelectedId(advanceSelection(selectedId, direction, flatIds));
+    return true;
+  }
+
+  /** 把文本编辑结果写回搜索框，并记下需要在重渲染后恢复的光标位置 */
+  function applyQueryEdit(edit: TextEdit): void {
+    if (edit.value === query) {
+      // 值没变（例如在行首按 ⌃W）不会触发重渲染，直接同步光标即可
+      inputRef.current?.setSelectionRange(edit.caret, edit.caret);
+      return;
+    }
+    pendingCaretRef.current = edit.caret;
+    setQuery(edit.value);
+  }
+
+  /**
+   * 搜索框文本编辑：⌃W 删前一个词、⌃H 删前一个字符、⌃U 清空。
+   * 只改搜索内容，不动列表选中项（选中项由列表自身的校正逻辑处理）。
+   */
+  function handleEditKey(e: React.KeyboardEvent<HTMLInputElement>): boolean {
+    if (!e.ctrlKey) return false;
+    const caret = inputRef.current?.selectionStart ?? query.length;
+    let edit: TextEdit;
+    switch (e.key.toLowerCase()) {
+      case "w":
+        edit = applyDeleteWord(query, caret);
+        break;
+      case "h":
+        edit = applyDeleteChar(query, caret);
+        break;
+      case "u":
+        edit = { value: "", caret: 0 };
+        break;
+      default:
+        return false;
+    }
+    e.preventDefault();
+    applyQueryEdit(edit);
+    return true;
+  }
+
+  /** Enter 粘贴、⌥Enter 复制 */
+  function handleConfirmKey(e: React.KeyboardEvent<HTMLInputElement>): boolean {
+    if (e.key !== "Enter") return false;
+    e.preventDefault();
+
+    if (!e.altKey) {
+      if (selectedId === null || selectedItem === null) return true;
+      confirmPasteById(selectedId);
+      return true;
+    }
+
+    if (selectedItem === null) return true;
+    // 走后端 IPC 按 id 取内容写系统剪贴板：文本保真富文本格式，图片解码原图 PNG 后写 set_image。
+    copyClipToClipboard(selectedItem.id)
+      .then(() => getCurrentWindow().hide())
+      .catch((err: unknown) => {
+        console.error("[clip-popover] copy failed:", err);
+      });
+    return true;
+  }
+
   function handleKeyDown(e: React.KeyboardEvent<HTMLInputElement>): void {
     // Esc 必须排在输入法防御之前：关面板是用户的显式中断，不属于候选词交互。
     // WKWebView 会把 Esc 键原生"清空 search input"行为吞掉，不冒泡到 document。
@@ -220,32 +333,11 @@ export default function ClipPopoverApp() {
 
     const flatIds = visibleFlatList.map((i) => i.id);
 
-    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
-      e.preventDefault();
-      setSelectedId(advanceSelection(selectedId, e.key, flatIds));
-      return;
-    }
-
+    if (handleEdgeJumpKey(e, flatIds)) return;
+    if (handleMoveKey(e, flatIds)) return;
     if (handleDirectPickKey(e)) return;
-
-    if (e.key === "Enter" && !e.altKey) {
-      e.preventDefault();
-      if (selectedId === null || selectedItem === null) return;
-      confirmPasteById(selectedId);
-      return;
-    }
-
-    if (e.key === "Enter" && e.altKey) {
-      e.preventDefault();
-      if (selectedItem === null) return;
-      // 走后端 IPC 按 id 取内容写系统剪贴板：文本保真富文本格式，图片解码原图 PNG 后写 set_image。
-      copyClipToClipboard(selectedItem.id)
-        .then(() => getCurrentWindow().hide())
-        .catch((err: unknown) => {
-          console.error("[clip-popover] copy failed:", err);
-        });
-      return;
-    }
+    if (handleEditKey(e)) return;
+    handleConfirmKey(e);
   }
 
   if (loadError) {
