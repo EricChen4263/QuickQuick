@@ -505,7 +505,11 @@ pub fn ingest(conn: &Connection, item: &CapturedItem) -> Result<IngestOutcome, D
 
     // 未命中：插入新行。带 html 时 kind='richtext'，否则 'text'。
     let new_id = Uuid::new_v4().to_string();
-    let kind = if item.html.is_some() { "richtext" } else { "text" };
+    let kind = if item.html.is_some() {
+        "richtext"
+    } else {
+        "text"
+    };
     conn.execute(
         "INSERT INTO clip_items
              (id, content, kind, created_utc, last_modified_utc, is_deleted, text_hash, html_content)
@@ -1292,7 +1296,10 @@ mod tests {
         };
 
         let rows = list_items_full(&conn).expect("list_items_full 不应 Err");
-        let row = rows.iter().find(|r| r.id == id).expect("应能查到刚入库的行");
+        let row = rows
+            .iter()
+            .find(|r| r.id == id)
+            .expect("应能查到刚入库的行");
         assert_eq!(row.kind, "richtext", "带 html 的条目 kind 应为 richtext");
         assert_eq!(
             row.html_content.as_deref(),
@@ -1410,7 +1417,11 @@ mod tests {
             IngestOutcome::Inserted(_) => panic!("同纯文本带 html 应补写已有行，不新增"),
         }
 
-        assert_eq!(count_live(&conn).expect("count_live 失败"), 1, "应仍仅 1 行");
+        assert_eq!(
+            count_live(&conn).expect("count_live 失败"),
+            1,
+            "应仍仅 1 行"
+        );
 
         let rows = list_items_full(&conn).expect("list_items_full 失败");
         let row = rows.iter().find(|r| r.id == id).expect("应查到该行");

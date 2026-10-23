@@ -801,9 +801,8 @@ fn handle_main_window_unfocus(win: &tauri::WebviewWindow, stay_in_tray: &Arc<Ato
             return;
         }
         let win_for_main = win.clone();
-        let _ = win.run_on_main_thread(move || {
-            apply_main_window_unfocus(&win_for_main, &stay_in_tray)
-        });
+        let _ =
+            win.run_on_main_thread(move || apply_main_window_unfocus(&win_for_main, &stay_in_tray));
     });
 }
 

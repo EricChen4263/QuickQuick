@@ -190,9 +190,9 @@ fn fetch_image_payload(conn: &Connection, clip_item_id: &str) -> Result<Clipboar
         .map_err(DbError::Sqlite)?
         .flatten();
 
-    let png = png.filter(|bytes| !bytes.is_empty()).ok_or_else(|| {
-        DbError::Other("图片原图已不可用，无法写回剪贴板".to_string())
-    })?;
+    let png = png
+        .filter(|bytes| !bytes.is_empty())
+        .ok_or_else(|| DbError::Other("图片原图已不可用，无法写回剪贴板".to_string()))?;
 
     let (width, height, rgba) = png_to_rgba(&png).map_err(DbError::Other)?;
     Ok(ClipboardPayload::Image {
@@ -556,8 +556,7 @@ pub fn paste_to_front(
 /// # Errors
 /// arboard 初始化或写入失败时返回错误字符串。
 fn write_clip_to_system_clipboard(payload: &ClipboardPayload) -> Result<(), String> {
-    let mut clipboard =
-        arboard::Clipboard::new().map_err(|e| format!("剪贴板初始化失败: {e}"))?;
+    let mut clipboard = arboard::Clipboard::new().map_err(|e| format!("剪贴板初始化失败: {e}"))?;
     match payload {
         ClipboardPayload::Text(item) => {
             crate::macos_paste::write_item_to_clipboard(&mut clipboard, item)
@@ -617,15 +616,7 @@ fn run_paste_with_backend(
             width,
             height,
             rgba,
-        } => paste_image_with_backend(
-            app,
-            &probe,
-            &mut backend,
-            *width,
-            *height,
-            rgba,
-            target_pid,
-        ),
+        } => paste_image_with_backend(app, &probe, &mut backend, *width, *height, rgba, target_pid),
     }
 }
 
@@ -1172,10 +1163,7 @@ mod tests {
 
         let outcome = paste_image_orchestrate(&probe, &mut backend, 1, 1, &rgba);
 
-        assert_eq!(
-            outcome, "write_back_only",
-            "写图失败应返回 write_back_only"
-        );
+        assert_eq!(outcome, "write_back_only", "写图失败应返回 write_back_only");
         assert!(backend.write_image_called, "应尝试过 write_image");
         assert!(
             !backend.send_paste_called,
@@ -1194,7 +1182,10 @@ mod tests {
 
         assert_eq!(outcome, "full_paste", "写图成功+trusted 应返回 full_paste");
         assert!(backend.write_image_called, "应调用 write_image");
-        assert!(backend.send_paste_called, "写图成功+trusted 应调用 send_paste");
+        assert!(
+            backend.send_paste_called,
+            "写图成功+trusted 应调用 send_paste"
+        );
     }
 
     /// C1③：paste_image_orchestrate — 写图成功但未授权 → 仅写回，不 send_paste
@@ -1206,10 +1197,7 @@ mod tests {
 
         let outcome = paste_image_orchestrate(&probe, &mut backend, 1, 1, &rgba);
 
-        assert_eq!(
-            outcome, "write_back_only",
-            "未授权应返回 write_back_only"
-        );
+        assert_eq!(outcome, "write_back_only", "未授权应返回 write_back_only");
         assert!(backend.write_image_called, "应调用 write_image");
         assert!(!backend.send_paste_called, "未授权不应 send_paste");
     }

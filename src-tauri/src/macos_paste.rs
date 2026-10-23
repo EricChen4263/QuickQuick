@@ -35,7 +35,9 @@ pub(crate) fn write_item_to_clipboard(
             .set()
             .html(html.clone(), Some(item.text.clone()))
             .map_err(|e| e.to_string()),
-        _ => clipboard.set_text(item.text.clone()).map_err(|e| e.to_string()),
+        _ => clipboard
+            .set_text(item.text.clone())
+            .map_err(|e| e.to_string()),
     }
 }
 

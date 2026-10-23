@@ -57,5 +57,9 @@ fn plaintext_dedup_unchanged_on_encrypted_store() {
         matches!(second, db::IngestOutcome::Bumped(_)),
         "相同纯文本二次应 Bumped"
     );
-    assert_eq!(db::count_live(&conn).expect("count 失败"), 1, "去重后应仅 1 行");
+    assert_eq!(
+        db::count_live(&conn).expect("count 失败"),
+        1,
+        "去重后应仅 1 行"
+    );
 }
