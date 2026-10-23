@@ -13,13 +13,16 @@
 //! 生产接线（ArboardBackend + LocalKeyProvider + 轮询线程）在 lib.rs 完成。
 
 use std::path::Path;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use rusqlite::Connection;
 
-use crate::clipboard::{CapturedClip, ClipboardBackend, ClipboardSnapshot, RawImageData};
+use crate::clipboard::{
+    CapturedClip, ClipboardBackend, ClipboardSnapshot, RawImageData, SourceApp,
+};
 use crate::db::{self, IngestOutcome};
 use crate::keyprovider::KeyProvider;
+use crate::pasteboard_meta::LastExternalSourceApp;
 use crate::privacy::CapturePolicy;
 
 /// FNV-1a 64-bit 素数（与 db.rs text_hash 使用同一常量，保证跨模块算法一致）
@@ -61,21 +64,26 @@ pub struct ArboardBackend {
     last_hash: Mutex<u64>,
     /// 单调递增的变化计数
     count: Mutex<u64>,
+    /// 最近一个外部前台应用身份（macOS 主线程观察者写入），用于来源应用排除名单匹配
+    source_app: Arc<LastExternalSourceApp>,
 }
 
 impl ArboardBackend {
     /// 创建 ArboardBackend 实例。
     ///
+    /// `source_app` 与主线程的应用激活观察者共享同一份身份记录：观察者写、本后端读。
+    ///
     /// # Errors
     /// arboard::Clipboard::new() 在无 GUI 环境（headless CI）可能失败，
     /// 调用方应优雅降级（eprintln，不 panic）。
     #[must_use = "ArboardBackend::new 返回 Result，忽略它会导致初始化失败被静默丢弃"]
-    pub fn new() -> Result<Self, String> {
+    pub fn new(source_app: Arc<LastExternalSourceApp>) -> Result<Self, String> {
         let clipboard = arboard::Clipboard::new().map_err(|e| format!("剪贴板初始化失败：{e}"))?;
         Ok(Self {
             clipboard: Mutex::new(clipboard),
             last_hash: Mutex::new(0),
             count: Mutex::new(0),
+            source_app,
         })
     }
 
@@ -190,8 +198,17 @@ impl ClipboardBackend for ArboardBackend {
             // Windows 读 ExcludeClipboardContentFromMonitorProcessing /
             // CanIncludeInClipboardHistory。判定逻辑在 pasteboard_meta 的纯谓词里。
             is_concealed: crate::pasteboard_meta::read_is_concealed(),
-            source_app: None,
+            source_app: crate::pasteboard_meta::read_source_app_identity(&self.source_app)
+                .and_then(|app| app.primary_identifier()),
         }
+    }
+
+    /// 返回本次变化的来源应用完整身份（bundle id + 显示名）。
+    ///
+    /// 与 `read` 读同一份身份记录，供排除名单做显示名匹配；
+    /// macOS 的身份来自主线程激活观察者，不做跨线程 AppKit 查询。
+    fn source_app_identity(&self) -> Option<SourceApp> {
+        crate::pasteboard_meta::read_source_app_identity(&self.source_app)
     }
 }
 

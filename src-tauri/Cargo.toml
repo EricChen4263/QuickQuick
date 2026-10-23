@@ -92,6 +92,7 @@ tauri-nspanel = "2.1"
 #   CanIncludeInClipboardHistory）判定敏感标记
 # - WindowsAndMessaging：GetForegroundWindow / SetForegroundWindow / GetWindowThreadProcessId
 # - System_Memory：GlobalLock / GlobalUnlock / GlobalSize 读取剪贴板格式的 DWORD 数据
+# - System_Threading：OpenProcess / QueryFullProcessImageNameW 由剪贴板所有者取来源应用名
 # - Foundation：HWND 等基础类型
 [target.'cfg(target_os = "windows")'.dependencies]
 windows-sys = { version = "0.61", features = [
@@ -99,6 +100,7 @@ windows-sys = { version = "0.61", features = [
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_System_DataExchange",
     "Win32_System_Memory",
+    "Win32_System_Threading",
     "Win32_UI_WindowsAndMessaging",
 ] }
 

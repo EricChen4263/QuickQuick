@@ -1,4 +1,4 @@
-//! 剪贴板平台标记读取（敏感内容）
+//! 剪贴板平台标记读取（敏感内容 + 来源应用身份）
 //!
 //! 分两层，使判定逻辑可在任意平台上单测：
 //! - **纯谓词层**：只接收"剪贴板类型名集合 / 平台标志位"这类已取值，不含任何 FFI；
@@ -12,7 +12,19 @@
 //! - Windows：剪贴板格式 `ExcludeClipboardContentFromMonitorProcessing` 存在，
 //!   或 `CanIncludeInClipboardHistory` 的 DWORD 值为 0，即视为敏感。
 //!
-//! 本模块只回答"平台是否声明了敏感标记"，不做任何内容启发式分析。
+//! 来源应用身份也按平台分流（见 [`read_source_app_identity`]）：
+//! - macOS：读主线程 `NSWorkspace` 应用激活观察者记录的身份，本模块只读那份记录。
+//!   不在轮询线程直接调 `NSWorkspace.frontmostApplication()`——AppKit 的前台状态在
+//!   非主线程读取是 stale 的，该结论已在 `ipc/system.rs` 的还焦编排里实测确认。
+//! - Windows：读剪贴板所有者窗口所属进程的可执行文件名。
+//!
+//! 本模块只回答"平台是否声明了标记 / 剪贴板归谁写"，不做任何内容启发式分析。
+
+use std::sync::Mutex;
+
+// 来源应用身份定义在 clipboard 模块（它是剪贴板快照的类型），此处重导出，
+// 使 `read_source_app_identity` 的返回类型在本模块公开可见。
+pub use crate::clipboard::SourceApp;
 
 /// macOS 敏感内容类型：密码管理器填充、一次性口令等会显式置此类型。
 pub const CONCEALED_TYPE: &str = "org.nspasteboard.ConcealedType";
@@ -86,6 +98,83 @@ pub fn read_is_concealed() -> bool {
     }
 }
 
+/// 最近一个外部前台应用的身份（主线程观察者写、剪贴板轮询线程读）。
+///
+/// macOS 上由 `NSWorkspaceDidActivateApplicationNotification` 观察者在主线程写入；
+/// 轮询线程只读这份快照，从而避免在非主线程读取 AppKit 前台状态。
+///
+/// 已知边界：身份是"最近一次被激活的外部应用"，而非"读取剪贴板瞬间的前台应用"。
+/// 若用户在复制后 500ms 内切到另一个应用，本轮捕获可能归属到后一个应用
+/// （排除名单可能漏命中或误命中）。这是事件驱动取法的固有代价，
+/// 换来的是不依赖 stale 的跨线程 AppKit 查询。
+#[derive(Default)]
+pub struct LastExternalSourceApp(Mutex<Option<SourceApp>>);
+
+impl LastExternalSourceApp {
+    /// 创建空状态（尚未观察到任何外部应用激活）。
+    #[must_use]
+    pub fn new() -> Self {
+        Self(Mutex::new(None))
+    }
+
+    /// 记录刚被激活的外部应用身份。
+    ///
+    /// lock poison 时静默跳过：身份只是排除名单的输入，丢失一次不影响正确性
+    /// （退化为"来源未知 → 不因名单跳过"），不值得为此 panic。
+    pub fn set(&self, app: SourceApp) {
+        if let Ok(mut guard) = self.0.lock() {
+            *guard = Some(app);
+        }
+    }
+
+    /// 读取最近记录的外部应用身份；未记录或 lock poison 时返回 `None`。
+    #[must_use]
+    pub fn get(&self) -> Option<SourceApp> {
+        self.0.lock().ok().and_then(|guard| guard.clone())
+    }
+}
+
+/// 读取当前剪贴板内容的来源应用身份。
+///
+/// macOS 读激活观察者记录（见 [`LastExternalSourceApp`]）；Windows 读剪贴板所有者
+/// 窗口所属进程的可执行文件名；其余平台不支持，返回 `None`。
+#[must_use]
+pub fn read_source_app_identity(tracker: &LastExternalSourceApp) -> Option<SourceApp> {
+    #[cfg(target_os = "macos")]
+    {
+        tracker.get()
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        // Windows 用剪贴板所有者判定，不需要 macOS 的激活观察者记录
+        let _ = tracker;
+        windows_ffi::clipboard_owner_identity()
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        let _ = tracker;
+        None
+    }
+}
+
+/// 从 Windows 可执行文件完整路径取应用名（去目录与 `.exe` 后缀）。
+///
+/// 用户在该输入框里写的是人类可读名称（如 `1Password`），而 Win32 只给得到
+/// `C:\...\1Password.exe`，故统一裁剪成主干名再参与不区分大小写的匹配。
+/// 纯函数，可在 macOS 开发机上单测。
+#[must_use]
+pub fn windows_executable_stem(path: &str) -> Option<String> {
+    let file_name = path.rsplit(['\\', '/']).next()?.trim();
+    let without_ext = file_name
+        .strip_suffix(".exe")
+        .or_else(|| file_name.strip_suffix(".EXE"))
+        .unwrap_or(file_name);
+    let stem = without_ext.trim();
+    (!stem.is_empty()).then(|| stem.to_owned())
+}
+
 // macOS 平台 FFI 薄层
 #[cfg(target_os = "macos")]
 mod macos_ffi {
@@ -106,12 +195,17 @@ mod macos_ffi {
 // Windows 平台 FFI 薄层
 #[cfg(target_os = "windows")]
 mod windows_ffi {
-    use windows_sys::Win32::Foundation::{HANDLE, HGLOBAL};
+    use windows_sys::Win32::Foundation::{CloseHandle, HANDLE, HGLOBAL};
     use windows_sys::Win32::System::DataExchange::{
-        CloseClipboard, GetClipboardData, IsClipboardFormatAvailable, OpenClipboard,
-        RegisterClipboardFormatW,
+        CloseClipboard, GetClipboardData, GetClipboardOwner, IsClipboardFormatAvailable,
+        OpenClipboard, RegisterClipboardFormatW,
     };
     use windows_sys::Win32::System::Memory::{GlobalLock, GlobalSize, GlobalUnlock};
+    use windows_sys::Win32::System::Threading::{
+        OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32,
+        PROCESS_QUERY_LIMITED_INFORMATION,
+    };
+    use windows_sys::Win32::UI::WindowsAndMessaging::GetWindowThreadProcessId;
 
     use super::{is_concealed_windows_signals, WIN_CAN_INCLUDE_HISTORY_FORMAT, WIN_EXCLUDE_FORMAT};
 
@@ -186,6 +280,57 @@ mod windows_ffi {
 
         let history_id = register_format(WIN_CAN_INCLUDE_HISTORY_FORMAT);
         is_concealed_windows_signals(exclude_present, read_dword_format(history_id))
+    }
+
+    /// 读取剪贴板所有者窗口所属进程的可执行文件路径。
+    ///
+    /// 用 `PROCESS_QUERY_LIMITED_INFORMATION` 打开进程：该权限对一般用户进程可用，
+    /// 不需要提权；打不开（进程已退出/权限不足）返回 `None`。
+    fn process_image_path(process_id: u32) -> Option<String> {
+        let process = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, process_id) };
+        if process.is_null() {
+            return None;
+        }
+        // 上限 MAX_PATH(260) 通常不够，取 1024 个宽字符；被截断时 API 返回失败，
+        // 此时降级为"来源未知"，不会给出错误的半截名字。
+        let mut buffer = vec![0u16; 1024];
+        let mut length = buffer.len() as u32;
+        let ok = unsafe {
+            QueryFullProcessImageNameW(
+                process,
+                PROCESS_NAME_WIN32,
+                buffer.as_mut_ptr(),
+                &mut length,
+            )
+        };
+        unsafe { CloseHandle(process) };
+        if ok == 0 {
+            return None;
+        }
+        buffer.truncate(length as usize);
+        Some(String::from_utf16_lossy(&buffer))
+    }
+
+    /// 读取剪贴板所有者窗口所属进程的应用名。
+    ///
+    /// 用"剪贴板所有者"而不是"当前前台窗口"：前者精确对应"是谁写入的"，后者在
+    /// QuickQuick 自身窗口取到焦点后会指向自己。剪贴板需先打开才能取所有者。
+    pub(super) fn clipboard_owner_identity() -> Option<super::SourceApp> {
+        let _guard = ClipboardGuard::open()?;
+        let owner = unsafe { GetClipboardOwner() };
+        if owner.is_null() {
+            return None;
+        }
+        let mut process_id: u32 = 0;
+        unsafe { GetWindowThreadProcessId(owner, &mut process_id) };
+        if process_id == 0 {
+            return None;
+        }
+        let image_path = process_image_path(process_id)?;
+        Some(super::SourceApp {
+            bundle_id: None,
+            display_name: super::windows_executable_stem(&image_path),
+        })
     }
 }
 
@@ -316,6 +461,59 @@ mod tests {
         assert!(
             names.iter().all(|name| !name.trim().is_empty()),
             "收集到的类型名不应为空字符串，实际为 {names:?}"
+        );
+    }
+
+    #[test]
+    fn windows_executable_stem_strips_directory_and_extension() {
+        // Arrange：Win32 只给得到完整路径
+        let path = r"C:\Program Files\1Password\1Password.exe";
+
+        // Act & Assert：裁剪成用户会输入的应用名
+        assert_eq!(windows_executable_stem(path).as_deref(), Some("1Password"));
+    }
+
+    #[test]
+    fn windows_executable_stem_handles_forward_slash_and_uppercase_ext() {
+        // Act & Assert：正斜杠路径与全大写后缀都要能裁剪
+        assert_eq!(
+            windows_executable_stem("C:/Tools/Bitwarden.EXE").as_deref(),
+            Some("Bitwarden")
+        );
+        assert_eq!(
+            windows_executable_stem("/Applications/Chrome.exe").as_deref(),
+            Some("Chrome")
+        );
+    }
+
+    #[test]
+    fn windows_executable_stem_rejects_empty_name() {
+        // Act & Assert：空路径/只有分隔符时不产生垃圾应用名
+        assert_eq!(windows_executable_stem(""), None);
+        assert_eq!(windows_executable_stem(r"C:\dir\"), None);
+        assert_eq!(windows_executable_stem(".exe"), None);
+    }
+
+    #[test]
+    fn last_external_source_app_roundtrips_identity() {
+        // Arrange：观察者写入、轮询线程读取的共享状态
+        let tracker = LastExternalSourceApp::new();
+        assert_eq!(tracker.get(), None, "初始状态应为空");
+
+        // Act
+        tracker.set(SourceApp {
+            bundle_id: Some("com.1password.1password".to_owned()),
+            display_name: Some("1Password".to_owned()),
+        });
+
+        // Assert
+        let got = tracker.get().expect("写入后应能读回");
+        assert_eq!(got.bundle_id.as_deref(), Some("com.1password.1password"));
+        assert_eq!(got.display_name.as_deref(), Some("1Password"));
+        assert_eq!(
+            got.primary_identifier().as_deref(),
+            Some("com.1password.1password"),
+            "快照单值标识应优先取 bundle id"
         );
     }
 }

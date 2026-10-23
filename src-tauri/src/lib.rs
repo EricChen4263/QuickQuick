@@ -202,8 +202,14 @@ pub fn run() {
             let stay_in_tray = Arc::clone(&capture_state.stay_in_tray);
             let exclude_list = Arc::clone(&capture_state.exclude_list);
             app.manage(capture_state);
-            setup_frontmost_tracking(app);
-            start_clipboard_poll(app.handle().clone(), paused, skip_sensitive, exclude_list);
+            let source_app = setup_frontmost_tracking(app);
+            start_clipboard_poll(
+                app.handle().clone(),
+                paused,
+                skip_sensitive,
+                exclude_list,
+                source_app,
+            );
             apply_autostart_preference(app);
             register_hotkeys(app.handle());
             tray::setup_tray(app)?;
@@ -324,6 +330,8 @@ fn reset_and_reopen(
 /// 线程持有 AppHandle，每次迭代通过 state::<AppDb>() 取得数据库锁后写入。
 /// ArboardBackend 在 headless 环境下初始化可能失败，此时仅记录警告不启动线程。
 /// `paused` 和 `skip_sensitive` 在每次迭代通过 `Relaxed` load 读取，运行时生效。
+/// `source_app` 与主线程的应用激活观察者共享：观察者写身份，本线程只读，
+/// 用于排除名单的 bundle id / 显示名匹配。
 ///
 /// # 为什么不在线程内 panic
 /// 后台线程崩溃不会影响主线程，但会导致轮询静默停止；
@@ -333,8 +341,9 @@ fn start_clipboard_poll(
     paused: Arc<AtomicBool>,
     skip_sensitive: Arc<AtomicBool>,
     exclude_list: Arc<RwLock<privacy::ExcludeList>>,
+    source_app: Arc<pasteboard_meta::LastExternalSourceApp>,
 ) {
-    let backend = match pipeline::ArboardBackend::new() {
+    let backend = match pipeline::ArboardBackend::new(source_app) {
         Ok(b) => b,
         Err(e) => {
             eprintln!("[QuickQuick] 剪贴板后端初始化失败，轮询不启动: {e}");
@@ -508,27 +517,37 @@ async fn run_one_update_check(
 
 /// 注册"最近外部前台 app"追踪并把共享状态交给 Tauri 托管。
 ///
-/// 托管 `Arc<LastExternalApp>`：观察者回调（主线程）与 paste_to_front 命令（命令线程）
-/// 共用同一实例——前者写 pid、后者读 pid。Arc 让两侧持有同一 `Mutex<Option<i32>>`。
+/// 托管两份互相独立的共享状态：
+/// - `Arc<LastExternalApp>`：只存 pid，供粘贴还焦使用；
+/// - `Arc<LastExternalSourceApp>`：存完整身份（bundle id + 本地化显示名），供剪贴板
+///   排除名单使用——用户按设置页提示输入的是应用名，只匹配 bundle id 永不命中。
 ///
-/// macOS：装 NSWorkspace 应用激活通知观察者（见 `register_frontmost_observer`）。
-/// 非 macOS：仅托管空状态（观察者为 no-op），保证 `State<Arc<LastExternalApp>>` 始终可取。
-fn setup_frontmost_tracking(app: &tauri::App) {
+/// 二者都由同一个应用激活观察者写，且写入发生在主线程；
+/// 读侧（粘贴命令线程、剪贴板轮询线程）只读快照，不跨线程调 AppKit。
+///
+/// 非 macOS：仅托管空状态（观察者为 no-op），保证状态始终可取。
+fn setup_frontmost_tracking(app: &tauri::App) -> Arc<pasteboard_meta::LastExternalSourceApp> {
     let shared = Arc::new(frontmost::LastExternalApp::new());
-    register_frontmost_observer(Arc::clone(&shared));
+    let source_app = Arc::new(pasteboard_meta::LastExternalSourceApp::new());
+    register_frontmost_observer(Arc::clone(&shared), Arc::clone(&source_app));
     app.manage(shared);
+    app.manage(Arc::clone(&source_app));
 
     // Windows：还焦走 SetForegroundWindow(hwnd)，需托管最近外部窗口句柄。
     // 由唤起点（popover/tray show 前）写入、粘贴命令读取。非 Windows 不托管，
     // try_state 返回 None 零开销。
     #[cfg(target_os = "windows")]
     app.manage(Arc::new(frontmost::LastExternalHwnd::new()));
+
+    source_app
 }
 
-/// macOS：注册 NSWorkspace 应用激活通知观察者，记录最近一个非自身前台 app 的 pid。
+/// macOS：注册 NSWorkspace 应用激活通知观察者，记录最近一个非自身前台 app。
+///
+/// 一次通知写两份状态：pid（供还焦）+ 完整身份（供排除名单的显示名匹配）。
 ///
 /// 线程模型：观察者注册与回调均在主线程（setup 在主线程；通知投递到 mainQueue）。
-/// 因此 set pid 发生在主线程，paste_to_front 命令线程随后读取。
+/// 因此写入发生在主线程，粘贴命令线程与剪贴板轮询线程随后只读，不跨线程调 AppKit。
 ///
 /// 用 block 形式（`addObserverForName:object:queue:usingBlock:` + block2::RcBlock）
 /// 而非 `define_class!` 自定义 NSObject：无需声明新类/管理 selector，最简且能编译。
@@ -536,7 +555,10 @@ fn setup_frontmost_tracking(app: &tauri::App) {
 /// 观察者 token 故意 `std::mem::forget`：观察者需存活至进程退出（与 app 同生命周期），
 /// 不在任何时点反注册；泄漏一个常驻 token 是此场景的正确选择，非疏漏。
 #[cfg(target_os = "macos")]
-fn register_frontmost_observer(shared: Arc<frontmost::LastExternalApp>) {
+fn register_frontmost_observer(
+    shared: Arc<frontmost::LastExternalApp>,
+    source_app: Arc<pasteboard_meta::LastExternalSourceApp>,
+) {
     use std::ptr::NonNull;
 
     use block2::RcBlock;
@@ -550,11 +572,12 @@ fn register_frontmost_observer(shared: Arc<frontmost::LastExternalApp>) {
     let block = RcBlock::new(move |notification: NonNull<NSNotification>| {
         // 通知对象由 AppKit 投递，引用在回调期间有效；转成安全引用读取 userInfo。
         let notification: &NSNotification = unsafe { notification.as_ref() };
-        let Some(pid) = extract_activated_pid(notification) else {
+        let Some((pid, identity)) = extract_activated_app(notification) else {
             return;
         };
         if frontmost::should_record_pid(pid, self_pid) {
             shared.set(pid);
+            source_app.set(identity);
         }
     });
 
@@ -574,13 +597,18 @@ fn register_frontmost_observer(shared: Arc<frontmost::LastExternalApp>) {
     std::mem::forget(observer);
 }
 
-/// macOS：从激活通知的 userInfo 取出被激活 app 的 pid（processIdentifier）。
+/// macOS：从激活通知的 userInfo 取出被激活 app 的 pid 与身份。
 ///
 /// 路径：notification.userInfo → objectForKey(NSWorkspaceApplicationKey)
-/// → downcast 为 NSRunningApplication → processIdentifier。
+/// → downcast 为 NSRunningApplication → processIdentifier / bundleIdentifier / localizedName。
 /// 任一环节缺失（无 userInfo / 无该 key / 类型不符）返回 None，调用方据此跳过记录。
+///
+/// `localizedName` 是用户在设置页里会输入的名字（如 `1Password`），
+/// `bundleIdentifier` 是稳定标识；排除名单两者都匹配，故这里两个都取。
 #[cfg(target_os = "macos")]
-fn extract_activated_pid(notification: &objc2_foundation::NSNotification) -> Option<i32> {
+fn extract_activated_app(
+    notification: &objc2_foundation::NSNotification,
+) -> Option<(i32, pasteboard_meta::SourceApp)> {
     use objc2::rc::Retained;
     use objc2_app_kit::{NSRunningApplication, NSWorkspaceApplicationKey};
 
@@ -588,12 +616,20 @@ fn extract_activated_pid(notification: &objc2_foundation::NSNotification) -> Opt
     // userInfo 是无类型 NSDictionary；用 NSWorkspaceApplicationKey 取关联的 NSRunningApplication。
     let value = user_info.objectForKey(unsafe { NSWorkspaceApplicationKey });
     let running_app: Retained<NSRunningApplication> = value?.downcast().ok()?;
-    Some(running_app.processIdentifier())
+    let identity = pasteboard_meta::SourceApp {
+        bundle_id: running_app.bundleIdentifier().map(|id| id.to_string()),
+        display_name: running_app.localizedName().map(|name| name.to_string()),
+    };
+    Some((running_app.processIdentifier(), identity))
 }
 
 /// 非 macOS：观察者为 no-op（无 NSWorkspace），仅保留签名让 setup 通用。
 #[cfg(not(target_os = "macos"))]
-fn register_frontmost_observer(_shared: Arc<frontmost::LastExternalApp>) {}
+fn register_frontmost_observer(
+    _shared: Arc<frontmost::LastExternalApp>,
+    _source_app: Arc<pasteboard_meta::LastExternalSourceApp>,
+) {
+}
 
 /// 将 `HotkeyAction` 映射为对应 popover 窗口的标签字符串。
 ///

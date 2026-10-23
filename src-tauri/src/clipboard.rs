@@ -5,6 +5,7 @@
 //! 核心抽象：
 //! - `ClipboardBackend` trait    — 抽象 OS 剪贴板，使逻辑层可脱离 OS 测试
 //! - `ClipboardSnapshot`         — 单次读取结果：纯文本 + HTML + 图片 + 自写标记 + 隐私字段
+//! - `SourceApp`                 — 复制来源应用身份（bundle id + 本地化显示名）
 //! - `CapturedItem`              — 双字段捕获结果：text（纯文本键）+ html（富文本）
 //! - `CapturedClip`              — 捕获结果枚举：文本条目或图片条目
 //! - `RawImageData`              — 剪贴板图片原始 RGBA 字节
@@ -43,6 +44,35 @@ pub struct RawImageData {
     pub bytes: Vec<u8>,
 }
 
+/// 复制来源应用的身份。
+///
+/// 两个字段都可能缺失，取决于平台与运行环境：
+/// - `bundle_id`：macOS bundle identifier（如 `com.1password.1password`），最稳定；
+/// - `display_name`：应用本地化显示名（如 `1Password`），也用于 Windows 可执行文件名
+///   （`1Password`，已去目录与 `.exe` 后缀）。
+///
+/// 为什么两者都要：设置页让用户输入的是**人类可读名称**，而历史匹配需要稳定的 bundle id；
+/// 只提供其中一个都会让「用户照提示输入却永不命中」。排除名单匹配两者任一项即可
+/// （见 [`crate::privacy::ExcludeList::matches_source`]）。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SourceApp {
+    /// bundle identifier（macOS 提供；Windows 无此概念时为 `None`）
+    pub bundle_id: Option<String>,
+    /// 本地化显示名（macOS）或可执行文件名主干（Windows）
+    pub display_name: Option<String>,
+}
+
+impl SourceApp {
+    /// 返回用于写入 [`ClipboardSnapshot::source_app`] 的单一标识（优先 bundle id）。
+    ///
+    /// `ClipboardSnapshot` 只保留单值字段以维持既有契约；需要显示名参与匹配的场景
+    /// 走 [`ClipboardBackend::source_app_identity`] 取得完整身份。
+    #[must_use]
+    pub fn primary_identifier(&self) -> Option<String> {
+        self.bundle_id.clone().or_else(|| self.display_name.clone())
+    }
+}
+
 /// 单次剪贴板读取结果。
 ///
 /// `text` 与 `html` 均为 `Option`，因为用户可能只复制了其中一种格式。
@@ -58,8 +88,9 @@ pub struct RawImageData {
 /// OS 后端置位（判定与平台取值都在 [`crate::pasteboard_meta`]）；
 /// 逻辑层不分析内容，只读取此布尔（设计§三#6）。
 ///
-/// `source_app`：复制动作的来源应用标识（OS 后端提供，如 bundle ID），
-/// 供 App 排除名单匹配；后端无法获取时为 `None`。
+/// `source_app`：复制动作的来源应用标识（macOS 为 bundle ID，Windows 为可执行文件名主干），
+/// 供 App 排除名单匹配；后端无法获取时为 `None`。需要「bundle id + 显示名」双匹配时
+/// 另用 [`ClipboardBackend::source_app_identity`]。
 #[derive(Debug, Clone)]
 pub struct ClipboardSnapshot {
     /// 纯文本内容（`text/plain`）
@@ -145,6 +176,17 @@ pub trait ClipboardBackend {
     ///
     /// 仅在 `change_count` 递增时调用，避免频繁 IPC 开销。
     fn read(&self) -> ClipboardSnapshot;
+
+    /// 返回本次变化的来源应用完整身份（bundle id + 本地化显示名）。
+    ///
+    /// 默认 `None`：测试后端与不提供应用身份的平台无需实现。
+    /// 生产后端应在 [`ClipboardBackend::read`] 之后调用本方法，两处读到的是同一次复制。
+    ///
+    /// 为什么不放进 [`ClipboardSnapshot`]：该结构被跨 crate 的测试直接穷尽构造，
+    /// 新增字段会连带破坏所有构造点；身份作为独立的可选通道更小侵入。
+    fn source_app_identity(&self) -> Option<SourceApp> {
+        None
+    }
 }
 
 /// 将 RGBA 原始字节编码为 PNG。
@@ -290,15 +332,16 @@ pub fn poll_once(backend: &dyn ClipboardBackend, last_seen_count: &mut u64) -> V
 /// 带隐私策略的单次轮询判定。
 ///
 /// 在 `poll_once` 的"严格递增计数"判定基础上，读取快照后调用
-/// [`crate::privacy::should_skip`] 进行隐私门控。命中任意跳过规则时，
+/// [`crate::privacy::should_skip_with_source`] 进行隐私门控。命中任意跳过规则时，
 /// 仍推进 `last_seen_count`（防止下次重复触发），但返回空 Vec。
 ///
 /// # 判定顺序
 ///
 /// 1. `current <= *last_seen_count` → 无递增，返回空 Vec（同 poll_once）
 /// 2. 读取快照，推进 `last_seen_count`
-/// 3. `privacy::should_skip(snapshot, policy)` 命中 → 返回空 Vec（跳过不记）
-/// 4. 按 snapshot_to_clips 拆分文本/图片，返回结果 Vec
+/// 3. 取来源应用完整身份（用于显示名匹配）
+/// 4. `privacy::should_skip_with_source(...)` 命中 → 返回空 Vec（跳过不记）
+/// 5. 按 snapshot_to_clips 拆分文本/图片，返回结果 Vec
 ///
 /// # 参数
 /// - `backend`         — 剪贴板后端（可为 fake）
@@ -321,7 +364,9 @@ pub fn poll_once_with_policy(
     let snapshot = backend.read();
     *last_seen_count = current;
 
-    if crate::privacy::should_skip(&snapshot, policy).is_some() {
+    // 排除名单为空时 should_skip_with_source 内部直接短路，不会碰这里的身份查询结果
+    let source_app = backend.source_app_identity();
+    if crate::privacy::should_skip_with_source(&snapshot, policy, source_app.as_ref()).is_some() {
         return Vec::new();
     }
 
