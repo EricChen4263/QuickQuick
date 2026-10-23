@@ -9,14 +9,9 @@
 ## Phase 0 收尾
 
 ### P0-1 · 修「主线程超时后误报 full_paste」
-- **状态**：ready
-- **做什么**：`on_main_thread_blocking` 超时只打日志，paste 两臂仍注入 ⌘V 并返回 `"full_paste"`。改为让 `hide_clip_popover` 返回是否真正完成，超时时粘贴路径降级为 `"write_back_only"`。
-- **验收**：
-  1. `hide_clip_popover`（及内部 `on_main_thread_blocking`）返回完成状态
-  2. 超时/派发失败时，`paste_text_with_backend` 与 `paste_image_with_backend` 返回 `write_back_only`，不注入 ⌘V
-  3. 正常路径行为不变（仍返回 `full_paste`）
-  4. 新增单测覆盖「超时 → write_back_only」的决策逻辑（可把决策抽成纯函数）
-  5. `cargo check` / `clippy -D warnings` / `cargo test` 通过
+- **状态**：done
+- **结果**：`on_main_thread_blocking` / `hide_clip_popover` / `hide_clip_panel_now` 返回 `bool`；新增 `should_inject_paste` 纯函数；两臂在交出失败时 `return "write_back_only"` 且 `send_paste` 不可达；六个 bool 函数加 `#[must_use]`。独立审查 **非 BLOCK**（6 点全部成立），顺手修掉 ADR 示意代码与实现矛盾、改动范围表漏列 `Cargo.lock`。
+- **验收**：全部达成；`cargo check/clippy/test`（557 passed）、`pnpm test`（519 passed）通过。
 
 ---
 
