@@ -415,6 +415,12 @@ pub fn strip_original(conn: &Connection, id: &str) -> Result<(), DbError> {
 /// [`crate::db::purge_orphan_image_tombstones`]）——这类行任何 GC 路径都碰不到，
 /// 不回收就是永久占库。
 ///
+/// 第三级**只在本次清理真的动过行时**才执行（`stripped_originals > 0 ||
+/// deleted_rows > 0`）：孤立墓碑只可能由第二级删除或历史遗留产生，历史遗留会在
+/// 「第一次真正需要清理」时被顺带回收——那正是有空间压力的时候。日常零压力的清理轮次
+/// （未超限）不该为一次全表 `DELETE ... WHERE is_deleted = 1` 付费：
+/// 20k 行量级实测约 88ms，而图片连续复制时每轮都会走到这里。
+///
 /// **收藏永远豁免**：`is_favorite=1` 的行不参与任何清理，
 /// 其 `clip_items` 父条目同样不动。
 ///
@@ -437,9 +443,14 @@ pub fn tiered_cleanup(conn: &Connection, policy: &CleanupPolicy) -> Result<Clean
         0
     };
 
-    // 第三级：回收孤立图片墓碑。这类行没有父条目可级联，`db::gc_purge_deleted` 永远
-    // 碰不到它们；不在这里回收就会成为永久占库的 BLOB（详见该函数的文档）。
-    let purged_orphan_images = crate::db::purge_orphan_image_tombstones(conn)? as usize;
+    // 第三级：只在本次清理真的动过行时才回收孤立墓碑。
+    // 判据用"本次动了行"而不是"是否超限"：孤立墓碑本就是清理的副产物或历史遗留，
+    // 没有清理动作的轮次（未超限）不该为一次全表 DELETE 付 ~88ms（20k 行实测）。
+    let purged_orphan_images = if stripped_originals > 0 || deleted_rows > 0 {
+        crate::db::purge_orphan_image_tombstones(conn)? as usize
+    } else {
+        0
+    };
 
     Ok(CleanupReport {
         stripped_originals,
@@ -915,8 +926,85 @@ mod tests {
         );
         // Assert 2：物理行数归零——孤立行再无 GC 死角
         assert_eq!(physical_image_rows(&conn), 0);
-        // Assert 3：再跑一次 GC 也不该有残留（幂等）
-        assert_eq!(crate::db::gc_purge_deleted(&conn).expect("gc"), 0);
+        // Assert 3：purge 自身幂等——再跑一次应返回 0
+        // （此前这条锚在 gc_purge_deleted 上，属锚错对象：回收孤立行的是 purge，不是 GC）
+        assert_eq!(
+            crate::db::purge_orphan_image_tombstones(&conn).expect("purge"),
+            0,
+            "已无孤立墓碑时 purge 应返回 0（幂等）"
+        );
         assert_eq!(physical_image_rows(&conn), 0);
+    }
+
+    #[test]
+    fn orphan_tombstones_are_skipped_on_idle_rounds_and_reclaimed_on_real_cleanup() {
+        // Arrange：一条真实入库的活图片（有父条目）+ 一条历史遗留的孤立墓碑
+        let (_dir, conn) = open_test_db();
+        let live_item_id = ingest_image_row(&conn, [7, 8, 9]);
+        insert_row(&conn, "legacy-orphan", 500, 30, 10, false);
+        conn.execute(
+            "UPDATE clip_images SET is_deleted = 1 WHERE id = 'legacy-orphan'",
+            [],
+        )
+        .expect("标记历史孤立墓碑应成功");
+        assert_eq!(physical_image_rows(&conn), 2);
+
+        // Act 1：未超限轮次（阈值远大于总量）→ 不做任何清理
+        let idle = tiered_cleanup(
+            &conn,
+            &CleanupPolicy {
+                max_total_bytes: i64::MAX,
+            },
+        )
+        .expect("idle cleanup");
+
+        // Assert 1：零动作，且没有为回收墓碑付一次全表 DELETE
+        assert_eq!(
+            idle,
+            CleanupReport::default(),
+            "未超限轮次不应有任何清理动作"
+        );
+        assert_eq!(
+            idle.purged_orphan_images, 0,
+            "未超限轮次不应执行孤立墓碑回收"
+        );
+        assert_eq!(
+            physical_image_rows(&conn),
+            2,
+            "未超限轮次不应减少任何行（历史孤立墓碑留着等真正需要清理时再收）"
+        );
+
+        // Act 2：有空间压力的轮次（阈值 0）→ 真清理，顺带回收历史遗留孤立墓碑
+        let busy = tiered_cleanup(&conn, &CleanupPolicy { max_total_bytes: 0 }).expect("cleanup");
+
+        // Assert 2：这次真的动了行，故第三级被执行
+        assert!(
+            busy.stripped_originals > 0 || busy.deleted_rows > 0,
+            "阈值 0 时应发生实际清理，实际: {busy:?}"
+        );
+        assert_eq!(
+            busy.purged_orphan_images, 1,
+            "第一次真正清理时应回收那条历史遗留的孤立墓碑"
+        );
+        // Assert 3：被回收的是孤立行；有父条目的图片行虽已软删，仍等 GC 走级联
+        let orphan_exists: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM clip_images WHERE id = 'legacy-orphan'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("查询应成功");
+        assert_eq!(orphan_exists, 0, "历史孤立墓碑应被物理删除");
+        let live_image_alive: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM clip_images WHERE clip_item_id = ?1",
+                rusqlite::params![live_item_id],
+                |row| row.get(0),
+            )
+            .expect("查询应成功");
+        assert_eq!(
+            live_image_alive, 1,
+            "有父条目的图片行不应被第三级回收（其物理清除走 GC 级联）"
+        );
     }
 }
