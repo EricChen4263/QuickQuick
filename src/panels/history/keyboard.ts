@@ -35,6 +35,57 @@ export function isImeComposing(event: ImeKeyboardLike): boolean {
 }
 
 /**
+ * 数字直达：把数字键字符映射为目标列表索引（0-based）。
+ * `"1"`..`"9"` → 0..8，`"0"` → 9（第 10 条）。
+ *
+ * 条目数不足该序号时返回 null——数字直达**不做**「就近取最后一条」的降级，
+ * 按到不存在的序号就什么也不取。
+ *
+ * @param digit     - 键盘按下的字符（如 event.key）
+ * @param itemCount - 当前可见条目总数
+ * @returns 0-based 目标索引，或 null（非数字 / 序号越界）
+ */
+export function directPickIndex(digit: string, itemCount: number): number | null {
+  if (digit.length !== 1) {
+    return null;
+  }
+  const num = parseInt(digit, 10);
+  if (Number.isNaN(num) || num < 0 || num > 9) {
+    return null;
+  }
+  const index = num === 0 ? 9 : num - 1;
+  return index < itemCount ? index : null;
+}
+
+/**
+ * 键盘修饰键集合（只取数字直达关心的四个布尔位）。
+ */
+export interface KeyboardModifiers {
+  metaKey?: boolean;
+  ctrlKey?: boolean;
+  altKey?: boolean;
+  shiftKey?: boolean;
+}
+
+/**
+ * 数字直达的前置条件：搜索框为空且未按任何修饰键。
+ * 否则数字要能正常输入进搜索框（例如搜索 "2"），或被修饰键组合的既有语义接管
+ * （主窗 ⌘1-9 是快速粘贴）。
+ *
+ * 空判定按字面长度：只有一个空格也算「搜索框非空」，此时数字照常输入。
+ *
+ * @param query     - 当前搜索框内容
+ * @param modifiers - 按键携带的修饰键状态
+ * @returns 满足数字直达条件返回 true
+ */
+export function isDirectPickAllowed(query: string, modifiers: KeyboardModifiers): boolean {
+  if (query !== "") {
+    return false;
+  }
+  return !modifiers.metaKey && !modifiers.ctrlKey && !modifiers.altKey && !modifiers.shiftKey;
+}
+
+/**
  * 根据方向键计算下一个高亮索引。
  * 结果 clamp 在 [0, count-1]，边界不越界。
  * count=0 时返回 -1，表示列表为空、无有效高亮。

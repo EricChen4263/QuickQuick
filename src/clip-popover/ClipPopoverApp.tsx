@@ -6,7 +6,7 @@ import { listen } from "@tauri-apps/api/event";
 import { CLIPBOARD_CHANGED_EVENT } from "../ipc/events";
 import { filterClipBySearch, groupClipItems } from "./grouping";
 import { advanceSelection } from "./keyboard-nav";
-import { isImeComposing } from "../panels/history/keyboard";
+import { isImeComposing, directPickIndex, isDirectPickAllowed } from "../panels/history/keyboard";
 import { PopoverList } from "./PopoverList";
 import { PopoverPreview } from "./PopoverPreview";
 import { PopoverFooter } from "./PopoverFooter";
@@ -20,6 +20,14 @@ function buildFlatList(groups: ReturnType<typeof groupClipItems>): ClipItem[] {
 }
 
 /**
+ * 数字直达的高亮反馈时长：先把目标条目亮起，让用户确认「按对了」，再执行取用。
+ */
+const DIRECT_PICK_FLASH_MS = 50;
+
+/** 数字直达只认单个数字字符（1–9 与 0），其余按键不进入该语义 */
+const DIGIT_KEY_PATTERN = /^[0-9]$/;
+
+/**
  * Popover 根组件。
  *
  * 状态：
@@ -29,6 +37,7 @@ function buildFlatList(groups: ReturnType<typeof groupClipItems>): ClipItem[] {
  *
  * 键盘交互（由 search input 的 onKeyDown 处理）：
  *   - ↑ / ↓：在 visibleFlatList 中移动选中项（advanceSelection）
+ *   - 1–0：搜索框为空且无修饰键时数字直达，选中并粘贴第 1–10 条
  *   - Enter：pasteToFront(selectedId) 成功后 hide 窗口
  *   - Alt+Enter：copyClipToClipboard(selectedItem.id) 成功后 hide 窗口（富文本保真）
  *   - Esc：关闭窗口并把焦点还给上一个外部 app（hideAndReturnFocus）
@@ -43,6 +52,22 @@ export default function ClipPopoverApp() {
   const inputRef = useRef<HTMLInputElement>(null);
   // ref 暴露最新的 visibleFlatList，避免 onFocusChanged 回调产生 stale closure
   const visibleFlatListRef = useRef<ClipItem[]>([]);
+  // 数字直达的高亮反馈定时器；同一时刻只允许一个待取用
+  const directPickTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  /** 取消尚未触发的数字直达取用（Esc 关窗、组件卸载时调用，避免关窗后又粘一次） */
+  function cancelPendingDirectPick(): void {
+    if (directPickTimerRef.current === null) return;
+    clearTimeout(directPickTimerRef.current);
+    directPickTimerRef.current = null;
+  }
+
+  // 卸载时清掉反馈定时器，避免对已卸载组件执行粘贴
+  useEffect(() => {
+    return () => {
+      cancelPendingDirectPick();
+    };
+  }, []);
 
   useEffect(() => {
     listClipItems()
@@ -138,6 +163,42 @@ export default function ClipPopoverApp() {
     [visibleFlatList, selectedId]
   );
 
+  /** 执行取用并关窗：Enter 确认与数字直达共用同一条粘贴路径 */
+  function confirmPasteById(id: string): void {
+    pasteToFront(id)
+      .then(() => getCurrentWindow().hide())
+      .catch((err: unknown) => {
+        console.error("[clip-popover] paste failed:", err);
+      });
+  }
+
+  /**
+   * 数字直达：搜索框为空且未按修饰键时，1–9 取第 1–9 条、0 取第 10 条。
+   * 先高亮目标条目并保持 DIRECT_PICK_FLASH_MS 作为按键反馈，再执行取用；
+   * 序号超出可见条数时只吞掉按键，不降级去取邻近条目。
+   *
+   * @returns 是否已按数字直达语义处理该按键
+   */
+  function handleDirectPickKey(e: React.KeyboardEvent<HTMLInputElement>): boolean {
+    // 只有单个数字键才进入数字直达；Enter/方向键等仍由后续分支处理
+    if (!DIGIT_KEY_PATTERN.test(e.key)) return false;
+    if (!isDirectPickAllowed(query, e)) return false;
+    // 数字直达模式下数字键归面板所有，不再作为搜索字符写入输入框
+    e.preventDefault();
+
+    const index = directPickIndex(e.key, visibleFlatList.length);
+    const target = index === null ? null : visibleFlatList[index];
+    if (target === null) return true;
+
+    setSelectedId(target.id);
+    cancelPendingDirectPick();
+    directPickTimerRef.current = setTimeout(() => {
+      directPickTimerRef.current = null;
+      confirmPasteById(target.id);
+    }, DIRECT_PICK_FLASH_MS);
+    return true;
+  }
+
   function handleKeyDown(e: React.KeyboardEvent<HTMLInputElement>): void {
     // Esc 必须排在输入法防御之前：关面板是用户的显式中断，不属于候选词交互。
     // WKWebView 会把 Esc 键原生"清空 search input"行为吞掉，不冒泡到 document。
@@ -145,6 +206,8 @@ export default function ClipPopoverApp() {
     // 走 hideAndReturnFocus 而非裸 hide：关闭面板同时把焦点还给上一个外部 app（方案 C）。
     if (e.key === "Escape") {
       e.preventDefault();
+      // 面板要关了，尚未触发的数字直达反馈不再取用
+      cancelPendingDirectPick();
       hideAndReturnFocus().catch((err: unknown) => {
         console.error("[clip-popover] hideAndReturnFocus on Esc failed:", err);
       });
@@ -163,14 +226,12 @@ export default function ClipPopoverApp() {
       return;
     }
 
+    if (handleDirectPickKey(e)) return;
+
     if (e.key === "Enter" && !e.altKey) {
       e.preventDefault();
       if (selectedId === null || selectedItem === null) return;
-      pasteToFront(selectedId)
-        .then(() => getCurrentWindow().hide())
-        .catch((err: unknown) => {
-          console.error("[clip-popover] paste failed:", err);
-        });
+      confirmPasteById(selectedId);
       return;
     }
 

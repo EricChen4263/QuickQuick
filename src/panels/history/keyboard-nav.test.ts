@@ -1,6 +1,62 @@
 import { describe, it, expect } from "vitest";
-import { moveHighlight, quickSelectIndex, resolveEnter, isImeComposing } from "./keyboard";
+import {
+  moveHighlight,
+  quickSelectIndex,
+  resolveEnter,
+  isImeComposing,
+  directPickIndex,
+  isDirectPickAllowed,
+} from "./keyboard";
 import type { HistoryItem } from "./search";
+
+// P2-3 数字直达：1–9 → 第 1–9 条，0 → 第 10 条，序号越界返回 null
+describe("directPickIndex", () => {
+  it("'0' 映射到第 10 条（索引 9）", () => {
+    expect(directPickIndex("0", 10)).toBe(9);
+  });
+
+  it("'1' 映射到索引 0，'9' 映射到索引 8", () => {
+    expect(directPickIndex("1", 10)).toBe(0);
+    expect(directPickIndex("9", 10)).toBe(8);
+  });
+
+  it("条目数不足该序号时返回 null（不降级取最后一条）", () => {
+    // 只有 3 条时，第 5 条与第 10 条都不存在
+    expect(directPickIndex("5", 3)).toBeNull();
+    expect(directPickIndex("0", 3)).toBeNull();
+    // 边界：恰好够
+    expect(directPickIndex("3", 3)).toBe(2);
+  });
+
+  it("空列表一律返回 null", () => {
+    expect(directPickIndex("1", 0)).toBeNull();
+    expect(directPickIndex("0", 0)).toBeNull();
+  });
+
+  it("非单个数字字符返回 null", () => {
+    expect(directPickIndex("a", 10)).toBeNull();
+    expect(directPickIndex("12", 10)).toBeNull();
+    expect(directPickIndex("", 10)).toBeNull();
+  });
+});
+
+// P2-3 前置条件：搜索框为空 + 无任何修饰键
+describe("isDirectPickAllowed", () => {
+  it("搜索框为空且无修饰键时允许数字直达", () => {
+    expect(isDirectPickAllowed("", {})).toBe(true);
+  });
+
+  it("搜索框非空时不允许（数字要能正常输入用于搜索）", () => {
+    expect(isDirectPickAllowed("2", {})).toBe(false);
+  });
+
+  it("带修饰键时不允许（⌘1-9 等组合有自己的语义）", () => {
+    expect(isDirectPickAllowed("", { metaKey: true })).toBe(false);
+    expect(isDirectPickAllowed("", { ctrlKey: true })).toBe(false);
+    expect(isDirectPickAllowed("", { altKey: true })).toBe(false);
+    expect(isDirectPickAllowed("", { shiftKey: true })).toBe(false);
+  });
+});
 
 // P2-6 输入法防御：组词期间两种平台表现都要识别
 describe("isImeComposing", () => {

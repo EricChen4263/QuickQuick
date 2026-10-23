@@ -1,5 +1,5 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { render, screen, fireEvent, waitFor, act } from "@testing-library/react";
 import ClipPopoverApp from "./ClipPopoverApp";
 
 vi.mock("../ipc/ipc-client", () => ({
@@ -283,6 +283,188 @@ describe("ClipPopoverApp 输入法防御（P2-6）", () => {
     await waitFor(() => {
       expect(mockHideAndReturnFocus).toHaveBeenCalled();
     });
+  });
+});
+
+describe("ClipPopoverApp 数字直达（P2-3）", () => {
+  /** 十条目列表：用于验证 0 → 第 10 条 */
+  const TEN_ITEMS = Array.from({ length: 10 }, (_, i) => ({
+    id: `d${i + 1}`,
+    content: `item ${i + 1}`,
+    kind: "text" as const,
+    isFavorite: false,
+    lastModifiedUtc: Date.now(),
+  }));
+
+  /**
+   * fake timers 下刷完 microtask 队列。
+   * waitFor 依赖真实计时器，注入假计时器后会一直挂到超时，故此处只用 act 冲微任务。
+   */
+  async function flushAsync(): Promise<void> {
+    await act(async () => {
+      for (let i = 0; i < 6; i++) {
+        await Promise.resolve();
+      }
+    });
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("按 '2' 先高亮第 2 条，50ms 后才调用 pasteToFront", async () => {
+    // Arrange
+    mockListClipItems.mockResolvedValue(TEN_ITEMS);
+    render(<ClipPopoverApp />);
+    await flushAsync();
+    const rows = screen.getAllByRole("option");
+    expect(rows).toHaveLength(10);
+
+    // Act：数字直达只吞键、先高亮
+    const input = screen.getByRole("searchbox");
+    fireEvent.keyDown(input, { key: "2" });
+
+    // Assert：反馈阶段——第 2 条已高亮，但尚未取用
+    expect(rows[1]).toHaveAttribute("aria-selected", "true");
+    expect(rows[0]).toHaveAttribute("aria-selected", "false");
+    expect(mockPasteToFront).not.toHaveBeenCalled();
+
+    // Act：推进反馈时长
+    act(() => {
+      vi.advanceTimersByTime(50);
+    });
+    await flushAsync();
+
+    // Assert：取用第 2 条并关窗
+    expect(mockPasteToFront).toHaveBeenCalledWith("d2");
+    expect(mockHide).toHaveBeenCalled();
+  });
+
+  it("按 '0' 取第 10 条", async () => {
+    // Arrange
+    mockListClipItems.mockResolvedValue(TEN_ITEMS);
+    render(<ClipPopoverApp />);
+    await flushAsync();
+    const input = screen.getByRole("searchbox");
+
+    // Act
+    fireEvent.keyDown(input, { key: "0" });
+    const rows = screen.getAllByRole("option");
+    expect(rows[9]).toHaveAttribute("aria-selected", "true");
+
+    act(() => {
+      vi.advanceTimersByTime(50);
+    });
+    await flushAsync();
+
+    // Assert
+    expect(mockPasteToFront).toHaveBeenCalledWith("d10");
+  });
+
+  it("条目不足该序号时什么也不做（数字不入搜索框、不取用）", async () => {
+    // Arrange：只有 4 条
+    mockListClipItems.mockResolvedValue(ITEMS);
+    render(<ClipPopoverApp />);
+    await flushAsync();
+    const input = screen.getByRole("searchbox");
+
+    // Act：按第 5 条（不存在）；dispatchEvent 返回 false 表示默认行为已被阻止
+    const notCancelled = fireEvent.keyDown(input, { key: "5" });
+    act(() => {
+      vi.advanceTimersByTime(200);
+    });
+    await flushAsync();
+
+    // Assert：按键被面板吞掉，但不取用、也不移动选中
+    expect(notCancelled).toBe(false);
+    expect(mockPasteToFront).not.toHaveBeenCalled();
+    expect(input).toHaveValue("");
+    const rows = screen.getAllByRole("option");
+    expect(rows[0]).toHaveAttribute("aria-selected", "true");
+  });
+
+  it("搜索框非空时数字让位给输入：不拦截、不取用", async () => {
+    // Arrange
+    mockListClipItems.mockResolvedValue(TEN_ITEMS);
+    render(<ClipPopoverApp />);
+    await flushAsync();
+    const input = screen.getByRole("searchbox");
+    fireEvent.change(input, { target: { value: "item 1" } });
+
+    // Act
+    const notCancelled = fireEvent.keyDown(input, { key: "2" });
+    act(() => {
+      vi.advanceTimersByTime(200);
+    });
+    await flushAsync();
+
+    // Assert：数字键未被数字直达接管
+    expect(notCancelled).toBe(true);
+    expect(mockPasteToFront).not.toHaveBeenCalled();
+  });
+
+  it("带修饰键时不算数字直达（⌘2 不取用）", async () => {
+    // Arrange
+    mockListClipItems.mockResolvedValue(TEN_ITEMS);
+    render(<ClipPopoverApp />);
+    await flushAsync();
+    const input = screen.getByRole("searchbox");
+
+    // Act
+    const notCancelled = fireEvent.keyDown(input, { key: "2", metaKey: true });
+    act(() => {
+      vi.advanceTimersByTime(200);
+    });
+    await flushAsync();
+
+    // Assert
+    expect(notCancelled).toBe(true);
+    expect(mockPasteToFront).not.toHaveBeenCalled();
+  });
+
+  it("卸载时清掉反馈定时器：不再取用，也不产生 act 警告", async () => {
+    // Arrange：把 console.error 当哨兵，捕获 React 的 act 警告
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    mockListClipItems.mockResolvedValue(TEN_ITEMS);
+    const { unmount } = render(<ClipPopoverApp />);
+    await flushAsync();
+
+    // Act：按下直达键后立即卸载（面板被关节径之一）
+    fireEvent.keyDown(screen.getByRole("searchbox"), { key: "2" });
+    unmount();
+    act(() => {
+      vi.advanceTimersByTime(200);
+    });
+    await flushAsync();
+
+    // Assert：定时器已清除，不会在卸载后取用，也没有 setState 警告
+    expect(mockPasteToFront).not.toHaveBeenCalled();
+    expect(consoleError).not.toHaveBeenCalled();
+    consoleError.mockRestore();
+  });
+
+  it("Esc 关窗时取消尚未触发的数字直达取用", async () => {
+    // Arrange
+    mockListClipItems.mockResolvedValue(TEN_ITEMS);
+    render(<ClipPopoverApp />);
+    await flushAsync();
+    const input = screen.getByRole("searchbox");
+
+    // Act：先按直达键，50ms 内按 Esc 关窗
+    fireEvent.keyDown(input, { key: "2" });
+    fireEvent.keyDown(input, { key: "Escape" });
+    act(() => {
+      vi.advanceTimersByTime(200);
+    });
+    await flushAsync();
+
+    // Assert：只关窗（hideAndReturnFocus），不再补一次粘贴
+    expect(mockHideAndReturnFocus).toHaveBeenCalled();
+    expect(mockPasteToFront).not.toHaveBeenCalled();
   });
 });
 
