@@ -14,6 +14,7 @@ vi.mock("../../ipc/ipc-client", () => ({
   deleteClipItem: vi.fn(),
   toggleFavoriteClip: vi.fn(),
   pasteToFront: vi.fn(),
+  copyClipToClipboard: vi.fn(),
   openAccessibilitySettings: vi.fn(),
 }));
 
@@ -24,6 +25,7 @@ import {
   deleteClipItem,
   toggleFavoriteClip,
   pasteToFront,
+  copyClipToClipboard,
   openAccessibilitySettings,
   type ClipItem,
 } from "../../ipc/ipc-client";
@@ -34,6 +36,7 @@ const mockListClipItems = vi.mocked(listClipItems);
 const mockDeleteClipItem = vi.mocked(deleteClipItem);
 const mockToggleFavoriteClip = vi.mocked(toggleFavoriteClip);
 const mockPasteToFront = vi.mocked(pasteToFront);
+const mockCopyClipToClipboard = vi.mocked(copyClipToClipboard);
 const mockOpenAccessibilitySettings = vi.mocked(openAccessibilitySettings);
 
 /** 测试用剪贴板条目数据 */
@@ -67,6 +70,7 @@ describe("clipboard-page", () => {
     mockDeleteClipItem.mockResolvedValue(undefined);
     mockToggleFavoriteClip.mockResolvedValue(undefined);
     mockPasteToFront.mockResolvedValue({ outcome: "full_paste" });
+    mockCopyClipToClipboard.mockResolvedValue(undefined);
     mockOpenAccessibilitySettings.mockResolvedValue(undefined);
   });
 
@@ -562,6 +566,7 @@ describe("clipboard-page: 主窗键盘流", () => {
     mockDeleteClipItem.mockResolvedValue(undefined);
     mockToggleFavoriteClip.mockResolvedValue(undefined);
     mockPasteToFront.mockResolvedValue({ outcome: "full_paste" });
+    mockCopyClipToClipboard.mockResolvedValue(undefined);
     mockOpenAccessibilitySettings.mockResolvedValue(undefined);
   });
 
@@ -670,6 +675,61 @@ describe("clipboard-page: 主窗键盘流", () => {
     });
     expect(mockPasteToFront).toHaveBeenCalledWith("item-1");
   });
+
+  it("⌥Enter 只复制不粘贴（与 popover 的 ⌥Enter 语义一致）", async () => {
+    // Arrange
+    mockListClipItems.mockResolvedValue(MOCK_ITEMS);
+    render(<ClipboardPage />);
+    await waitFor(() => {
+      expect(screen.getAllByText("Hello World").length).toBeGreaterThanOrEqual(1);
+    });
+
+    // Act
+    const notCancelled = fireEvent.keyDown(screen.getByRole("searchbox"), {
+      key: "Enter",
+      altKey: true,
+    });
+
+    // Assert：复制走 IPC 保真路径，不触发前台粘贴
+    expect(notCancelled).toBe(false);
+    await waitFor(() => {
+      expect(mockCopyClipToClipboard).toHaveBeenCalledWith("item-1");
+    });
+    expect(mockPasteToFront).not.toHaveBeenCalled();
+  });
+
+  it("⌥Enter 复制失败时显示操作错误提示（不静默吞掉）", async () => {
+    // Arrange
+    mockListClipItems.mockResolvedValue(MOCK_ITEMS);
+    mockCopyClipToClipboard.mockRejectedValue(new Error("copy IPC 失败"));
+    render(<ClipboardPage />);
+    await waitFor(() => {
+      expect(screen.getAllByText("Hello World").length).toBeGreaterThanOrEqual(1);
+    });
+
+    // Act
+    fireEvent.keyDown(screen.getByRole("searchbox"), { key: "Enter", altKey: true });
+
+    // Assert
+    await waitFor(() => {
+      expect(screen.getByRole("alert")).toBeInTheDocument();
+    });
+    expect(mockPasteToFront).not.toHaveBeenCalled();
+  });
+
+  it("Enter 与 ⌘3 阻止默认行为（不让浏览器再做一次默认动作）", async () => {
+    // Arrange
+    mockListClipItems.mockResolvedValue(MOCK_ITEMS);
+    render(<ClipboardPage />);
+    await waitFor(() => {
+      expect(screen.getAllByText("Hello World").length).toBeGreaterThanOrEqual(1);
+    });
+    const input = screen.getByRole("searchbox");
+
+    // Act & Assert：dispatchEvent 返回 false 表示 preventDefault 已生效
+    expect(fireEvent.keyDown(input, { key: "Enter" })).toBe(false);
+    expect(fireEvent.keyDown(input, { key: "3", metaKey: true })).toBe(false);
+  });
 });
 
 // P2-6 输入法防御：主窗搜索框在组词期间不劫持方向键
@@ -679,6 +739,7 @@ describe("clipboard-page: 输入法防御", () => {
     mockDeleteClipItem.mockResolvedValue(undefined);
     mockToggleFavoriteClip.mockResolvedValue(undefined);
     mockPasteToFront.mockResolvedValue({ outcome: "full_paste" });
+    mockCopyClipToClipboard.mockResolvedValue(undefined);
     mockOpenAccessibilitySettings.mockResolvedValue(undefined);
   });
 
@@ -743,6 +804,7 @@ describe("clipboard-page: 边界探测 - 横幅 DOM 顺序", () => {
     mockDeleteClipItem.mockResolvedValue(undefined);
     mockToggleFavoriteClip.mockResolvedValue(undefined);
     mockPasteToFront.mockResolvedValue({ outcome: "full_paste" });
+    mockCopyClipToClipboard.mockResolvedValue(undefined);
     mockOpenAccessibilitySettings.mockResolvedValue(undefined);
   });
 

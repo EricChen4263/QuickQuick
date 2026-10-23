@@ -144,6 +144,16 @@ describe("ClipPopoverApp 键盘模型：列表移动（P2-2）", () => {
       expect(rowAt(1)).toHaveAttribute("aria-selected", "true");
     });
   });
+
+  it("⌃N/⌃J/⌃P/⌃K 均阻止浏览器默认行为", async () => {
+    const input = await renderReady();
+
+    // dispatchEvent 返回 false 表示 preventDefault 已生效（浏览器不会再处理一次）
+    expect(fireEvent.keyDown(input, { key: "n", ctrlKey: true })).toBe(false);
+    expect(fireEvent.keyDown(input, { key: "j", ctrlKey: true })).toBe(false);
+    expect(fireEvent.keyDown(input, { key: "p", ctrlKey: true })).toBe(false);
+    expect(fireEvent.keyDown(input, { key: "k", ctrlKey: true })).toBe(false);
+  });
 });
 
 describe("ClipPopoverApp 键盘模型：搜索框编辑（P2-2）", () => {
@@ -214,5 +224,43 @@ describe("ClipPopoverApp 键盘模型：搜索框编辑（P2-2）", () => {
     await waitFor(() => {
       expect(screen.getAllByText("first item").length).toBeGreaterThan(0);
     });
+  });
+
+  it("⌃W 删词后光标停在中段词首（受控 input 重置到行尾则此断言会红）", async () => {
+    // Arrange：光标落在第三个词的词首，删词后光标应停在中段（6），
+    // 而不是新值长度（9，"hello foo" 的末尾）——这条能真正守住 useLayoutEffect。
+    const input = await renderReady();
+    fireEvent.change(input, { target: { value: "hello world foo" } });
+    input.setSelectionRange(12, 12);
+
+    // Act
+    fireEvent.keyDown(input, { key: "w", ctrlKey: true });
+
+    // Assert
+    expect(input).toHaveValue("hello foo");
+    expect(input.selectionStart).toBe(6);
+  });
+
+  it("⌃H 删字符后光标停在中段（不跳到行尾）", async () => {
+    // Arrange：光标位于空格之后，删掉空格后新值长度 10，期望光标停在中段 5
+    const input = await renderReady();
+    fireEvent.change(input, { target: { value: "hello world" } });
+    input.setSelectionRange(6, 6);
+
+    // Act
+    fireEvent.keyDown(input, { key: "h", ctrlKey: true });
+
+    // Assert
+    expect(input).toHaveValue("helloworld");
+    expect(input.selectionStart).toBe(5);
+  });
+
+  it("⌃W/⌃H/⌃U 均阻止浏览器默认行为", async () => {
+    const input = await renderReady();
+    fireEvent.change(input, { target: { value: "hello world" } });
+
+    expect(fireEvent.keyDown(input, { key: "w", ctrlKey: true })).toBe(false);
+    expect(fireEvent.keyDown(input, { key: "h", ctrlKey: true })).toBe(false);
+    expect(fireEvent.keyDown(input, { key: "u", ctrlKey: true })).toBe(false);
   });
 });

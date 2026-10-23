@@ -466,6 +466,107 @@ describe("ClipPopoverApp 数字直达（P2-3）", () => {
     expect(mockHideAndReturnFocus).toHaveBeenCalled();
     expect(mockPasteToFront).not.toHaveBeenCalled();
   });
+
+  it("50ms 内按 Enter：只粘贴一次（待取用被取消，不双发）", async () => {
+    // Arrange
+    mockListClipItems.mockResolvedValue(TEN_ITEMS);
+    render(<ClipPopoverApp />);
+    await flushAsync();
+    const input = screen.getByRole("searchbox");
+
+    // Act：先按直达键 arm 定时器，再在 50ms 内按 Enter
+    fireEvent.keyDown(input, { key: "2" });
+    fireEvent.keyDown(input, { key: "Enter" });
+    act(() => {
+      vi.advanceTimersByTime(200);
+    });
+    await flushAsync();
+
+    // Assert：Enter 自己的那次粘贴照常发生，定时器那次不再补
+    expect(mockPasteToFront).toHaveBeenCalledTimes(1);
+    expect(mockPasteToFront).toHaveBeenCalledWith("d2");
+  });
+
+  it("50ms 内按 ⌥Enter：只复制不粘贴（不双发）", async () => {
+    // Arrange
+    mockListClipItems.mockResolvedValue(TEN_ITEMS);
+    render(<ClipPopoverApp />);
+    await flushAsync();
+    const input = screen.getByRole("searchbox");
+
+    // Act
+    fireEvent.keyDown(input, { key: "2" });
+    fireEvent.keyDown(input, { key: "Enter", altKey: true });
+    act(() => {
+      vi.advanceTimersByTime(200);
+    });
+    await flushAsync();
+
+    // Assert：复制一次（当前高亮 d2），粘贴一次都不发生
+    expect(mockCopyClipToClipboard).toHaveBeenCalledTimes(1);
+    expect(mockCopyClipToClipboard).toHaveBeenCalledWith("d2");
+    expect(mockPasteToFront).not.toHaveBeenCalled();
+  });
+
+  it("50ms 内开始打字：不再粘贴已放弃的条目", async () => {
+    // Arrange
+    mockListClipItems.mockResolvedValue(TEN_ITEMS);
+    render(<ClipPopoverApp />);
+    await flushAsync();
+    const input = screen.getByRole("searchbox");
+
+    // Act：按直达键后立刻输入一个字符（非数字键 → 取消待取用）
+    fireEvent.keyDown(input, { key: "2" });
+    fireEvent.keyDown(input, { key: "a" });
+    act(() => {
+      vi.advanceTimersByTime(200);
+    });
+    await flushAsync();
+
+    // Assert
+    expect(mockPasteToFront).not.toHaveBeenCalled();
+  });
+
+  it("50ms 内按 ArrowDown 导航走：不再粘贴已导航走的条目", async () => {
+    // Arrange
+    mockListClipItems.mockResolvedValue(TEN_ITEMS);
+    render(<ClipPopoverApp />);
+    await flushAsync();
+    const input = screen.getByRole("searchbox");
+
+    // Act
+    fireEvent.keyDown(input, { key: "2" });
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+    act(() => {
+      vi.advanceTimersByTime(200);
+    });
+    await flushAsync();
+
+    // Assert：用户已把高亮移到 d3，d2 不应再被粘
+    expect(mockPasteToFront).not.toHaveBeenCalled();
+    const rows = screen.getAllByRole("option");
+    expect(rows[2]).toHaveAttribute("aria-selected", "true");
+  });
+
+  it("50ms 内连按两个数字：只取用最后一个", async () => {
+    // Arrange
+    mockListClipItems.mockResolvedValue(TEN_ITEMS);
+    render(<ClipPopoverApp />);
+    await flushAsync();
+    const input = screen.getByRole("searchbox");
+
+    // Act：先 2 再 3，两次都在 50ms 反馈窗口内
+    fireEvent.keyDown(input, { key: "2" });
+    fireEvent.keyDown(input, { key: "3" });
+    act(() => {
+      vi.advanceTimersByTime(200);
+    });
+    await flushAsync();
+
+    // Assert：只有最后一次 arm 的 d3 被取用
+    expect(mockPasteToFront).toHaveBeenCalledTimes(1);
+    expect(mockPasteToFront).toHaveBeenCalledWith("d3");
+  });
 });
 
 describe("ClipPopoverApp 窗口焦点变化", () => {
