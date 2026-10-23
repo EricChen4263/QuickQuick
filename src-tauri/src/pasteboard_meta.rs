@@ -480,8 +480,9 @@ fn consume_self_write_latch() -> bool {
 ///
 /// - macOS：在当前剪贴板上追加私有类型 [`SELF_MARKER_TYPE`]（不清空既有内容），
 ///   返回是否追加成功；
-/// - 其余平台：置写入门闩并返回 `true`。Windows 无法追加自定义格式的原因见
-///   [`SelfWriteLatch`] 的说明。
+/// - 其余平台：置写入门闩（`SelfWriteLatch`）并返回 `true`。Windows 上 arboard
+///   独占写剪贴板、无法像 macOS 那样追加自定义格式，故用「下一次变化是本进程写的」
+///   这一等价判断；门闩的理由写在 `SelfWriteLatch` 自身的文档里。
 #[must_use]
 pub fn mark_self_write() -> bool {
     #[cfg(target_os = "macos")]
@@ -856,6 +857,17 @@ mod tests {
         assert_eq!(
             windows_executable_stem("/Applications/Chrome.exe").as_deref(),
             Some("Chrome")
+        );
+    }
+
+    /// 混合大小写后缀（`.Exe`）：实际路径可能来自用户手工输入或非标准打包工具，
+    /// 后缀比较必须与大小写无关，否则会给出带后缀的错误应用名、让排除名单永不命中。
+    #[test]
+    fn windows_executable_stem_strips_mixed_case_extension() {
+        // Act & Assert
+        assert_eq!(
+            windows_executable_stem(r"C:\a\1Password.Exe").as_deref(),
+            Some("1Password")
         );
     }
 
