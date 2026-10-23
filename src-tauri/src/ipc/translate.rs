@@ -153,6 +153,9 @@ fn normalize_ureq_error(err: ureq::Error) -> TranslateError {
 /// ureq 把超时统一表现为 `ErrorKind::Io`，真正原因藏在 `source()` 链上的
 /// `io::Error`（`ErrorKind::TimedOut`），因此必须沿 source 链下探，
 /// 而不能只看错误文本或 ureq 的 `kind()`。
+///
+/// 这条链路依赖 ureq 2.x 用 `impl From<io::Error> for Error` 把 `io::Error` 挂成
+/// `Error::Transport` 的 `source`；升级 ureq 大版本时必须重新核对（对应单测会先失败）。
 fn is_timeout(err: &ureq::Error) -> bool {
     let mut source = std::error::Error::source(err);
     while let Some(inner) = source {
@@ -1386,5 +1389,37 @@ mod tests {
             };
             assert_eq!(actual, expected, "HTTP {status_line} 的归一结果不符: {err}");
         }
+    }
+
+    #[test]
+    fn is_timeout_reads_timed_out_io_source_on_ureq_transport_error() {
+        // Arrange：ureq 用 `impl From<io::Error> for Error` 把 io::Error 挂成
+        // `Error::Transport` 的 source；真实超时正是 io::ErrorKind::TimedOut 走这条链，
+        // 因此这样构造与线上超时错误同形，且零等待、零网络。
+        let timed_out = ureq::Error::from(std::io::Error::new(
+            std::io::ErrorKind::TimedOut,
+            "timed out reading response",
+        ));
+        let refused = ureq::Error::from(std::io::Error::new(
+            std::io::ErrorKind::ConnectionRefused,
+            "connection refused",
+        ));
+
+        // Assert：只有 TimedOut 判为超时
+        assert!(
+            is_timeout(&timed_out),
+            "io::ErrorKind::TimedOut 应识别为超时"
+        );
+        assert!(!is_timeout(&refused), "其它 IO 错误不应被当作超时");
+
+        // Assert：超时归一为统一文案；非超时传输失败也归 Network，但文案不同
+        assert!(
+            matches!(normalize_ureq_error(timed_out), TranslateError::Network(msg) if msg == "请求超时"),
+            "超时应归一为 Network(\"请求超时\")"
+        );
+        assert!(
+            matches!(normalize_ureq_error(refused), TranslateError::Network(msg) if msg != "请求超时"),
+            "非超时传输失败同样归 Network，但不使用超时文案"
+        );
     }
 }
