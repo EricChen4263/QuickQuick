@@ -139,7 +139,16 @@ pub fn run() {
         tray::show_and_focus_window(app);
     }));
 
-    register_plugins(builder)
+    let builder = register_plugins(builder);
+
+    // clip-popover 的 NSPanel 承载依赖该插件注册的面板状态表：`to_panel` / `get_webview_panel`
+    // 内部直接取插件状态，未注册时会 panic。故在 builder 阶段注册——早于 setup 与懒建窗口。
+    // 不放进 `register_plugins`：那是 `R: Runtime` 泛型函数且被 MockRuntime 测试复用，
+    // 塞入只对真实窗口有意义的面板插件会污染测试路径。非 macOS 无面板概念，不注册。
+    #[cfg(target_os = "macos")]
+    let builder = builder.plugin(tauri_nspanel::init());
+
+    builder
         .invoke_handler(tauri::generate_handler![
             ipc::clipboard::list_clip_items,
             ipc::clipboard::delete_clip_item,

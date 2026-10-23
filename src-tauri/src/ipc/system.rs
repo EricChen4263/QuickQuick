@@ -7,18 +7,24 @@
 //! - `paste_to_front`              — 将指定条目写回系统剪贴板，trusted 时走完整粘贴路径
 //! - `copy_clip_to_clipboard`      — 按 id 把条目（富文本带 html）写入系统剪贴板（仅写回，不注入粘贴）
 //!
-//! paste_to_front 行为（V5-F4-S04-9b）：
-//! - trusted=true：写回剪贴板 → 隐藏 clip-popover/main 窗口 → hide app 让出前台
-//!   → 固定等待 FOCUS_YIELD_WAIT_MS → Cmd+V 注入 → 返回 "full_paste"
+//! paste_to_front 行为：
+//! - trusted=true：写回剪贴板 → 交还键盘焦点 → Cmd+V 注入 → 返回 "full_paste"
 //! - trusted=false 或超时：仅写回剪贴板 → 返回 "write_back_only"
+//! - 焦点没能可靠交出：同样只写回、不注入 Cmd+V → 返回 "write_back_only"
 //! - 图片条目：取原图 PNG 解码为 RGBA → set_image 写回；trusted 时同样走完整粘贴路径，
 //!   原图已不可用（降级剥离）时返回错误
 //!
-//! 焦点编排（FocusStep 序列）：
-//! - HidePanel：hide clip-popover（或 main）
-//! - HideApp：app.hide() 隐藏整个 QuickQuick 进程，macOS 自动把前台还给上一个 app
-//! - WaitForeground：固定等待 FOCUS_YIELD_WAIT_MS，让焦点转移自然完成后再 send_paste
-//! - SimulatePaste：send_paste(Cmd+V)
+//! 焦点编排按「唤起 clip-popover 的是不是非激活面板」分两条路：
+//! - 面板路径（clip-popover 面板持有 key）：让面板 resign + order out 就够。面板从不激活
+//!   本 app，前台应用自始至终没变，因此不必隐藏 app、不必挑目标 app，也不存在要等的
+//!   窗口动画——⌘V 直接落进前台应用。
+//! - 主窗口路径（其余情况，含面板降级）：hide 窗口 → app.hide() 让出前台 → 按记录的 pid
+//!   显式激活目标 app → 固定等待 FOCUS_YIELD_WAIT_MS → send_paste。这条路仍需要固定等待：
+//!   AppKit 的激活状态在非主线程读取是 stale 的，无法可靠轮询到位。
+//!
+//! 两条路径成功交出焦点后都以 send_paste(Cmd+V) 收尾。差别在失败时的处理：面板路径的
+//! 「让出 key」是同步派发，能拿到确定结果，拿不到就不注入；主窗口路径的还焦结果无法回读，
+//! 只能沿用既有行为继续注入。
 
 use rusqlite::{Connection, OptionalExtension};
 use serde::Serialize;
@@ -73,6 +79,9 @@ const KEEP_RECENT_COUNT: usize = 500;
 /// QuickQuick 自身 pid，轮询条件永不成立。
 /// app.hide() 异步完成焦点转移约需 250-350ms，固定等待是此约束下的务实选择。
 /// 100ms 实测过短致 Cmd+V 落空，800ms 可靠但用户感知明显卡顿，350ms 为平衡点。
+///
+/// 非激活面板路径**不使用**本常量：那条路只需等主线程把面板 order out 完成，
+/// 而那是同步派发（见 `popover::hide_clip_popover`），不需要猜时延。
 const FOCUS_YIELD_WAIT_MS: u64 = 350;
 
 /// get_storage_stats 的纯函数实现，可在测试中直接调用。
@@ -338,6 +347,36 @@ fn hide_and_restore_focus(app: &tauri::AppHandle, target_pid: Option<i32>) {
     std::thread::sleep(std::time::Duration::from_millis(FOCUS_YIELD_WAIT_MS));
 }
 
+/// 粘贴前把键盘焦点交还前台应用（trusted 路径的分叉点），返回是否还能注入 ⌘V。
+///
+/// 两条路的差别不是"快与慢"，而是语义不同：
+/// - clip-popover 是非激活面板，前台应用自始至终没被换走，因此只需让面板让出 key；
+/// - 其余情况（从主窗口粘贴、或面板转制失败降级）才需要隐藏 app 并显式激活记录的目标 app。
+///
+/// 面板路径不加固定等待：`hide_clip_popover` 会同步等到主线程把面板
+/// order out 完成才返回，返回之后注入的 `⌘V` 才不会落到面板自己身上。
+///
+/// 返回值经 `should_inject_paste` 判定：面板没能确认让出 key 时返回 `false`，
+/// 调用方据此放弃注入。不注入的代价是用户要自己按一次 ⌘V；误注入的代价是
+/// "界面报成功、实际什么都没粘"——后者不可接受。
+#[cfg(target_os = "macos")]
+fn yield_focus_before_paste(app: &tauri::AppHandle, target_pid: Option<i32>) -> bool {
+    use crate::popover::{
+        clip_popover_holds_key, paste_focus_plan, should_inject_paste, PasteFocusPlan,
+    };
+
+    let plan = paste_focus_plan(clip_popover_holds_key());
+    let focus_yielded = match plan {
+        PasteFocusPlan::YieldClipPanel => crate::popover::hide_clip_popover(app),
+        // 旧路径靠 hide + 显式激活 + 固定等待完成还焦，结果无法回读，按既有行为视为已交出。
+        PasteFocusPlan::HideAppAndActivateTarget => {
+            hide_and_restore_focus(app, target_pid);
+            true
+        }
+    };
+    should_inject_paste(plan, focus_yielded)
+}
+
 /// 隐藏窗口 + 隐藏 app + 按 pid 显式激活目标 app（hide-and-restore 的共享前半段，无等待）。
 ///
 /// 三步顺序：HidePanel（hide clip-popover，无则 hide main）→ HideApp（app.hide() 让出前台）
@@ -356,17 +395,30 @@ fn hide_window_and_activate_target(app: &tauri::AppHandle, target_pid: Option<i3
 
 /// Tauri 命令：隐藏当前窗口并把前台焦点还给上一个外部 app（方案 C）。
 ///
-/// 复用 `hide_window_and_activate_target`：hide 窗口（popover 优先，无则 main）→ app.hide()
-/// → 按 `LastExternalApp` 记录的 pid 显式激活。供 popover 的 Esc 关闭路径 invoke，
-/// 替代裸 `getCurrentWindow().hide()`——后者只隐藏窗口、不把焦点显式交还触发处的 app。
+/// 供 popover 的 Esc 关闭路径 invoke，替代裸 `getCurrentWindow().hide()`——后者只隐藏
+/// 窗口、不保证焦点回到用户原应用。
 ///
-/// 降级：未记录到 pid 时退化为纯 `app.hide()` 隐式还焦（macOS 自动让出前台），不 panic。
-/// 不调用 send_paste、不固定等待，故无粘贴路径的 350ms 卡顿。
+/// 两条路径：
+/// - 面板路径：clip-popover 是非激活面板，隐藏它就把键焦点交还前台应用。
+///   这里不再 `app.hide()` + 显式激活——app 从未被激活，那两步既多余，
+///   又会连带把用户可能开着的 main 窗口一起隐掉。
+/// - 其余情况：hide 窗口（popover 优先，无则 main）→ app.hide() → 按 `LastExternalApp`
+///   记录的 pid 显式激活。未记录到 pid 时退化为纯 `app.hide()` 隐式还焦，不 panic。
+///
+/// 两条路径都不调用 send_paste、不固定等待，故没有粘贴路径的 350ms。
 #[tauri::command]
 pub fn hide_and_return_focus(
     last_external: State<'_, Arc<LastExternalApp>>,
     app: tauri::AppHandle,
 ) {
+    #[cfg(target_os = "macos")]
+    if crate::popover::clip_popover_holds_key() {
+        if !crate::popover::hide_clip_popover(&app) {
+            eprintln!("[hide_and_return_focus] clip-popover 未能确认让出 key，面板可能仍可见");
+        }
+        return;
+    }
+
     hide_window_and_activate_target(&app, last_external.get());
 }
 
@@ -473,8 +525,8 @@ fn hide_app(_app: &tauri::AppHandle) {}
 
 /// Tauri 命令：将指定条目写回系统剪贴板，trusted 时走完整粘贴路径（V5-F4-S04-9b）。
 ///
-/// trusted=true 分支：写回 → hide 窗口 → 等待 100ms → Cmd+V → 返回 "full_paste"。
-/// trusted=false 或超时：仅写回 → 返回 "write_back_only"。
+/// trusted=true 分支：写回 → 交还键盘焦点 → Cmd+V → 返回 "full_paste"。
+/// trusted=false、写回确认超时、或焦点没能可靠交出：仅写回 → 返回 "write_back_only"。
 /// 图片原图已不可用（降级剥离）时返回 Err。
 #[tauri::command]
 pub fn paste_to_front(
@@ -577,9 +629,10 @@ fn run_paste_with_backend(
     }
 }
 
-/// Text 臂粘贴：write_and_confirm（marker 回读）→ trusted 时 hide+send_paste。
+/// Text 臂粘贴：write_and_confirm（marker 回读）→ trusted 时交还焦点 + send_paste。
 ///
 /// 拆出以降低 `run_paste_with_backend` 的嵌套与长度。语义见调用方文档。
+/// 焦点交出不可靠时只写回：此时注入的 ⌘V 会落到面板自己身上，报成功就是撒谎。
 #[cfg(target_os = "macos")]
 fn paste_text_with_backend(
     app: &tauri::AppHandle,
@@ -594,7 +647,11 @@ fn paste_text_with_backend(
     }
     match paste::write_and_confirm(backend, item) {
         Ok(()) => {
-            hide_and_restore_focus(app, target_pid);
+            if !yield_focus_before_paste(app, target_pid) {
+                // 焦点没交出去：注入的 ⌘V 会被面板自己吞掉，只写回让用户手动粘贴。
+                eprintln!("[paste_to_front] 焦点未能可靠交出，跳过 ⌘V 注入（文本已写入剪贴板）");
+                return "write_back_only".to_string();
+            }
             backend.send_paste();
             "full_paste".to_string()
         }
@@ -602,10 +659,11 @@ fn paste_text_with_backend(
     }
 }
 
-/// Image 臂粘贴：write_image 写图（无 marker 回读）→ trusted 时 hide+send_paste。
+/// Image 臂粘贴：write_image 写图（无 marker 回读）→ trusted 时交还焦点 + send_paste。
 ///
 /// 为何图片不套 marker 回读确认：macOS 写图后系统重编码为 TIFF，回读字节不等值，
 /// marker 机制对图片无意义；arboard set_image 同步写入，写回去重由 image_hash 兜底。
+/// 焦点交出不可靠时与文本臂同处理：只写回，不注入。
 #[cfg(target_os = "macos")]
 #[allow(clippy::too_many_arguments)]
 fn paste_image_with_backend(
@@ -622,7 +680,11 @@ fn paste_image_with_backend(
         return "write_back_only".to_string();
     }
     if probe.is_trusted() {
-        hide_and_restore_focus(app, target_pid);
+        if !yield_focus_before_paste(app, target_pid) {
+            // 同文本臂：焦点不可靠时只写回，图片已在剪贴板里，用户可手动粘贴。
+            eprintln!("[paste_to_front] 焦点未能可靠交出，跳过 ⌘V 注入（图片已写入剪贴板）");
+            return "write_back_only".to_string();
+        }
         backend.send_paste();
         "full_paste".to_string()
     } else {

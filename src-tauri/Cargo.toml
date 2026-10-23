@@ -79,6 +79,10 @@ objc2-foundation = { version = "0.3", features = [
     "NSGeometry",
 ] }
 block2 = "0.6"
+# clip-popover 以非激活 NSPanel 承载：面板能成为 key window 却不激活 app，
+# 于是不需要 NSApplication.activate()，也不需要「隐藏 app + 等焦点交还」的编排。
+# 该 crate 通过 object_setClass 把已创建的 NSWindow 就地换成动态 panel 子类。
+tauri-nspanel = "2.1"
 
 # Windows 粘贴注入与前台捕获（Bug 修复：Windows 粘贴落空）。
 # 版本对齐 Cargo.lock 已锁定的 windows-sys 0.61，避免新增下载。

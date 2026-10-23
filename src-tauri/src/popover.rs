@@ -4,6 +4,11 @@
 //! - `clip-popover`（720×480）：剪贴板快速选取
 //! - `trans-popover`（320×200）：迷你翻译
 //!
+//! macOS 的 clip-popover 以非激活面板（NSPanel + nonactivatingPanel）承载：
+//! 面板能成为 key window 接收键盘输入，却不会把 QuickQuick 变成前台应用。
+//! 这一条决定了整条焦点编排——粘贴前不必隐藏 app、也不必等焦点交还，
+//! 因为前台自始至终没被换走过。trans-popover 保持普通窗口语义。
+//!
 //! 窗口不写进 tauri.conf.json，首次触发时按需创建，复用时直接定位并显示。
 //! 所有可失败操作均用 eprintln 记录并优雅降级，不 panic、不向上抛错。
 
@@ -13,10 +18,18 @@ use crate::ipc::clipboard::pick_latest_translate_text_impl;
 use crate::ipc::{with_db, AppDb};
 use crate::window_pos::compute_window_position_for_width;
 
+#[cfg(target_os = "macos")]
+use std::sync::atomic::{AtomicBool, Ordering};
+#[cfg(target_os = "macos")]
+use std::time::Duration;
+
 /// trans-popover 待译文本推送事件名。
 /// 与前端 src/ipc/events.ts 的 TRANS_SOURCE_EVENT 必须一致；
 /// Tauri 事件名跨语言无法编译期共享，改动需两端同步。
 const TRANS_SOURCE_EVENT: &str = "trans-source";
+
+/// clip-popover 窗口 label。该窗口在 macOS 上以非激活面板承载。
+const CLIP_POPOVER_LABEL: &str = "clip-popover";
 
 /// trans-popover 窗口 label，用于区分仅对翻译 popover 推送待译文本。
 const TRANS_POPOVER_LABEL: &str = "trans-popover";
@@ -30,6 +43,22 @@ const TRANS_WIDTH: i32 = 320;
 /// trans-popover 窗口高度（物理像素）
 const TRANS_HEIGHT: f64 = 200.0;
 
+/// 把主线程任务派发出去后等待其完成的上限。
+///
+/// 主线程被长任务占住时不应无限等待：粘贴命令卡住比粘贴失败更糟，用户会以为整个
+/// app 挂了。超时即判为「无法确认完成」，由调用方退成只写回剪贴板；正常路径远小于
+/// 这个上界。
+#[cfg(target_os = "macos")]
+const MAIN_THREAD_WAIT_TIMEOUT: Duration = Duration::from_millis(500);
+
+/// clip-popover 面板当前是否持有 key 状态。
+///
+/// 用原子布尔而不是随时读 `NSWindow.keyWindow`：粘贴命令跑在 worker 线程，
+/// 跨线程读 AppKit 状态不安全；而「是否 key」只在唤起与 resign 两个已知时机变化，
+/// 无锁原子量足够且线程安全。
+#[cfg(target_os = "macos")]
+static CLIP_PANEL_HOLDS_KEY: AtomicBool = AtomicBool::new(false);
+
 /// Popover 窗口规格：统一描述一个 popover 所需的全部参数，避免重复硬编码。
 struct PopoverSpec {
     label: &'static str,
@@ -41,20 +70,116 @@ struct PopoverSpec {
 /// 两个 popover 的规格表，顺序与 label 一一对应。
 const POPOVER_SPECS: &[PopoverSpec] = &[
     PopoverSpec {
-        label: "clip-popover",
+        label: CLIP_POPOVER_LABEL,
         url: "src/clip-popover/index.html",
         width: CLIP_WIDTH,
         height: CLIP_HEIGHT,
     },
     PopoverSpec {
-        label: "trans-popover",
+        label: TRANS_POPOVER_LABEL,
         url: "src/trans-popover/index.html",
         width: TRANS_WIDTH,
         height: TRANS_HEIGHT,
     },
 ];
 
-/// 触发指定 label 的 popover 窗口：get_or_create → 定位 → 显示 → 激活 app → 聚焦。
+/// clip-popover 的非激活面板类型定义。仅 macOS 需要。
+///
+/// `can_become_key_window`：面板不激活 app 也能成为 key window，键盘事件才会进入 webview，
+/// 这是整套非激活方案成立的前提（普通 NSWindow 必须先激活 app 才收键盘）。
+/// `can_become_main_window=false`：它不是主窗口，不应参与主窗语义。
+/// `is_floating_panel=true`：浮动面板不会随 app 失活自动隐藏，可稳定浮在普通窗口之上。
+#[cfg(target_os = "macos")]
+mod clip_panel {
+    use tauri_nspanel::tauri_panel;
+
+    tauri_panel! {
+        panel!(ClipPopoverPanel {
+            config: {
+                can_become_key_window: true,
+                can_become_main_window: false,
+                is_floating_panel: true
+            }
+        })
+    }
+}
+
+/// 粘贴前的键盘焦点交出策略。
+#[cfg(target_os = "macos")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PasteFocusPlan {
+    /// clip-popover 面板持有 key：只需让面板让出 key，⌘V 就落到前台应用。
+    YieldClipPanel,
+    /// 面板未持有 key（主窗口粘贴 / 面板降级路径）：沿用隐藏窗口 + 隐藏 app + 激活目标 app。
+    HideAppAndActivateTarget,
+}
+
+/// 依「面板是否持有 key」决定粘贴前如何交出键盘焦点。
+///
+/// 为什么必须让出：面板处于 key 状态时，合成出来的 CGEvent ⌘V 会先被面板自己的
+/// webview 消费掉，前台应用什么也收不到——表现就是「粘贴看起来成功但没内容」。
+/// 让面板先释放 key，键焦点回到前台应用，注入才有效。
+///
+/// 抽成纯函数是为了让这条判据能在 headless 环境单测：真实聚焦行为只能真机验证，
+/// 但「什么时候该走面板路径」是可以断言的决策。
+#[must_use]
+#[cfg(target_os = "macos")]
+pub(crate) fn paste_focus_plan(clip_panel_holds_key: bool) -> PasteFocusPlan {
+    if clip_panel_holds_key {
+        PasteFocusPlan::YieldClipPanel
+    } else {
+        PasteFocusPlan::HideAppAndActivateTarget
+    }
+}
+
+/// 交出焦点之后是否还能安全注入 ⌘V。
+///
+/// 只有面板路径存在「确定性交出失败」这种状态：`hide_clip_popover` 超时或派发失败时，
+/// 面板可能仍持有 key，此时注入的 ⌘V 会被面板自己的 webview 吞掉——注入方看到的是
+/// "按键已发出"，用户看到的是"粘贴成功"，而内容根本没进前台应用。
+/// 确认不了就该退成只写回剪贴板，把"要不要手动粘"交回用户，而不是兑现不了的成功。
+///
+/// 主窗口路径不参与本判据：它靠 hide + 显式激活目标 app + 固定等待完成还焦，
+/// 结果无法在命令线程回读（见 `ipc::system::FOCUS_YIELD_WAIT_MS` 的注释），
+/// 故沿用既有行为，避免在无法判定的地方臆造一个失败信号。
+#[must_use]
+#[cfg(target_os = "macos")]
+pub(crate) fn should_inject_paste(plan: PasteFocusPlan, focus_yielded: bool) -> bool {
+    match plan {
+        PasteFocusPlan::YieldClipPanel => focus_yielded,
+        PasteFocusPlan::HideAppAndActivateTarget => true,
+    }
+}
+
+/// clip-popover 面板当前是否持有键盘焦点。
+///
+/// 只有 macOS 面板路径有这个概念：非 macOS 上 clip-popover 始终是普通窗口，
+/// 粘贴一律走隐藏 app 那条旧路径。
+#[must_use]
+#[cfg(target_os = "macos")]
+pub(crate) fn clip_popover_holds_key() -> bool {
+    CLIP_PANEL_HOLDS_KEY.load(Ordering::SeqCst)
+}
+
+/// 隐藏 clip-popover 面板（macOS 面板路径专用）。
+///
+/// 供两处调用，语义都是"让面板消失并把键盘焦点交回前台应用"：
+/// - 粘贴前：面板若不先让出 key，合成的 ⌘V 会被它自己吞掉；
+/// - Esc 关闭：面板本来就是非激活的，隐藏它就把焦点还给了前台应用，
+///   不需要隐藏整个 app，也不需要显式激活目标 app。
+///
+/// 返回 `true` 表示面板已完成 resign + order out，调用方可以立刻注入 ⌘V；
+/// 返回 `false` 表示无法确认面板已让出 key（主线程派发失败 / 等待超时 / 取不到面板）。
+/// 粘贴路径必须据此放弃注入：面板还持有 key 时注入的 ⌘V 会被它自己吞掉，
+/// 而注入方无从察觉，最终表现成"界面报成功、实际什么都没粘"。
+#[must_use]
+#[cfg(target_os = "macos")]
+pub(crate) fn hide_clip_popover(app: &tauri::AppHandle) -> bool {
+    let app_main = app.clone();
+    on_main_thread_blocking(app, move || hide_clip_panel_now(&app_main))
+}
+
+/// 触发指定 label 的 popover 窗口：get_or_create → 定位 → 唤起。
 ///
 /// `label` 必须是 `"clip-popover"` 或 `"trans-popover"`；
 /// 未知 label 会记录错误并立即返回。
@@ -68,8 +193,8 @@ pub fn trigger_popover(handle: &tauri::AppHandle, label: &str) {
         return;
     };
 
+    // 定位放在 show 之前：面板 order front 时就已经落在目标位置，避免可见的跳动。
     let position = compute_window_position_for_width(&window, spec.width);
-
     if let Err(e) = window.set_position(position) {
         eprintln!("[QuickQuick] {label} set_position 失败: {e}");
     }
@@ -77,16 +202,21 @@ pub fn trigger_popover(handle: &tauri::AppHandle, label: &str) {
     // 一旦 show 自己的窗口，前台就成了 QuickQuick，再取就晚了。
     #[cfg(target_os = "windows")]
     crate::frontmost::capture_foreground_window(handle);
+
+    if label == CLIP_POPOVER_LABEL {
+        show_clip_popover(handle, &window);
+        return;
+    }
+
     if let Err(e) = window.show() {
         eprintln!("[QuickQuick] {label} show 失败: {e}");
         return;
     }
     // show 后立即就地取词并推给 trans-popover：让前端无需再 listClipItems()
     // 往返查加密 DB（去掉可见延迟），并由 Rust 主动推送驱动重译（消除旧译文残影）。
-    if label == TRANS_POPOVER_LABEL {
-        push_translate_source(handle, &window);
-    }
-    // 先激活 app，再聚焦窗口。
+    // 推送安排在激活之前：先让内容就位，再让窗口接住键盘焦点。
+    push_translate_source(handle, &window);
+    // trans-popover 仍是普通窗口：先激活 app，再聚焦窗口。
     // 顺序说明：macOS 要求进程本身处于"活跃"(active)状态后，
     // 窗口的 makeKeyAndOrderFront 才能拿到 key 状态。
     // 若反序（先 set_focus 后 activate），窗口已前置但 app 未激活，
@@ -94,6 +224,33 @@ pub fn trigger_popover(handle: &tauri::AppHandle, label: &str) {
     activate_app_macos();
     if let Err(e) = window.set_focus() {
         eprintln!("[QuickQuick] {label} set_focus 失败: {e}");
+    }
+}
+
+/// 唤起 clip-popover。
+///
+/// macOS 上它是非激活面板：`show_and_make_key()` 一步同时完成「前置」与「拿键盘」，
+/// 且不改变前台应用——所以面板路径既没有 `activate_app_macos()` 也没有 `set_focus()`。
+///
+/// 面板不可用（非 macOS / 转面板失败）时降级为普通窗口的「show → activate → set_focus」
+/// 编排，即本改动之前的行为，保证任何环境都还能用。
+fn show_clip_popover(handle: &tauri::AppHandle, window: &WebviewWindow) {
+    #[cfg(target_os = "macos")]
+    {
+        if show_clip_panel(handle) {
+            return;
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = handle;
+
+    if let Err(e) = window.show() {
+        eprintln!("[QuickQuick] clip-popover show 失败: {e}");
+        return;
+    }
+    activate_app_macos();
+    if let Err(e) = window.set_focus() {
+        eprintln!("[QuickQuick] clip-popover set_focus 失败: {e}");
     }
 }
 
@@ -122,17 +279,18 @@ fn push_translate_source(handle: &tauri::AppHandle, window: &WebviewWindow) {
 /// 显式激活当前 app，使 QuickQuick 成为 macOS 活跃应用。
 ///
 /// 为何需要此调用：tauri/tao 的 `window.set_focus()` 底层用的是已废弃的
-/// `activateIgnoringOtherApps:YES`，在 macOS 14+（含 macOS 26.5）上该方法
-/// 已成 no-op。从全局热键触发时前台是其他 app，QuickQuick 进程未被激活，
+/// `activateIgnoringOtherApps:YES`，在 macOS 14+ 上该方法已成 no-op。
+/// 从全局热键触发时前台是其他 app，QuickQuick 进程未被激活，
 /// `makeKeyAndOrderFront` 无法让窗口真正拿到 key——键盘事件永远不会进入 webview。
 ///
 /// 此 helper 调用 `NSApplication.activate()`（macOS 14+ 正式接口），
 /// 替代已废弃的 `activateIgnoringOtherApps:`，确保进程被激活。
 ///
+/// clip-popover 改走非激活面板后不再需要它，但 trans-popover 与托盘显示 main
+/// 仍是普通窗口路径，依然依赖它。
+///
 /// 拿不到 MainThreadMarker（理论上不应发生：热键回调在主线程）时优雅跳过，
 /// 不 panic，与本文件其他错误处理风格（eprintln 降级）一致。
-/// `pub(crate)`：tray 在 Accessory 策略下显示窗口时复用同一激活实现，
-/// 避免在 tray.rs 另造一份 NSApplication FFI（DRY，见设计文档改造点 #2）。
 #[cfg(target_os = "macos")]
 pub(crate) fn activate_app_macos() {
     use objc2::MainThreadMarker;
@@ -155,7 +313,7 @@ pub(crate) fn activate_app_macos() {
 #[cfg(not(target_os = "macos"))]
 pub(crate) fn activate_app_macos() {}
 
-/// 获取已存在的 popover 窗口，或在首次调用时按规格创建并注册失焦隐藏。
+/// 获取已存在的 popover 窗口，或在首次调用时按规格创建并绑定生命周期钩子。
 fn get_or_create_popover(handle: &tauri::AppHandle, spec: &PopoverSpec) -> Option<WebviewWindow> {
     // 已存在则直接复用，无需重建
     if let Some(existing) = handle.get_webview_window(spec.label) {
@@ -178,7 +336,7 @@ fn get_or_create_popover(handle: &tauri::AppHandle, spec: &PopoverSpec) -> Optio
 
     match window {
         Ok(w) => {
-            register_focus_lost_hide(&w);
+            bind_popover_lifecycle(&w, spec.label == CLIP_POPOVER_LABEL);
             Some(w)
         }
         Err(e) => {
@@ -186,6 +344,24 @@ fn get_or_create_popover(handle: &tauri::AppHandle, spec: &PopoverSpec) -> Optio
             None
         }
     }
+}
+
+/// 绑定 popover 的生命周期钩子（失焦隐藏）。
+///
+/// clip-popover 在 macOS 上是面板：它转面板成功就由 resign key 通知驱动隐藏
+/// （见 `observe_resign_key_hide`）。转面板失败时降级回普通窗口的
+/// `WindowEvent::Focused(false)` 语义，行为等同改造前。
+fn bind_popover_lifecycle(window: &WebviewWindow, is_clip: bool) {
+    #[cfg(target_os = "macos")]
+    {
+        if is_clip && convert_clip_popover_to_panel(window) {
+            return;
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = is_clip;
+
+    register_focus_lost_hide(window);
 }
 
 /// 在窗口上注册失焦隐藏事件：失去焦点时自动 hide。
@@ -200,6 +376,245 @@ fn register_focus_lost_hide(window: &WebviewWindow) {
             }
         }
     });
+}
+
+/// 把已创建的 clip-popover 窗口就地转成非激活 NSPanel，并绑定失焦隐藏。返回是否成功。
+///
+/// 动机：普通 NSWindow 要收键盘必须先让整个 app 成为活跃应用，于是粘贴时得先
+/// 隐藏 app 再等焦点交还（固定等待 + 目标 app 错乱风险）。NSPanel 配 nonactivatingPanel
+/// 后，面板不激活本 app 也能成为 key window，键盘事件照常进入 webview，
+/// 粘贴时只需让面板自己让出 key。
+///
+/// 转换失败时保持普通窗口语义（eprintln 降级），功能不受影响。
+///
+/// 必须主线程调用：`to_panel` 内部用 `object_setClass` 换窗口类，受 AppKit 主线程约束。
+#[cfg(target_os = "macos")]
+fn convert_clip_popover_to_panel(window: &WebviewWindow) -> bool {
+    use tauri_nspanel::{PanelLevel, StyleMask, WebviewWindowExt};
+
+    if !on_main_thread() {
+        eprintln!("[QuickQuick] 转面板不在主线程，降级为普通窗口");
+        return false;
+    }
+    if !panel_registered(window.app_handle()) {
+        eprintln!("[QuickQuick] tauri-nspanel 插件未注册，clip-popover 保持普通窗口");
+        return false;
+    }
+
+    let panel = match window.to_panel::<clip_panel::ClipPopoverPanel>() {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("[QuickQuick] clip-popover 转 NSPanel 失败，保持普通窗口: {e}");
+            return false;
+        }
+    };
+
+    // 用 add 而非 set：保留 Tauri 已设的窗口结构样式，只追加「不激活 app」语义。
+    // 该调用同时同步 AppKit 侧「阻止应用被激活」的开关，是面板不抢前台的关键。
+    if let Err(e) = panel.add_style_mask(StyleMask::empty().nonactivating_panel().into()) {
+        eprintln!("[QuickQuick] clip-popover 追加 nonactivatingPanel 失败（面板会激活 app，粘贴需退回旧路径）: {e}");
+    }
+    // Dock 层级（20）足以盖住普通窗口，又不会压过系统菜单栏与系统弹窗。
+    panel.set_level(PanelLevel::Dock.value());
+    panel.set_collection_behavior(hidden_space_behavior());
+
+    observe_resign_key_hide(window);
+    true
+}
+
+/// 面板处于隐藏态时的跨 Space 行为：跟随用户当前所在的 Space 落位。
+///
+/// `stationary` 避免随 Space 切换做位移动画；`full_screen_auxiliary` 是它能出现在
+/// 全屏应用上方的必要条件；`move_to_active_space` 保证显示时落在用户此刻的 Space，
+/// 而不是上次隐藏时那个（多屏 + 多 Space 下最典型的「唤起了却看不见」）。
+#[cfg(target_os = "macos")]
+fn hidden_space_behavior() -> tauri_nspanel::objc2_app_kit::NSWindowCollectionBehavior {
+    use tauri_nspanel::CollectionBehavior;
+
+    CollectionBehavior::new()
+        .stationary()
+        .move_to_active_space()
+        .full_screen_auxiliary()
+        .into()
+}
+
+/// 面板处于显示态时的跨 Space 行为：加入所有 Space，跟随用户当前视野。
+///
+/// 与 `hidden_space_behavior` 成对切换：显示期间面板稳定跟随用户，
+/// 隐藏后复位，下次显示重新按当时所在的 Space 落位。
+#[cfg(target_os = "macos")]
+fn shown_space_behavior() -> tauri_nspanel::objc2_app_kit::NSWindowCollectionBehavior {
+    use tauri_nspanel::CollectionBehavior;
+
+    CollectionBehavior::new()
+        .stationary()
+        .can_join_all_spaces()
+        .full_screen_auxiliary()
+        .into()
+}
+
+/// 监听窗口「失去 key」通知来做失焦隐藏。
+///
+/// 为什么不用 `tauri_nspanel` 的 `set_event_handler`：它内部会 `setDelegate:`
+/// 替换掉 tao 的窗口代理，此后 tao 收不到任何窗口回调——包括前端
+/// `clip-popover` 依赖的 focus 事件（前端靠它在每次唤起时聚焦搜索框并清空搜索词）。
+/// 换成观察 `NSWindowDidResignKeyNotification`：与 resign key 事件的信号源相同，
+/// 但由通知中心广播，不占用 delegate，tao 原有事件链完好。
+///
+/// 观察者需与进程同生命周期（窗口只建一次、不重建），故 forget token 防止反注册。
+#[cfg(target_os = "macos")]
+fn observe_resign_key_hide(window: &WebviewWindow) {
+    use std::ptr::NonNull;
+
+    use block2::RcBlock;
+    use objc2::rc::Retained;
+    use objc2::runtime::AnyObject;
+    use objc2_app_kit::NSWindowDidResignKeyNotification;
+    use objc2_foundation::{NSNotification, NSNotificationCenter};
+
+    let Ok(ns_window_ptr) = window.ns_window() else {
+        eprintln!("[QuickQuick] 取 clip-popover 的 NSWindow 失败，失焦隐藏将不可用");
+        return;
+    };
+    // ns_window() 返回的指针在窗口存活期间有效；这里只当作通知中心的对象过滤条件用，
+    // 即「只监听我自己这个窗口的 resign key」。
+    let ns_window_as_object: &AnyObject = unsafe { &*(ns_window_ptr as *const AnyObject) };
+
+    let handle = window.app_handle().clone();
+    let block = RcBlock::new(move |_notification: NonNull<NSNotification>| {
+        CLIP_PANEL_HOLDS_KEY.store(false, Ordering::SeqCst);
+        // 隐藏动作落到主线程：通知在主线程投递，这里再确认一次派发目标。
+        let handle_for_hide = handle.clone();
+        if !on_main_thread_blocking(&handle, move || hide_clip_panel_now(&handle_for_hide)) {
+            eprintln!("[QuickQuick] clip-popover 失焦隐藏未完成，面板可能仍可见");
+        }
+    });
+
+    let center = NSNotificationCenter::defaultCenter();
+    let observer: Retained<_> = unsafe {
+        center.addObserverForName_object_queue_usingBlock(
+            Some(NSWindowDidResignKeyNotification),
+            Some(ns_window_as_object),
+            None,
+            &block,
+        )
+    };
+
+    std::mem::forget(observer);
+}
+
+/// tauri-nspanel 插件状态是否已注册。
+///
+/// crate 的 `to_panel` / `get_webview_panel` 内部直接取插件状态，未注册时会 panic；
+/// 本函数让所有面板入口先探测再调用，把「崩溃」降级成「保持普通窗口」。
+#[cfg(target_os = "macos")]
+fn panel_registered(app: &tauri::AppHandle) -> bool {
+    app.try_state::<tauri_nspanel::WebviewPanelManager<tauri::Wry>>()
+        .is_some()
+}
+
+/// 显示 clip-popover 面板并取 key（不激活 app）。返回是否成功。
+#[cfg(target_os = "macos")]
+fn show_clip_panel(app: &tauri::AppHandle) -> bool {
+    use tauri_nspanel::ManagerExt;
+
+    if !on_main_thread() {
+        eprintln!("[QuickQuick] 唤起面板不在主线程，降级为普通窗口唤起");
+        return false;
+    }
+    if !panel_registered(app) {
+        return false;
+    }
+    let Ok(panel) = app.get_webview_panel(CLIP_POPOVER_LABEL) else {
+        return false;
+    };
+
+    panel.set_collection_behavior(shown_space_behavior());
+    panel.show_and_make_key();
+    // 面板理论上总能成为 key；即便被外部抢走焦点，这里乐观置位也不会造成错误——
+    // 粘贴路径最坏多做一次「让出 key + 隐藏」，结果仍然正确。
+    CLIP_PANEL_HOLDS_KEY.store(true, Ordering::SeqCst);
+    true
+}
+
+/// 隐藏面板并把跨 Space 行为复位。须主线程调用。返回是否真正完成。
+///
+/// 先用 `resign_key_window` 把键焦点交回前台应用，再 `hide` 让面板 order out：
+/// 面板仍是 key 时合成出来的 ⌘V 会被面板自己的 webview 吞掉，顺序反了粘贴就落空。
+#[must_use]
+#[cfg(target_os = "macos")]
+fn hide_clip_panel_now(app: &tauri::AppHandle) -> bool {
+    use tauri_nspanel::ManagerExt;
+
+    CLIP_PANEL_HOLDS_KEY.store(false, Ordering::SeqCst);
+
+    if !panel_registered(app) {
+        eprintln!("[QuickQuick] 面板插件未注册，无法让 clip-popover 让出 key");
+        return false;
+    }
+    let Ok(panel) = app.get_webview_panel(CLIP_POPOVER_LABEL) else {
+        eprintln!("[QuickQuick] 取不到 clip-popover 面板，无法让出 key");
+        return false;
+    };
+
+    panel.resign_key_window();
+    panel.hide();
+    panel.set_collection_behavior(hidden_space_behavior());
+    true
+}
+
+/// 在主线程上同步执行 `f`，返回 `f` 的结果；无法确认已完成时返回 `false`。
+///
+/// 为什么需要「同步」：AppKit 调用只能主线程做，而粘贴命令跑在 worker 线程；
+/// 若只投递不等待（`run_on_main_thread` 本身是异步的），紧接着注入的 ⌘V 会赶在
+/// 面板真正 order out 之前发出，被面板自己的 webview 吞掉——表现是粘贴静默失败。
+/// 这里投递后阻塞等待完成，用「确定已做完」替代「猜一个等待时长」。
+///
+/// 派发失败与等待超时都返回 `false`：两者都无法确认主线程上的操作已经完成，
+/// 调用方若照「已完成」继续推进，就只是在赌一个自己没验证过的前提。
+///
+/// 若调用时已在主线程（粘贴命令理论上不在主线程，但防止未来改动踩坑），
+/// 就地执行，避免自己等自己造成死锁。
+#[must_use]
+#[cfg(target_os = "macos")]
+fn on_main_thread_blocking(
+    app: &tauri::AppHandle,
+    f: impl FnOnce() -> bool + Send + 'static,
+) -> bool {
+    if on_main_thread() {
+        return f();
+    }
+
+    let (tx, rx) = std::sync::mpsc::channel::<bool>();
+    if let Err(e) = app.run_on_main_thread(move || {
+        let done = f();
+        // 接收端可能已超时放弃，发送失败不值得记录。
+        let _ = tx.send(done);
+    }) {
+        eprintln!("[QuickQuick] 派发主线程任务失败: {e}");
+        return false;
+    }
+
+    match rx.recv_timeout(MAIN_THREAD_WAIT_TIMEOUT) {
+        Ok(done) => done,
+        Err(_) => {
+            eprintln!(
+                "[QuickQuick] 等待主线程任务超时（{}ms）",
+                MAIN_THREAD_WAIT_TIMEOUT.as_millis()
+            );
+            false
+        }
+    }
+}
+
+/// 当前线程是否就是 macOS 主线程。
+///
+/// 面板操作（`object_setClass`、`makeKeyAndOrderFront`、`orderOut`）都只能在主线程做，
+/// 越线程调用属于未定义行为且不报错。用一次探针把这种可能性显式化：
+/// 万一将来唤起点换了线程，降级成普通窗口并在日志里说清楚，而不是静默踩 UB。
+#[cfg(target_os = "macos")]
+fn on_main_thread() -> bool {
+    objc2::MainThreadMarker::new().is_some()
 }
 
 #[cfg(test)]
@@ -222,5 +637,63 @@ mod tests {
     fn activate_app_macos_noop_on_non_macos() {
         // 非 macOS 平台的空实现应可被安全调用，无副作用。
         super::activate_app_macos();
+    }
+
+    /// 面板持有 key 时必须走「让出面板 key」路径：否则 ⌘V 会被面板自己吞掉。
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn paste_focus_plan_yields_panel_when_panel_holds_key() {
+        assert_eq!(
+            super::paste_focus_plan(true),
+            super::PasteFocusPlan::YieldClipPanel
+        );
+    }
+
+    /// 面板未持有 key（主窗口粘贴 / 面板降级）必须沿用旧的隐藏 app 路径：
+    /// 否则从主窗口粘贴时前台应用不会被还焦，⌘V 会落到 QuickQuick 自己身上。
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn paste_focus_plan_falls_back_when_panel_not_key() {
+        assert_eq!(
+            super::paste_focus_plan(false),
+            super::PasteFocusPlan::HideAppAndActivateTarget
+        );
+    }
+
+    /// 面板路径交出失败（超时 / 派发失败）时必须放弃注入：此时 ⌘V 会被面板吞掉，
+    /// 继续注入只会让界面报出一个兑现不了的成功。
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn should_inject_paste_skips_when_panel_yield_failed() {
+        assert!(!super::should_inject_paste(
+            super::PasteFocusPlan::YieldClipPanel,
+            false
+        ));
+    }
+
+    /// 面板路径交出成功时照常注入 ⌘V。
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn should_inject_paste_injects_when_panel_yield_succeeded() {
+        assert!(super::should_inject_paste(
+            super::PasteFocusPlan::YieldClipPanel,
+            true
+        ));
+    }
+
+    /// 主窗口旧路径没有可靠的交出信号，必须保持改造前「一律注入」的行为；
+    /// 若按交出结果判定，从主窗口粘贴会静默退化成只写回。
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn should_inject_paste_keeps_main_window_path_unchanged() {
+        for focus_yielded in [false, true] {
+            assert!(
+                super::should_inject_paste(
+                    super::PasteFocusPlan::HideAppAndActivateTarget,
+                    focus_yielded
+                ),
+                "主窗口路径交出结果={focus_yielded} 时仍须注入 ⌘V"
+            );
+        }
     }
 }
