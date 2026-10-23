@@ -43,6 +43,9 @@ describe("StoragePanel 单张图片阈值", () => {
       fileSizeBytes: 1024 * 1024,
     });
     mockCleanupHistory.mockResolvedValue({ softDeleted: 0, purged: 0 });
+    // 显式给默认值（组件默认 20 MB）：vi.clearAllMocks() 只清调用记录、不清实现，
+    // 不设默认就会依赖其他 describe 残留的 mock 实现，用例结果随执行顺序变化。
+    mockGetImageThreshold.mockResolvedValue(20 * 1024 * 1024);
     mockSetImageThreshold.mockResolvedValue(undefined);
   });
 
@@ -51,11 +54,12 @@ describe("StoragePanel 单张图片阈值", () => {
 
     render(<StoragePanel />);
 
+    // 必须等到 DOM 落地：只等 mock 被调用时，promise 回调可能在断言之后才触发
+    // setState，并发负载下会读到初始的 20 MB（曾偶发 expected 10 MB / received 20 MB）。
     await waitFor(() => {
       expect(mockGetImageThreshold).toHaveBeenCalledTimes(1);
+      expect(screen.getByRole("button", { name: /单张图片阈值/ })).toHaveTextContent("10 MB");
     });
-
-    expect(screen.getByRole("button", { name: /单张图片阈值/ })).toHaveTextContent("10 MB");
   });
 
   it("返回默认 20MiB 时，trigger 显示 20 MB", async () => {
@@ -91,11 +95,11 @@ describe("StoragePanel 单张图片阈值", () => {
     await user.click(screen.getByRole("button", { name: /单张图片阈值/ }));
     await user.click(screen.getByRole("option", { name: "50 MB" }));
 
+    // 同上：setImageThreshold 的 await 之后才 setState，断言必须等 DOM 更新
     await waitFor(() => {
       expect(mockSetImageThreshold).toHaveBeenCalledWith(52428800);
+      expect(screen.getByRole("button", { name: /单张图片阈值/ })).toHaveTextContent("50 MB");
     });
-
-    expect(screen.getByRole("button", { name: /单张图片阈值/ })).toHaveTextContent("50 MB");
   });
 
   it("下拉含预设档位 5/10/20/50/100 MB", async () => {
@@ -327,7 +331,7 @@ describe("StoragePanel 占用口径（图片占用 vs 库文件体积）", () =>
     // Assert：图片占用一行（受上限约束）
     expect(await screen.findByText("图片占用")).toBeInTheDocument();
     expect(screen.getByText("100.0 MB 已用")).toBeInTheDocument();
-    expect(screen.getByText(/上限 500 MB/)).toBeInTheDocument();
+    expect(screen.getByText(/图片占用上限 500 MB/)).toBeInTheDocument();
     // Assert：库文件体积单列，并标注磁盘占用语义
     expect(screen.getByText("库文件体积")).toBeInTheDocument();
     expect(screen.getByText(/500\.0 MB · 磁盘实际占用/)).toBeInTheDocument();

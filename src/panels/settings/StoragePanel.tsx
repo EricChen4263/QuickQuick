@@ -194,7 +194,7 @@ function StoragePanel() {
             </div>
             <div className="meter-legend">
               <span>{toMB(imageBytes)} MB 已用</span>
-              <span>上限 500 MB</span>
+              <span>图片占用上限 500 MB</span>
             </div>
           </div>
         </div>
