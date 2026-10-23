@@ -264,7 +264,9 @@ Maccy 的 31 语言靠 BartyCrouch + DeepL 机翻管线自动铺开，但它的*
 | 私有 UTI 自产标记（写回时附加，读取时跳过） | `macos_paste.rs:146-152`、`paste.rs:49` | 从历史粘贴后不产生新条目、不打乱顺序 |
 | `tiered_cleanup` 接线（自动触发） | `image.rs:413`、`lib.rs` | 超过 500MB 自动两级清理 |
 | `portable.rs` 暴露 IPC + UI（导出/导入） | `portable.rs`、`ipc/*`、设置页 | 能导出加密备份包并在新机导入 |
-| 翻译 cache/retry/cancel/error 接线 | `ipc/translate.rs:226-279` | 同文本二次翻译零网络；瞬时失败自动重试；连点丢弃过期结果 |
+| 翻译 cache/retry/cancel/error 接线 | `ipc/translate.rs`（`translate_text_impl` 编排段）、`translate/{cache,retry,cancel,error}.rs` | 同文本二次翻译零网络；瞬时失败自动重试；连点丢弃过期结果 |
+
+**落地记录**：Phase 1 七个 item 已完成并各自独立 commit（`8ee670a`…`b2245da`），逐项结论与未闭环的人工验证见 [v04-work-items.md](v04-work-items.md)。其中「敏感内容过滤接线」在独立审查中被判 BLOCK（`NSPasteboard` 跨线程访问必崩），修复后复审闭环；由此暴露的「串行化全部 `NSPasteboard` 访问」作为 **P1-8** 挂号，与 Phase 3 的 `changeCount` 改造一起做。
 
 **为什么排第一**：这批是「UI 已承诺、代码未做到」，修复成本低、信任收益高，且不依赖任何架构决策。
 
