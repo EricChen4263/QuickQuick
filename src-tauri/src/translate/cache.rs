@@ -29,6 +29,7 @@ pub struct CacheEntry<'a> {
 /// 键由四段按序哈希，段间插入 `\0` 分隔符防止前缀碰撞
 /// （例如 `("ab","c")` 与 `("a","bc")` 产生不同哈希）。
 /// `provider_id` 不同时键必然不同，换源必 miss。
+#[must_use = "缓存键必须用于后续 cache_get / cache_put，丢弃它没有意义"]
 pub fn cache_key(
     source_text: &str,
     source_lang: &str,

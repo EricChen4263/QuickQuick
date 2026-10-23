@@ -19,6 +19,7 @@ use std::path::Path;
 use crate::db::DbError;
 use crate::ipc::settings::{get_selected_provider_impl, resolve_config_path};
 use crate::ipc::{with_db, AppDb, EcdictDbState};
+use crate::translate::cache::{cache_get, cache_key, cache_put};
 use crate::translate::credential::{load_credentials, CredStore, DbCredStore};
 use crate::translate::ecdict_db::EcdictDb;
 use crate::translate::history::{
@@ -35,6 +36,12 @@ use crate::translate::{
 ///
 /// 设计文档§三.决策1：免 key 开箱可用的机翻源，无第三方实例可用性依赖。
 pub const DEFAULT_PROVIDER_ID: &str = "google_free";
+
+/// 翻译缓存容量上限（条目数），超出后按 `last_used_utc` 做 LRU 淘汰。
+///
+/// 取 500：单条缓存只存一段纯文本译文，500 条在加密库中的体量可忽略；
+/// 同时足以覆盖「反复翻译同一批短文本」与「免费源被限流后复用既有结果」两类真实场景。
+const TRANSLATE_CACHE_CAPACITY: usize = 500;
 
 /// 把持久化的 selected_provider 解析为当前注册表内的有效 id。
 ///
@@ -210,12 +217,14 @@ pub struct TranslateInput<'a> {
 /// 编排流程：
 /// 1. 校验输入（空/全空白 text → Err，不发网络）
 /// 2. 读 settings_path 取 selected_provider_id
-/// 3. load_credentials(provider_id, cred_store, conn) 加载凭据
-/// 4. build_provider(provider_id, &creds, ecdict_db) 动态构造 provider（缺必填凭据 → Err）
-/// 5. 定方向（resolve_direction_with_source）
-/// 6. provider.translate(req, exec)（单步源默认 build/execute/parse；多步源自行编排）
-/// 7. 写入翻译历史（provider_id 为真实选中的 id）
-/// 8. 返回 TranslateResultDto
+/// 3. 定方向（`resolve_direction_with_source`）——必须在缓存查询与 provider 构造之前，
+///    因为缓存键要求**最终**的 source/target，而不是检测前的猜测语言
+/// 4. 按 `(text, source_lang, target_lang, provider_id)` 四元组查缓存，命中直接返回（零网络）
+/// 5. 未命中：`load_credentials` + `build_provider` 构造 provider（缺必填凭据 → Err）
+/// 6. `provider.translate(req, exec)`（单步源默认 build/execute/parse；多步源自行编排）
+/// 7. Plain 结果写缓存（Dict 不写，理由见下方「只缓存 Plain」注释）
+/// 8. 写入翻译历史（命中缓存与未命中路径一致，provider_id 为真实选中的 id）
+/// 9. 返回 TranslateResultDto
 ///
 /// # Errors
 /// - text 为空或全空白：返回 Err（不触发执行器）
@@ -237,12 +246,26 @@ pub fn translate_text_impl(
     }
 
     let provider_id = get_selected_provider_impl(settings_path)?;
-    let creds = load_credentials(&provider_id, cred_store, conn).map_err(|e| e.to_string())?;
-    let provider = build_provider(&provider_id, &creds, Some(ecdict_db))?;
 
+    // 方向先于缓存查询解析：缓存键必须由最终语言对构成。
     let target_lang = input.configured_target.map(Lang::new);
     let (source, target) =
         resolve_direction_with_source(text, input.configured_source, target_lang);
+    let ctx = ResolvedTranslation {
+        text,
+        source: &source,
+        target: &target,
+        provider_id: &provider_id,
+    };
+
+    // 命中缓存：零网络，也不必读凭据（凭据缺失时仍可复用既有译文）。
+    if let Some(translated) = lookup_cache(conn, &ctx) {
+        record_history(conn, &ctx, &translated)?;
+        return Ok(plain_dto(translated, &source, &target));
+    }
+
+    let creds = load_credentials(&provider_id, cred_store, conn).map_err(|e| e.to_string())?;
+    let provider = build_provider(&provider_id, &creds, Some(ecdict_db))?;
 
     let req = TranslateRequest {
         text: text.to_string(),
@@ -251,23 +274,23 @@ pub fn translate_text_impl(
     };
 
     // 改调 provider.translate（默认实现 = 单步 build/execute/parse；多步源如 Bing override）。
-    let resp = provider.translate(&req, exec).map_err(|e| e.to_string())?;
+    let response = provider.translate(&req, exec).map_err(|e| e.to_string())?;
 
-    // 拆出类型判别标签 + 历史用纯文本：Plain 直接取译文，Dict 压成摘要回退。
-    let (kind, translated, entry) = match resp {
+    // 只缓存 Plain。缓存表只存一段 `translated` 纯文本，`Dict` 的结构化 entry
+    // （音标/词性分组释义/例句/词形）没有存放位置；若把 Dict 压成摘要写进缓存，
+    // 命中时只能还原成纯文本译文，词典源会静默退化为机翻样式，属于用户可见的能力损失。
+    // 收益也有限：现存 Dict 源（ecdict 本地词库、youdao_dict 回退分支）要么零网络、
+    // 要么本就按「是否单词」分流，重复查询代价远小于一次错误降级。
+    // 「只写 Plain」这条不变量同时让读取侧安全：表里任何记录都必然来自 Plain 响应。
+    if let TranslateResponse::Plain { translated } = &response {
+        store_cache(conn, &ctx, translated);
+    }
+
+    let (kind, translated, entry) = match response {
         TranslateResponse::Plain { translated } => ("plain", translated, None),
         TranslateResponse::Dict { entry } => ("dict", dict_entry_summary(&entry), Some(entry)),
     };
-
-    add_translate_history(
-        conn,
-        text,
-        &translated,
-        source.as_str(),
-        target.as_str(),
-        &provider_id,
-    )
-    .map_err(|e| e.to_string())?;
+    record_history(conn, &ctx, &translated)?;
 
     Ok(TranslateResultDto {
         kind: kind.to_string(),
@@ -276,6 +299,84 @@ pub fn translate_text_impl(
         source_lang: source.as_str().to_string(),
         target_lang: target.as_str().to_string(),
     })
+}
+
+/// 方向解析之后的翻译上下文：原文 + 最终语言对 + 选中的 provider。
+///
+/// 缓存键、历史写入与 DTO 构造都要用到这四项，聚为一组可让各段辅助函数的参数
+/// 数量保持在 clippy 上限内（设计同 code-standards「参数 > 5 改结构体」）。
+struct ResolvedTranslation<'a> {
+    text: &'a str,
+    source: &'a Lang,
+    target: &'a Lang,
+    provider_id: &'a str,
+}
+
+/// 按四元组查缓存（best-effort）。
+///
+/// 命中返回已缓存译文；未命中或查询失败返回 `None`。缓存是纯优化，DB 读失败不应让
+/// 用户翻译直接失败，因此降级为「无缓存」并通过 stderr 留痕（不静默吞掉）。
+fn lookup_cache(conn: &Connection, ctx: &ResolvedTranslation<'_>) -> Option<String> {
+    let key = cache_key(
+        ctx.text,
+        ctx.source.as_str(),
+        ctx.target.as_str(),
+        ctx.provider_id,
+    );
+    match cache_get(conn, &key) {
+        Ok(hit) => hit,
+        Err(e) => {
+            eprintln!("[QuickQuick] 读取翻译缓存失败，降级为直接请求翻译源: {e}");
+            None
+        }
+    }
+}
+
+/// 写入缓存并触发 LRU 淘汰（best-effort）。
+///
+/// 写失败只影响后续命中率，不影响本次翻译结果，因此留痕后继续返回译文。
+fn store_cache(conn: &Connection, ctx: &ResolvedTranslation<'_>, translated: &str) {
+    let result = cache_put(
+        conn,
+        ctx.text,
+        ctx.source.as_str(),
+        ctx.target.as_str(),
+        ctx.provider_id,
+        translated,
+        TRANSLATE_CACHE_CAPACITY,
+    );
+    if let Err(e) = result {
+        eprintln!("[QuickQuick] 写入翻译缓存失败，本次译文仍正常返回: {e}");
+    }
+}
+
+/// 写入翻译历史；命中缓存与未命中路径共用，保证「命中缓存也算翻译过」。
+fn record_history(
+    conn: &Connection,
+    ctx: &ResolvedTranslation<'_>,
+    translated: &str,
+) -> Result<(), String> {
+    add_translate_history(
+        conn,
+        ctx.text,
+        translated,
+        ctx.source.as_str(),
+        ctx.target.as_str(),
+        ctx.provider_id,
+    )
+    .map(|_id| ())
+    .map_err(|e| e.to_string())
+}
+
+/// 构造 Plain 结果 DTO（缓存命中路径使用：缓存里只有纯文本译文，没有结构化词条）。
+fn plain_dto(translated: String, source: &Lang, target: &Lang) -> TranslateResultDto {
+    TranslateResultDto {
+        kind: "plain".to_string(),
+        translated,
+        entry: None,
+        source_lang: source.as_str().to_string(),
+        target_lang: target.as_str().to_string(),
+    }
 }
 
 /// `list_translate_history` 的纯函数实现，可在测试中直接调用。
@@ -376,7 +477,7 @@ mod tests {
 
     /// 创建内存 SQLite 并初始化所需表，供测试隔离使用。
     ///
-    /// 包含 translate_history 和 provider_config，
+    /// 包含 translate_history、provider_config 与 translation_cache，
     /// schema 必须与各自对应模块中实际 SQL 一致。
     fn setup_test_db() -> Connection {
         let conn = Connection::open_in_memory().expect("内存 DB 打开失败");
@@ -395,6 +496,16 @@ mod tests {
                 field_key    TEXT NOT NULL,
                 value        TEXT NOT NULL,
                 PRIMARY KEY (provider_id, field_key)
+            );
+            CREATE TABLE translation_cache (
+                cache_key     TEXT PRIMARY KEY NOT NULL,
+                source_text   TEXT NOT NULL,
+                source_lang   TEXT NOT NULL,
+                target_lang   TEXT NOT NULL,
+                provider_id   TEXT NOT NULL,
+                translated    TEXT NOT NULL,
+                created_utc   INTEGER NOT NULL,
+                last_used_utc INTEGER NOT NULL
             );",
         )
         .expect("建表失败");
@@ -598,5 +709,246 @@ mod tests {
         let err = result.unwrap_err();
         assert!(err.contains("未配置"), "错误消息应提示未配置凭据：{err}");
         assert_eq!(fake.call_count(), 0, "凭据缺失时执行器不应被调用");
+    }
+
+    // ---- 缓存接线（P1-6）----
+
+    /// Google 免费源成功响应的最小合法 JSON 模板。
+    fn google_free_ok_response(translated: &str) -> String {
+        format!(r#"[[["{translated}","x",null,null,10]]]"#)
+    }
+
+    /// 统计缓存表当前行数（用于断言「是否写缓存」）。
+    fn cache_row_count(conn: &Connection) -> i64 {
+        conn.query_row("SELECT COUNT(*) FROM translation_cache", [], |row| {
+            row.get(0)
+        })
+        .expect("统计缓存行数应成功")
+    }
+
+    /// 自动检测方向的输入（原文 + 默认方向）。
+    fn auto_input(text: &str) -> TranslateInput<'_> {
+        TranslateInput {
+            text,
+            configured_source: None,
+            configured_target: None,
+        }
+    }
+
+    #[test]
+    fn translate_text_impl_second_identical_request_served_from_cache_without_network() {
+        // Arrange：同文本、同语言对、同 provider
+        let conn = setup_test_db();
+        let fake = FakeExecutor::new(&lingva_ok_response("你好世界"));
+        let store = MockCredStore::new();
+        let settings_file = tempfile::NamedTempFile::new().unwrap();
+        write_settings_with_provider(settings_file.path(), "lingva");
+
+        // Act：连续翻译两次
+        let first = translate_text_impl(
+            &conn,
+            &fake,
+            auto_input("hello world"),
+            settings_file.path(),
+            &store,
+            placeholder_ecdict_db(),
+        )
+        .expect("首次翻译应成功");
+        let second = translate_text_impl(
+            &conn,
+            &fake,
+            auto_input("hello world"),
+            settings_file.path(),
+            &store,
+            placeholder_ecdict_db(),
+        )
+        .expect("第二次翻译应命中缓存并成功");
+
+        // Assert：第二次零网络，译文与方向与首次一致，缓存表只有一条记录
+        assert_eq!(
+            fake.call_count(),
+            1,
+            "第二次翻译应命中缓存，执行器调用次数应保持 1"
+        );
+        assert_eq!(second.translated, "你好世界");
+        assert_eq!(second.translated, first.translated);
+        assert_eq!(second.kind, "plain");
+        assert_eq!(second.source_lang, "en");
+        assert_eq!(second.target_lang, "zh");
+        assert_eq!(cache_row_count(&conn), 1, "缓存表应只有一条四元组记录");
+    }
+
+    #[test]
+    fn translate_text_impl_cache_miss_when_target_language_changes() {
+        // Arrange：同文本同 provider，但目标语言不同（en→zh 与 en→ja）
+        let conn = setup_test_db();
+        let fake = FakeExecutor::new(&lingva_ok_response("你好世界"));
+        let store = MockCredStore::new();
+        let settings_file = tempfile::NamedTempFile::new().unwrap();
+        write_settings_with_provider(settings_file.path(), "lingva");
+
+        // Act
+        translate_text_impl(
+            &conn,
+            &fake,
+            auto_input("hello world"),
+            settings_file.path(),
+            &store,
+            placeholder_ecdict_db(),
+        )
+        .expect("首次 en→zh 翻译应成功");
+        let second = translate_text_impl(
+            &conn,
+            &fake,
+            TranslateInput {
+                text: "hello world",
+                configured_source: None,
+                configured_target: Some("ja"),
+            },
+            settings_file.path(),
+            &store,
+            placeholder_ecdict_db(),
+        )
+        .expect("换目标语言的翻译应成功");
+
+        // Assert：语言对进入缓存键，换语言对必 miss
+        assert_eq!(second.target_lang, "ja");
+        assert_eq!(
+            fake.call_count(),
+            2,
+            "目标语言不同时缓存键不同，应再次走网络"
+        );
+        assert_eq!(cache_row_count(&conn), 2, "两个语言对应各留一条缓存");
+    }
+
+    #[test]
+    fn translate_text_impl_cache_miss_when_provider_changes() {
+        // Arrange：先 lingva，再切到 google_free（两者都免 key）
+        let conn = setup_test_db();
+        let lingva = FakeExecutor::new(&lingva_ok_response("你好世界"));
+        let google = FakeExecutor::new(&google_free_ok_response("你好世界"));
+        let store = MockCredStore::new();
+        let settings_file = tempfile::NamedTempFile::new().unwrap();
+
+        // Act
+        write_settings_with_provider(settings_file.path(), "lingva");
+        translate_text_impl(
+            &conn,
+            &lingva,
+            auto_input("hello world"),
+            settings_file.path(),
+            &store,
+            placeholder_ecdict_db(),
+        )
+        .expect("lingva 翻译应成功");
+        write_settings_with_provider(settings_file.path(), "google_free");
+        translate_text_impl(
+            &conn,
+            &google,
+            auto_input("hello world"),
+            settings_file.path(),
+            &store,
+            placeholder_ecdict_db(),
+        )
+        .expect("google_free 翻译应成功");
+
+        // Assert：provider_id 进入缓存键，换源必 miss
+        assert_eq!(lingva.call_count(), 1);
+        assert_eq!(
+            google.call_count(),
+            1,
+            "provider 不同时缓存键不同，换源应再次走网络"
+        );
+        assert_eq!(cache_row_count(&conn), 2, "两个 provider 应各留一条缓存");
+    }
+
+    #[test]
+    fn translate_text_impl_cache_hit_still_records_history() {
+        // Arrange：同文本连续翻译两次
+        let conn = setup_test_db();
+        let fake = FakeExecutor::new(&lingva_ok_response("你好世界"));
+        let store = MockCredStore::new();
+        let settings_file = tempfile::NamedTempFile::new().unwrap();
+        write_settings_with_provider(settings_file.path(), "lingva");
+
+        // Act
+        translate_text_impl(
+            &conn,
+            &fake,
+            auto_input("hello world"),
+            settings_file.path(),
+            &store,
+            placeholder_ecdict_db(),
+        )
+        .expect("首次翻译应成功");
+        translate_text_impl(
+            &conn,
+            &fake,
+            auto_input("hello world"),
+            settings_file.path(),
+            &store,
+            placeholder_ecdict_db(),
+        )
+        .expect("命中缓存的翻译应成功");
+
+        // Assert：命中缓存也算翻译过，历史条数与未命中路径保持一致（两次翻译两条历史）
+        let count =
+            crate::translate::history::translate_history_count(&conn).expect("查历史数应成功");
+        assert_eq!(count, 2, "命中缓存也应写入翻译历史");
+    }
+
+    /// 有道词典成功响应的最小合法 JSON 模板（isWord=true 时解析为 Dict）。
+    fn youdao_dict_ok_response() -> String {
+        r#"{"isWord":true,"basic":{"phonetic":"ˈɡleɪʃər","explains":["n. 冰川"]},"translation":["冰川"]}"#
+            .to_string()
+    }
+
+    #[test]
+    fn translate_text_impl_dict_response_is_not_cached() {
+        // Arrange：youdao_dict 是 Dict 产出源，缓存表只存纯文本，Dict 不写缓存
+        let conn = setup_test_db();
+        let fake = FakeExecutor::new(&youdao_dict_ok_response());
+        let store = MockCredStore::new();
+        // youdao_dict 的 app_key 是非密字段（落 provider_config 表），app_secret 才是 secret。
+        conn.execute(
+            "INSERT INTO provider_config (provider_id, field_key, value) VALUES (?1, ?2, ?3)",
+            rusqlite::params!["youdao_dict", "app_key", "test-app-key"],
+        )
+        .expect("预置 youdao_dict app_key 应成功");
+        store
+            .set_secret("youdao_dict", "app_secret", "test-app-secret")
+            .expect("预置 youdao_dict app_secret 应成功");
+        let settings_file = tempfile::NamedTempFile::new().unwrap();
+        write_settings_with_provider(settings_file.path(), "youdao_dict");
+
+        // Act：同文本连续翻译两次
+        let first = translate_text_impl(
+            &conn,
+            &fake,
+            auto_input("glacier"),
+            settings_file.path(),
+            &store,
+            placeholder_ecdict_db(),
+        )
+        .expect("词典翻译应成功");
+        let second = translate_text_impl(
+            &conn,
+            &fake,
+            auto_input("glacier"),
+            settings_file.path(),
+            &store,
+            placeholder_ecdict_db(),
+        )
+        .expect("词典翻译应成功");
+
+        // Assert：两次都是结构化词条，且缓存表为空（Dict 不写缓存）
+        assert_eq!(first.kind, "dict");
+        assert!(first.entry.is_some(), "词典结果应带结构化 entry");
+        assert_eq!(
+            second.kind, "dict",
+            "第二次也应保留 dict 类型（未降级为纯文本）"
+        );
+        assert_eq!(fake.call_count(), 2, "Dict 不缓存，第二次仍走执行器");
+        assert_eq!(cache_row_count(&conn), 0, "Dict 结果不应写入缓存");
     }
 }
