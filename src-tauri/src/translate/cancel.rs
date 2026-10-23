@@ -29,6 +29,8 @@ impl InflightTracker {
     /// 发起新请求：generation 自增，返回本次请求的 generation 编号。
     ///
     /// 调用后，所有持有旧 generation 的在途请求均视为已作废。
+    /// 返回值必须被持有并在收到响应后交给 `is_current` 校验——丢弃它等于放弃取消语义。
+    #[must_use = "返回的 generation 必须交给 is_current 校验，否则取消语义失效"]
     pub fn begin(&self) -> u64 {
         self.current.fetch_add(1, Ordering::SeqCst) + 1
     }

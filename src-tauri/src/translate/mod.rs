@@ -16,8 +16,26 @@ pub mod retry;
 
 pub use providers::registry;
 
+use std::sync::OnceLock;
+
+use cancel::InflightTracker;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
+
+/// 进程内翻译在途请求追踪器（全局单例）。
+///
+/// 取消语义（「连续请求时旧结果作废」）是翻译域的横切关注点，与窗口、命令环境无关：
+/// 全局单例让任何一层都能在不依赖 Tauri 的前提下取得同一份 generation 计数，
+/// 因此不用 Tauri `State` 托管——`State` 需要在 `lib.rs` 的 `Builder::manage` 注册，
+/// 会把「一次翻译是否被更新的请求取代」这件事耦合到 app 启动装配上。
+///
+/// 需要跨请求作废的调用方（当前是 `ipc::translate::translate_text` 命令）取用此单例；
+/// 只承担「一次翻译」语义的纯函数实现则使用自己新建的 tracker，避免不同来源的
+/// 并发请求互相作废（详见 `ipc::translate::translate_text_impl`）。
+pub fn inflight_tracker() -> &'static InflightTracker {
+    static TRACKER: OnceLock<InflightTracker> = OnceLock::new();
+    TRACKER.get_or_init(InflightTracker::new)
+}
 
 /// BCP-47 语言标签的薄包装。
 ///

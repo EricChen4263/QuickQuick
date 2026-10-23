@@ -15,18 +15,22 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter, State};
 
 use std::path::Path;
+use std::time::Duration;
 
 use crate::db::DbError;
 use crate::ipc::settings::{get_selected_provider_impl, resolve_config_path};
 use crate::ipc::{with_db, AppDb, EcdictDbState};
 use crate::translate::cache::{cache_get, cache_key, cache_put};
+use crate::translate::cancel::InflightTracker;
 use crate::translate::credential::{load_credentials, CredStore, DbCredStore};
 use crate::translate::ecdict_db::EcdictDb;
+use crate::translate::error::{classify_timeout, map_provider_error};
 use crate::translate::history::{
     add_translate_history, list_translate_history as db_list_translate_history, TranslateHistoryRow,
 };
 use crate::translate::lang::resolve_direction_with_source;
 use crate::translate::providers::{build_provider, registry};
+use crate::translate::retry::retry_with_backoff;
 use crate::translate::{
     DictEntry, HttpExecutor, Lang, ProviderHttpRequest, TranslateError, TranslateRequest,
     TranslateResponse,
@@ -42,6 +46,50 @@ pub const DEFAULT_PROVIDER_ID: &str = "google_free";
 /// 取 500：单条缓存只存一段纯文本译文，500 条在加密库中的体量可忽略；
 /// 同时足以覆盖「反复翻译同一批短文本」与「免费源被限流后复用既有结果」两类真实场景。
 const TRANSLATE_CACHE_CAPACITY: usize = 500;
+
+/// 单次翻译的最大尝试次数（含首次请求）。
+///
+/// 取 3：免费源偶发抖动一次重试即可恢复；再多会把可感知延迟推到不可接受
+/// （退避序列 500ms、1000ms，两次重试合计最多 1.5s）。
+const TRANSLATE_MAX_ATTEMPTS: u32 = 3;
+
+/// 单次 HTTP 请求的整体超时上限。
+const HTTP_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// 请求被更新的请求取代时返回给前端的错误文案。
+const TRANSLATE_CANCELLED_MESSAGE: &str = "翻译请求已被更新的请求取代";
+
+/// 生产环境的退避等待：真实线程休眠。
+///
+/// `translate_text` 是同步 Tauri 命令，运行在命令线程池而非 UI 线程，阻塞休眠不影响界面。
+fn sleep_blocking(ms: u64) {
+    std::thread::sleep(Duration::from_millis(ms));
+}
+
+/// 翻译运行期的横切配置：重试策略 + 在途请求追踪器。
+///
+/// 把两者聚为一组，使 `translate_text_with_runtime` 的参数数量收敛在 clippy 上限内，
+/// 同时保留两项测试注入能力：不阻塞的 `sleep`（断言退避序列）与独立的 `tracker`
+/// （断言旧 generation 的结果被丢弃）。
+pub struct TranslateRuntime<'a> {
+    /// 单次翻译允许的最大尝试次数（含首次）。
+    pub max_attempts: u32,
+    /// 退避等待函数，入参为毫秒。
+    pub sleep: &'a dyn Fn(u64),
+    /// 在途请求追踪器，用于作废旧请求的结果。
+    pub tracker: &'a InflightTracker,
+}
+
+impl TranslateRuntime<'static> {
+    /// 生产运行期配置：3 次尝试 + 真实退避休眠 + 进程内在途追踪器单例。
+    pub fn production() -> Self {
+        Self {
+            max_attempts: TRANSLATE_MAX_ATTEMPTS,
+            sleep: &sleep_blocking,
+            tracker: crate::translate::inflight_tracker(),
+        }
+    }
+}
 
 /// 把持久化的 selected_provider 解析为当前注册表内的有效 id。
 ///
@@ -68,11 +116,46 @@ const TRANSLATE_HISTORY_CHANGED_EVENT: &str = "translate-history-changed";
 /// 跨 await 点持有的复杂度（SQLCipher Connection 不是 Send，无法跨 await）。
 pub struct UreqExecutor;
 
+/// 把 ureq 错误归一为统一 `TranslateError`。
+///
+/// - 非 2xx 状态码：经 `map_provider_error` 归一为 Auth（401/403）/ RateLimit（429）/
+///   ServerError（5xx）等具体变体，而不是笼统的 Network；
+/// - 传输层失败：超时经 `classify_timeout` 归一为 Network，其余传输失败同为 Network。
+///
+/// 归一之后上层的 `is_transient` 判定才真正有意义：Auth / Quota 类永久错误不会被
+/// 当成瞬时抖动反复重试，而 429 / 5xx / 超时才会进入退避重试。
+fn normalize_ureq_error(err: ureq::Error) -> TranslateError {
+    match err {
+        ureq::Error::Status(status, _response) => map_provider_error(status, None),
+        transport_error @ ureq::Error::Transport(_) => {
+            if is_timeout(&transport_error) {
+                classify_timeout()
+            } else {
+                TranslateError::Network(transport_error.to_string())
+            }
+        }
+    }
+}
+
+/// 判断 ureq 错误是否由请求超时引起。
+///
+/// ureq 把超时统一表现为 `ErrorKind::Io`，真正原因藏在 `source()` 链上的
+/// `io::Error`（`ErrorKind::TimedOut`），因此必须沿 source 链下探，
+/// 而不能只看错误文本或 ureq 的 `kind()`。
+fn is_timeout(err: &ureq::Error) -> bool {
+    let mut source = std::error::Error::source(err);
+    while let Some(inner) = source {
+        if let Some(io_err) = inner.downcast_ref::<std::io::Error>() {
+            return io_err.kind() == std::io::ErrorKind::TimedOut;
+        }
+        source = inner.source();
+    }
+    false
+}
+
 impl HttpExecutor for UreqExecutor {
     fn execute(&self, req: &ProviderHttpRequest) -> Result<String, TranslateError> {
-        let agent = ureq::AgentBuilder::new()
-            .timeout(std::time::Duration::from_secs(10))
-            .build();
+        let agent = ureq::AgentBuilder::new().timeout(HTTP_TIMEOUT).build();
 
         let mut builder = match req.method {
             "GET" => agent.get(&req.url),
@@ -89,18 +172,14 @@ impl HttpExecutor for UreqExecutor {
         }
 
         let response = if let Some(body) = &req.body {
-            builder
-                .send_string(body)
-                .map_err(|e| TranslateError::Network(e.to_string()))?
+            builder.send_string(body).map_err(normalize_ureq_error)?
         } else {
-            builder
-                .call()
-                .map_err(|e| TranslateError::Network(e.to_string()))?
+            builder.call().map_err(normalize_ureq_error)?
         };
 
         response
             .into_string()
-            .map_err(|e| TranslateError::Network(e.to_string()))
+            .map_err(|e| TranslateError::Network(format!("读取响应体失败: {e}")))
     }
 }
 
@@ -221,15 +300,20 @@ pub struct TranslateInput<'a> {
 ///    因为缓存键要求**最终**的 source/target，而不是检测前的猜测语言
 /// 4. 按 `(text, source_lang, target_lang, provider_id)` 四元组查缓存，命中直接返回（零网络）
 /// 5. 未命中：`load_credentials` + `build_provider` 构造 provider（缺必填凭据 → Err）
-/// 6. `provider.translate(req, exec)`（单步源默认 build/execute/parse；多步源自行编排）
-/// 7. Plain 结果写缓存（Dict 不写，理由见下方「只缓存 Plain」注释）
+/// 6. `provider.translate(req, exec)`（单步源默认 build/execute/parse；多步源自行编排），
+///    瞬时错误按退避序列重试，永久错误立即返回
+/// 7. Plain 结果写缓存（Dict 不写，理由见 `translate_text_with_runtime`）
 /// 8. 写入翻译历史（命中缓存与未命中路径一致，provider_id 为真实选中的 id）
 /// 9. 返回 TranslateResultDto
+///
+/// 取消：本函数只承担「一次翻译」的语义，使用本次调用独立新建的 tracker，
+/// 不假设不同调用之间存在先后关系。跨请求的「旧结果作废」由命令层
+/// `translate_text` 注入进程内单例 tracker 实现（见 `TranslateRuntime::production`）。
 ///
 /// # Errors
 /// - text 为空或全空白：返回 Err（不触发执行器）
 /// - 必填凭据缺失：返回含"未配置"的中文 Err（不触发执行器）
-/// - 执行器网络失败：`TranslateError` 转字符串
+/// - 执行器网络失败 / 瞬时可重试错误重试耗尽：`TranslateError` 转字符串
 /// - 响应解析失败：`TranslateError` 转字符串
 /// - 历史写入失败：DbError 转字符串
 pub fn translate_text_impl(
@@ -239,6 +323,41 @@ pub fn translate_text_impl(
     settings_path: &Path,
     cred_store: &dyn CredStore,
     ecdict_db: Arc<EcdictDb>,
+) -> Result<TranslateResultDto, String> {
+    let tracker = InflightTracker::new();
+    let runtime = TranslateRuntime {
+        max_attempts: TRANSLATE_MAX_ATTEMPTS,
+        sleep: &sleep_blocking,
+        tracker: &tracker,
+    };
+    translate_text_with_runtime(
+        conn,
+        exec,
+        input,
+        settings_path,
+        cred_store,
+        ecdict_db,
+        &runtime,
+    )
+}
+
+/// 带运行期横切配置（重试 / 取消）的翻译主链路实现。
+///
+/// 与 `translate_text_impl` 的差别只有两点：重试等待函数与在途追踪器由调用方注入。
+/// 生产入口 `translate_text` 用 `TranslateRuntime::production()` 获得真实休眠 +
+/// 进程内共享 tracker；单测注入记录退避序列的闭包与独立 tracker，从而不引入真实等待、
+/// 也不受其它并发测试影响。
+///
+/// # Errors
+/// 同 [`translate_text_impl`]，外加「请求被更新的请求取代」的取消错误。
+fn translate_text_with_runtime(
+    conn: &Connection,
+    exec: &dyn HttpExecutor,
+    input: TranslateInput<'_>,
+    settings_path: &Path,
+    cred_store: &dyn CredStore,
+    ecdict_db: Arc<EcdictDb>,
+    runtime: &TranslateRuntime<'_>,
 ) -> Result<TranslateResultDto, String> {
     let text = input.text;
     if text.trim().is_empty() {
@@ -258,23 +377,20 @@ pub fn translate_text_impl(
         provider_id: &provider_id,
     };
 
+    // 本请求的 generation：之后任何一次新请求都会让它失效。
+    let generation = runtime.tracker.begin();
+
     // 命中缓存：零网络，也不必读凭据（凭据缺失时仍可复用既有译文）。
     if let Some(translated) = lookup_cache(conn, &ctx) {
+        ensure_still_current(runtime.tracker, generation)?;
         record_history(conn, &ctx, &translated)?;
         return Ok(plain_dto(translated, &source, &target));
     }
 
-    let creds = load_credentials(&provider_id, cred_store, conn).map_err(|e| e.to_string())?;
-    let provider = build_provider(&provider_id, &creds, Some(ecdict_db))?;
-
-    let req = TranslateRequest {
-        text: text.to_string(),
-        source_lang: source.clone(),
-        target_lang: target.clone(),
-    };
-
-    // 改调 provider.translate（默认实现 = 单步 build/execute/parse；多步源如 Bing override）。
-    let response = provider.translate(&req, exec).map_err(|e| e.to_string())?;
+    let response = translate_uncached(conn, exec, &ctx, cred_store, ecdict_db, runtime);
+    // 任何副作用之前校验 generation：被取代的请求整条作废，不写缓存也不写历史。
+    ensure_still_current(runtime.tracker, generation)?;
+    let response = response?;
 
     // 只缓存 Plain。缓存表只存一段 `translated` 纯文本，`Dict` 的结构化 entry
     // （音标/词性分组释义/例句/词形）没有存放位置；若把 Dict 压成摘要写进缓存，
@@ -312,6 +428,38 @@ struct ResolvedTranslation<'a> {
     provider_id: &'a str,
 }
 
+/// 走网络（含退避重试）完成一次翻译，返回 provider 的统一响应。
+///
+/// 重试范围覆盖整个 provider 编排（含多步源内部的多次 HTTP），保证「同源」语义。
+///
+/// # Errors
+/// - 必填凭据缺失：返回含"未配置"的中文 Err（不触发执行器）
+/// - 瞬时错误重试耗尽 / 永久错误：`TranslateError` 转字符串
+fn translate_uncached(
+    conn: &Connection,
+    exec: &dyn HttpExecutor,
+    ctx: &ResolvedTranslation<'_>,
+    cred_store: &dyn CredStore,
+    ecdict_db: Arc<EcdictDb>,
+    runtime: &TranslateRuntime<'_>,
+) -> Result<TranslateResponse, String> {
+    let creds = load_credentials(ctx.provider_id, cred_store, conn).map_err(|e| e.to_string())?;
+    let provider = build_provider(ctx.provider_id, &creds, Some(ecdict_db))?;
+
+    let req = TranslateRequest {
+        text: ctx.text.to_string(),
+        source_lang: ctx.source.clone(),
+        target_lang: ctx.target.clone(),
+    };
+
+    retry_with_backoff(
+        runtime.max_attempts,
+        || provider.translate(&req, exec),
+        runtime.sleep,
+    )
+    .map_err(|e| e.to_string())
+}
+
 /// 按四元组查缓存（best-effort）。
 ///
 /// 命中返回已缓存译文；未命中或查询失败返回 `None`。缓存是纯优化，DB 读失败不应让
@@ -347,6 +495,15 @@ fn store_cache(conn: &Connection, ctx: &ResolvedTranslation<'_>, translated: &st
     );
     if let Err(e) = result {
         eprintln!("[QuickQuick] 写入翻译缓存失败，本次译文仍正常返回: {e}");
+    }
+}
+
+/// 返回结果前校验 generation：已被更新请求取代时返回取消错误。
+fn ensure_still_current(tracker: &InflightTracker, generation: u64) -> Result<(), String> {
+    if tracker.is_current(generation) {
+        Ok(())
+    } else {
+        Err(TRANSLATE_CANCELLED_MESSAGE.to_string())
     }
 }
 
@@ -396,6 +553,9 @@ pub fn list_translate_history_impl(conn: &Connection) -> Result<Vec<TranslateHis
 /// `source` 为具体语言码（如 "ja"）时跳过检测；为 "auto"/null/省略 时回退自动检测。
 /// 翻译成功后 emit `TRANSLATE_HISTORY_CHANGED_EVENT`，通知前端历史栏刷新；
 /// emit 失败仅 eprintln 记录，不影响翻译结果返回。
+///
+/// 走 `TranslateRuntime::production()`：真实退避休眠 + 进程内共享在途追踪器，
+/// 因此用户连续发起的翻译只有最新一次的结果会被采纳，旧请求返回取消错误。
 #[tauri::command]
 pub fn translate_text(
     app: AppHandle,
@@ -406,10 +566,11 @@ pub fn translate_text(
     target: Option<String>,
 ) -> Result<TranslateResultDto, String> {
     let settings_path = resolve_config_path(&app, "settings.json")?;
+    let runtime = TranslateRuntime::production();
     // secret 存进同一加密 DB 的 provider_secret 表（去 Keychain），故在 with_db 闭包内构造 DbCredStore。
     let result = with_db(&state, |conn| {
         let cred_store = DbCredStore::new(conn);
-        translate_text_impl(
+        translate_text_with_runtime(
             conn,
             &UreqExecutor,
             TranslateInput {
@@ -420,6 +581,7 @@ pub fn translate_text(
             &settings_path,
             &cred_store,
             Arc::clone(&ecdict.0),
+            &runtime,
         )
     });
     if result.is_ok() {
@@ -726,6 +888,18 @@ mod tests {
         .expect("统计缓存行数应成功")
     }
 
+    /// 构造运行期配置：注入不阻塞的 sleep 与独立 tracker。
+    fn runtime_with<'a>(
+        tracker: &'a InflightTracker,
+        sleep: &'a dyn Fn(u64),
+    ) -> TranslateRuntime<'a> {
+        TranslateRuntime {
+            max_attempts: TRANSLATE_MAX_ATTEMPTS,
+            sleep,
+            tracker,
+        }
+    }
+
     /// 自动检测方向的输入（原文 + 默认方向）。
     fn auto_input(text: &str) -> TranslateInput<'_> {
         TranslateInput {
@@ -950,5 +1124,256 @@ mod tests {
         );
         assert_eq!(fake.call_count(), 2, "Dict 不缓存，第二次仍走执行器");
         assert_eq!(cache_row_count(&conn), 0, "Dict 结果不应写入缓存");
+    }
+
+    // ---- 重试 / 取消接线（P1-7）----
+
+    /// 假执行器注入的错误种类。
+    #[derive(Clone, Copy)]
+    enum InjectedError {
+        /// 瞬时：服务端 5xx。
+        ServerError,
+        /// 永久：认证失败。
+        Auth,
+    }
+
+    impl InjectedError {
+        fn to_translate_error(self) -> TranslateError {
+            match self {
+                Self::ServerError => TranslateError::ServerError("HTTP 503".to_string()),
+                Self::Auth => TranslateError::Auth("HTTP 401".to_string()),
+            }
+        }
+    }
+
+    /// 前 `failures_left` 次调用返回注入错误、之后返回成功响应的假执行器。
+    struct FlakyExecutor {
+        failures_left: AtomicU32,
+        attempts: AtomicU32,
+        injected: InjectedError,
+        ok_response: String,
+    }
+
+    impl FlakyExecutor {
+        fn new(injected: InjectedError, failures: u32, ok_response: String) -> Self {
+            Self {
+                failures_left: AtomicU32::new(failures),
+                attempts: AtomicU32::new(0),
+                injected,
+                ok_response,
+            }
+        }
+
+        fn attempt_count(&self) -> u32 {
+            self.attempts.load(Ordering::SeqCst)
+        }
+    }
+
+    impl HttpExecutor for FlakyExecutor {
+        fn execute(&self, _req: &ProviderHttpRequest) -> Result<String, TranslateError> {
+            self.attempts.fetch_add(1, Ordering::SeqCst);
+            if self.failures_left.load(Ordering::SeqCst) > 0 {
+                self.failures_left.fetch_sub(1, Ordering::SeqCst);
+                return Err(self.injected.to_translate_error());
+            }
+            Ok(self.ok_response.clone())
+        }
+    }
+
+    #[test]
+    fn translate_text_with_runtime_retries_transient_error_then_succeeds() {
+        // Arrange：第一次返回 5xx、第二次成功；sleep 注入记录器，零真实等待
+        let conn = setup_test_db();
+        let exec = FlakyExecutor::new(
+            InjectedError::ServerError,
+            1,
+            lingva_ok_response("你好世界"),
+        );
+        let store = MockCredStore::new();
+        let settings_file = tempfile::NamedTempFile::new().unwrap();
+        write_settings_with_provider(settings_file.path(), "lingva");
+        let recorded: std::sync::Mutex<Vec<u64>> = std::sync::Mutex::new(Vec::new());
+        let sleep = |ms: u64| recorded.lock().unwrap().push(ms);
+        let tracker = InflightTracker::new();
+        let runtime = runtime_with(&tracker, &sleep);
+
+        // Act
+        let dto = translate_text_with_runtime(
+            &conn,
+            &exec,
+            auto_input("hello world"),
+            settings_file.path(),
+            &store,
+            placeholder_ecdict_db(),
+            &runtime,
+        )
+        .expect("瞬时错误重试后应成功");
+
+        // Assert：共尝试 2 次，退避序列为首次退避的 500ms
+        assert_eq!(dto.translated, "你好世界");
+        assert_eq!(exec.attempt_count(), 2, "瞬时错误应重试一次后成功");
+        assert_eq!(
+            *recorded.lock().unwrap(),
+            vec![500],
+            "退避序列应为 [500]，且未发生真实等待"
+        );
+    }
+
+    #[test]
+    fn translate_text_with_runtime_returns_permanent_error_without_retry() {
+        // Arrange：认证失败属于永久错误，不得重试
+        let conn = setup_test_db();
+        let exec = FlakyExecutor::new(InjectedError::Auth, 99, lingva_ok_response("不应被使用"));
+        let store = MockCredStore::new();
+        let settings_file = tempfile::NamedTempFile::new().unwrap();
+        write_settings_with_provider(settings_file.path(), "lingva");
+        let recorded: std::sync::Mutex<Vec<u64>> = std::sync::Mutex::new(Vec::new());
+        let sleep = |ms: u64| recorded.lock().unwrap().push(ms);
+        let tracker = InflightTracker::new();
+        let runtime = runtime_with(&tracker, &sleep);
+
+        // Act
+        let err = translate_text_with_runtime(
+            &conn,
+            &exec,
+            auto_input("hello world"),
+            settings_file.path(),
+            &store,
+            placeholder_ecdict_db(),
+            &runtime,
+        )
+        .expect_err("认证失败应直接返回错误");
+
+        // Assert：只调用 1 次，不进退避等待，错误归一为 Auth 文案
+        assert_eq!(exec.attempt_count(), 1, "永久错误不应重试");
+        assert!(
+            recorded.lock().unwrap().is_empty(),
+            "永久错误不应进入退避等待"
+        );
+        assert!(err.contains("认证错误"), "错误应归一为 Auth 变体: {err}");
+        assert_eq!(
+            crate::translate::history::translate_history_count(&conn).expect("查历史数应成功"),
+            0,
+            "失败的翻译不应写历史"
+        );
+    }
+
+    /// 在 `execute` 中发起一次新请求的假执行器，模拟「翻译进行中用户又提交了一次」。
+    struct SupersedingExecutor<'a> {
+        tracker: &'a InflightTracker,
+        response: String,
+    }
+
+    impl HttpExecutor for SupersedingExecutor<'_> {
+        fn execute(&self, _req: &ProviderHttpRequest) -> Result<String, TranslateError> {
+            // 故意丢弃新 generation：这里只关心「让本次请求的 generation 过期」。
+            let _ = self.tracker.begin();
+            Ok(self.response.clone())
+        }
+    }
+
+    #[test]
+    fn translate_text_with_runtime_discards_result_of_superseded_generation() {
+        // Arrange：执行器在「网络往返」中发起新请求，使本次 generation 立即过期
+        let conn = setup_test_db();
+        let tracker = InflightTracker::new();
+        let exec = SupersedingExecutor {
+            tracker: &tracker,
+            response: lingva_ok_response("你好世界"),
+        };
+        let store = MockCredStore::new();
+        let settings_file = tempfile::NamedTempFile::new().unwrap();
+        write_settings_with_provider(settings_file.path(), "lingva");
+        let noop_sleep = |_ms: u64| {};
+        let runtime = runtime_with(&tracker, &noop_sleep);
+
+        // Act
+        let result = translate_text_with_runtime(
+            &conn,
+            &exec,
+            auto_input("hello world"),
+            settings_file.path(),
+            &store,
+            placeholder_ecdict_db(),
+            &runtime,
+        );
+
+        // Assert：旧 generation 的结果被丢弃，且不留下缓存/历史副作用
+        let err = result.expect_err("旧 generation 的结果应被丢弃");
+        assert_eq!(err, TRANSLATE_CANCELLED_MESSAGE);
+        assert_eq!(cache_row_count(&conn), 0, "被作废的请求不应写缓存");
+        assert_eq!(
+            crate::translate::history::translate_history_count(&conn).expect("查历史数应成功"),
+            0,
+            "被作废的请求不应写历史"
+        );
+    }
+
+    // ---- 错误归一（P1-7）----
+
+    /// 在本地回环起一个只回一行状态行的 HTTP 服务，返回监听端口。
+    ///
+    /// 用于真实走通 `UreqExecutor` → ureq → 非 2xx 状态码的归一链路，全程不访问外网。
+    fn spawn_http_status_server(status_line: &'static str) -> u16 {
+        use std::io::{BufRead, BufReader, Write};
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("绑定回环端口应成功");
+        let port = listener.local_addr().expect("读取本地地址应成功").port();
+        std::thread::spawn(move || {
+            if let Ok((mut stream, _)) = listener.accept() {
+                let mut reader = BufReader::new(stream.try_clone().expect("克隆连接应成功"));
+                let mut line = String::new();
+                // 读完请求头再回响应，避免客户端仍在写请求时被提前关闭连接
+                while reader.read_line(&mut line).unwrap_or(0) > 0 {
+                    let is_header_end = line == "\r\n" || line == "\n";
+                    line.clear();
+                    if is_header_end {
+                        break;
+                    }
+                }
+                let response = format!(
+                    "HTTP/1.1 {status_line}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                );
+                let _ = stream.write_all(response.as_bytes());
+                let _ = stream.flush();
+            }
+        });
+        port
+    }
+
+    #[test]
+    fn ureq_executor_normalizes_http_status_errors() {
+        // Arrange：覆盖认证失败、限流、服务端错误三类状态码
+        let cases = [
+            ("401 Unauthorized", "auth"),
+            ("403 Forbidden", "auth"),
+            ("429 Too Many Requests", "rate_limit"),
+            ("503 Service Unavailable", "server_error"),
+        ];
+
+        for (status_line, expected) in cases {
+            let port = spawn_http_status_server(status_line);
+            let req = ProviderHttpRequest {
+                method: "GET",
+                url: format!("http://127.0.0.1:{port}/"),
+                body: None,
+                headers: vec![],
+            };
+
+            // Act
+            let err = UreqExecutor
+                .execute(&req)
+                .expect_err("非 2xx 状态码应返回错误");
+
+            // Assert：状态码被归一为具体变体，而非笼统的 Network
+            let actual = match &err {
+                TranslateError::Auth(_) => "auth",
+                TranslateError::RateLimit(_) => "rate_limit",
+                TranslateError::ServerError(_) => "server_error",
+                TranslateError::Network(_) => "network",
+                _ => "other",
+            };
+            assert_eq!(actual, expected, "HTTP {status_line} 的归一结果不符: {err}");
+        }
     }
 }
