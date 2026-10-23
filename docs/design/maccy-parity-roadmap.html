@@ -1,0 +1,818 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>QuickQuick 对标 Maccy 全面升级方案</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<script>
+(function(){
+  try{
+    var saved=localStorage.getItem('dotfiles-theme');
+    var prefersDark=window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches;
+    document.documentElement.setAttribute('data-theme', saved || (prefersDark?'dark':'light'));
+    document.documentElement.setAttribute('data-nav', localStorage.getItem('dotfiles-nav')==='hidden'?'hidden':'shown');
+  }catch(e){
+    document.documentElement.setAttribute('data-theme','light');
+    document.documentElement.setAttribute('data-nav','shown');
+  }
+})();
+</script>
+<style>
+/*
+ * ============================================================================
+ * Wayfinder — dotfiles 仓全局文档设计系统（母版样式表）
+ * ----------------------------------------------------------------------------
+ * 取代旧的「Fjord / Nordic Serenity」。气质：精确、克制、现代、有结构感、
+ * 信息密但不挤、专业而不冷漠。技术读者在 1m 笔记本距离快速扫读 + 精确定位。
+ *
+ * 三支柱（硬约束）：
+ *   ① 字扛轻重 —— 正文近黑 #191c1d，字号抬档（正文 ≥16px、表格/卡片 ≥14.5px），
+ *      模块化字阶（~1.22），字重明确跳变。轻重永远靠 字号+字重+黑度，绝不靠色相。
+ *   ② 色扛分区（wayfinding）—— ≤6 个章节色，固定语义，染 章节条/编号/行内强调/
+ *      该章 chip/侧栏当前章高亮。三铁律：封顶 ≤6 / 色绝不单独承载（永配编号文字、
+ *      对比达标、色盲可读）/ 同章同源。代码与链接用跨章一致的中性技术色，不算章色。
+ *   ③ 版式与主题 —— 左侧常驻两栏导航（去掉右栏 On this page）、提密度、去模板化
+ *      （不再 topbar+hero 渐变带+单栏卡流）、组件现代化；亮/暗双主题。
+ *
+ * 用法（重要）：
+ *   - CSS 内联：把本文件整段内联进每个 HTML 的 <style>，不外链 —— 保证文档自包含、
+ *     双击即开、可移植。骨架范例见同目录 template.html，规范见 DESIGN.md。
+ *   - 字体：<head> 加 Google Fonts
+ *       Inter:wght@400;500;600;700  +  JetBrains+Mono:wght@400;500
+ *   - 结构骨架：.shell（两栏）> aside.nav（brand + theme-toggle + 章节列表）
+ *       + main.main > .content（.doc-head + 若干 section[data-c="1..5"]）+ .footer
+ *   - 双主题：在 <head> body 前放「防闪烁」脚本，body 渲染前据 localStorage /
+ *       prefers-color-scheme 在 <html> 上写 data-theme；body 尾部脚本接 theme toggle
+ *       与 scroll-spy。active 高亮由 CSS 跟随主题自动切换，脚本只切 class，不写色。
+ * ============================================================================
+ */
+
+/* ===== LIGHT THEME tokens ===== */
+:root{
+  color-scheme:light;
+
+  /* ---- ink：层级靠黑度(tonal)，从不靠色相 ---- */
+  --ink-900:#191c1d;          /* 正文 — 近黑 */
+  --ink-700:#33383b;          /* 强次级 */
+  --ink-500:#5b6166;          /* 真·caption / 脚注 */
+  --ink-400:#7a8186;          /* 最弱提示 */
+
+  /* ---- 面 / 边 ---- */
+  --bg:#ffffff;
+  --bg-soft:#f7f8f9;          /* 代码 / 面板底 */
+  --bg-sunk:#f0f2f4;          /* 更沉的底（nav 编号块等） */
+  --rule:#e6e9ec;             /* 发丝线 */
+  --rule-strong:#d4d9dd;      /* 容器边 */
+
+  /* ---- 代码 & 链接：跨章一致的中性技术色，不算章色 ---- */
+  --code-ink:#9a3b66;
+  --code-bg:#f7f1f4;
+  --code-border:#efe3ea;
+  --link:#1a5fb4;
+
+  /* ---- 实心章色块上的文字色 ---- */
+  --c-ink:#ffffff;
+
+  /* ---- 5 章 wayfinding 色（≤6，固定语义；base/soft/rule 三件套）---- */
+  --c1:#5b54e6;  --c1-soft:#edecfb;  --c1-rule:#d6d3f7;
+  --c2:#0e7c86;  --c2-soft:#e2f1f2;  --c2-rule:#c3e2e4;
+  --c3:#1a7f4b;  --c3-soft:#e3f2ea;  --c3-rule:#c2e5d1;
+  --c4:#b25a00;  --c4-soft:#f8eede;  --c4-rule:#f0d9b5;
+  --c5:#a02b7e;  --c5-soft:#f7e6f1;  --c5-rule:#eecae0;
+
+  /* ---- 状态 chip（语义固定；done/moot/wait/new/meta）---- */
+  --chip-done-bg:#e3f2ea;  --chip-done-tx:#1a7f4b;
+  --chip-moot-bg:#eceef0;  --chip-moot-tx:#6b7176;
+  --chip-wait-bg:#f7eed8;  --chip-wait-tx:#8a6a23;
+  --chip-new-bg:#edecfb;   --chip-new-tx:#4a43c8;
+  --chip-meta-bg:#f0f2f4;  --chip-meta-tx:#5b6166;
+
+  /* ---- 几何 / 排版 ---- */
+  --maxw:none;          /* 容器铺满显示区；正文可读性由 p/ul 的 ch 上限保证 */
+  --nav-w:264px;
+
+  --font-sans:"Inter","Source Han Sans SC","Noto Sans SC","PingFang SC","Microsoft YaHei",system-ui,-apple-system,sans-serif;
+  --font-mono:"JetBrains Mono","SFMono-Regular",ui-monospace,"Menlo",monospace;
+
+  /* 模块化字阶 ~1.22 */
+  --step-0:16.5px;   /* 正文 */
+  --step-1:19px;     /* subtitle / h3 / point 标题 */
+  --step-2:23px;     /* 次级标题 */
+  --step-3:28px;     /* h2 */
+  --step-4:35px;     /* h1 */
+}
+
+/* ===== DARK THEME tokens ===== 章色为深底重新调亮、保持可辨；面/边/代码/状态同步深化（非反色）===== */
+html[data-theme="dark"]{
+  color-scheme:dark;
+
+  --ink-900:#e7eaec;
+  --ink-700:#aeb4b8;
+  --ink-500:#828a8f;
+  --ink-400:#666d72;
+
+  --bg:#111315;
+  --bg-soft:#1a1d20;
+  --bg-sunk:#22262a;
+  --rule:#262a2d;
+  --rule-strong:#373c40;
+
+  --code-ink:#e7a6c6;
+  --code-bg:#251c21;
+  --code-border:#3a2c33;
+  --link:#7fb0ea;
+
+  --c-ink:#14120f;            /* 亮章色块上改用深字 */
+
+  --c1:#9d97ff;  --c1-soft:#211f3b;  --c1-rule:#383472;
+  --c2:#3fc9d6;  --c2-soft:#0e2b2d;  --c2-rule:#1d4a4d;
+  --c3:#4cc481;  --c3-soft:#0f2a1d;  --c3-rule:#1d4a31;
+  --c4:#e8a24a;  --c4-soft:#2c2211;  --c4-rule:#4d3a17;
+  --c5:#ec80c2;  --c5-soft:#2b1524;  --c5-rule:#4c2540;
+
+  --chip-done-bg:#0f2a1d;  --chip-done-tx:#6cd29a;
+  --chip-moot-bg:#23272b;  --chip-moot-tx:#9aa1a6;
+  --chip-wait-bg:#2c2511;  --chip-wait-tx:#e0bd6a;
+  --chip-new-bg:#211f3b;   --chip-new-tx:#b3aeff;
+  --chip-meta-bg:#22262a;  --chip-meta-tx:#909799;
+}
+
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+
+*{box-sizing:border-box;margin:0;padding:0}
+html{scroll-behavior:smooth}
+body{
+  font-family:var(--font-sans);
+  font-size:var(--step-0);
+  line-height:1.68;
+  color:var(--ink-900);
+  background:var(--bg);
+  -webkit-font-smoothing:antialiased;
+  text-rendering:optimizeLegibility;
+  transition:background-color .25s ease,color .25s ease;
+}
+.mono{font-family:var(--font-mono)}
+.nav,.codeblock,.codeblock .cb-head,.callout,.tbl-wrap,.figs,.theme-toggle,.cards .card,.cmd-group,.mermaid-target,code,thead th,.point .pn,.chip{
+  transition:background-color .25s ease,border-color .25s ease,color .25s ease;
+}
+
+/* ---- 每章 accent 作用域：section 内一切 var(--c)/(--c-soft)/(--c-rule) 都取本章源 ---- */
+section[data-c="1"]{--c:var(--c1);--c-soft:var(--c1-soft);--c-rule:var(--c1-rule)}
+section[data-c="2"]{--c:var(--c2);--c-soft:var(--c2-soft);--c-rule:var(--c2-rule)}
+section[data-c="3"]{--c:var(--c3);--c-soft:var(--c3-soft);--c-rule:var(--c3-rule)}
+section[data-c="4"]{--c:var(--c4);--c-soft:var(--c4-soft);--c-rule:var(--c4-rule)}
+section[data-c="5"]{--c:var(--c5);--c-soft:var(--c5-soft);--c-rule:var(--c5-rule)}
+
+/* ---- nav 链接自带章色 → active 高亮 CSS 跟随主题自动切换 ---- */
+#navlist a[data-c="1"]{--accent:var(--c1);--accent-soft:var(--c1-soft)}
+#navlist a[data-c="2"]{--accent:var(--c2);--accent-soft:var(--c2-soft)}
+#navlist a[data-c="3"]{--accent:var(--c3);--accent-soft:var(--c3-soft)}
+#navlist a[data-c="4"]{--accent:var(--c4);--accent-soft:var(--c4-soft)}
+#navlist a[data-c="5"]{--accent:var(--c5);--accent-soft:var(--c5-soft)}
+
+/* ============================================================
+   SHELL — 两栏（左 nav + 内容），≤820px 堆叠
+   ============================================================ */
+.shell{
+  display:grid;
+  grid-template-columns:var(--nav-w) minmax(0,1fr);
+  align-items:start;
+  max-width:none;               /* 铺满显示区；窄屏由媒体查询收成单栏 */
+  margin:0;
+  transition:grid-template-columns .18s ease;
+}
+
+/* ---- LEFT：常驻章节导航 ---- */
+.nav{
+  position:sticky;top:0;height:100vh;overflow-y:auto;
+  border-right:1px solid var(--rule);
+  padding:22px 20px 40px 28px;
+  background:var(--bg);
+}
+.brand{
+  display:flex;align-items:center;justify-content:space-between;gap:10px;
+  padding-bottom:16px;margin-bottom:18px;border-bottom:1px solid var(--rule);
+}
+.brand-tools{display:flex;align-items:center;gap:7px;flex-shrink:0}
+.brand-id{display:flex;align-items:baseline;gap:9px}
+.brand .logo{font-size:20px;font-weight:700;letter-spacing:-.02em;color:var(--ink-900)}
+.brand .tag{font-size:12px;color:var(--ink-500);font-weight:500}
+
+/* theme toggle：月亮·太阳 SVG 按主题切换 + 暗色/亮色 文字 */
+.theme-toggle{
+  display:inline-flex;align-items:center;gap:6px;flex-shrink:0;
+  padding:5px 9px;border:1px solid var(--rule-strong);border-radius:7px;
+  background:var(--bg-soft);color:var(--ink-700);
+  font-family:var(--font-sans);font-size:12px;font-weight:500;
+  cursor:pointer;line-height:1;
+  white-space:nowrap;
+}
+.theme-toggle:hover{border-color:var(--ink-400);color:var(--ink-900)}
+.theme-toggle svg{display:block}
+.theme-toggle .tt-sun{display:none}
+.theme-toggle .tt-moon{display:block}
+html[data-theme="dark"] .theme-toggle .tt-sun{display:block}
+html[data-theme="dark"] .theme-toggle .tt-moon{display:none}
+.theme-toggle .tt-text::after{content:"暗色"}
+html[data-theme="dark"] .theme-toggle .tt-text::after{content:"亮色"}
+
+.nav-label{
+  font-size:11px;font-weight:600;letter-spacing:.09em;text-transform:uppercase;
+  color:var(--ink-400);margin:0 0 10px 8px;
+}
+.nav ol{list-style:none}
+.nav li{margin:1px 0}
+.nav a{
+  display:flex;align-items:center;gap:11px;
+  padding:7px 9px;border-radius:7px;
+  text-decoration:none;color:var(--ink-700);
+  font-size:14.5px;font-weight:500;line-height:1.35;
+  transition:background .12s,color .12s;
+}
+.nav a .num{
+  flex:0 0 auto;width:21px;height:21px;border-radius:5px;
+  display:grid;place-items:center;
+  font-family:var(--font-mono);font-size:11.5px;font-weight:500;
+  background:var(--bg-sunk);color:var(--ink-500);
+  transition:background .12s,color .12s;
+}
+.nav a:hover{background:var(--bg-soft);color:var(--ink-900)}
+.nav a.active{color:var(--accent);font-weight:600;background:var(--accent-soft)}
+.nav a.active .num{background:var(--accent);color:var(--c-ink)}
+.nav-toggle{
+  display:inline-flex;align-items:center;gap:5px;flex-shrink:0;
+  padding:5px 9px;border:1px solid var(--rule-strong);border-radius:7px;
+  background:var(--bg-soft);color:var(--ink-700);
+  font-family:var(--font-sans);font-size:12px;font-weight:500;
+  cursor:pointer;line-height:1;white-space:nowrap;
+}
+.nav-toggle:hover{border-color:var(--ink-400);color:var(--ink-900)}
+/* 章节栏折叠：hidden 时左栏收成 0，浮动控件接管「目录 / 主题」两个开关 */
+html[data-nav="hidden"] .shell{grid-template-columns:0 minmax(0,1fr)}
+html[data-nav="hidden"] .nav{opacity:0;visibility:hidden;padding:0;border-right:none;overflow:hidden}
+html[data-nav="hidden"] .nav a,html[data-nav="hidden"] .nav button{pointer-events:none}
+.nav{transition:opacity .15s ease}
+.float-tools{position:fixed;left:14px;top:14px;z-index:60;display:none;gap:7px}
+html[data-nav="hidden"] .float-tools{display:flex}
+.nav-foot{
+  margin-top:26px;padding-top:16px;border-top:1px solid var(--rule);
+  font-size:12px;color:var(--ink-500);line-height:1.6;
+}
+
+/* ---- CENTER：内容 ---- */
+.main{padding:46px clamp(28px,3.2vw,80px) 120px;min-width:0}
+.content{max-width:var(--maxw);margin:0}
+section > ul,section > ol,section > blockquote{max-width:86ch}
+
+/* ---- 文档头 ---- */
+.doc-head{padding-bottom:30px;margin-bottom:14px;border-bottom:1px solid var(--rule)}
+.doc-head .eyebrow{
+  font-family:var(--font-mono);font-size:12px;letter-spacing:.04em;
+  color:var(--ink-500);margin-bottom:14px;display:flex;gap:10px;flex-wrap:wrap;
+}
+.doc-head .eyebrow span{padding:2px 8px;border:1px solid var(--rule-strong);border-radius:5px}
+h1{font-size:var(--step-4);font-weight:700;letter-spacing:-.025em;line-height:1.1;color:var(--ink-900);margin-bottom:10px}
+.subtitle{font-size:var(--step-1);color:var(--ink-700);font-weight:500;margin-bottom:18px;letter-spacing:-.01em}
+.lede{font-size:17px;color:var(--ink-700);line-height:1.7;max-width:66ch}
+
+/* ---- section / 章节 ---- */
+section{scroll-margin-top:24px;padding-top:44px}
+.chapter-bar{display:flex;align-items:center;gap:14px;margin-bottom:8px}
+.chapter-bar .cnum{
+  flex:0 0 auto;font-family:var(--font-mono);font-size:13px;font-weight:500;
+  color:var(--c-ink);background:var(--c);
+  padding:3px 9px;border-radius:6px;letter-spacing:.02em;
+}
+.chapter-bar .rule{flex:1;height:1px;background:var(--c-rule)}
+h2{font-size:var(--step-3);font-weight:700;letter-spacing:-.02em;color:var(--ink-900);line-height:1.2;margin-bottom:18px}
+h3{font-size:var(--step-1);font-weight:600;letter-spacing:-.01em;color:var(--ink-900);margin:30px 0 12px}
+.subhead{font-size:var(--step-2);font-weight:600;letter-spacing:-.015em;color:var(--ink-900);margin:34px 0 14px}
+section > p{margin-bottom:16px;max-width:68ch}
+
+/* ---- 行内 code + 链接 + 强调 ---- */
+code{
+  font-family:var(--font-mono);font-size:.86em;font-weight:500;
+  color:var(--code-ink);background:var(--code-bg);
+  padding:1.5px 5px;border-radius:5px;border:1px solid var(--code-border);
+  word-break:break-word;
+}
+/* 章内行内代码可染本章色，作「该章强调」用（仍配文字，不单独承载） */
+section code.c-em{color:var(--c);background:var(--c-soft);border-color:var(--c-rule)}
+a.link{color:var(--link);text-decoration:none;border-bottom:1px solid color-mix(in srgb,var(--link) 45%,transparent);padding-bottom:.5px}
+a.link:hover{border-bottom-color:var(--link)}
+strong{font-weight:600;color:var(--ink-900)}
+blockquote{
+  border-left:3px solid var(--rule-strong);
+  background:var(--bg-soft);
+  padding:14px 18px;
+  border-radius:0 9px 9px 0;
+  margin:16px 0;
+  color:var(--ink-700);
+}
+blockquote > *:first-child{margin-top:0}
+blockquote > *:last-child{margin-bottom:0}
+
+/* ---- 关键数字（figures）---- */
+.figs{
+  display:grid;grid-template-columns:repeat(4,1fr);gap:0;
+  border:1px solid var(--rule-strong);border-radius:11px;overflow:hidden;
+  margin:6px 0 22px;background:var(--bg);
+}
+.fig{padding:18px 18px 16px;border-right:1px solid var(--rule)}
+.fig:last-child{border-right:none}
+.fig .top{width:22px;height:3px;border-radius:2px;background:var(--c);margin-bottom:14px}
+.fig .v{font-size:30px;font-weight:700;letter-spacing:-.03em;color:var(--ink-900);line-height:1;display:flex;align-items:baseline;gap:3px}
+.fig .v .u{font-size:15px;font-weight:600;color:var(--c)}
+.fig .k{font-size:13.5px;color:var(--ink-700);margin-top:9px;line-height:1.45}
+
+/* ---- 分点 / 原则列表（支持嵌套子列表）---- */
+.points{display:flex;flex-direction:column;gap:0;border-top:1px solid var(--rule)}
+.point{padding:18px 0;border-bottom:1px solid var(--rule);display:grid;grid-template-columns:auto 1fr;gap:0 16px;align-items:start}
+.point .pn{
+  font-family:var(--font-mono);font-size:12.5px;font-weight:500;
+  color:var(--c);background:var(--c-soft);
+  width:26px;height:26px;border-radius:7px;display:grid;place-items:center;
+}
+.point .pbody .pt{font-size:17px;font-weight:600;color:var(--ink-900);margin-bottom:5px;letter-spacing:-.01em}
+.point .pbody .pd{font-size:15.5px;color:var(--ink-700);line-height:1.62}
+/* 嵌套二级 bullet：旧 README principles 的子列表 */
+.point .pbody ul,.pd ul{list-style:none;margin:9px 0 2px;padding:0}
+.point .pbody ul li,.pd ul li{
+  position:relative;padding:4px 0 4px 18px;font-size:15px;color:var(--ink-700);line-height:1.6;
+}
+.point .pbody ul li::before,.pd ul li::before{
+  content:"";position:absolute;left:1px;top:13px;width:7px;height:2px;border-radius:2px;background:var(--c);
+}
+
+/* ---- 代码 / 命令块（取代旧 .ladder）---- */
+.codeblock{margin:14px 0 18px;border:1px solid var(--rule-strong);border-radius:10px;overflow:hidden;background:var(--bg-soft)}
+.codeblock .cb-head{display:flex;align-items:center;gap:8px;padding:8px 14px;border-bottom:1px solid var(--rule);background:var(--bg)}
+.codeblock .cb-head .dot{width:9px;height:9px;border-radius:50%;background:var(--c-rule);border:1px solid var(--c)}
+.codeblock .cb-head .lbl{font-family:var(--font-mono);font-size:12px;color:var(--ink-500);font-weight:500}
+.codeblock pre{padding:15px 16px;overflow-x:auto;font-family:var(--font-mono);font-size:13.5px;line-height:1.72;color:var(--ink-900)}
+.codeblock pre .cm{color:var(--ink-400)}              /* 注释 */
+.codeblock pre .pr{color:var(--c);user-select:none}   /* 提示符 */
+/* 目录树：枝干 ├──│ 与目录名(/ 结尾)取本章色，文件名留正文色——色只分「目录/结构」不分轻重 */
+.filetree .br{color:var(--c,var(--ink-700))}                 /* 枝干 ├── └── │ */
+.filetree .d{color:var(--c,var(--ink-700));font-weight:600}  /* 目录名 */
+
+/* ---- Mermaid 图块：默认输出源码，浏览器端渲染成功（.is-rendered）后才换成图；离线/语法错误保留源码 ---- */
+.mermaid-block{margin:14px 0 18px}
+.mermaid-block .mermaid-source{margin:0}
+.mermaid-block .mermaid-target{display:none;padding:14px 16px;border:1px solid var(--rule-strong);border-radius:10px;background:var(--bg-soft);overflow-x:auto}
+.mermaid-block.is-rendered .mermaid-source{display:none}
+.mermaid-block.is-rendered .mermaid-target{display:block}
+.mermaid-target svg{display:block;max-width:100%;height:auto;margin:0 auto}
+
+/* ---- callout（用本章色调）---- */
+.callout{border:1px solid var(--c-rule);border-left:3px solid var(--c);border-radius:9px;background:var(--c-soft);padding:15px 18px;margin:16px 0}
+.callout .ch{display:flex;align-items:center;gap:8px;font-size:13px;font-weight:600;letter-spacing:.02em;color:var(--c);margin-bottom:6px;text-transform:uppercase}
+.callout .ch::before{content:"";width:14px;height:14px;border-radius:4px;border:2px solid var(--c);background:transparent}
+.callout p{font-size:15.5px;color:var(--ink-700);line-height:1.62;margin:0;max-width:none}
+
+/* ---- 表格 ---- */
+.tbl-wrap{margin:16px 0 18px;border:1px solid var(--rule-strong);border-radius:10px;overflow:hidden;background:var(--bg)}
+table{width:100%;border-collapse:collapse;font-size:15px}
+thead th{text-align:left;font-weight:600;font-size:13px;letter-spacing:.03em;text-transform:uppercase;color:var(--ink-500);background:var(--bg-soft);padding:11px 16px;border-bottom:1px solid var(--rule-strong)}
+tbody td{padding:13px 16px;border-bottom:1px solid var(--rule);vertical-align:top;color:var(--ink-700);line-height:1.55}
+tbody tr:last-child td{border-bottom:none}
+tbody tr:hover{background:var(--bg-soft)}
+tbody td:first-child{white-space:nowrap}
+td strong{color:var(--ink-900)}
+/* 表格内常见编码列（mono；语义中性，非章色）：阶/编号/型号等 */
+.scode{font-family:var(--font-mono);font-weight:600;color:var(--ink-900);white-space:nowrap}
+.pcode{font-family:var(--font-mono);color:var(--ink-500);white-space:nowrap}
+.phase-num{font-family:var(--font-mono);font-weight:600;color:var(--c,var(--ink-700));white-space:nowrap}
+.layer-cell{font-weight:600;color:var(--ink-900);white-space:nowrap}
+.model{font-family:var(--font-mono);font-size:13px;color:var(--ink-500);white-space:nowrap}
+.model.opus{color:var(--code-ink);font-weight:500}
+
+/* ---- 状态 chip（多态；语义固定，亮/暗都可读）---- */
+.chip{display:inline-flex;align-items:center;gap:5px;white-space:nowrap;font-size:12.5px;font-weight:500;padding:3px 10px;border-radius:999px;line-height:1.45}
+.chip.done{background:var(--chip-done-bg);color:var(--chip-done-tx)}
+.chip.moot{background:var(--chip-moot-bg);color:var(--chip-moot-tx)}
+.chip.wait{background:var(--chip-wait-bg);color:var(--chip-wait-tx)}
+.chip.new{background:var(--chip-new-bg);color:var(--chip-new-tx)}
+.chip.meta{background:var(--chip-meta-bg);color:var(--chip-meta-tx);font-family:var(--font-mono);font-size:11px;letter-spacing:.02em}
+
+/* ---- 通用卡片栅格 ---- */
+.cards{display:grid;gap:14px;grid-template-columns:repeat(2,1fr);margin:6px 0 18px}
+.card{border:1px solid var(--rule-strong);border-radius:11px;background:var(--bg);padding:18px 20px}
+.card .card-top{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px}
+.card .card-id{font-family:var(--font-mono);font-size:12px;font-weight:600;color:var(--c-ink);background:var(--c);padding:2px 9px;border-radius:6px}
+.card h3{font-size:16px;font-weight:600;color:var(--ink-900);margin:0;flex:1;min-width:140px;line-height:1.3;letter-spacing:-.01em}
+.card p{font-size:15px;color:var(--ink-700);line-height:1.6;margin:0;max-width:none}
+.card .card-foot{margin-top:12px}
+
+/* 命令组卡（旧 .cmd-group 现代等价物）：mono 标题 + 多条命令 */
+.cmd-group{border:1px solid var(--rule-strong);border-radius:11px;background:var(--bg);padding:18px 20px}
+.cmd-group h4{font-family:var(--font-mono);font-size:11px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--c,var(--ink-500));margin:0 0 12px}
+.cmd-group p{font-size:14.5px;color:var(--ink-700);line-height:1.85;margin:0;max-width:none}
+.cmd-group code{font-size:13px}
+
+/* ---- 页脚 ---- */
+.footer{margin-top:64px;padding-top:22px;border-top:1px solid var(--rule);font-size:13px;color:var(--ink-500);line-height:1.6}
+
+/* ============================================================
+   响应式：≤820px 堆叠为单栏，nav 转顶部条；栅格收为单/双列
+   ============================================================ */
+@media (max-width:820px){
+  .shell{grid-template-columns:1fr}
+  html[data-nav="hidden"] .nav{display:none}
+  .nav{position:static;height:auto;border-right:none;border-bottom:1px solid var(--rule)}
+  .main{padding:32px 22px 80px}
+  .figs{grid-template-columns:repeat(2,1fr)}
+  .fig:nth-child(2){border-right:none}
+  .fig:nth-child(1),.fig:nth-child(2){border-bottom:1px solid var(--rule)}
+  .cards{grid-template-columns:1fr}
+}
+
+@media print{
+  body{background:#fff}
+  .nav{position:static;height:auto}
+  section{break-inside:avoid}
+}
+
+</style>
+</head>
+<body>
+<div class="shell">
+<aside class="nav">
+  <div class="brand">
+    <span class="brand-id"><span class="logo">QuickQuick</span><span class="tag">Project docs</span></span>
+    <span class="brand-tools">
+    <button class="nav-toggle" type="button" data-nav-toggle aria-label="折叠章节栏" title="折叠章节栏（快捷键 [）">⇤</button>
+    <button class="theme-toggle" id="themeToggle" type="button" aria-label="切换亮色 / 暗色">
+      <svg class="tt-moon" viewBox="0 0 24 24" width="14" height="14"
+        fill="none" stroke="currentColor" stroke-width="2"
+        stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M21 12.8A9 9 0 1 1 11.2 3 7 7 0 0 0 21 12.8z"/>
+      </svg>
+      <svg class="tt-sun" viewBox="0 0 24 24" width="14" height="14"
+        fill="none" stroke="currentColor" stroke-width="2"
+        stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <circle cx="12" cy="12" r="4"/>
+        <path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>
+      </svg>
+      <span class="tt-text"></span>
+    </button>
+    </span>
+  </div>
+  <p class="nav-label">章节</p>
+  <ol id="navlist">
+<li><a href="#0-摘要-五个必须先接受的判断" data-c="1"><span class="num">01</span>0. 摘要：五个必须先接受的判断</a></li>
+<li><a href="#1-调研方法与证据边界" data-c="2"><span class="num">02</span>1. 调研方法与证据边界</a></li>
+<li><a href="#2-差距分析-四层-一层债" data-c="3"><span class="num">03</span>2. 差距分析：四层 + 一层债</a></li>
+<li><a href="#3-需要你裁决的五个取舍" data-c="4"><span class="num">04</span>3. 需要你裁决的五个取舍</a></li>
+<li><a href="#4-分阶段方案" data-c="5"><span class="num">05</span>4. 分阶段方案</a></li>
+<li><a href="#5-不做的事-明确边界" data-c="1"><span class="num">06</span>5. 不做的事（明确边界）</a></li>
+<li><a href="#6-风险登记" data-c="2"><span class="num">07</span>6. 风险登记</a></li>
+<li><a href="#7-验证方式" data-c="3"><span class="num">08</span>7. 验证方式</a></li>
+<li><a href="#8-一页纸结论" data-c="4"><span class="num">09</span>8. 一页纸结论</a></li>
+<li><a href="#附-裁决结果-2026-10-24-确认" data-c="5"><span class="num">10</span>附：裁决结果（2026-10-24 确认）</a></li>
+  </ol>
+  <p class="nav-foot">Generated from Markdown<br>Wayfinder global doc style</p>
+</aside>
+<main class="main">
+<div class="content">
+<header class="doc-head">
+  <div class="eyebrow"><span>待确认</span><span>2026-10-24</span><span>v0.4.x → v0.5.x</span><span>REA 对 Maccy 2.6.1 发布态的逆向取证 + Maccy 2.6.1 源码对照 + QuickQuick 全域只读代码审计</span></div>
+  <h1>QuickQuick 对标 Maccy 全面升级方案</h1>
+  <p class="subtitle">---</p>
+  <p class="lede">Markdown 是权威正文；本 HTML 由 <code>docs/design/maccy-parity-roadmap.md</code> 生成，仅作为同内容视觉化呈现。</p>
+</header>
+<ul><li>状态：待确认</li>
+<li>日期：2026-10-24</li>
+<li>目标版本：v0.4.x → v0.5.x</li>
+<li>依据：REA 对 Maccy 2.6.1 发布态的逆向取证 + Maccy 2.6.1 源码对照 + QuickQuick 全域只读代码审计</li></ul>
+<p>---</p>
+<section id="0-摘要-五个必须先接受的判断" data-c="1">
+<div class="chapter-bar"><span class="cnum">01</span><span class="rule"></span></div>
+<h2>0. 摘要：五个必须先接受的判断</h2>
+<p>在给出方案前，有五个判断会直接改变方案形状。它们不是修辞，是本轮调研推翻或确认的事实。</p>
+<p><strong>判断一：Maccy 的功能面比「标杆」印象窄得多。</strong> 实测它的功能边界是：6 类 pasteboard 类型、200 条上限、4 种搜索模式、6 个设置页、<strong>0 个右键菜单、0 个多选、0 个粘贴栈、0 个导入导出、0 个多词 AND 搜索</strong>。它没有 OCR 之外的内容理解，没有翻译，存储不加密。</p>
+<p>所以「全面看齐 Maccy」如果按字面理解，是一个<strong>比想象中小</strong>的目标。真正值得看齐的是它把一条窄路径打磨到极致的部分：交互模型、捕获完整性、规则系统、搜索手感、本地化工程。</p>
+<p><strong>判断二：粘贴栈不存在，不要为它立项。</strong> 调研初期我曾把它列为 Maccy 的核心能力（这也是社区常见误解）。全量枚举 76 个 Swift 文件后确认：<strong>Maccy 2.6.1 没有任何 Paste Stack / 队列 / 多选实现</strong>。它用两套机制覆盖「连续粘贴」需求：</p>
+<ul><li><strong>字母 pin</strong>：<code>pin</code> 字段存单个字母（<code>b</code>–<code>y</code>，排除 <code>a/q/v/w/z</code>），20 个键位持久化在库里，重启不变。按 <code>b</code>/<code>c</code> 即取该条粘贴。</li>
+<li><strong>数字直达</strong>：前 10 条 unpinned 自动绑定 <code>1</code>–<code>0</code>。</li></ul>
+<p>体验上比粘贴栈<strong>少一步</strong>（不需要先组队列），但覆盖不了「临时挑 5 条按顺序贴进一个表单」。这是 QuickQuick 可以<strong>超越</strong>的地方，不是「看齐」项。</p>
+<p><strong>判断三：交互重构的技术路径已被同栈项目验证，风险从「成败未定」降为「适配工作量」。</strong> Maccy 交互体验的根基是 <code>NSPanel(.nonactivatingPanel)</code>——<strong>点开面板不激活 Maccy</strong>。这一个决策消灭了整类 bug：不需要记录/恢复前台应用，不需要 <code>NSApp.activate</code>，粘贴必然落到正确目标，用户原应用的光标与选区完全不变。</p>
+<p>初版方案把「Tauri webview 能否在非激活面板拿到键盘焦点」列为单点成败风险。<strong>这个判断过重了，已被实证推翻</strong>：</p>
+<ul><li>存在成熟库 <code>tauri-nspanel</code>（crates.io 2.1.1，12,593 下载），定位即「subclassing Tauri&#39;s NSWindow to NSPanel」，机制是 <code>object_setClass</code> 把 <code>NSWindow</code> 改成动态生成的 panel 子类。</li>
+<li>存在同技术栈、同品类的成功先例：<strong>EcoPaste</strong>（Tauri v2 剪贴板管理器，v1.1.0）已在 <code>src-tauri/src/window/macos.rs</code> 落地了与 Maccy 同构的方案：</li></ul>
+<div class="codeblock"><div class="cb-head"><span class="dot"></span><span class="lbl">rust</span></div><pre><code>tauri_panel! {
+    panel!(MainPanel {
+        config: {
+            is_floating_panel: true,
+            can_become_key_window: true,      // 能成为 key window，接收键盘
+            can_become_main_window: false
+        }
+    })
+}
+panel.set_style_mask(StyleMask::empty().resizable().nonactivating_panel().into());
+panel.set_collection_behavior(
+    CollectionBehavior::new().stationary().move_to_active_space().full_screen_auxiliary().into()
+);
+panel.show_and_make_key();   // ← 等价 Maccy 的 makeKey()：拿键盘焦点但不激活 App</code></pre></div>
+<ul><li>它甚至已踩过并解决了最隐蔽的坑，注释写得很明确：<strong>面板处于 key window 时，合成出来的 <code>CGEvent ⌘V</code> 会被面板自己吞掉</strong>。解法是粘贴前 <code>resign_key_window()</code>，粘贴后 <code>make_key_window()</code> 把焦点拿回来（<code>macos.rs:180-204</code>）。</li></ul>
+<p>所以 Phase 0 的性质从「可行性验证」变为「<strong>接入适配 + 关键坑复现</strong>」：不是问「能不能做」，而是问「在 QuickQuick 现有 <code>popover.rs</code> 的焦点编排（<code>NSApplication.activate()</code> + <code>set_focus</code>）之上，如何替换成 panel 语义，并保留已有的辅助功能降级路径」。</p>
+<p>参考实现的价值不止于此——EcoPaste 还解决了全屏 Space 下的显示策略（<code>move_to_active_space</code> 与 <code>can_join_all_spaces</code> 的切换时机）、失焦自动隐藏（<code>window_did_resign_key</code>）、<code>to_panel</code> 的逆操作与生命周期还原（<code>lifecycle/mod.rs:650</code>）。这些都是 QuickQuick 会遇到的同类问题。</p>
+<p><strong>判断四：QuickQuick 当前最大的问题不是缺功能，是「承诺与实现脱节」。</strong> 审计发现一批<strong>代码写了但运行期不可达</strong>的能力：</p>
+<div class="tbl-wrap"><table><thead><tr><th>能力</th><th>实现状态</th><th>实际效果</th></tr></thead><tbody><tr><td>跳过敏感内容（concealed/transient）</td><td><code>privacy.rs:97-117</code> 逻辑完整</td><td><code>is_concealed</code> 硬编码 <code>false</code>，<strong>永不生效</strong></td></tr>
+<tr><td>按来源应用排除</td><td>名单管理链齐全</td><td><code>source_app</code> 硬编码 <code>None</code>，<strong>永不生效</strong></td></tr>
+<tr><td>防自污染（私有 UTI）</td><td>trait 文档承诺</td><td><code>has_self_marker</code> 恒 <code>false</code>，<strong>未实现</strong></td></tr>
+<tr><td>翻译缓存（四元组 + LRU）</td><td><code>cache.rs</code> 196 行 + 建表</td><td><strong>零生产调用</strong>，每次翻译都走网络</td></tr>
+<tr><td>翻译重试 / 取消 / 错误归一</td><td><code>retry.rs</code>/<code>cancel.rs</code>/<code>error.rs</code></td><td><strong>全部零生产调用</strong></td></tr>
+<tr><td>可移植备份（口令加密包）</td><td><code>portable.rs</code> 格式加密完整</td><td><strong>只被测试调用</strong>，无 IPC、无 UI</td></tr>
+<tr><td>分级容量清理（500MB）</td><td><code>image.rs:413</code> 有实现有测试</td><td><strong>零调用</strong>，而存储页 UI 已向用户承诺此行为</td></tr></tbody></table></div>
+<p>这类问题的严重性高于「功能缺失」：<strong>设置页在向用户撒谎</strong>。用户配了排除名单、开了敏感跳过，实际密码管理器内容照样入库。</p>
+<p><strong>判断五：翻译、加密、跨平台、富文本是 Maccy 结构上不可能有的资产，重构不能伤到它们。</strong> QuickQuick 有 21 个翻译源、SQLCipher 整库加密 + 机器绑定密钥、Windows 双端、HTML 全链路保真、内置签名自动更新、离线 ECDICT 词典。这是差异化护城河。任何交互重构都必须先确认不破坏这些链路。</p>
+<p>---</p>
+</section>
+<section id="1-调研方法与证据边界" data-c="2">
+<div class="chapter-bar"><span class="cnum">02</span><span class="rule"></span></div>
+<h2>1. 调研方法与证据边界</h2>
+<h3>1.1 用了什么</h3>
+<div class="tbl-wrap"><table><thead><tr><th>手段</th><th>对象</th><th>产出</th></tr></thead><tbody><tr><td>REA <code>inspect_macho</code> / <code>inspect_plist</code> / <code>inspect_signature</code> / <code>inspect_artifact</code></td><td>Maccy 2.6.1 发布态</td><td>依赖（仅 Sparkle 2.6.4）、31 语言、<code>LSUIElement</code>、沙盒与 XPC 更新架构</td></tr>
+<tr><td><code>strings</code> + <code>__cstring</code> / <code>__swift5_reflstr</code></td><td>Maccy 发布态</td><td>默认忽略类型 5 项、数据库路径、UI 文案、类名</td></tr>
+<tr><td>Maccy 2.6.1 源码（MIT，tag 对齐）</td><td>实现逻辑</td><td>能力矩阵、设计决策、键位表、淘汰策略、本地化工程</td></tr>
+<tr><td>只读代码审计</td><td>QuickQuick 全域</td><td>能力矩阵、死代码清单、性能链条</td></tr></tbody></table></div>
+<h3>1.2 反编译器：已装但未接入，且判定为<strong>非关键路径</strong></h3>
+<p>本轮已安装 OpenJDK 21 + Ghidra 12.1.4（<code>~/tools/ghidra_12.1.4_PUBLIC</code>），REA <code>doctor</code> 对 install/version/headless/java 四项均报 healthy，但卡在最后一步：Ghidra 官方发布包<strong>只含 <code>linux_x86_64</code> 与 <code>win_x86_64</code> 的 native decompiler</strong>，macOS arm64 需本地编译，而 Makefile 硬编码 x86_64、depend 规则不透传 BFD include，两次编译均失败。</p>
+<p><strong>判定放弃的理由</strong>（不是「懒得装」）：</p>
+<ol><li>Maccy 是 MIT 开源，源码可读，比伪代码更快更准；</li>
+<li>发布版与源码的一致性已由 <code>sha256</code> 绑定 + 类名/字符串逐条交叉印证（2.6.1 / build 60 与 appcast pubDate 一致）；</li>
+<li>REA 的 Ghidra provider 对 universal Mach-O 报 <code>architecture_unsupported</code>，还需先 thin slice，多一层麻烦；</li>
+<li>Maccy 二进制已 strip（exports 仅 1 个），Swift 类型名在元数据 section，反编译产出是 <code>FUN_xxx</code> + 指针运算，边际价值低。</li></ol>
+<p><strong>保留状态</strong>：Ghidra 已就位，未来若需要验证<strong>闭源</strong>目标（无源码可读时），只差编译 native decompiler 这一步。</p>
+<h3>1.3 拿不到的（明确记录）</h3>
+<ul><li>Maccy 的实际 SQLite 物理 schema（本机容器为空，从未使用过该 app；物理 schema 由 SwiftData 运行时生成）</li>
+<li>SwiftUI 视图树的精确层级与 modifier 顺序（SwiftUI 无 nib，IB 解析不到 Maccy 自身文档）</li>
+<li>Glass / VisualEffect 的最终视觉参数（系统渲染决定）</li>
+<li><strong>运行时观察 = 0 项</strong>：Maccy 的 <code>FloatingPanel</code> 在 <code>resignKey()</code> 里无条件 <code>close()</code>，窗口存活约 2s，跨不过一次 MCP 调用；REA 只接受 onscreen 窗口，而该 panel 的 <code>kCGWindowIsOnscreen</code> 为空</li></ul>
+<p>影响评估：<strong>不影响</strong>能力矩阵与设计决策；<strong>轻度影响</strong>像素级 UI 复刻（需真机开一次 Maccy 校准行高/留白/字体）。</p>
+<p>---</p>
+</section>
+<section id="2-差距分析-四层-一层债" data-c="3">
+<div class="chapter-bar"><span class="cnum">03</span><span class="rule"></span></div>
+<h2>2. 差距分析：四层 + 一层债</h2>
+<p>把差距按「用户可感知的先后顺序」分层，而不是按模块分。</p>
+<h3>L0 — 诚信债（应最先还）</h3>
+<p>见判断四。这批问题的共同特征是：<strong>UI 已承诺、代码未接线</strong>。还债不需要新设计，只需要接线或诚实下线。</p>
+<h3>L1 — 交互模型（用户明确说最痛）</h3>
+<div class="tbl-wrap"><table><thead><tr><th>维度</th><th>Maccy</th><th>QuickQuick 现状</th><th>差距性质</th></tr></thead><tbody><tr><td>面板激活语义</td><td><code>NSPanel(.nonactivatingPanel)</code>，不夺焦</td><td>普通窗口 + <code>NSApplication.activate()</code>（<code>popover.rs:122-152</code>）</td><td><strong>架构级</strong></td></tr>
+<tr><td>唤起位置</td><td>5 种可选（光标/图标/窗口/中心/上次），多屏可选</td><td>固定公式：水平居中 + 距顶 15%（<code>window_pos.rs:17-55</code>）</td><td>能力级</td></tr>
+<tr><td>高度自适应</td><td>三段 <code>GeometryReader</code> 上报 + 0.2s 动画，顶边固定</td><td>固定 720×480</td><td>能力级</td></tr>
+<tr><td>键盘模型</td><td>30+ 键位（vim <code>⌃N/P/J/K</code>、<code>⌘↑↓</code> 跳首尾、<code>⌃W</code> 删词、<code>⌥⌫</code> 删除、<code>⌥P</code> pin、<code>⌘,</code> 设置…）</td><td>4 个：<code>↑↓</code> / <code>Enter</code> / <code>⌥Enter</code> / <code>Esc</code></td><td><strong>数量级</strong></td></tr>
+<tr><td>数字直达</td><td><code>1</code>–<code>0</code> 取前 10 条</td><td>无</td><td>能力级</td></tr>
+<tr><td>字母 pin</td><td><code>b</code>–<code>y</code> 持久化键位</td><td>只有 <code>is_favorite</code> 布尔，无键位</td><td>能力级</td></tr>
+<tr><td>cycle 模式</td><td>按住 <code>⇧⌘C</code> 连按 <code>C</code> 翻页、松手即粘贴</td><td>无</td><td><strong>体验杀手锏</strong></td></tr>
+<tr><td>输入法防御</td><td><code>hasMarkedText</code> 拦截（中文拼音期间不响应方向键）</td><td>无（webview 有 composition events，但未用）</td><td>必须自研</td></tr>
+<tr><td>行内预览</td><td><code>NSPopover</code> + 分级延迟（首 1500ms→后续 200ms）</td><td>有预览面板，无分级延迟</td><td>打磨级</td></tr>
+<tr><td>快捷键徽标随修饰键变</td><td>每条目 3 变体，按当前修饰键切换</td><td>静态 footer 4 个提示</td><td>打磨级</td></tr>
+<tr><td>主窗键盘流</td><td>—</td><td><strong>主窗 Enter 无动作</strong>（<code>ClipboardPage.tsx:156-159</code> 丢弃返回值）</td><td><strong>bug 级</strong></td></tr>
+<tr><td>popover 管理动作</td><td>pin / 删除 / 清空</td><td>无（只能 Enter 粘、⌥Enter 复制）</td><td>能力级</td></tr>
+<tr><td>悬停与键盘仲裁</td><td>鼠标移动即交还主导权</td><td>无</td><td>打磨级</td></tr></tbody></table></div>
+<h3>L2 — 捕获与规则（基本功）</h3>
+<div class="tbl-wrap"><table><thead><tr><th>维度</th><th>Maccy</th><th>QuickQuick</th><th>差距</th></tr></thead><tbody><tr><td>轮询机制</td><td><code>changeCount</code> 只比整数</td><td><strong>内容哈希伪计数</strong>：每 500ms 全量读 text+html+image 再构造合并 Vec 哈希（<code>pipeline.rs:86-134</code>）</td><td><strong>性能根因</strong></td></tr>
+<tr><td>捕获类型</td><td>硬白名单 6 类，含<strong>文件</strong>（<code>.fileURL</code>）</td><td>文本 / HTML / 图片，<strong>无文件</strong></td><td>能力级</td></tr>
+<tr><td>任意 UTI 遍历</td><td><code>pasteboard.types()</code> 全量</td><td>arboard 抽象，拿不到任意 UTI</td><td>架构级</td></tr>
+<tr><td>多 pasteboard item 合并</td><td>支持（BBEdit/Edge 双 item）</td><td>无</td><td>能力级</td></tr>
+<tr><td>去重</td><td><code>supersedes()</code> 集合包含判定 + <code>numberOfCopies</code> 累加</td><td>单 hash 精确匹配（<code>text_hash</code>/<code>image_hash</code>）</td><td>精度级</td></tr>
+<tr><td>忽略规则</td><td><strong>三层</strong>：类型集合 / 来源应用（黑或白名单）/ 内容正则</td><td>三层都有代码，<strong>全部空接线</strong>（见 L0）</td><td>接线级</td></tr>
+<tr><td>暂停</td><td><code>⌥</code> 点图标切换；<code>⌥⇧</code> 点仅忽略下一次</td><td>仅设置页开关，托盘无</td><td>能力级</td></tr>
+<tr><td>自产标记</td><td>写回时置 <code>org.p0deje.Maccy</code> 类型</td><td>未实现 → <strong>粘贴后自己再捕获一次、污染历史顺序</strong></td><td>接线级</td></tr>
+<tr><td>动态类型剔除</td><td>丢弃 <code>dyn.*</code>、OLE、Word 书签三件套</td><td>无</td><td>边缘</td></tr>
+<tr><td>OCR</td><td>图片异步跑 Vision，回填 <code>title</code> → 图片可被文字搜到</td><td>无（图片 <code>content</code> 是 <code>[图片] W×H</code>）</td><td>能力级</td></tr>
+<tr><td>Universal Clipboard 识别</td><td>显示 &quot;iCloud&quot; 标记</td><td>无</td><td>边缘</td></tr></tbody></table></div>
+<h3>L3 — 存储与性能（规模可持续性）</h3>
+<div class="tbl-wrap"><table><thead><tr><th>维度</th><th>Maccy</th><th>QuickQuick</th><th>差距</th></tr></thead><tbody><tr><td>索引</td><td>SwiftData 自动</td><td><strong>零 <code>CREATE INDEX</code></strong>（<code>db.rs:745-812</code>）</td><td>硬伤</td></tr>
+<tr><td>列表加载</td><td>内存常驻 + 预计算 <code>title</code></td><td><strong>无 LIMIT 全表</strong> + 全量排序（<code>db.rs:272-280</code>）</td><td>硬伤</td></tr>
+<tr><td>图片 IPC</td><td>原生视图直接持有 <code>NSImage</code></td><td><strong>每条内联 base64 缩略图</strong>（<code>ipc/clipboard.rs:52-66</code>），每次刷新全量重传</td><td>硬伤</td></tr>
+<tr><td>自动淘汰</td><td><code>add</code> 内自动 <code>limitHistorySize</code>，pin 无限豁免</td><td><code>tiered_cleanup</code> 死代码；只剩手动按钮（500 条硬编码）</td><td>硬伤</td></tr>
+<tr><td>搜索</td><td>预计算 title + 内存过滤 + 4 模式 + 200ms 防抖 + 命中高亮</td><td>纯前端 <code>includes</code> 子串，无模糊/无高亮/无多词 AND</td><td>能力级</td></tr>
+<tr><td>容量上限</td><td>1–999 可配，默认 200</td><td>硬编码 500，不可配</td><td>配置级</td></tr>
+<tr><td>备份迁移</td><td>无（Maccy 也没有）</td><td><code>portable.rs</code> 完整实现但<strong>未接线</strong></td><td>接线级</td></tr>
+<tr><td>迁移框架</td><td>布尔开关 <code>migrations[...]</code></td><td>1 个 ad-hoc 函数，<code>PRAGMA user_version</code> 只做解密探测</td><td>工程级</td></tr></tbody></table></div>
+<h3>L4 — 产品化</h3>
+<div class="tbl-wrap"><table><thead><tr><th>维度</th><th>Maccy</th><th>QuickQuick</th><th>差距</th></tr></thead><tbody><tr><td>托盘菜单</td><td>图标可显示最近内容；<code>⌥</code>/<code>⌥⇧</code> 点击语义</td><td><strong>只有「显示」「退出」2 项</strong></td><td>能力级</td></tr>
+<tr><td>系统通知</td><td><code>UNUserNotificationCenter</code>，body = 条目标题</td><td><strong>零系统通知</strong>（全仓无 notification 插件）</td><td>能力级</td></tr>
+<tr><td>音效</td><td><code>Knock.caf</code>（取用）/ <code>Write.caf</code>（捕获）</td><td>无</td><td>能力级</td></tr>
+<tr><td>首次引导</td><td>有设置向导</td><td>只有一张辅助功能卡片，且授权后仍会再出现一次</td><td>打磨级</td></tr>
+<tr><td>辅助功能引导</td><td><code>AXIsProcessTrusted</code> <strong>只检查不提示</strong>（Maccy 的缺陷）</td><td>检查 + 降级 + 深链横幅（<strong>比 Maccy 好</strong>）</td><td>QQ 领先</td></tr>
+<tr><td>设置项</td><td>6 页 / 约 40 项，每项带 tooltip 写默认值</td><td>6 区 / 8 项</td><td>数量级</td></tr>
+<tr><td>i18n</td><td><strong>31 语言</strong>（BartyCrouch + DeepL 管线，<code>knownRegions</code> 作出货闸门）</td><td><strong>纯中文硬编码</strong>，无 i18n 框架</td><td>数量级</td></tr>
+<tr><td>排序偏好</td><td>3 种（最近/最早/复制次数）</td><td>固定按收藏 + 最近</td><td>能力级</td></tr>
+<tr><td>CI</td><td>GitHub Actions</td><td><strong>只发布不验证</strong>（唯一 workflow 是 <code>release.yml</code>，不跑测试/tsc/clippy）</td><td>工程级</td></tr></tbody></table></div>
+<p>---</p>
+</section>
+<section id="3-需要你裁决的五个取舍" data-c="4">
+<div class="chapter-bar"><span class="cnum">04</span><span class="rule"></span></div>
+<h2>3. 需要你裁决的五个取舍</h2>
+<p>方案的形状取决于这五个问题的答案。我给出推荐，但这是你的产品判断。</p>
+<h3>Q1｜交互架构路线：已定，走非激活面板（附适配 spike）</h3>
+<p><strong>结论：走 Maccy/EcoPaste 路线，不再考虑「激活 + 前台应用恢复」的降级方案。</strong></p>
+<p>理由见判断三：<code>tauri-nspanel</code> + EcoPaste 已证明 Tauri v2 webview 能在非激活面板里拿到键盘焦点，且关键坑（粘贴时面板吞掉 <code>CGEvent ⌘V</code>）已有明确解法。</p>
+<p>仍保留一个<strong>短 spike（约 1 天）</strong>，但性质是「适配验证」而非「可行性验证」，只确认三件事：</p>
+<ol><li>QuickQuick 现有 <code>popover.rs:122-152</code> 的 <code>NSApplication.activate()</code> + <code>set_focus()</code> 编排，替换为 <code>show_and_make_key()</code> 后，原前台应用是否仍保持 active</li>
+<li>webview 内 <code>&lt;input autofocus&gt;</code> 能收到字符（中文输入法 composition 事件是否正常）</li>
+<li>「<code>resign_key_window</code> → 注入 ⌘V → <code>make_key_window</code>」这套编排，与 QuickQuick 现有「hide 窗口 + hide app + 等 350ms + 注入」（<code>ipc/system.rs:69-78</code>）如何合并——<strong>注意现有代码是「隐藏整个 app」，panel 语义下应改为「仅 resign key」</strong>，这是最容易改错的一处</li></ol>
+<p><strong>为什么不能跳过这个 spike</strong>：不是怀疑可行性，而是 QuickQuick 现在的粘贴编排是围绕「隐藏 app」设计的。panel 化之后这个假设失效，改错会导致「粘贴到错误应用」或「面板消失后无法继续操作」。</p>
+<h3>Q2｜「全面看齐」的范围：一次到底，还是分两版？</h3>
+<p><strong>推荐：分两版。v0.4 还债 + 交互地基；v0.5 捕获/规则/存储/产品化。</strong></p>
+<p>理由：L0 诚信债 + L1 交互是用户当前体感最痛的两块，且它们互相独立于 L2/L3。L2 的「任意 UTI 遍历」需要换掉 arboard、直连 <code>NSPasteboard</code>，是架构级改动，风险独立，不该和交互重构挤在同一版。</p>
+<h3>Q3｜i18n：做 31 语言，还是先中英双语？</h3>
+<p><strong>推荐：v0.5 只做「i18n 框架 + 中英双语」，语言数后续按需求扩。</strong></p>
+<p>Maccy 的 31 语言靠 BartyCrouch + DeepL 机翻管线自动铺开，但它的<strong>出货闸门是 <code>knownRegions</code> 白名单</strong>——机翻铺满 41 个目录，只有被信任的 31 个进包。这个工程思路值得抄（框架 + 白名单），但一次性上 31 语言对当前阶段是负担，且 QuickQuick 的文案量（6 区设置 + 3 个窗口）远大于 Maccy 的窄界面。</p>
+<h3>Q4｜死代码：接线还是删除？</h3>
+<p><strong>推荐：逐个判定，不搞一刀切。</strong></p>
+<div class="tbl-wrap"><table><thead><tr><th>模块</th><th>建议</th><th>理由</th></tr></thead><tbody><tr><td>隐私三件套（concealed/source_app/self_marker）</td><td><strong>接线</strong></td><td>用户已能看到配置项，且这是隐私承诺</td></tr>
+<tr><td><code>portable.rs</code> 备份</td><td><strong>接线</strong></td><td>解决「换机即失去全部历史」的真实痛点，格式已完整</td></tr>
+<tr><td><code>tiered_cleanup</code></td><td><strong>接线</strong></td><td>存储页已承诺此行为</td></tr>
+<tr><td>翻译 <code>cache.rs</code></td><td><strong>接线</strong></td><td>直接减少网络请求与免费源限流</td></tr>
+<tr><td>翻译 <code>retry.rs</code> / <code>cancel.rs</code> / <code>error.rs</code></td><td><strong>接线</strong></td><td>免费源失败率高的根因</td></tr>
+<tr><td><code>AppStoreReview</code> 类死代码（Maccy 侧）</td><td>不适用</td><td>—</td></tr></tbody></table></div>
+<h3>Q5｜翻译域是否同期修？</h3>
+<p><strong>推荐：v0.4 顺带接线（缓存/重试/取消），不新增翻译功能。</strong></p>
+<p>理由：翻译是差异化资产，但当前「21 个源下面没有缓存/重试/取消」的状态会持续损耗它的价值。接线是低成本高回报，而新增源/流式输出/划词即译应等剪贴板域稳定后再说。</p>
+<p>---</p>
+</section>
+<section id="4-分阶段方案" data-c="5">
+<div class="chapter-bar"><span class="cnum">05</span><span class="rule"></span></div>
+<h2>4. 分阶段方案</h2>
+<h3>Phase 0｜接入适配 spike（约 1 天）</h3>
+<p><strong>性质</strong>：不是可行性验证（已有先例），是<strong>接入方式验证</strong>。</p>
+<div class="tbl-wrap"><table><thead><tr><th>任务</th><th>产出</th><th>通过标准</th></tr></thead><tbody><tr><td>引入 <code>tauri-nspanel</code>，把 <code>clip-popover</code> 窗口 <code>to_panel</code> 成 <code>NSPanel</code>，置 <code>can_become_key_window: true</code> + <code>nonactivating_panel</code> styleMask</td><td>可运行 PoC</td><td>面板打开时 <code>NSWorkspace.frontmostApplication</code> 不变</td></tr>
+<tr><td>替换现有焦点编排：<code>NSApplication.activate()</code> + <code>set_focus()</code> → <code>show_and_make_key()</code></td><td>改动点清单</td><td>webview 搜索框能输入；中文输入法 composition 正常</td></tr>
+<tr><td>复现并解决「面板 key 状态下吞掉 <code>CGEvent ⌘V</code>」</td><td>粘贴编排方案</td><td>「resign key → 注入 ⌘V → make key」链路可用</td></tr>
+<tr><td>全屏 Space 显示策略验证</td><td>策略结论</td><td>全屏应用下唤起面板可见</td></tr>
+<tr><td>决策记录</td><td>ADR：panel 化改造范围</td><td>明确哪些窗口 panel 化、哪些保持常规窗口</td></tr></tbody></table></div>
+<p><strong>Gate</strong>：这一阶段不通过则 L1 方案退回降级路线；通过则 L1 全部可做。</p>
+<p><strong>参考实现</strong>：EcoPaste <code>src-tauri/src/window/macos.rs</code>（完整 panel 生命周期）、<code>window/lifecycle/mod.rs:650</code>（<code>to_panel</code> 逆操作与还原）。</p>
+<h3>Phase 1｜还诚信债（约 1 周）</h3>
+<div class="tbl-wrap"><table><thead><tr><th>任务</th><th>涉及文件</th><th>验收</th></tr></thead><tbody><tr><td>敏感内容过滤接线（<code>concealed</code>/<code>transient</code> 真实读取）</td><td><code>pipeline.rs:187</code>、<code>macos_paste.rs</code>、<code>clipboard.rs</code></td><td>从 1Password/Bitwarden 复制密码不入库</td></tr>
+<tr><td>来源应用排除接线（<code>source_app</code> 真实读取 + bundle id 匹配）</td><td>同上 + <code>privacy.rs</code></td><td>名单内 app 的复制不入库</td></tr>
+<tr><td>私有 UTI 自产标记（写回时附加，读取时跳过）</td><td><code>macos_paste.rs:146-152</code>、<code>paste.rs:49</code></td><td>从历史粘贴后不产生新条目、不打乱顺序</td></tr>
+<tr><td><code>tiered_cleanup</code> 接线（自动触发）</td><td><code>image.rs:413</code>、<code>lib.rs</code></td><td>超过 500MB 自动两级清理</td></tr>
+<tr><td><code>portable.rs</code> 暴露 IPC + UI（导出/导入）</td><td><code>portable.rs</code>、<code>ipc/*</code>、设置页</td><td>能导出加密备份包并在新机导入</td></tr>
+<tr><td>翻译 cache/retry/cancel/error 接线</td><td><code>ipc/translate.rs:226-279</code></td><td>同文本二次翻译零网络；瞬时失败自动重试；连点丢弃过期结果</td></tr></tbody></table></div>
+<p><strong>为什么排第一</strong>：这批是「UI 已承诺、代码未做到」，修复成本低、信任收益高，且不依赖任何架构决策。</p>
+<h3>Phase 2｜交互地基重构（2–3 周，依赖 Phase 0 结论）</h3>
+<div class="tbl-wrap"><table><thead><tr><th>任务</th><th>说明</th></tr></thead><tbody><tr><td>面板语义改造</td><td>引入 <code>tauri-nspanel</code>，<code>clip-popover</code> 转 <code>NSPanel</code>（<code>can_become_key_window: true</code> + <code>nonactivating_panel</code>）；替换现有 <code>NSApplication.activate()</code> 编排为 <code>show_and_make_key()</code>；高度自适应（前端测高 → IPC → <code>set_size</code> 同步 <code>set_position</code> 保顶边）</td></tr>
+<tr><td>键盘模型升级</td><td>照抄 Maccy 键位表的可用子集：<code>⌃N/P/J/K</code> 上下、<code>⌘↑↓</code> 首尾、<code>⌃W</code> 删词、<code>⌃U</code> 清搜索、<code>⌃H</code> 删字符、<code>⌥⌫</code> 删除、<code>⌥P</code> pin、<code>⌘,</code> 设置</td></tr>
+<tr><td>数字直达</td><td><code>1</code>–<code>0</code> 取前 10 条（含 50ms 高亮反馈）</td></tr>
+<tr><td>字母 pin</td><td><code>pin</code> 字段改存字母，20 键位持久化；设置页加 Pins 管理</td></tr>
+<tr><td>cycle 模式</td><td>按住热键连按翻页、松手即粘贴（<code>NSEvent</code> 全局 <code>flagsChanged</code> 监听）</td></tr>
+<tr><td>输入法防御</td><td>webview <code>compositionstart/update/end</code> 期间禁用方向键导航</td></tr>
+<tr><td>主窗键盘流修复</td><td>Enter 粘贴、<code>⌘1-9</code> 直接粘贴（当前只移动高亮）</td></tr>
+<tr><td>popover 管理动作</td><td>pin / 删除 / 清空，配 <code>⌥⌫</code> / <code>⌥P</code></td></tr>
+<tr><td>唤起位置可选</td><td>光标 / 托盘图标 / 屏幕中心 / 上次位置（多屏）</td></tr>
+<tr><td>行内预览分级延迟</td><td>首次 1500ms，后续 200ms</td></tr>
+<tr><td>快捷键徽标随修饰键变</td><td>前端跟踪 modifier，<code>opacity</code> 切换</td></tr>
+<tr><td>悬停与键盘仲裁</td><td>鼠标移动即交还主导权</td></tr></tbody></table></div>
+<h3>Phase 3｜捕获与规则（约 2 周）</h3>
+<div class="tbl-wrap"><table><thead><tr><th>任务</th><th>说明</th></tr></thead><tbody><tr><td><strong>换掉 arboard，直连 <code>NSPasteboard</code></strong></td><td><code>types()</code> 全量遍历 + <code>data(forType:)</code>；这是支持任意 UTI、文件、多 item 合并的前提</td></tr>
+<tr><td><code>changeCount</code> 替代内容哈希轮询</td><td>消除「每 500ms 全量读取 + 哈希」的性能根因</td></tr>
+<tr><td>类型白名单</td><td>对齐 Maccy 6 类（<code>fileURL</code>/<code>html</code>/<code>png</code>/<code>rtf</code>/<code>string</code>/<code>tiff</code>），可配</td></tr>
+<tr><td>文件类型条目</td><td>捕获 + 图标 + 复制回写</td></tr>
+<tr><td>忽略规则三层接线增强</td><td>应用黑/白名单 + 类型集合 + 内容正则（提示 Rust <code>regex</code> 与 <code>NSRegularExpression</code> 的语法差异）</td></tr>
+<tr><td>暂停语义补齐</td><td>托盘 <code>⌥</code> 点击切换、<code>⌥⇧</code> 仅忽略下一次</td></tr>
+<tr><td>多 pasteboard item 合并</td><td>与 Maccy 同构</td></tr>
+<tr><td>去重精度提升</td><td>集合包含判定 + 复制次数累加</td></tr>
+<tr><td>OCR（图片可搜）</td><td><strong>建议 Swift helper + IPC</strong>（进程隔离，OCR 是低频路径），不硬啃 <code>objc2-vision</code></td></tr>
+<tr><td>动态类型/OLE/Word 书签剔除</td><td>边缘规则，一并补</td></tr></tbody></table></div>
+<h3>Phase 4｜存储与性能（约 2 周）</h3>
+<div class="tbl-wrap"><table><thead><tr><th>任务</th><th>说明</th></tr></thead><tbody><tr><td>建索引</td><td><code>clip_items(is_deleted, last_modified_utc)</code>、<code>text_hash</code>、<code>clip_images(image_hash)</code></td></tr>
+<tr><td>分页 + 增量加载</td><td><code>list_items_with_images</code> 加 LIMIT/OFFSET；前端虚拟滚动（<code>@tanstack/react-virtual</code>，固定行高）</td></tr>
+<tr><td>缩略图移出 IPC payload</td><td>改为按需拉取或自定义协议 URL，消除 base64 全量重传</td></tr>
+<tr><td>自动淘汰</td><td>接 <code>tiered_cleanup</code> + 可配上限（对齐 Maccy 的 1–999 语义，pin 豁免）</td></tr>
+<tr><td>搜索升级</td><td>预计算 <code>title</code> 落库（截断 1000 字符）→ 内存过滤 + 4 模式（exact/fuzzy/regex/mixed）+ 200ms 防抖 + 命中高亮；<strong>加多词 AND（Maccy 没有，是我们的超越点）</strong></td></tr>
+<tr><td>翻译历史分页</td><td>加 LIMIT + 清理</td></tr>
+<tr><td>迁移框架版本化</td><td>用 <code>PRAGMA user_version</code> 承担 schema 版本，替代当前 ad-hoc 函数</td></tr></tbody></table></div>
+<h3>Phase 5｜产品化（2–3 周）</h3>
+<div class="tbl-wrap"><table><thead><tr><th>任务</th><th>说明</th></tr></thead><tbody><tr><td>托盘菜单补齐</td><td>暂停捕获 / 清空未固定 / 打开设置 / 检查更新 / 版本号；图标可显示最近内容（可选）</td></tr>
+<tr><td>系统通知</td><td><code>tauri-plugin-notification</code>，用于「更新就绪」「清理完成」等低频事件</td></tr>
+<tr><td>音效</td><td>捕获 / 取用两个音效；<strong>与通知开关解耦</strong>（Maccy 把音效挂在通知权限上，是缺陷，别抄）</td></tr>
+<tr><td>首次引导向导</td><td>多步：欢迎 → 热键介绍 → 辅助功能授权 → 自启确认；授权后自动恢复（当前 OnboardCard 授权后仍会再出现一次）</td></tr>
+<tr><td>设置项扩充</td><td>排序方式、图片高度、预览延迟、命中高亮样式、容量上限、弹出位置</td></tr>
+<tr><td>每项设置加 tooltip 写明默认值</td><td>抄 Maccy 的文案约定</td></tr>
+<tr><td>i18n 框架 + 中英双语</td><td><code>i18next</code> + namespace 按区域分（对齐 Maccy 8 张表的思路）；CI 维护 <code>shipped_locales</code> 白名单作出货闸门</td></tr>
+<tr><td>设置页加搜索</td><td>项数增长后必要</td></tr></tbody></table></div>
+<h3>Phase 6｜工程加固（贯穿，约 1 周）</h3>
+<div class="tbl-wrap"><table><thead><tr><th>任务</th><th>说明</th></tr></thead><tbody><tr><td>CI 加验证</td><td>现有 <code>release.yml</code> 只发布不验证；新增 PR/push workflow 跑 <code>make verify</code>（tsc + fmt + clippy + 双端测试）</td></tr>
+<tr><td>覆盖率基线</td><td>当前无 coverage 配置；先建立基线再谈阈值</td></tr>
+<tr><td>死代码检测</td><td>引入 <code>knip</code>（前端）/ <code>cargo-udeps</code> 或人工清单，防止再次出现「写完未接线」</td></tr></tbody></table></div>
+<p>---</p>
+</section>
+<section id="5-不做的事-明确边界" data-c="1">
+<div class="chapter-bar"><span class="cnum">06</span><span class="rule"></span></div>
+<h2>5. 不做的事（明确边界）</h2>
+<div class="tbl-wrap"><table><thead><tr><th>项</th><th>理由</th></tr></thead><tbody><tr><td><strong>粘贴栈 / 多选队列</strong></td><td>Maccy 没有；它用字母 pin + 数字直达覆盖了 80% 场景。若要做，是<strong>超越项</strong>，应单独立项，不在「看齐」范围内</td></tr>
+<tr><td><strong>右键菜单</strong></td><td>Maccy 没有（全量 grep 0 命中）。QuickQuick 现有 <code>⌥⌫</code>/<code>⌥P</code> 键位已能覆盖，右键菜单收益低于成本</td></tr>
+<tr><td><strong>AppIntents / Shortcuts</strong></td><td>Tauri 无法生成 <code>Metadata.appintents</code>，这是硬边界</td></tr>
+<tr><td><strong>沙盒</strong></td><td>Maccy 因沙盒才需要 <code>Downloader.xpc</code>/<code>Installer.xpc</code> 那套复杂架构。QuickQuick 不上沙盒，<code>tauri-plugin-updater</code> 直接够用，<strong>不要复刻</strong></td></tr>
+<tr><td><strong>Core Data / SwiftData</strong></td><td>无意义，继续用 <code>rusqlite</code></td></tr>
+<tr><td><strong>像素级 1:1 复刻 Maccy 视觉</strong></td><td>行高 22pt、padding 5/10 等常量可参考，但 QuickQuick 有自己的 OKLch token 体系，应保持视觉自主</td></tr>
+<tr><td><strong>Ghidra native decompiler 编译</strong></td><td>见 §1.2，非关键路径；已保留 Ghidra 待未来验证闭源目标</td></tr></tbody></table></div>
+<p>---</p>
+</section>
+<section id="6-风险登记" data-c="2">
+<div class="chapter-bar"><span class="cnum">07</span><span class="rule"></span></div>
+<h2>6. 风险登记</h2>
+<div class="tbl-wrap"><table><thead><tr><th>风险</th><th>等级</th><th>应对</th></tr></thead><tbody><tr><td><strong>panel 化与现有粘贴编排冲突</strong>：现有实现是「hide 窗口 + hide app + 等 350ms + 注入」（<code>ipc/system.rs:69-78</code>），panel 语义下正确做法是「仅 <code>resign_key_window</code>」，改错会粘贴到错误应用</td><td>中</td><td>Phase 0 明确改动点清单；粘贴链路加回归测试；保留现有降级路径作为兜底</td></tr>
+<tr><td><code>tauri-nspanel</code> 上游稳定性：EcoPaste 用的是 git <code>branch = &quot;v2.1&quot;</code> 而非 crates.io 版本，说明可能需要跟主干</td><td>低</td><td>锁定 commit（<code>a3122e8</code>）；若上游停滞，参考实现足够自写</td></tr>
+<tr><td><strong>换掉 arboard 直连 NSPasteboard</strong> 破坏现有捕获/粘贴链路</td><td>高</td><td>Phase 3 单独成版；先补集成测试覆盖现有捕获路径再动手</td></tr>
+<tr><td><strong>cycle 模式需全局 <code>flagsChanged</code> 监听</strong></td><td>中</td><td>用 <code>NSEvent.addGlobalMonitorForEvents</code>（比 <code>CGEventTap</code> 轻），依赖已有辅助功能权限</td></tr>
+<tr><td><strong>i18n 改造触碰全部前端文案</strong></td><td>中</td><td>只在中英双语阶段做；用 <code>i18next-parser</code> 抽取，避免手改遗漏</td></tr>
+<tr><td><strong>交互重构伤到翻译/加密链路</strong></td><td>中</td><td>Phase 2 前后各跑一次全量 <code>make verify</code>；翻译域加回归测试</td></tr>
+<tr><td><strong>索引 + 分页改动引发数据兼容问题</strong></td><td>中</td><td>借 Phase 4 的迁移框架版本化一起做，带幂等守卫</td></tr>
+<tr><td>工作量超预期（全案约 10–13 周）</td><td>中</td><td>按 Q2 分两版交付，每版可独立发布</td></tr></tbody></table></div>
+<p>---</p>
+</section>
+<section id="7-验证方式" data-c="3">
+<div class="chapter-bar"><span class="cnum">08</span><span class="rule"></span></div>
+<h2>7. 验证方式</h2>
+<p>每阶段完成时必须实跑，不接受「应该可以」：</p>
+<div class="tbl-wrap"><table><thead><tr><th>阶段</th><th>验证</th></tr></thead><tbody><tr><td>Phase 0</td><td>PoC 三条断言实跑；录屏或日志为证</td></tr>
+<tr><td>Phase 1</td><td>逐项手工验证：1Password 复制不入库、名单 app 不入库、粘贴不产生新条目、导出包能在干净环境导入、同文本二次翻译零网络（抓包或日志）</td></tr>
+<tr><td>Phase 2</td><td>键位表逐条手测；<code>cycle</code> 模式松手粘贴落到正确应用；中文输入法拼音期间方向键不劫持</td></tr>
+<tr><td>Phase 3</td><td>文件复制可入库；多 item 合并；忽略三层各命中一次；500ms 轮询 CPU 占用前后对比</td></tr>
+<tr><td>Phase 4</td><td>造 2000 条含图数据，测量列表首屏耗时与 IPC payload 体积（前后对比）；搜索 4 模式 + 多词 AND</td></tr>
+<tr><td>Phase 5</td><td>31 语言白名单机制验证（先中英）；托盘每项可用；引导全流程</td></tr>
+<tr><td>Phase 6</td><td>CI 在 PR 上真实跑绿</td></tr></tbody></table></div>
+<p>日常用 <code>make verify</code>；CI、发布、版本裁决时才跑全量。</p>
+<p>---</p>
+</section>
+<section id="8-一页纸结论" data-c="4">
+<div class="chapter-bar"><span class="cnum">09</span><span class="rule"></span></div>
+<h2>8. 一页纸结论</h2>
+<p>Maccy 不是「功能更多的剪贴板管理器」，而是「把窄路径打磨到极致的交互范本」。它的杀手锏只有三个：<strong>非激活面板</strong>（消灭前台应用恢复类 bug）、<strong>cycle 模式</strong>（把选+粘压成一次肌肉动作）、<strong>预计算 title + 内存过滤</strong>（200 条列表秒开）。它的空缺（无引导、无 AND 搜索、无导入导出、音效搭通知权限）可以直接超越。</p>
+<p>QuickQuick 要「全面看齐」，真正的工程量集中在<strong>十个原生桥接模块</strong>。交互架构那条路已经通了——<code>tauri-nspanel</code> + EcoPaste 证明了 Tauri v2 webview 能在非激活面板里拿到键盘焦点，连「面板吞掉合成 ⌘V」这个最隐蔽的坑都有现成解法。剩下的是适配与工作量，不是赌运气。</p>
+<p>在此之前，有一批更该先还的债：<strong>设置页正在向用户承诺它并未实现的能力</strong>。这件事的优先级高于任何新功能。</p>
+<p>---</p>
+</section>
+<section id="附-裁决结果-2026-10-24-确认" data-c="5">
+<div class="chapter-bar"><span class="cnum">10</span><span class="rule"></span></div>
+<h2>附：裁决结果（2026-10-24 确认）</h2>
+<div class="tbl-wrap"><table><thead><tr><th>编号</th><th>问题</th><th>结论</th></tr></thead><tbody><tr><td>Q1</td><td>交互架构</td><td>走非激活面板（<code>tauri-nspanel</code>），保留 1 天适配 spike，不做降级路线</td></tr>
+<tr><td>Q2</td><td>交付节奏</td><td><strong>分两版</strong>：v0.4 = 还债 + 交互；v0.5 = 捕获 + 存储 + 产品化</td></tr>
+<tr><td>Q3</td><td>i18n</td><td><strong>框架 + 中英双语</strong>，语言数后续按需扩，CI 维护出货白名单</td></tr>
+<tr><td>Q4</td><td>死代码</td><td><strong>逐项接线</strong>（隐私三件套 / portable / tiered_cleanup / 翻译四件套）</td></tr>
+<tr><td>Q5</td><td>翻译域</td><td><strong>v0.4 顺带接线，不新增功能</strong></td></tr></tbody></table></div>
+</section>
+<footer class="footer">Generated from docs/design/maccy-parity-roadmap.md. Markdown is the authoritative source.</footer>
+</div>
+</main>
+</div>
+<div class="float-tools">
+  <button class="nav-toggle" type="button" data-nav-toggle aria-label="展开章节栏" title="展开章节栏（快捷键 [）">☰ 目录</button>
+  <button class="theme-toggle" type="button" aria-label="切换亮色 / 暗色">
+    <svg class="tt-moon" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3 7 7 0 0 0 21 12.8z"/></svg>
+    <svg class="tt-sun" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
+    <span class="tt-text"></span>
+  </button>
+</div>
+<script>
+(function(){
+  Array.prototype.slice.call(document.querySelectorAll('.theme-toggle')).forEach(function(btn){
+    btn.addEventListener('click',function(){
+      var current=document.documentElement.getAttribute('data-theme')||'light';
+      var next=current==='dark'?'light':'dark';
+      document.documentElement.setAttribute('data-theme',next);
+      try{localStorage.setItem('dotfiles-theme',next);}catch(e){}
+    });
+  });
+  function toggleNav(){
+    var hidden=document.documentElement.getAttribute('data-nav')==='hidden';
+    document.documentElement.setAttribute('data-nav',hidden?'shown':'hidden');
+    try{localStorage.setItem('dotfiles-nav',hidden?'shown':'hidden');}catch(e){}
+  }
+  Array.prototype.slice.call(document.querySelectorAll('[data-nav-toggle]')).forEach(function(btn){
+    btn.addEventListener('click',toggleNav);
+  });
+  document.addEventListener('keydown',function(event){
+    if(event.key!=='['||event.metaKey||event.ctrlKey||event.altKey){return;}
+    var tag=((event.target&&event.target.tagName)||'').toLowerCase();
+    if(tag==='input'||tag==='textarea'){return;}
+    event.preventDefault();
+    toggleNav();
+  });
+  var links=Array.prototype.slice.call(document.querySelectorAll('#navlist a'));
+  var sections=Array.prototype.slice.call(document.querySelectorAll('section[id]'));
+  if('IntersectionObserver' in window){
+    var obs=new IntersectionObserver(function(entries){
+      entries.forEach(function(entry){
+        if(entry.isIntersecting){
+          links.forEach(function(a){a.classList.toggle('active',a.getAttribute('href')==='#'+entry.target.id);});
+        }
+      });
+    },{rootMargin:'-25% 0px -65% 0px',threshold:0});
+    sections.forEach(function(section){obs.observe(section);});
+  }
+})();
+</script>
+</body>
+</html>
