@@ -66,6 +66,11 @@ pub struct ArboardBackend {
     count: Mutex<u64>,
     /// 最近一个外部前台应用身份（macOS 主线程观察者写入），用于来源应用排除名单匹配
     source_app: Arc<LastExternalSourceApp>,
+    /// 最近一次 `read` 采集到的来源应用完整身份，供 `source_app_identity` 复用。
+    ///
+    /// 缓存一次而不是重复读平台层：Windows 侧读身份需要打开剪贴板，
+    /// 同一次捕获没必要开合两次。
+    last_source_app: Mutex<Option<SourceApp>>,
 }
 
 impl ArboardBackend {
@@ -84,6 +89,7 @@ impl ArboardBackend {
             last_hash: Mutex::new(0),
             count: Mutex::new(0),
             source_app,
+            last_source_app: Mutex::new(None),
         })
     }
 
@@ -164,6 +170,7 @@ impl ClipboardBackend for ArboardBackend {
 
     fn read(&self) -> ClipboardSnapshot {
         let Ok(mut cb) = self.clipboard.lock() else {
+            self.reset_source_app_cache();
             return ClipboardSnapshot {
                 text: None,
                 html: None,
@@ -188,27 +195,46 @@ impl ClipboardBackend for ArboardBackend {
             bytes: img_data.bytes.into_owned(),
         });
 
+        // arboard 抽象不暴露平台类型集合，故标记直连平台层读取：
+        // 敏感（macOS ConcealedType / TransientType；Windows 两个剪贴板格式）、
+        // 自产标记（macOS 私有 UTI；Windows 写入门闩）、来源应用身份。
+        // 三者都来自这一次平台读取，描述的是同一份内容。
+        let meta = crate::pasteboard_meta::read_pasteboard_meta(&self.source_app);
+        let source_app = meta.source_app.clone();
+        *self
+            .last_source_app
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = source_app.clone();
+
         ClipboardSnapshot {
             text,
             html,
             image,
-            has_self_marker: false,
-            // arboard 抽象不暴露平台类型集合，故敏感标记直连平台层读取：
-            // macOS 读 NSPasteboard 类型集合（ConcealedType / TransientType），
-            // Windows 读 ExcludeClipboardContentFromMonitorProcessing /
-            // CanIncludeInClipboardHistory。判定逻辑在 pasteboard_meta 的纯谓词里。
-            is_concealed: crate::pasteboard_meta::read_is_concealed(),
-            source_app: crate::pasteboard_meta::read_source_app_identity(&self.source_app)
-                .and_then(|app| app.primary_identifier()),
+            has_self_marker: meta.has_self_marker,
+            is_concealed: meta.is_concealed,
+            source_app: source_app.and_then(|app| app.primary_identifier()),
         }
     }
 
     /// 返回本次变化的来源应用完整身份（bundle id + 显示名）。
     ///
-    /// 与 `read` 读同一份身份记录，供排除名单做显示名匹配；
-    /// macOS 的身份来自主线程激活观察者，不做跨线程 AppKit 查询。
+    /// 取自最近一次 `read` 采集并缓存的身份，供排除名单做显示名匹配。
+    /// 轮询路径保证 `read` 先于本方法调用（`poll_once_with_policy` 的顺序）。
     fn source_app_identity(&self) -> Option<SourceApp> {
-        crate::pasteboard_meta::read_source_app_identity(&self.source_app)
+        self.last_source_app
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
+}
+
+impl ArboardBackend {
+    /// 清空来源应用身份缓存（读取失败时调用，避免沿用上一轮的身份误判来源）。
+    fn reset_source_app_cache(&self) {
+        *self
+            .last_source_app
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = None;
     }
 }
 

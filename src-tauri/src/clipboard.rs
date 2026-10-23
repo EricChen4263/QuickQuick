@@ -13,8 +13,10 @@
 //! - `poll_once_with_policy`     — 带隐私策略的捕获（返回 Vec<CapturedClip>）
 //!
 //! 私有 UTI 标记机制（防自污染）：
-//! 工具自写剪贴板时，OS 后端在系统剪贴板中附加一个私有类型标记
-//! （macOS: 自定义 NSPasteboard type；Windows: 自定义剪贴板格式 CF_*）。
+//! 工具自写剪贴板时，在系统剪贴板中留下"这是 QuickQuick 写的"标记
+//! （macOS: 追加自定义 NSPasteboard 类型 `com.quickquick.self-marker`；
+//! Windows/Linux: arboard 独占写剪贴板、无法追加自定义格式，改用写入门闩，
+//! 让下一次变化被识别为本进程写入）。
 //! 逻辑层只读取 `has_self_marker` 布尔，不感知具体 OS 实现细节。
 //! 这样可在不检查内容的情况下安全跳过工具自身的写入，避免循环捕获。
 //!

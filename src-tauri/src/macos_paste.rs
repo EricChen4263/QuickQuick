@@ -24,13 +24,16 @@ use crate::paste::PasteBackend;
 /// 抽出供 macOS / fallback 两个后端复用，避免富文本写入分支重复。
 /// 纯文本兜底用 `item.text`：不支持富文本的目标 app 粘贴时仍能拿到纯文本（设计§四任务4 决策2）。
 ///
+/// 写入成功后追加"本工具自产"标记（macOS 私有 UTI / 其余平台写入门闩），
+/// 让轮询引擎跳过这次自身写入，避免粘贴后历史里又多一条、顺序被打乱。
+///
 /// # Errors
 /// arboard 写入失败时返回错误字符串（由调用方降级记录日志，不 panic）。
 pub(crate) fn write_item_to_clipboard(
     clipboard: &mut arboard::Clipboard,
     item: &CapturedItem,
 ) -> Result<(), String> {
-    match &item.html {
+    let written = match &item.html {
         Some(html) if !html.is_empty() => clipboard
             .set()
             .html(html.clone(), Some(item.text.clone()))
@@ -38,7 +41,10 @@ pub(crate) fn write_item_to_clipboard(
         _ => clipboard
             .set_text(item.text.clone())
             .map_err(|e| e.to_string()),
-    }
+    };
+    written?;
+    mark_self_write_or_log();
+    Ok(())
 }
 
 /// 将图片（裸 RGBA 字节）写入 arboard 剪贴板。
@@ -47,6 +53,7 @@ pub(crate) fn write_item_to_clipboard(
 /// （与捕获侧 `get_image()` 读到的格式一致）；用 `Cow::Borrowed` 借用入参字节，
 /// 避免对大图做无谓全量克隆（set_image 同步消费、不需要更长生命周期）。
 /// 抽出供 macOS / fallback 两个后端复用，镜像 `write_item_to_clipboard` 的错误处理。
+/// 同样在写入成功后追加自产标记（图片回读字节不可比，但"是不是我写的"仍可判定）。
 ///
 /// # Errors
 /// arboard `set_image` 失败时返回错误字符串（由调用方按需降级，不 panic）。
@@ -62,7 +69,19 @@ pub(crate) fn write_image_to_clipboard(
         height,
         bytes: Cow::Borrowed(rgba),
     };
-    clipboard.set_image(image_data).map_err(|e| e.to_string())
+    clipboard.set_image(image_data).map_err(|e| e.to_string())?;
+    mark_self_write_or_log();
+    Ok(())
+}
+
+/// 追加自产标记；失败只记日志，不影响本次写入结果。
+///
+/// 标记失败的实际后果是"这次写入可能被自己再捕获一次"，比让粘贴整体失败轻得多，
+/// 故不向上传播错误。
+fn mark_self_write_or_log() {
+    if !crate::pasteboard_meta::mark_self_write() {
+        eprintln!("[clipboard] 自产标记写入失败：本轮写回可能被自身轮询重复捕获一次");
+    }
 }
 
 // macOS 平台实现

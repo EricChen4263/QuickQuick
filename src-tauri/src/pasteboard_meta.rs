@@ -20,6 +20,10 @@
 //!
 //! 本模块只回答"平台是否声明了标记 / 剪贴板归谁写"，不做任何内容启发式分析。
 
+// 写入门闩只在 macOS 之外的生产路径使用（macOS 有真实私有类型标记），
+// 但测试构建也要编译它来覆盖 arm/consume 语义。
+#[cfg(any(test, not(target_os = "macos")))]
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 
 // 来源应用身份定义在 clipboard 模块（它是剪贴板快照的类型），此处重导出，
@@ -30,6 +34,12 @@ pub use crate::clipboard::SourceApp;
 pub const CONCEALED_TYPE: &str = "org.nspasteboard.ConcealedType";
 /// macOS 一次性内容类型：内容短暂存在，按约定不应进入历史。
 pub const TRANSIENT_TYPE: &str = "org.nspasteboard.TransientType";
+
+/// 本工具私有自产标记类型：写回剪贴板时追加，读取时据此跳过自身写入。
+///
+/// 用自定义 UTI（而非系统约定类型）表达"这是 QuickQuick 写的"：
+/// 系统与第三方都不会产生这个类型，因而不会误挡别人的内容。
+pub const SELF_MARKER_TYPE: &str = "com.quickquick.self-marker";
 
 /// Windows：要求剪贴板监控器忽略本次内容的注册格式名。
 #[cfg(target_os = "windows")]
@@ -75,26 +85,66 @@ pub fn is_concealed_windows_signals(
     exclude_format_present || can_include_history == Some(0)
 }
 
-/// 读取当前剪贴板是否被平台标记为敏感内容。
+/// 判断类型名集合是否含本工具写入时附带的私有自产标记。
 ///
-/// 各平台失败路径一律降级为 `false`（宁可记录，也不误删用户内容）：
-/// 平台调用失败时报 false，隐私门控仍可用排除名单兜底。
+/// 命中即表示这份剪贴板内容是本工具自己写回的（粘贴/复制历史条目），
+/// 轮询必须跳过，否则会把自己的写入再记一遍、打乱历史顺序。
 #[must_use]
-pub fn read_is_concealed() -> bool {
+pub fn has_self_marker_type<I, S>(types: I) -> bool
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+{
+    types
+        .into_iter()
+        .any(|name| same_type_name(name.as_ref(), SELF_MARKER_TYPE))
+}
+
+/// 单次读取的平台剪贴板元数据。
+///
+/// 三个字段来自同一次平台读取，保证"是否敏感 / 是否自产 / 归谁写"描述的是同一份内容。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PasteboardMeta {
+    /// 平台是否声明了敏感标记（见 [`is_concealed_types`]）
+    pub is_concealed: bool,
+    /// 是否带本工具私有自产标记（见 [`has_self_marker_type`]）
+    pub has_self_marker: bool,
+    /// 复制来源应用身份（macOS 来自激活观察者，Windows 来自剪贴板所有者）
+    pub source_app: Option<SourceApp>,
+}
+
+/// 读取当前剪贴板的平台元数据。
+///
+/// 失败路径一律降级为"无标记 / 无身份"，不 panic：
+/// 宁可记录，也不误删用户内容；宁可漏排除一次，也不阻断捕获。
+#[must_use]
+pub fn read_pasteboard_meta(tracker: &LastExternalSourceApp) -> PasteboardMeta {
     #[cfg(target_os = "macos")]
     {
+        // 只读一次类型集合，敏感与自产两个判定共用
         let types = macos_ffi::pasteboard_type_names();
-        is_concealed_types(&types)
+        PasteboardMeta {
+            is_concealed: is_concealed_types(&types),
+            has_self_marker: has_self_marker_type(&types),
+            source_app: tracker.get(),
+        }
     }
 
     #[cfg(target_os = "windows")]
     {
-        windows_ffi::read_is_concealed()
+        // Windows 用剪贴板所有者判定来源，不需要 macOS 的激活观察者记录
+        let _ = tracker;
+        windows_ffi::read_pasteboard_meta()
     }
 
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
-        false
+        let _ = tracker;
+        PasteboardMeta {
+            is_concealed: false,
+            has_self_marker: consume_self_write_latch(),
+            source_app: None,
+        }
     }
 }
 
@@ -134,31 +184,6 @@ impl LastExternalSourceApp {
     }
 }
 
-/// 读取当前剪贴板内容的来源应用身份。
-///
-/// macOS 读激活观察者记录（见 [`LastExternalSourceApp`]）；Windows 读剪贴板所有者
-/// 窗口所属进程的可执行文件名；其余平台不支持，返回 `None`。
-#[must_use]
-pub fn read_source_app_identity(tracker: &LastExternalSourceApp) -> Option<SourceApp> {
-    #[cfg(target_os = "macos")]
-    {
-        tracker.get()
-    }
-
-    #[cfg(target_os = "windows")]
-    {
-        // Windows 用剪贴板所有者判定，不需要 macOS 的激活观察者记录
-        let _ = tracker;
-        windows_ffi::clipboard_owner_identity()
-    }
-
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-    {
-        let _ = tracker;
-        None
-    }
-}
-
 /// 从 Windows 可执行文件完整路径取应用名（去目录与 `.exe` 后缀）。
 ///
 /// 用户在该输入框里写的是人类可读名称（如 `1Password`），而 Win32 只给得到
@@ -175,10 +200,76 @@ pub fn windows_executable_stem(path: &str) -> Option<String> {
     (!stem.is_empty()).then(|| stem.to_owned())
 }
 
+/// 写入门闩：记录"本进程刚写过剪贴板"。
+///
+/// 非 macOS 平台用它顶替私有类型标记：Windows 上 arboard 独占写剪贴板，
+/// 无法像 macOS 那样 `addTypes:owner:` 追加自定义格式，于是把"下一次剪贴板变化
+/// 是本进程写的"记成一个一次性标志，读取时消费掉。
+///
+/// 在 macOS 的测试构建里也会编译，以便覆盖 arm/consume 语义
+/// （macOS 生产路径走真实私有 UTI，不用门闩）。
+#[cfg(any(test, not(target_os = "macos")))]
+#[derive(Default)]
+struct SelfWriteLatch(AtomicBool);
+
+#[cfg(any(test, not(target_os = "macos")))]
+impl SelfWriteLatch {
+    /// 构造未置位的门闩。
+    const fn new() -> Self {
+        Self(AtomicBool::new(false))
+    }
+
+    /// 置位：声明"下一次变化由本进程产生"。
+    fn arm(&self) {
+        self.0.store(true, Ordering::SeqCst);
+    }
+
+    /// 消费门闩：返回"自上次置位以来尚未消费"。
+    ///
+    /// 用 `swap` 而非 `load`：一次写入只豁免一次变化，
+    /// 否则后续真正来自其他应用的变化会被误跳过。
+    fn consume(&self) -> bool {
+        self.0.swap(false, Ordering::SeqCst)
+    }
+}
+
+/// 进程级写入门闩（非 macOS 平台使用）。
+#[cfg(not(target_os = "macos"))]
+static SELF_WRITE_LATCH: SelfWriteLatch = SelfWriteLatch::new();
+
+/// 消费写入门闩：返回"上次写入后尚未被消费"。
+#[cfg(not(target_os = "macos"))]
+fn consume_self_write_latch() -> bool {
+    SELF_WRITE_LATCH.consume()
+}
+
+/// 写回剪贴板成功后调用：让本轮"剪贴板变化"被识别为本工具自写，从而跳过捕获。
+///
+/// - macOS：在当前剪贴板上追加私有类型 [`SELF_MARKER_TYPE`]（不清空既有内容），
+///   返回是否追加成功；
+/// - 其余平台：置写入门闩并返回 `true`。Windows 无法追加自定义格式的原因见
+///   [`SelfWriteLatch`] 的说明。
+#[must_use]
+pub fn mark_self_write() -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        macos_ffi::append_self_marker()
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        SELF_WRITE_LATCH.arm();
+        true
+    }
+}
+
 // macOS 平台 FFI 薄层
 #[cfg(target_os = "macos")]
 mod macos_ffi {
     use objc2_app_kit::NSPasteboard;
+    use objc2_foundation::{NSArray, NSData, NSString};
+
+    use super::SELF_MARKER_TYPE;
 
     /// 读取 `NSPasteboard.generalPasteboard()` 当前声明的全部类型名。
     ///
@@ -189,6 +280,23 @@ mod macos_ffi {
             return Vec::new();
         };
         types.to_vec().iter().map(|name| name.to_string()).collect()
+    }
+
+    /// 在当前剪贴板上追加私有自产标记类型，返回是否追加成功。
+    ///
+    /// 关键：用 `addTypes:owner:` 而不是 `declareTypes:owner:`。
+    /// `declareTypes:` 会清空剪贴板已有的全部类型与数据，把 arboard 刚写入的
+    /// 文本/HTML/图片一并抹掉；`addTypes:` 只往类型列表里追加一项，
+    /// 既有内容与类型分毫不动，其他应用照常读到正文。
+    pub(super) fn append_self_marker() -> bool {
+        let pasteboard = NSPasteboard::generalPasteboard();
+        let marker = NSString::from_str(SELF_MARKER_TYPE);
+        let types = NSArray::from_slice(&[&*marker]);
+        // SAFETY: owner 传 None 表示不需要所有者回填数据；标记数据在下一行同步写入。
+        unsafe { pasteboard.addTypes_owner(&types, None) };
+        // 只给"本工具标记类型"设置数据，其余类型的数据保持 arboard 写入的原样。
+        let payload = NSData::with_bytes(&[1u8]);
+        pasteboard.setData_forType(Some(&payload), &marker)
     }
 }
 
@@ -265,21 +373,38 @@ mod windows_ffi {
         Some(value)
     }
 
-    /// 读取 Windows 平台的敏感标记。
+    /// 读取 Windows 平台的剪贴板元数据（敏感标记 + 自产标记 + 来源应用）。
     ///
     /// `IsClipboardFormatAvailable` 不需要先打开剪贴板，故即便随后 `OpenClipboard` 失败，
-    /// "要求监控器忽略"这一最强信号仍能读到；DWORD 语义则需要打开剪贴板。
-    pub(super) fn read_is_concealed() -> bool {
+    /// "要求监控器忽略"这一最强信号仍能读到；DWORD 语义与所有者身份则需要打开剪贴板。
+    ///
+    /// 自产标记走写入门闩：arboard 在 Windows 上独占写剪贴板，无法像 macOS 那样
+    /// 追加自定义格式，故用"本次变化是本进程写的"这一等价判断。
+    pub(super) fn read_pasteboard_meta() -> super::PasteboardMeta {
+        let has_self_marker = super::consume_self_write_latch();
+
         let exclude_id = register_format(WIN_EXCLUDE_FORMAT);
         let exclude_present =
             exclude_id != 0 && unsafe { IsClipboardFormatAvailable(exclude_id) } != 0;
 
         let Some(_guard) = ClipboardGuard::open() else {
-            return is_concealed_windows_signals(exclude_present, None);
+            return super::PasteboardMeta {
+                is_concealed: is_concealed_windows_signals(exclude_present, None),
+                has_self_marker,
+                source_app: None,
+            };
         };
 
         let history_id = register_format(WIN_CAN_INCLUDE_HISTORY_FORMAT);
-        is_concealed_windows_signals(exclude_present, read_dword_format(history_id))
+        super::PasteboardMeta {
+            is_concealed: is_concealed_windows_signals(
+                exclude_present,
+                read_dword_format(history_id),
+            ),
+            has_self_marker,
+            // 剪贴板已在本守卫内打开，直接取所有者，不再二次开合
+            source_app: clipboard_owner_identity(),
+        }
     }
 
     /// 读取剪贴板所有者窗口所属进程的可执行文件路径。
@@ -314,9 +439,11 @@ mod windows_ffi {
     /// 读取剪贴板所有者窗口所属进程的应用名。
     ///
     /// 用"剪贴板所有者"而不是"当前前台窗口"：前者精确对应"是谁写入的"，后者在
-    /// QuickQuick 自身窗口取到焦点后会指向自己。剪贴板需先打开才能取所有者。
-    pub(super) fn clipboard_owner_identity() -> Option<super::SourceApp> {
-        let _guard = ClipboardGuard::open()?;
+    /// QuickQuick 自身窗口取到焦点后会指向自己。
+    ///
+    /// 前置条件：调用方已打开剪贴板（`GetClipboardOwner` 要求剪贴板处于打开状态）。
+    /// 这里不再自行开合，避免同一线程嵌套 `OpenClipboard`。
+    fn clipboard_owner_identity() -> Option<super::SourceApp> {
         let owner = unsafe { GetClipboardOwner() };
         if owner.is_null() {
             return None;
@@ -492,6 +619,52 @@ mod tests {
         assert_eq!(windows_executable_stem(""), None);
         assert_eq!(windows_executable_stem(r"C:\dir\"), None);
         assert_eq!(windows_executable_stem(".exe"), None);
+    }
+
+    #[test]
+    fn self_marker_type_hit_returns_true() {
+        // Arrange：写回时附加的私有标记混在正文类型之间
+        let types = ["public.utf8-plain-text", SELF_MARKER_TYPE];
+
+        // Act & Assert
+        assert!(
+            has_self_marker_type(types),
+            "含 {SELF_MARKER_TYPE} 时应判定为本工具自写"
+        );
+    }
+
+    #[test]
+    fn ordinary_types_have_no_self_marker() {
+        // Arrange：别的应用写的剪贴板不会有我们的私有类型
+        let types = ["public.utf8-plain-text", "public.html", "public.png"];
+
+        // Act & Assert
+        assert!(
+            !has_self_marker_type(types),
+            "普通类型集合不应被误判为本工具自写"
+        );
+    }
+
+    #[test]
+    fn self_marker_matches_case_and_whitespace_variants() {
+        // Act & Assert：大小写/空白变体同样命中（等价比较，非字节比较）
+        assert!(has_self_marker_type([" COM.QUICKQUICK.SELF-MARKER "]));
+        assert!(!has_self_marker_type(["com.quickquick.self-marker.extra"]));
+        assert!(!has_self_marker_type(["com.quickquick"]));
+    }
+
+    #[test]
+    fn self_write_latch_is_consumed_once() {
+        // Arrange：模拟一次自身写入
+        let latch = SelfWriteLatch::new();
+        assert!(!latch.consume(), "未置位时不应判定为自写");
+
+        // Act
+        latch.arm();
+
+        // Assert：一次写入只豁免一次变化
+        assert!(latch.consume(), "置位后第一次消费应返回 true");
+        assert!(!latch.consume(), "门闩消费后不应再次生效");
     }
 
     #[test]
