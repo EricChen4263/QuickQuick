@@ -574,10 +574,43 @@ pub fn top_id(conn: &Connection) -> Result<Option<String>, DbError> {
 ///
 /// 仅删除已标记软删的行；正常行不受影响。
 ///
+/// 注意：本函数只删 `clip_items`，`clip_images` 依赖外键 `ON DELETE CASCADE`
+/// 随父条目一起物理消失。因此**没有父条目的孤立图片行**不会被这里清理，
+/// 那条缺口由 [`purge_orphan_image_tombstones`] 补上（分级清理会自动调用）。
+///
 /// # Errors
 /// `DbError::Sqlite`：SQL 执行失败
 pub fn gc_purge_deleted(conn: &Connection) -> Result<u64, DbError> {
     let count = conn.execute("DELETE FROM clip_items WHERE is_deleted = 1", [])?;
+    Ok(count as u64)
+}
+
+/// 物理清除「无父条目可级联」的 `clip_images` 墓碑（孤立行回收），返回删除条数。
+///
+/// 为什么需要单独一条路径：`gc_purge_deleted` 只删 `clip_items` 墓碑，图片行靠
+/// `ON DELETE CASCADE` 随父条目消失。而 `clip_item_id IS NULL`（或父条目已不存在）
+/// 的孤立图片行没有任何父条目可级联，**所有既有 GC 路径都碰不到它**，
+/// 其缩略图/原图 BLOB 会永久占库、`file_size_bytes` 永不下降。
+///
+/// 回收范围刻意收窄到「已软删 + 无父条目」：
+/// - 未软删的孤立行仍可能被 [`crate::db::ingest_image_as_clip`] 的去重/领养路径使用，
+///   不能删；
+/// - 父条目尚存的图片行由级联负责，不在这里重复处理；
+/// - 孤立行对 UI 不可见（列表以 `clip_items` 为主表），故物理删除不改变用户可见状态，
+///   只是把本已无主的 BLOB 真正释放掉。
+///
+/// # Errors
+/// `DbError::Sqlite`：SQL 执行失败
+pub fn purge_orphan_image_tombstones(conn: &Connection) -> Result<u64, DbError> {
+    let count = conn.execute(
+        "DELETE FROM clip_images
+         WHERE is_deleted = 1
+           AND (clip_item_id IS NULL
+                OR NOT EXISTS (
+                    SELECT 1 FROM clip_items ci WHERE ci.id = clip_images.clip_item_id
+                ))",
+        [],
+    )?;
     Ok(count as u64)
 }
 

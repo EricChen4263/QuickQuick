@@ -333,13 +333,15 @@ impl Default for CleanupPolicy {
     }
 }
 
-/// 分级清理报告：记录本次清理腾掉的原图数和整条删除数。
+/// 分级清理报告：记录本次清理腾掉的原图数、整条删除数与回收的孤立墓碑数。
 #[derive(Debug, Default, PartialEq)]
 pub struct CleanupReport {
     /// 第一级：腾掉原图（strip original）的行数
     pub stripped_originals: usize,
-    /// 第二级：整条软删的行数
+    /// 第二级：整条软删的行数（`clip_images` 与其父 `clip_items` 同步软删）
     pub deleted_rows: usize,
+    /// 第三级：物理回收的孤立图片墓碑行数（`clip_item_id` 为空、无父条目可级联）
+    pub purged_orphan_images: usize,
 }
 
 /// 默认图片总量上限（500 MiB）。
@@ -398,17 +400,23 @@ pub fn strip_original(conn: &Connection, id: &str) -> Result<(), DbError> {
 
 /// 分级清理：按 `policy.max_total_bytes` 控制图片总存储量。
 ///
-/// 两级策略：
+/// 三级策略：
 ///
 /// **第一级**：当 total > max，按 `created_utc` 最旧优先、仅非收藏（`is_favorite=0`），
 /// 逐个调用 `strip_original`（清掉原图 BLOB、`original_present=0`、保留缩略图），
 /// 直到 total ≤ max 或无可腾原图的非收藏行。
 ///
 /// **第二级**：若第一级完成后 total 仍 > max（缩略图本身也超限），
-/// 按 `created_utc` 最旧优先、仅非收藏，逐行软删（`is_deleted=1`），
-/// 直到 total ≤ max 或仅剩收藏行。
+/// 按 `created_utc` 最旧优先、仅非收藏，逐行「整条」软删：`clip_images` 行与它关联的
+/// `clip_items` 父条目**同步**软删（否则前端会留下既无缩略图、又无法粘贴的幽灵条目，
+/// 且父条目从未标墓碑 → 级联 GC 永不触发 → BLOB 永不释放）。
 ///
-/// **收藏永远豁免**：`is_favorite=1` 的行不参与任何清理。
+/// **第三级**：回收没有父条目可级联的孤立图片墓碑（见
+/// [`crate::db::purge_orphan_image_tombstones`]）——这类行任何 GC 路径都碰不到，
+/// 不回收就是永久占库。
+///
+/// **收藏永远豁免**：`is_favorite=1` 的行不参与任何清理，
+/// 其 `clip_items` 父条目同样不动。
 ///
 /// # 触发点与阈值
 /// 由 [`crate::pipeline::capture_and_ingest`] 在「本轮新增了图片行」之后自动调用，
@@ -429,9 +437,14 @@ pub fn tiered_cleanup(conn: &Connection, policy: &CleanupPolicy) -> Result<Clean
         0
     };
 
+    // 第三级：回收孤立图片墓碑。这类行没有父条目可级联，`db::gc_purge_deleted` 永远
+    // 碰不到它们；不在这里回收就会成为永久占库的 BLOB（详见该函数的文档）。
+    let purged_orphan_images = crate::db::purge_orphan_image_tombstones(conn)? as usize;
+
     Ok(CleanupReport {
         stripped_originals,
         deleted_rows,
+        purged_orphan_images,
     })
 }
 
@@ -470,32 +483,62 @@ fn strip_oldest_originals(conn: &Connection, max_bytes: i64) -> Result<usize, Db
     Ok(stripped)
 }
 
-/// 第二级清理：软删最旧非收藏行（整条），直到总量 ≤ max 或无可删行。
+/// 第二级清理：整条软删最旧非收藏行，直到总量 ≤ max 或无可删行。
 ///
-/// 选择软删而非物理删：与 `db::soft_delete` 语义一致，GC 后续负责物理清理。
-/// 返回实际软删的行数。
+/// "整条"= `clip_images` 行 + 它关联的 `clip_items` 父条目一起软删：
+/// - 只软删图片行会让父条目继续出现在列表里（`list_items_with_images` 以 `clip_items`
+///   为主表），前端渲染出既无缩略图、又无法粘贴的幽灵条目；
+/// - 父条目从不标墓碑，`db::gc_purge_deleted` 就永远不会级联删除图片行，
+///   BLOB 也就永远不会从库文件里释放。
+///
+/// 父条目软删复用 [`crate::db::soft_delete`]（与用户手动删除同一语义、同一时间戳字段），
+/// 不手写 SQL 绕开。
+///
+/// 孤立行（`clip_item_id IS NULL`）没有可软删的父条目：图片行照常软删，
+/// 其物理回收由第三级 [`crate::db::purge_orphan_image_tombstones`] 负责，
+/// 不依赖父条目级联。
+///
+/// 本地累计估算：候选查询一并取整行字节数与父条目 id，每删一行就减去已知字节，
+/// 不在循环体里重复全表 SUM（与第一级同样的 O(N²) → O(N) 优化）。
+///
+/// 返回实际整条软删的行数。
 fn delete_oldest_nonfavorite_rows(conn: &Connection, max_bytes: i64) -> Result<usize, DbError> {
     let mut stmt = conn.prepare(
-        "SELECT id FROM clip_images
+        "SELECT id, clip_item_id,
+                COALESCE(length(original), 0) + COALESCE(length(thumbnail), 0)
+         FROM clip_images
          WHERE is_deleted = 0 AND is_favorite = 0
          ORDER BY created_utc ASC",
     )?;
-    let ids: Vec<String> = stmt
-        .query_map([], |row| row.get::<_, String>(0))?
+    let candidates: Vec<(String, Option<String>, i64)> = stmt
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, Option<String>>(1)?,
+                row.get::<_, i64>(2)?,
+            ))
+        })?
         .collect::<Result<_, _>>()?;
 
+    // 取一次当前总量作为基准；后续用本地累计释放量估算，不再循环全表扫
+    let mut estimated_total = total_image_bytes(conn)?;
     let now_ms = current_utc_ms();
     let mut deleted = 0usize;
-    for id in &ids {
-        if total_image_bytes(conn)? <= max_bytes {
+    for (image_id, clip_item_id, row_bytes) in &candidates {
+        if estimated_total <= max_bytes {
             break;
         }
         conn.execute(
             "UPDATE clip_images
              SET is_deleted = 1, deleted_at_utc = ?1, last_modified_utc = ?1
              WHERE id = ?2",
-            rusqlite::params![now_ms, id],
+            rusqlite::params![now_ms, image_id],
         )?;
+        // 父条目同步软删；孤立行没有父条目，其回收归第三级
+        if let Some(item_id) = clip_item_id {
+            crate::db::soft_delete(conn, item_id)?;
+        }
+        estimated_total -= row_bytes;
         deleted += 1;
     }
     Ok(deleted)
@@ -507,6 +550,18 @@ fn current_utc_ms() -> i64 {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis() as i64
+}
+
+/// 测试专用：建一个带完整 schema 的临时加密库，返回（临时目录, 连接）。
+///
+/// 用生产建表语句（`db::open_or_create`）而不是手抄 schema，避免测试与真实表结构漂移。
+/// 供本模块与 `pipeline` 的清理相关测试共用，避免两处各写一份建库逻辑。
+#[cfg(test)]
+pub(crate) fn open_test_db() -> (tempfile::TempDir, Connection) {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let conn =
+        crate::db::open_or_create(&dir.path().join("qq.db"), &[7u8; 32]).expect("建库应成功");
+    (dir, conn)
 }
 
 #[cfg(test)]
@@ -575,14 +630,6 @@ mod tests {
             ],
         )
         .expect("插入 clip_images 行应成功");
-    }
-
-    /// 建一个带完整 schema 的临时加密库（复用生产建表语句，避免测试手抄 schema 漂移）。
-    fn open_test_db() -> (tempfile::TempDir, Connection) {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let conn =
-            crate::db::open_or_create(&dir.path().join("qq.db"), &[7u8; 32]).expect("建库应成功");
-        (dir, conn)
     }
 
     #[test]
@@ -694,7 +741,182 @@ mod tests {
         assert_eq!(report.stripped_originals, 2, "两行非收藏原图都应先被腾空");
         // Assert：第二级字段 = 被整条软删的行数（缩略图仍超限，故两行都被删）
         assert_eq!(report.deleted_rows, 2, "缩略图仍超限时两行都应被整条软删");
-        // Assert：软删后已无活跃行
+        // Assert：第三级字段 = 物理回收的孤立墓碑数（helper 插的行没有父条目）
+        assert_eq!(
+            report.purged_orphan_images, 2,
+            "无父条目的孤立墓碑应在同一次清理里被物理回收"
+        );
+        // Assert：软删后已无活跃行，且孤立墓碑不会留下来占库
         assert_eq!(image_count(&conn).expect("image_count"), 0);
+        assert_eq!(
+            physical_image_rows(&conn),
+            0,
+            "孤立墓碑必须被物理删除，不能变成永久占库的 BLOB"
+        );
+    }
+
+    /// 造一张最小 PNG（真实入库路径需要合法图片字节）。
+    fn tiny_png(width: u32, height: u32, rgb: [u8; 3]) -> Vec<u8> {
+        use image::ImageEncoder;
+        let img = image::RgbImage::from_pixel(width, height, image::Rgb(rgb));
+        let mut buf = Vec::new();
+        image::codecs::png::PngEncoder::new(&mut buf)
+            .write_image(img.as_raw(), width, height, image::ExtendedColorType::Rgb8)
+            .expect("PNG 编码应成功");
+        buf
+    }
+
+    /// `clip_images` 物理行数（含墓碑）。
+    fn physical_image_rows(conn: &Connection) -> i64 {
+        conn.query_row("SELECT COUNT(*) FROM clip_images", [], |row| row.get(0))
+            .expect("统计物理行数应成功")
+    }
+
+    /// 走真实入库路径造一条图片条目（同时创建 clip_items 父条目与外键关联）。
+    fn ingest_image_row(conn: &Connection, rgb: [u8; 3]) -> String {
+        let png = tiny_png(2, 2, rgb);
+        let outcome = crate::db::ingest_image_as_clip(conn, 2, 2, &png, usize::MAX as u64)
+            .expect("图片入库应成功");
+        match outcome {
+            crate::db::IngestOutcome::Inserted(id) => id,
+            crate::db::IngestOutcome::Bumped(id) => id,
+        }
+    }
+
+    #[test]
+    fn second_level_soft_deletes_parent_items_too() {
+        // Arrange：两条真实入库的图片（各有 clip_items 父条目），阈值 0 强制第二级
+        let (_dir, conn) = open_test_db();
+        ingest_image_row(&conn, [255, 0, 0]);
+        ingest_image_row(&conn, [0, 255, 0]);
+        assert_eq!(crate::db::count_live(&conn).expect("count_live"), 2);
+
+        // Act
+        let report = tiered_cleanup(&conn, &CleanupPolicy { max_total_bytes: 0 }).expect("cleanup");
+
+        // Assert 1：两级都生效
+        assert_eq!(report.deleted_rows, 2, "两行非收藏都应被整条软删");
+        // Assert 2：图片行活跃数归零
+        assert_eq!(image_count(&conn).expect("image_count"), 0);
+        // Assert 3：父条目同步软删——这是本 BLOCK 的核心
+        assert_eq!(
+            crate::db::count_live(&conn).expect("count_live"),
+            0,
+            "第二级必须同步软删 clip_items 父条目，否则前端留下幽灵条目"
+        );
+        // Assert 4：列表不再渲染任何 image 占位行
+        let listed = crate::db::list_items_with_images(&conn).expect("list");
+        assert!(
+            listed.is_empty(),
+            "清理后列表应为空，实际仍有 {} 条幽灵条目",
+            listed.len()
+        );
+    }
+
+    #[test]
+    fn gc_after_second_level_physically_releases_image_blobs() {
+        // Arrange：真实入库两条图片 → 第二级整条软删
+        let (_dir, conn) = open_test_db();
+        ingest_image_row(&conn, [255, 0, 0]);
+        ingest_image_row(&conn, [0, 0, 255]);
+        let report = tiered_cleanup(&conn, &CleanupPolicy { max_total_bytes: 0 }).expect("cleanup");
+        assert_eq!(report.deleted_rows, 2);
+        // 软删阶段：墓碑行仍在（靠 GC 物理清）
+        assert_eq!(physical_image_rows(&conn), 2, "软删阶段不应物理删行");
+
+        // Act：跑既有 GC
+        let purged = crate::db::gc_purge_deleted(&conn).expect("gc");
+
+        // Assert 1：父条目墓碑被物理删除
+        assert_eq!(purged, 2, "两个 clip_items 墓碑应被物理删除");
+        // Assert 2：外键级联把图片行也物理删了 —— BLOB 真正释放
+        assert_eq!(
+            physical_image_rows(&conn),
+            0,
+            "父条目被物理删除后，clip_images 应被 ON DELETE CASCADE 级联清理"
+        );
+    }
+
+    #[test]
+    fn favorite_parent_item_survives_second_level_cleanup() {
+        // Arrange：一条收藏图片 + 一条非收藏图片，阈值 0 强制第二级
+        let (_dir, conn) = open_test_db();
+        let fav_item_id = ingest_image_row(&conn, [1, 2, 3]);
+        // 收藏标记打在图片行上（分级清理按它豁免）与父条目上（用于断言父条目未被动）
+        conn.execute(
+            "UPDATE clip_images SET is_favorite = 1 WHERE clip_item_id = ?1",
+            rusqlite::params![fav_item_id],
+        )
+        .expect("标记收藏应成功");
+        conn.execute(
+            "UPDATE clip_items SET is_favorite = 1 WHERE id = ?1",
+            rusqlite::params![fav_item_id],
+        )
+        .expect("标记父条目收藏应成功");
+        ingest_image_row(&conn, [9, 9, 9]);
+
+        // Act
+        let report = tiered_cleanup(&conn, &CleanupPolicy { max_total_bytes: 0 }).expect("cleanup");
+
+        // Assert 1：只清了非收藏那一条
+        assert_eq!(report.deleted_rows, 1, "只应清理 1 条非收藏行");
+        // Assert 2：收藏图片行与其原图都还在
+        // 注意：ingest_image_as_clip 返回的是 clip_items id，图片行 id 需按外键查回
+        let fav_image_id: String = conn
+            .query_row(
+                "SELECT id FROM clip_images WHERE clip_item_id = ?1",
+                rusqlite::params![fav_item_id],
+                |row| row.get(0),
+            )
+            .expect("应能查到收藏项的图片行 id");
+        assert_eq!(
+            get_original_present(&conn, &fav_image_id).expect("ok"),
+            Some(1),
+            "收藏项原图必须豁免"
+        );
+        let fav_live: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM clip_images WHERE clip_item_id = ?1 AND is_deleted = 0",
+                rusqlite::params![fav_item_id],
+                |row| row.get(0),
+            )
+            .expect("查询收藏图片行应成功");
+        assert_eq!(fav_live, 1, "收藏图片行不应被软删");
+        // Assert 3：收藏的父条目也不许被动
+        let fav_item_live: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM clip_items WHERE id = ?1 AND is_deleted = 0",
+                rusqlite::params![fav_item_id],
+                |row| row.get(0),
+            )
+            .expect("查询收藏父条目应成功");
+        assert_eq!(fav_item_live, 1, "收藏父条目不应被软删");
+        assert_eq!(
+            crate::db::count_live(&conn).expect("count_live"),
+            1,
+            "活跃条目只剩收藏那一条"
+        );
+    }
+
+    #[test]
+    fn orphan_image_tombstones_are_reclaimed_without_parent_cascade() {
+        // Arrange：两条孤立图片行（clip_item_id 为空，没有可级联的父条目）
+        let (_dir, conn) = open_test_db();
+        insert_row(&conn, "orphan-a", 1_000, 50, 10, false);
+        insert_row(&conn, "orphan-b", 2_000, 50, 10, false);
+
+        // Act
+        let report = tiered_cleanup(&conn, &CleanupPolicy { max_total_bytes: 0 }).expect("cleanup");
+
+        // Assert 1：孤立墓碑在同一次清理里被物理回收（不留永久占库的 BLOB）
+        assert_eq!(
+            report.purged_orphan_images, 2,
+            "孤立图片墓碑应被第三级物理回收"
+        );
+        // Assert 2：物理行数归零——孤立行再无 GC 死角
+        assert_eq!(physical_image_rows(&conn), 0);
+        // Assert 3：再跑一次 GC 也不该有残留（幂等）
+        assert_eq!(crate::db::gc_purge_deleted(&conn).expect("gc"), 0);
+        assert_eq!(physical_image_rows(&conn), 0);
     }
 }

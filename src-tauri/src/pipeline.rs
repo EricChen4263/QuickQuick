@@ -361,10 +361,12 @@ fn run_image_cleanup_best_effort(conn: &Connection, policy: &CleanupPolicy) {
             // 未超阈值：静默（这是绝大多数情况，不应产生日志噪声）
         }
         Ok(report) => eprintln!(
-            "[QuickQuick] 图片总量超过 {} MiB，已自动清理：腾空原图 {} 条、整条软删 {} 条",
+            "[QuickQuick] 图片总量超过 {} MiB，已自动清理：腾空原图 {} 条、整条软删 {} 条、\
+             回收孤立墓碑 {} 条",
             policy.max_total_bytes / (1024 * 1024),
             report.stripped_originals,
-            report.deleted_rows
+            report.deleted_rows,
+            report.purged_orphan_images
         ),
         Err(e) => eprintln!("[QuickQuick] 图片分级清理失败（非致命，不影响本轮捕获）：{e}"),
     }
@@ -442,14 +444,6 @@ mod tests {
         }
     }
 
-    /// 建一个带完整 schema 的临时加密库（复用生产建表语句）。
-    fn open_test_db() -> (tempfile::TempDir, Connection) {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let conn =
-            crate::db::open_or_create(&dir.path().join("qq.db"), &[9u8; 32]).expect("建库应成功");
-        (dir, conn)
-    }
-
     /// 直接插一条"最旧"的图片行（created_utc 早于运行时新插入的行）。
     fn seed_old_image_row(conn: &Connection, original_size: usize, created_utc: i64) {
         conn.execute(
@@ -513,7 +507,7 @@ mod tests {
     #[test]
     fn new_image_capture_triggers_tiered_cleanup_over_limit() {
         // Arrange：库里已有一条很旧的图片行（原图 200 字节）
-        let (_dir, conn) = open_test_db();
+        let (_dir, conn) = crate::image::open_test_db();
         seed_old_image_row(&conn, 200, 1_000);
         let backend = OneShotBackend {
             count: 1,
@@ -571,7 +565,7 @@ mod tests {
     #[test]
     fn text_only_capture_does_not_trigger_cleanup() {
         // Arrange：库里已经超限（种子原图 200 字节，阈值只给 100）
-        let (_dir, conn) = open_test_db();
+        let (_dir, conn) = crate::image::open_test_db();
         seed_old_image_row(&conn, 200, 1_000);
         let backend = OneShotBackend {
             count: 1,
@@ -625,7 +619,7 @@ mod tests {
     #[test]
     fn cleanup_failure_does_not_block_capture() {
         // Arrange：清理阶段必然失败（UPDATE 被触发器阻断），且本轮确实新增了图片行
-        let (_dir, conn) = open_test_db();
+        let (_dir, conn) = crate::image::open_test_db();
         seed_old_image_row(&conn, 200, 1_000);
         block_clip_images_updates(&conn);
         let backend = OneShotBackend {
@@ -671,7 +665,7 @@ mod tests {
     #[test]
     fn best_effort_cleanup_swallows_db_error_and_leaves_data_intact() {
         // Arrange：超限 + UPDATE 被阻断 → tiered_cleanup 必然返回 Err
-        let (_dir, conn) = open_test_db();
+        let (_dir, conn) = crate::image::open_test_db();
         seed_old_image_row(&conn, 200, 1_000);
         block_clip_images_updates(&conn);
         let cleanup = CleanupPolicy {
