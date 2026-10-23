@@ -145,6 +145,18 @@ function ClipboardPage({ onTranslateItem }: ClipboardPageProps) {
       ? items.find((c) => c.id === filteredItems[safeHighlight].id) ?? null
       : null;
 
+  /**
+   * 按条目 id 执行「粘贴到前台」。
+   * 键盘（Enter / ⌘1-9）与鼠标点击共用这一条取用路径，
+   * 降级提示、错误提示、IPC 调用都只在 handlePasteToFront 里发生一次。
+   */
+  function pasteItemById(id: string | null): void {
+    if (id === null) return;
+    const target = items.find((c) => c.id === id);
+    if (!target) return;
+    void handlePasteToFront(target);
+  }
+
   function handleKeyDown(event: React.KeyboardEvent) {
     if (event.key === "ArrowDown" || event.key === "ArrowUp") {
       event.preventDefault();
@@ -154,14 +166,17 @@ function ClipboardPage({ onTranslateItem }: ClipboardPageProps) {
       return;
     }
     if (event.key === "Enter") {
-      resolveEnter(safeHighlight, filteredItems);
+      event.preventDefault();
+      // Enter 直接取用高亮条目；没有有效高亮（空列表 / 越界）时不做任何事
+      pasteItemById(resolveEnter(safeHighlight, filteredItems)?.id ?? null);
       return;
     }
     if (event.metaKey || event.ctrlKey) {
       const idx = quickSelectIndex(event.key);
-      if (idx !== null) {
-        setHighlightIndex(idx);
-      }
+      if (idx === null) return;
+      event.preventDefault();
+      // ⌘1-9 是快速粘贴：序号落在列表内就直接取用，不存在的序号不降级取邻近条目
+      pasteItemById(filteredItems[idx]?.id ?? null);
     }
   }
 

@@ -555,6 +555,123 @@ describe("clipboard-page", () => {
   });
 });
 
+// P2-7 主窗键盘流：Enter / ⌘1-9 必须真正走粘贴，而不是只移动高亮
+describe("clipboard-page: 主窗键盘流", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockDeleteClipItem.mockResolvedValue(undefined);
+    mockToggleFavoriteClip.mockResolvedValue(undefined);
+    mockPasteToFront.mockResolvedValue({ outcome: "full_paste" });
+    mockOpenAccessibilitySettings.mockResolvedValue(undefined);
+  });
+
+  it("Enter 对高亮条目执行粘贴（pasteToFront 收到被高亮的 id）", async () => {
+    // Arrange：初始高亮第一条 item-1
+    mockListClipItems.mockResolvedValue(MOCK_ITEMS);
+    render(<ClipboardPage />);
+    await waitFor(() => {
+      expect(screen.getAllByText("Hello World").length).toBeGreaterThanOrEqual(1);
+    });
+
+    // Act
+    fireEvent.keyDown(screen.getByRole("searchbox"), { key: "Enter" });
+
+    // Assert
+    await waitFor(() => {
+      expect(mockPasteToFront).toHaveBeenCalledWith("item-1");
+    });
+  });
+
+  it("ArrowDown 移动高亮后 Enter 粘贴被高亮的第二条", async () => {
+    // Arrange
+    mockListClipItems.mockResolvedValue(MOCK_ITEMS);
+    render(<ClipboardPage />);
+    await waitFor(() => {
+      expect(screen.getAllByText("Hello World").length).toBeGreaterThanOrEqual(1);
+    });
+    const searchInput = screen.getByRole("searchbox");
+
+    // Act
+    fireEvent.keyDown(searchInput, { key: "ArrowDown" });
+    fireEvent.keyDown(searchInput, { key: "Enter" });
+
+    // Assert
+    await waitFor(() => {
+      expect(mockPasteToFront).toHaveBeenCalledWith("item-2");
+    });
+  });
+
+  it("⌘3 直接粘贴第三条（不经过高亮移动）", async () => {
+    // Arrange
+    mockListClipItems.mockResolvedValue(MOCK_ITEMS);
+    render(<ClipboardPage />);
+    await waitFor(() => {
+      expect(screen.getAllByText("Hello World").length).toBeGreaterThanOrEqual(1);
+    });
+
+    // Act
+    fireEvent.keyDown(screen.getByRole("searchbox"), { key: "3", metaKey: true });
+
+    // Assert
+    await waitFor(() => {
+      expect(mockPasteToFront).toHaveBeenCalledWith("item-3");
+    });
+  });
+
+  it("⌘5 序号超出列表条数时不粘贴（不降级取邻近条目）", async () => {
+    // Arrange：列表只有 3 条
+    mockListClipItems.mockResolvedValue(MOCK_ITEMS);
+    render(<ClipboardPage />);
+    await waitFor(() => {
+      expect(screen.getAllByText("Hello World").length).toBeGreaterThanOrEqual(1);
+    });
+
+    // Act
+    fireEvent.keyDown(screen.getByRole("searchbox"), { key: "5", metaKey: true });
+
+    // Assert
+    await waitFor(() => {
+      expect(mockListClipItems).toHaveBeenCalledTimes(1);
+    });
+    expect(mockPasteToFront).not.toHaveBeenCalled();
+  });
+
+  it("空列表按 Enter 不调用 pasteToFront", async () => {
+    // Arrange：后端返回空列表
+    mockListClipItems.mockResolvedValue([]);
+    render(<ClipboardPage />);
+    await screen.findByText("暂无记录");
+
+    // Act
+    fireEvent.keyDown(screen.getByRole("searchbox"), { key: "Enter" });
+
+    // Assert
+    await waitFor(() => {
+      expect(mockListClipItems).toHaveBeenCalledTimes(1);
+    });
+    expect(mockPasteToFront).not.toHaveBeenCalled();
+  });
+
+  it("Enter 粘贴返回 write_back_only 时仍显示降级提示横幅", async () => {
+    // Arrange：走键盘路径，但降级提示沿用 handlePasteToFront 的既有逻辑
+    mockListClipItems.mockResolvedValue(MOCK_ITEMS);
+    mockPasteToFront.mockResolvedValue({ outcome: "write_back_only" });
+    render(<ClipboardPage />);
+    await waitFor(() => {
+      expect(screen.getAllByText("Hello World").length).toBeGreaterThanOrEqual(1);
+    });
+
+    // Act
+    fireEvent.keyDown(screen.getByRole("searchbox"), { key: "Enter" });
+
+    // Assert
+    await waitFor(() => {
+      expect(screen.getByText(/已复制到剪贴板/)).toBeInTheDocument();
+    });
+    expect(mockPasteToFront).toHaveBeenCalledWith("item-1");
+  });
+});
+
 // 边界探测（tester 补充，2026-06-08）
 
 describe("clipboard-page: 边界探测 - 横幅 DOM 顺序", () => {
