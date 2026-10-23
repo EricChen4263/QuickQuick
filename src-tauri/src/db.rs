@@ -576,7 +576,8 @@ pub fn top_id(conn: &Connection) -> Result<Option<String>, DbError> {
 ///
 /// 注意：本函数只删 `clip_items`，`clip_images` 依赖外键 `ON DELETE CASCADE`
 /// 随父条目一起物理消失。因此**没有父条目的孤立图片行**不会被这里清理，
-/// 那条缺口由 [`purge_orphan_image_tombstones`] 补上（分级清理会自动调用）。
+/// 那条缺口由 [`purge_orphan_image_tombstones`] 补上（分级清理在**本次有实际清理动作时**
+/// 才会调用它，日常未超限的轮次不为此付一次全表扫描）。
 ///
 /// # Errors
 /// `DbError::Sqlite`：SQL 执行失败
@@ -598,6 +599,12 @@ pub fn gc_purge_deleted(conn: &Connection) -> Result<u64, DbError> {
 /// - 父条目尚存的图片行由级联负责，不在这里重复处理；
 /// - 孤立行对 UI 不可见（列表以 `clip_items` 为主表），故物理删除不改变用户可见状态，
 ///   只是把本已无主的 BLOB 真正释放掉。
+///
+/// # 调用时机
+/// 由 [`crate::image::tiered_cleanup`] 的第三级调用，且**仅当本次清理真的动过行**
+/// （腾空原图或整条软删）时才执行——孤立墓碑只可能来自第二级删除或历史遗留，
+/// 历史遗留会在第一次真正需要清理（有空间压力）时被顺带回收；
+/// 未超限的日常轮次不做这次全表 `DELETE` 扫描。
 ///
 /// # Errors
 /// `DbError::Sqlite`：SQL 执行失败
