@@ -31,6 +31,9 @@ vi.mock("../../ipc/ipc-client", () => ({
   cleanupHistory: vi.fn(),
   getImageThreshold: vi.fn(),
   setImageThreshold: vi.fn(),
+  exportBackup: vi.fn(),
+  importBackup: vi.fn(),
+  revealBackupInFinder: vi.fn(),
 }));
 
 import { getVersion } from "@tauri-apps/api/app";

@@ -596,3 +596,70 @@ export async function restartApp(): Promise<void> {
     throw toError(err);
   }
 }
+
+/** 备份导出结果，与 Rust ExportBackupDto（camelCase）对齐。 */
+export interface ExportBackupResult {
+  /** 备份包落盘的绝对路径（由后端选定目录） */
+  path: string;
+  /** 写入备份包的条目数 */
+  itemCount: number;
+  /** 因判重信息不可得而未纳入备份的条目数 */
+  skippedCount: number;
+}
+
+/** 备份导入结果，与 Rust ImportBackupDto（camelCase）对齐。 */
+export interface ImportBackupResult {
+  /** 新插入的条目数 */
+  inserted: number;
+  /** 因库内已存在相同内容/图片而跳过的条目数 */
+  skipped: number;
+}
+
+/**
+ * 导出加密备份包。
+ *
+ * 落盘目录由后端决定（文稿 → 下载 → 应用数据目录），返回值里带绝对路径供展示。
+ * 口令只作为参数传入，既不出现在返回值，也不出现在错误消息里。
+ *
+ * @param passphrase - 备份口令（导入时需输入同一口令）
+ */
+export async function exportBackup(passphrase: string): Promise<ExportBackupResult> {
+  try {
+    return await invoke<ExportBackupResult>("export_backup", { passphrase });
+  } catch (err) {
+    throw toError(err);
+  }
+}
+
+/**
+ * 导入加密备份包并合并进当前历史。
+ *
+ * 后端先完成解密与解析，再在 SAVEPOINT 内合并；失败时库内数据保持导入前状态。
+ * 口令错误会以「备份口令错误，或文件已损坏」reject。
+ *
+ * @param blobBase64 - 备份文件原始字节的 base64
+ * @param passphrase - 该备份包的加密口令
+ */
+export async function importBackup(
+  blobBase64: string,
+  passphrase: string
+): Promise<ImportBackupResult> {
+  try {
+    return await invoke<ImportBackupResult>("import_backup", { blobBase64, passphrase });
+  } catch (err) {
+    throw toError(err);
+  }
+}
+
+/**
+ * 在系统文件管理器中定位备份文件。
+ *
+ * @param path - 导出返回的备份包绝对路径
+ */
+export async function revealBackupInFinder(path: string): Promise<void> {
+  try {
+    await invoke<void>("reveal_backup_in_finder", { path });
+  } catch (err) {
+    throw toError(err);
+  }
+}

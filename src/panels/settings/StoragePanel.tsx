@@ -1,7 +1,17 @@
-import { useEffect, useState, useCallback } from "react";
-import { getStorageStats, cleanupHistory, getImageThreshold, setImageThreshold } from "../../ipc/ipc-client";
+import { useEffect, useState, useCallback, useRef } from "react";
+import type { ChangeEvent } from "react";
+import {
+  getStorageStats,
+  cleanupHistory,
+  getImageThreshold,
+  setImageThreshold,
+  exportBackup,
+  importBackup,
+  revealBackupInFinder,
+} from "../../ipc/ipc-client";
 import { Select } from "../../components/Select";
 import type { SelectOption } from "../../components/Select";
+import { arrayBufferToBase64 } from "./backup-file";
 import PanelHeader from "./PanelHeader";
 import SettingGroup from "./SettingGroup";
 
@@ -25,13 +35,19 @@ function toMB(bytes: number): string {
   return (bytes / (1024 * 1024)).toFixed(1);
 }
 
-/** 存储子项面板：库体积进度条 + 上限/阈值展示 + 立即清理按钮 */
+/** 存储子项面板：库体积/阈值/清理 + 备份与恢复 */
 function StoragePanel() {
   const [liveCount, setLiveCount] = useState(0);
   const [fileSizeBytes, setFileSizeBytes] = useState(0);
   const [cleanupMsg, setCleanupMsg] = useState<string | null>(null);
   const [opError, setOpError] = useState<string | null>(null);
   const [imageThresholdMB, setImageThresholdMB] = useState(DEFAULT_IMAGE_THRESHOLD_MB);
+  const [passphrase, setPassphrase] = useState("");
+  const [backupPath, setBackupPath] = useState<string | null>(null);
+  const [backupMsg, setBackupMsg] = useState<string | null>(null);
+  const [isExporting, setIsExporting] = useState(false);
+  const [isImporting, setIsImporting] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const fetchStats = useCallback(async (cancelled: { current: boolean }) => {
     try {
@@ -85,6 +101,71 @@ function StoragePanel() {
       setCleanupMsg(`已清理 ${result.softDeleted + result.purged} 条`);
     } catch {
       setOpError("清理失败，请稍后重试");
+    }
+  }
+
+  /** 导出备份：成功后展示后端回传的落盘路径，并刷新条目统计。 */
+  async function handleExportBackup() {
+    setOpError(null);
+    setBackupMsg(null);
+    setBackupPath(null);
+    setIsExporting(true);
+    try {
+      const result = await exportBackup(passphrase);
+      setBackupPath(result.path);
+      const skippedNote =
+        result.skippedCount > 0
+          ? `，另有 ${result.skippedCount} 条缺少判重信息未纳入`
+          : "";
+      setBackupMsg(`已导出 ${result.itemCount} 条到备份包${skippedNote}`);
+    } catch (err) {
+      setOpError(err instanceof Error ? err.message : "导出备份失败");
+    } finally {
+      setIsExporting(false);
+    }
+  }
+
+  /** 在文件管理器中定位刚导出的备份包。 */
+  async function handleRevealBackup() {
+    if (backupPath === null) return;
+    try {
+      await revealBackupInFinder(backupPath);
+    } catch (err) {
+      setOpError(err instanceof Error ? err.message : "无法在文件管理器中显示备份文件");
+    }
+  }
+
+  /**
+   * 导入备份：先二次确认（只合并、不删除），再读文件字节交给后端解密合并。
+   *
+   * 读文件放在确认之后：用户取消时一个字节都不读、也不调后端。
+   */
+  async function handleBackupFileSelected(event: ChangeEvent<HTMLInputElement>) {
+    const input = event.currentTarget;
+    const file = input.files?.[0];
+    // 清空选择，保证再次选同一个文件也能触发 change
+    input.value = "";
+    if (file === undefined) return;
+
+    setOpError(null);
+    setBackupMsg(null);
+
+    const confirmed = window.confirm(
+      "导入会把备份包里的条目合并进当前历史，不会删除任何现有条目。继续导入？"
+    );
+    if (!confirmed) return;
+
+    setIsImporting(true);
+    try {
+      const bytes = await file.arrayBuffer();
+      const result = await importBackup(arrayBufferToBase64(bytes), passphrase);
+      setBackupMsg(`导入完成：新增 ${result.inserted} 条，跳过已存在 ${result.skipped} 条`);
+      const cancelled = { current: false };
+      await fetchStats(cancelled);
+    } catch (err) {
+      setOpError(err instanceof Error ? err.message : "导入备份失败");
+    } finally {
+      setIsImporting(false);
     }
   }
 
@@ -144,9 +225,78 @@ function StoragePanel() {
         </div>
       </SettingGroup>
 
+      <SettingGroup>
+        <div className="set-row">
+          <div className="grow">
+            <div className="label">备份 / 恢复</div>
+            <div className="desc">
+              导出带口令加密的备份包（.qqbp）；换机或空库时导入即可恢复历史。导入只做合并，不删除现有条目。
+            </div>
+          </div>
+        </div>
+        <div className="set-row column">
+          <label className="label" htmlFor="backup-passphrase">
+            备份口令
+          </label>
+          <input
+            id="backup-passphrase"
+            className="set-input"
+            type="password"
+            autoComplete="new-password"
+            value={passphrase}
+            placeholder="导出与导入需使用同一口令"
+            onChange={(e) => setPassphrase(e.target.value)}
+          />
+          <div className="backup-actions">
+            <button
+              className="btn btn-primary"
+              type="button"
+              onClick={() => void handleExportBackup()}
+              disabled={isExporting}
+            >
+              {isExporting ? "导出中…" : "导出备份"}
+            </button>
+            <button
+              className="btn"
+              type="button"
+              onClick={() => fileInputRef.current?.click()}
+              disabled={isImporting}
+            >
+              {isImporting ? "导入中…" : "选择备份文件导入…"}
+            </button>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".qqbp"
+              aria-label="选择备份文件"
+              hidden
+              onChange={(e) => void handleBackupFileSelected(e)}
+            />
+          </div>
+        </div>
+        {backupPath !== null && (
+          <div className="set-row">
+            <div className="grow">
+              <div className="label">备份位置</div>
+              <div className="desc" style={{ wordBreak: "break-all" }}>
+                {backupPath}
+              </div>
+            </div>
+            <button className="btn" type="button" onClick={() => void handleRevealBackup()}>
+              在 Finder 中显示
+            </button>
+          </div>
+        )}
+      </SettingGroup>
+
       {cleanupMsg !== null && (
         <div style={{ marginTop: 8, fontSize: 12, color: "var(--muted)" }}>
           {cleanupMsg}
+        </div>
+      )}
+      {backupMsg !== null && (
+        <div style={{ marginTop: 8, fontSize: 12, color: "var(--muted)" }}>
+          {backupMsg}
         </div>
       )}
       {opError !== null && (
