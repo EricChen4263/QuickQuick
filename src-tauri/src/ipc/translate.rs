@@ -61,7 +61,18 @@ const TRANSLATE_CANCELLED_MESSAGE: &str = "翻译请求已被更新的请求取�
 
 /// 生产环境的退避等待：真实线程休眠。
 ///
-/// `translate_text` 是同步 Tauri 命令，运行在命令线程池而非 UI 线程，阻塞休眠不影响界面。
+/// 这条休眠落在**既有阻塞缺陷之内**，不是新增的界面影响面：同步 `#[tauri::command]`
+/// 由 tauri-macros 生成为 `body_blocking`，命令体在回调线程上直接执行（没有
+/// `spawn_blocking`，也无运行时线程跳转）；而该回调是 wry 的
+/// `WKScriptMessageHandler::userContentController:didReceiveScriptMessage:`，
+/// 该协议在 `objc2-web-kit` 中声明为 `MainThreadOnly`。
+/// 也就是说 `translate_text` 与既有的同步网络 I/O 一样运行在 macOS **主线程**上，
+/// 同样会冻结界面；本函数是在这个既有缺陷之上再叠加最多 1.5s 的阻塞
+/// （3 次尝试的退避 500ms + 1000ms），叠加在既有的 10s 网络超时之上。
+///
+/// 根治方向（超出本次改动范围，需动 `lib.rs` 的命令注册装配，已登记 follow-up）：
+/// 把 `translate_text` 改为 `async` 命令，并把同步网络 I/O 与退避一并挪进
+/// `spawn_blocking`，让主线程只负责派发。
 fn sleep_blocking(ms: u64) {
     std::thread::sleep(Duration::from_millis(ms));
 }
@@ -69,8 +80,8 @@ fn sleep_blocking(ms: u64) {
 /// 翻译运行期的横切配置：重试策略 + 在途请求追踪器。
 ///
 /// 把两者聚为一组，使 `translate_text_with_runtime` 的参数数量收敛在 clippy 上限内，
-/// 同时保留两项测试注入能力：不阻塞的 `sleep`（断言退避序列）与独立的 `tracker`
-/// （断言旧 generation 的结果被丢弃）。
+/// 同时保留两项测试注入能力：只记录不退避的 `sleep`（断言退避序列）与独立的 `tracker`
+/// （断言旧 generation 的结果被丢弃）。生产环境两者都取真实实现，退避会真实阻塞主线程。
 pub struct TranslateRuntime<'a> {
     /// 单次翻译允许的最大尝试次数（含首次）。
     pub max_attempts: u32,
@@ -888,7 +899,7 @@ mod tests {
         .expect("统计缓存行数应成功")
     }
 
-    /// 构造运行期配置：注入不阻塞的 sleep 与独立 tracker。
+    /// 构造运行期配置：注入只记录不退避的 sleep（不做真实休眠）与独立 tracker。
     fn runtime_with<'a>(
         tracker: &'a InflightTracker,
         sleep: &'a dyn Fn(u64),
