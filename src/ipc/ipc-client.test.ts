@@ -20,6 +20,9 @@ import {
   getTranslateProviders,
   getSelectedProvider,
   setSelectedProvider,
+  exportBackup,
+  importBackup,
+  revealBackupInFinder,
 } from "./ipc-client";
 import type {
   ClipItem,
@@ -27,6 +30,8 @@ import type {
   TranslateHistoryItem,
   Provider,
   Hotkeys,
+  ExportBackupResult,
+  ImportBackupResult,
 } from "./ipc-client";
 
 const mockInvoke = invoke as MockedFunction<typeof invoke>;
@@ -299,5 +304,76 @@ describe("setSelectedProvider", () => {
     const err = await setSelectedProvider("invalid").catch((e: unknown) => e);
     expect(err).toBeInstanceOf(Error);
     expect((err as Error).message).toContain("非法 provider id");
+  });
+});
+
+describe("exportBackup", () => {
+  it("使用正确命令名并传 passphrase 参数，透传返回的导出结果", async () => {
+    const result: ExportBackupResult = {
+      path: "/Users/tester/Documents/QuickQuick-Backup-20231114-221320.qqbp",
+      itemCount: 3,
+      skippedCount: 1,
+      usedFallbackDir: false,
+    };
+    mockInvoke.mockResolvedValueOnce(result);
+
+    const ret = await exportBackup("backup-passphrase");
+
+    expect(mockInvoke).toHaveBeenCalledWith("export_backup", {
+      passphrase: "backup-passphrase",
+    });
+    expect(ret).toEqual(result);
+  });
+
+  it("invoke reject 字符串时重抛为含原始消息的 Error", async () => {
+    mockInvoke.mockRejectedValueOnce("请输入备份口令");
+
+    const err = await exportBackup("").catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).message).toContain("请输入备份口令");
+  });
+});
+
+describe("importBackup", () => {
+  it("使用正确命令名并传 blobBase64 与 passphrase 参数", async () => {
+    const result: ImportBackupResult = { inserted: 2, skipped: 1 };
+    mockInvoke.mockResolvedValueOnce(result);
+
+    const ret = await importBackup("QUJD", "backup-passphrase");
+
+    // blobBase64 对应 Rust 侧 blob_base64（Tauri 命令参数按 camelCase 映射）
+    expect(mockInvoke).toHaveBeenCalledWith("import_backup", {
+      blobBase64: "QUJD",
+      passphrase: "backup-passphrase",
+    });
+    expect(ret).toEqual(result);
+  });
+
+  it("invoke reject 字符串时重抛为含原始消息的 Error（口令错误文案透传）", async () => {
+    mockInvoke.mockRejectedValueOnce("备份口令错误，或文件已损坏");
+
+    const err = await importBackup("QUJD", "wrong").catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).message).toBe("备份口令错误，或文件已损坏");
+  });
+});
+
+describe("revealBackupInFinder", () => {
+  it("使用正确命令名并传 path 参数", async () => {
+    mockInvoke.mockResolvedValueOnce(undefined);
+
+    await revealBackupInFinder("/Users/tester/Documents/QuickQuick-Backup-20231114-221320.qqbp");
+
+    expect(mockInvoke).toHaveBeenCalledWith("reveal_backup_in_finder", {
+      path: "/Users/tester/Documents/QuickQuick-Backup-20231114-221320.qqbp",
+    });
+  });
+
+  it("invoke reject 字符串时重抛为含原始消息的 Error", async () => {
+    mockInvoke.mockRejectedValueOnce("只能在文件管理器中显示 .qqbp 备份文件");
+
+    const err = await revealBackupInFinder("/tmp/x.txt").catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).message).toContain("只能在文件管理器中显示 .qqbp 备份文件");
   });
 });

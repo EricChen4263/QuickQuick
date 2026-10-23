@@ -44,6 +44,7 @@ function StoragePanel() {
   const [imageThresholdMB, setImageThresholdMB] = useState(DEFAULT_IMAGE_THRESHOLD_MB);
   const [passphrase, setPassphrase] = useState("");
   const [backupPath, setBackupPath] = useState<string | null>(null);
+  const [backupUsedFallbackDir, setBackupUsedFallbackDir] = useState(false);
   const [backupMsg, setBackupMsg] = useState<string | null>(null);
   const [isExporting, setIsExporting] = useState(false);
   const [isImporting, setIsImporting] = useState(false);
@@ -109,10 +110,12 @@ function StoragePanel() {
     setOpError(null);
     setBackupMsg(null);
     setBackupPath(null);
+    setBackupUsedFallbackDir(false);
     setIsExporting(true);
     try {
       const result = await exportBackup(passphrase);
       setBackupPath(result.path);
+      setBackupUsedFallbackDir(result.usedFallbackDir);
       const skippedNote =
         result.skippedCount > 0
           ? `，另有 ${result.skippedCount} 条缺少判重信息未纳入`
@@ -281,6 +284,11 @@ function StoragePanel() {
               <div className="desc" style={{ wordBreak: "break-all" }}>
                 {backupPath}
               </div>
+              {backupUsedFallbackDir && (
+                <div className="desc">
+                  已回退到应用数据目录（文稿/下载目录不可用）
+                </div>
+              )}
             </div>
             <button className="btn" type="button" onClick={() => void handleRevealBackup()}>
               在 Finder 中显示

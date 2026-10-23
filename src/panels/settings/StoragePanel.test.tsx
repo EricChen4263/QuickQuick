@@ -129,6 +129,7 @@ describe("StoragePanel 备份 / 恢复", () => {
       path: BACKUP_PATH,
       itemCount: 3,
       skippedCount: 0,
+      usedFallbackDir: false,
     });
     mockImportBackup.mockResolvedValue({ inserted: 2, skipped: 1 });
     mockRevealBackupInFinder.mockResolvedValue(undefined);
@@ -163,6 +164,41 @@ describe("StoragePanel 备份 / 恢复", () => {
     await waitFor(() => {
       expect(mockRevealBackupInFinder).toHaveBeenCalledWith(BACKUP_PATH);
     });
+  });
+
+  it("后端标记走了回退目录时，路径下方显示回退说明", async () => {
+    // Arrange
+    mockExportBackup.mockResolvedValue({
+      path: BACKUP_PATH,
+      itemCount: 3,
+      skippedCount: 0,
+      usedFallbackDir: true,
+    });
+    const user = userEvent.setup();
+    render(<StoragePanel />);
+
+    // Act
+    await user.click(screen.getByRole("button", { name: "导出备份" }));
+
+    // Assert
+    expect(
+      await screen.findByText("已回退到应用数据目录（文稿/下载目录不可用）")
+    ).toBeInTheDocument();
+  });
+
+  it("未回退时不显示回退说明（不让用户看到假的降级提示）", async () => {
+    // Arrange: 默认 mock 的 usedFallbackDir 为 false
+    const user = userEvent.setup();
+    render(<StoragePanel />);
+
+    // Act
+    await user.click(screen.getByRole("button", { name: "导出备份" }));
+    await screen.findByText(BACKUP_PATH);
+
+    // Assert
+    expect(
+      screen.queryByText("已回退到应用数据目录（文稿/下载目录不可用）")
+    ).not.toBeInTheDocument();
   });
 
   it("导出被后端拒绝时用 role=alert 展示错误文案", async () => {

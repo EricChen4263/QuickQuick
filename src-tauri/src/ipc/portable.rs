@@ -43,6 +43,13 @@ const IMPORT_SAVEPOINT: &str = "portable_import";
 /// 同名备份文件的探测上限（同一秒内重复导出最多生成 100 个不同文件名）
 const MAX_NAME_PROBE: u32 = 100;
 
+/// 导入备份包的解码后字节数上限：1 GiB。
+///
+/// 防的是「误选了某个超大文件 / 恶意构造的超大包」把内存打爆——base64 解码、
+/// 载荷解析、JSON 反序列化各自都要再分配一份，不设限时峰值可达文件大小的 5～6 倍。
+/// 这**不是**业务容量限制：真实剪贴板历史备份远到不了这个量级。
+pub const MAX_BACKUP_BLOB_BYTES: usize = 1024 * 1024 * 1024;
+
 /// 导出结果 DTO。
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -53,6 +60,19 @@ pub struct ExportBackupDto {
     pub item_count: usize,
     /// 因判重键不可得而未纳入备份的条目数（如实上报，不静默丢弃）
     pub skipped_count: usize,
+    /// 是否因文稿/下载目录不可用而回退到了应用数据目录
+    ///
+    /// 由命令层回填（导出核心函数只负责落盘，不知道目录是怎么选出来的），
+    /// 前端据此解释「备份位置」为什么与用户预期不同。
+    pub used_fallback_dir: bool,
+}
+
+impl ExportBackupDto {
+    /// 标记这次导出是否用了回退目录。
+    fn with_fallback_dir(mut self, used_fallback_dir: bool) -> Self {
+        self.used_fallback_dir = used_fallback_dir;
+        self
+    }
 }
 
 /// 导入结果 DTO。
@@ -218,6 +238,8 @@ pub fn export_backup_to_dir(
         path: path.to_string_lossy().into_owned(),
         item_count,
         skipped_count,
+        // 目录决策不在这层：命令层拿到回退事实后用 with_fallback_dir 回填
+        used_fallback_dir: false,
     })
 }
 
@@ -335,7 +357,24 @@ pub fn import_backup_bytes(
     blob: &[u8],
     passphrase: &str,
 ) -> Result<ImportBackupDto, String> {
+    import_backup_bytes_with_limit(conn, blob, passphrase, MAX_BACKUP_BLOB_BYTES)
+}
+
+/// 同 [`import_backup_bytes`]，但上限由调用方给定（单测用小上限覆盖超限路径）。
+///
+/// 上限检查刻意排在解密**之前**：Argon2id 每次派生要占 64 MiB 并跑 3 轮，
+/// 先付这笔代价再因为体积拒绝没有任何收益。
+///
+/// # Errors
+/// 口令为空、体积超上限、口令错误、格式非法、载荷不可解析或合并失败时返回中文提示。
+pub fn import_backup_bytes_with_limit(
+    conn: &rusqlite::Connection,
+    blob: &[u8],
+    passphrase: &str,
+    max_blob_bytes: usize,
+) -> Result<ImportBackupDto, String> {
     validate_passphrase(passphrase)?;
+    ensure_blob_within_limit(blob.len(), max_blob_bytes)?;
 
     let plaintext = portable::import_portable(blob, passphrase).map_err(map_portable_error)?;
     let payload = portable::decode_backup_payload(&plaintext).map_err(map_portable_error)?;
@@ -463,6 +502,26 @@ fn merge_image_item(conn: &rusqlite::Connection, item: &BackupItem) -> Result<bo
     Ok(true)
 }
 
+/// 校验解码后的备份字节数不超过上限。
+///
+/// 口径是**解码后字节数**而不是 base64 字符串长度：字符串长度只是估算
+/// （4 字符对应 3 字节，还受 padding/换行影响），判定必须用真实长度。
+///
+/// # Errors
+/// 超限时返回带真实字节数与上限的中文提示。
+fn ensure_blob_within_limit(len: usize, max_bytes: usize) -> Result<(), String> {
+    const BYTES_PER_MIB: usize = 1024 * 1024;
+
+    if len > max_bytes {
+        return Err(format!(
+            "备份文件过大（{} MiB，上限 {} MiB），请确认选择的是 QuickQuick 备份文件",
+            len / BYTES_PER_MIB,
+            max_bytes / BYTES_PER_MIB
+        ));
+    }
+    Ok(())
+}
+
 /// base64 解码（标准字母表，与导出时的编码方式对应）。
 fn decode_base64(text: &str) -> Result<Vec<u8>, base64::DecodeError> {
     base64::engine::general_purpose::STANDARD.decode(text)
@@ -488,26 +547,43 @@ fn validate_reveal_path(path: &Path) -> Result<(), String> {
 /// 解析备份落盘目录：文稿 → 下载 → 应用数据目录（逐级回退）。
 ///
 /// 这三个目录都由系统约定给出，用户可在文件管理器里按回传路径直接找到。
-fn resolve_backup_dir(app: &AppHandle) -> Result<PathBuf, String> {
+/// 回退到应用数据目录时会 `eprintln!` 留痕，并把「用了回退目录」这一事实
+/// 通过 [`ExportBackupDto::used_fallback_dir`] 带回前端——用户看到的路径与
+/// 「备份存在文稿里」的预期不一致时，原因必须是可见的，而不是静默降级。
+fn resolve_backup_dir(app: &AppHandle) -> Result<(PathBuf, bool), String> {
     let paths = app.path();
-
-    if let Ok(dir) = paths.document_dir() {
-        if dir.is_dir() {
-            return Ok(dir);
-        }
-    }
-    if let Ok(dir) = paths.download_dir() {
-        if dir.is_dir() {
-            return Ok(dir);
-        }
-    }
-
-    let dir = paths
+    let fallback = paths
         .app_data_dir()
         .map_err(|e| format!("无法确定备份目录：{e}"))?;
-    std::fs::create_dir_all(&dir)
-        .map_err(|e| format!("无法创建备份目录 {}：{e}", dir.display()))?;
-    Ok(dir)
+
+    let (dir, used_fallback) = pick_backup_dir(
+        vec![paths.document_dir().ok(), paths.download_dir().ok()],
+        fallback,
+    );
+
+    if used_fallback {
+        std::fs::create_dir_all(&dir)
+            .map_err(|e| format!("无法创建备份目录 {}：{e}", dir.display()))?;
+        eprintln!(
+            "[QuickQuick] 备份目录回退：文稿/下载目录不可用，改用应用数据目录 {}",
+            dir.display()
+        );
+    }
+
+    Ok((dir, used_fallback))
+}
+
+/// 按候选顺序挑第一个真实存在的目录；都不存在时用回退目录。
+///
+/// 拆成纯决策函数是为了可单测：只有它能区分「首选目录可用」与「全部回退」，
+/// `AppHandle` 那层胶水在单测里拿不到。
+fn pick_backup_dir(candidates: Vec<Option<PathBuf>>, fallback: PathBuf) -> (PathBuf, bool) {
+    for candidate in candidates.into_iter().flatten() {
+        if candidate.is_dir() {
+            return (candidate, false);
+        }
+    }
+    (fallback, true)
 }
 
 /// Tauri 命令：导出加密备份包，返回落盘路径与条目统计。
@@ -517,10 +593,11 @@ pub fn export_backup(
     state: State<'_, AppDb>,
     passphrase: String,
 ) -> Result<ExportBackupDto, String> {
-    let dir = resolve_backup_dir(&app)?;
+    let (dir, used_fallback) = resolve_backup_dir(&app)?;
     let now_ms = now_utc_ms();
     with_db(&state, |conn| {
         export_backup_to_dir(conn, &passphrase, &dir, now_ms)
+            .map(|dto| dto.with_fallback_dir(used_fallback))
     })
 }
 
@@ -1039,6 +1116,166 @@ mod tests {
         assert_eq!(
             civil_from_epoch_ms(1_709_210_096_000),
             (2024, 2, 29, 12, 34, 56)
+        );
+    }
+
+    /// 超上限的备份包：在解密与写库之前就被拒绝，库内条目数不变
+    ///
+    /// 上限通过 `import_backup_bytes_with_limit` 注入一个小值来构造超限场景
+    /// （真造 1 GiB 文件会让单测本身把内存打爆），两条断言分别锚定：
+    /// 1. 报的是体积错误而不是口令错误 → 体积检查排在解密之前；
+    /// 2. 库内条目数/快照不变 → 没有进入写库阶段（更没进 SAVEPOINT）。
+    #[test]
+    fn import_rejects_oversized_blob_before_decrypting() {
+        // Arrange
+        let source_dir = tempfile::tempdir().expect("临时目录");
+        let target_dir = tempfile::tempdir().expect("临时目录");
+        let source = make_db(&source_dir);
+        seed_source_db(&source);
+        let exported =
+            export_backup_to_dir(&source, PASSPHRASE, source_dir.path(), 1_700_000_000_000)
+                .expect("导出应成功");
+        let blob = std::fs::read(&exported.path).expect("备份文件应可读");
+
+        let target = make_db(&target_dir);
+        db::ingest(
+            &target,
+            &CapturedItem {
+                text: "目标库原有条目".to_string(),
+                html: None,
+            },
+        )
+        .expect("目标库入库应成功");
+        let before = business_snapshot(&target);
+
+        // Act: 上限比真实字节数少 1 → 超限
+        let result = import_backup_bytes_with_limit(&target, &blob, PASSPHRASE, blob.len() - 1);
+
+        // Assert
+        let message = result.expect_err("超限备份必须被拒绝");
+        assert!(message.contains("备份文件过大"), "实际错误：{message}");
+        assert!(
+            !message.contains("口令错误"),
+            "体积检查必须排在解密之前，实际错误：{message}"
+        );
+        assert_eq!(
+            db::count_live(&target).expect("计数应成功"),
+            1,
+            "不得写入任何条目"
+        );
+        assert_eq!(business_snapshot(&target), before, "不得改动既有条目");
+    }
+
+    /// 上限是闭区间：恰好等于上限的备份包正常导入（不是 >= 就拒）
+    #[test]
+    fn import_size_limit_boundary_is_inclusive() {
+        // Arrange
+        let source_dir = tempfile::tempdir().expect("临时目录");
+        let target_dir = tempfile::tempdir().expect("临时目录");
+        let source = make_db(&source_dir);
+        seed_source_db(&source);
+        let exported =
+            export_backup_to_dir(&source, PASSPHRASE, source_dir.path(), 1_700_000_000_000)
+                .expect("导出应成功");
+        let blob = std::fs::read(&exported.path).expect("备份文件应可读");
+        let target = make_db(&target_dir);
+
+        // Act: 上限恰好等于真实字节数
+        let result = import_backup_bytes_with_limit(&target, &blob, PASSPHRASE, blob.len());
+
+        // Assert
+        assert_eq!(result.expect("恰好等于上限应放行").inserted, 3);
+    }
+
+    /// 生产上限常量走的是同一套边界逻辑（1 GiB 处放行、多 1 字节拒绝）
+    #[test]
+    fn backup_blob_limit_boundary_uses_production_constant() {
+        // Assert: 边界行为挂在真实常量上，而不是测试里另造的数字
+        assert!(ensure_blob_within_limit(MAX_BACKUP_BLOB_BYTES, MAX_BACKUP_BLOB_BYTES).is_ok());
+        let message = ensure_blob_within_limit(MAX_BACKUP_BLOB_BYTES + 1, MAX_BACKUP_BLOB_BYTES)
+            .expect_err("超 1 字节必须被拒绝");
+        assert!(message.contains("备份文件过大"), "实际错误：{message}");
+        assert!(
+            message.contains("1024 MiB"),
+            "错误里应带上限，便于诊断：{message}"
+        );
+    }
+
+    /// 目录决策：首选目录存在就用它，且不标记回退
+    #[test]
+    fn pick_backup_dir_prefers_first_existing_candidate() {
+        // Arrange
+        let root = tempfile::tempdir().expect("临时目录");
+        let documents = root.path().join("Documents");
+        let downloads = root.path().join("Downloads");
+        std::fs::create_dir_all(&documents).expect("建目录应成功");
+        std::fs::create_dir_all(&downloads).expect("建目录应成功");
+        let fallback = root.path().join("AppData");
+
+        // Act
+        let (dir, used_fallback) =
+            pick_backup_dir(vec![Some(documents.clone()), Some(downloads)], fallback);
+
+        // Assert
+        assert_eq!(dir, documents);
+        assert!(!used_fallback, "首选目录可用时不应标记回退");
+    }
+
+    /// 目录决策：首选缺失时跳过它用下一个，不算回退
+    #[test]
+    fn pick_backup_dir_skips_missing_candidate() {
+        // Arrange
+        let root = tempfile::tempdir().expect("临时目录");
+        let documents = root.path().join("Documents"); // 故意不创建
+        let downloads = root.path().join("Downloads");
+        std::fs::create_dir_all(&downloads).expect("建目录应成功");
+        let fallback = root.path().join("AppData");
+
+        // Act
+        let (dir, used_fallback) =
+            pick_backup_dir(vec![Some(documents), Some(downloads.clone())], fallback);
+
+        // Assert
+        assert_eq!(dir, downloads);
+        assert!(!used_fallback, "仍落在系统约定目录内，不算回退");
+    }
+
+    /// 目录决策：候选全不可用时回退并标记，供前端解释路径为何不同
+    #[test]
+    fn pick_backup_dir_falls_back_when_all_candidates_missing() {
+        // Arrange
+        let root = tempfile::tempdir().expect("临时目录");
+        let fallback = root.path().join("AppData");
+
+        // Act
+        let (dir, used_fallback) = pick_backup_dir(
+            vec![Some(root.path().join("Documents")), None],
+            fallback.clone(),
+        );
+
+        // Assert
+        assert_eq!(dir, fallback);
+        assert!(used_fallback, "回退到应用数据目录时必须标记");
+    }
+
+    /// DTO 的回退标记能被置位，且 JSON 键名是前端约定的 usedFallbackDir
+    #[test]
+    fn export_dto_reports_fallback_dir_with_camel_case_key() {
+        // Arrange
+        let dir = tempfile::tempdir().expect("临时目录");
+        let conn = make_db(&dir);
+
+        // Act
+        let dto = export_backup_to_dir(&conn, PASSPHRASE, dir.path(), 1_700_000_000_000)
+            .expect("导出应成功")
+            .with_fallback_dir(true);
+
+        // Assert
+        assert!(dto.used_fallback_dir);
+        let json = serde_json::to_string(&dto).expect("DTO 应可序列化");
+        assert!(
+            json.contains("\"usedFallbackDir\":true"),
+            "实际 JSON：{json}"
         );
     }
 }

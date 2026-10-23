@@ -605,6 +605,8 @@ export interface ExportBackupResult {
   itemCount: number;
   /** 因判重信息不可得而未纳入备份的条目数 */
   skippedCount: number;
+  /** 是否因文稿/下载目录不可用而回退到了应用数据目录 */
+  usedFallbackDir: boolean;
 }
 
 /** 备份导入结果，与 Rust ImportBackupDto（camelCase）对齐。 */
