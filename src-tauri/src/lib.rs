@@ -191,6 +191,9 @@ pub fn run() {
             ipc::update::check_for_updates,
             ipc::update::download_and_install_update,
             ipc::update::restart_app,
+            ipc::portable::export_backup,
+            ipc::portable::import_backup,
+            ipc::portable::reveal_backup_in_finder,
         ])
         .setup(|app| {
             setup_app_db(app);

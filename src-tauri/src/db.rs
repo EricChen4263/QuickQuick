@@ -705,6 +705,252 @@ fn try_insert_image_clip(
     Ok(())
 }
 
+// ===================== 备份导入/导出辅助（只读 + 只插入，不改 schema） =====================
+//
+// 便携备份包的导出与导入需要两件事是 `ingest` 系列做不到的：
+// 1. 导出要读到「原图 BLOB + 缩略图 + 创建时间 + 收藏位」的完整行（`ingest` 只写不读）；
+// 2. 导入要按备份里的原始时间/收藏位原样插入，且命中去重键时**跳过而非 bump**
+//    （`ingest` 的语义是「再次复制就置顶」，会把导入变成打乱现有顺序）。
+//
+// 因此这里只补最小集合的读取与插入原语，判重决策与事务边界留在 IPC 层。
+
+/// 文本判重哈希的公开入口：与 `ingest` 使用的算法完全一致（FNV-1a 64-bit）。
+///
+/// 备份导入必须用同一算法重算哈希，否则与既有条目的判重键对不上，
+/// 会把库里已有的条目再插一遍。
+pub fn text_hash_of(text: &str) -> String {
+    text_hash(text)
+}
+
+/// 备份导出用的图片字段。
+#[derive(Debug, Clone, PartialEq)]
+pub struct BackupImageRow {
+    /// 库内原图字节哈希（列可为 NULL：返回 `None` 由调用方兜底）
+    pub image_hash: Option<String>,
+    /// 缩略图 BLOB
+    pub thumbnail: Vec<u8>,
+    /// 原图 BLOB（`original_present=0` 时为空 Vec）
+    pub original: Vec<u8>,
+    /// 原图是否已存（0 = 超过单张阈值被降级丢弃）
+    pub original_present: bool,
+}
+
+/// 备份导出用的条目行：`clip_items` 业务字段 + 可选关联图片。
+///
+/// 不含条目 id：备份包按内容/图片哈希判重，不搬迁 id（新库里 id 重新生成）。
+#[derive(Debug, Clone, PartialEq)]
+pub struct BackupItemRow {
+    /// 条目内容
+    pub content: String,
+    /// 条目类型（"text" / "richtext" / "image"）
+    pub kind: String,
+    /// 创建时间（UTC epoch ms）
+    pub created_utc: i64,
+    /// 最后修改时间（UTC epoch ms）
+    pub last_modified_utc: i64,
+    /// 收藏标记
+    pub is_favorite: bool,
+    /// 富文本 HTML
+    pub html_content: Option<String>,
+    /// 关联图片（文本条目为 `None`）
+    pub image: Option<BackupImageRow>,
+}
+
+/// 读取全部未软删条目（含图片原图/缩略图），顺序与列表页一致。
+///
+/// 每个条目最多关联一张未软删图片：关联条件用「按 rowid 取第一张」的相关子查询，
+/// 避免同一 `clip_item_id` 有多行 `clip_images` 时把一个条目展开成多条。
+///
+/// # Errors
+/// `DbError::Sqlite`：SQL 执行失败
+pub fn list_backup_items(conn: &Connection) -> Result<Vec<BackupItemRow>, DbError> {
+    let mut stmt = conn.prepare(
+        "SELECT ci.content, ci.kind, ci.created_utc, ci.last_modified_utc,
+                ci.is_favorite, ci.html_content,
+                cimg.id, cimg.image_hash, cimg.thumbnail, cimg.original, cimg.original_present
+         FROM clip_items ci
+         LEFT JOIN clip_images cimg ON cimg.id = (
+             SELECT id FROM clip_images
+             WHERE clip_item_id = ci.id AND is_deleted = 0
+             ORDER BY rowid LIMIT 1
+         )
+         WHERE ci.is_deleted = 0
+         ORDER BY ci.is_favorite DESC, ci.last_modified_utc DESC, ci.rowid DESC",
+    )?;
+
+    let rows = stmt.query_map([], |row| {
+        // 关联到图片行的判据是图片 id 非 NULL（文本条目的 JOIN 结果全为 NULL）
+        let image = match row.get::<_, Option<String>>(6)? {
+            Some(_) => Some(BackupImageRow {
+                image_hash: row.get(7)?,
+                thumbnail: row.get::<_, Option<Vec<u8>>>(8)?.unwrap_or_default(),
+                original: row.get::<_, Option<Vec<u8>>>(9)?.unwrap_or_default(),
+                original_present: row.get::<_, Option<i64>>(10)?.unwrap_or(0) != 0,
+            }),
+            None => None,
+        };
+
+        Ok(BackupItemRow {
+            content: row.get::<_, Option<String>>(0)?.unwrap_or_default(),
+            kind: row.get(1)?,
+            created_utc: row.get(2)?,
+            last_modified_utc: row.get(3)?,
+            is_favorite: row.get::<_, i64>(4)? != 0,
+            html_content: row.get(5)?,
+            image,
+        })
+    })?;
+
+    let mut result = Vec::new();
+    for row in rows {
+        result.push(row?);
+    }
+    Ok(result)
+}
+
+/// 库里是否已有未软删的同内容文本条目（判重键 = `text_hash`）。
+///
+/// 只看未软删行：软删条目的内容视为「用户已丢弃」，导入应重新建行（与 `ingest` 一致）。
+///
+/// # Errors
+/// `DbError::Sqlite`：SQL 执行失败
+pub fn has_live_text_item(conn: &Connection, text_hash: &str) -> Result<bool, DbError> {
+    let found = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM clip_items WHERE text_hash = ?1 AND is_deleted = 0)",
+        rusqlite::params![text_hash],
+        |row| row.get::<_, i64>(0),
+    )?;
+    Ok(found != 0)
+}
+
+/// 库里是否已有未软删的同图行（判重键 = `clip_images.image_hash`）。
+///
+/// 含 `clip_item_id` 为 NULL 的孤立图片行：那种行同样占着这个去重键，
+/// 再插一条会造成同图两行。
+///
+/// # Errors
+/// `DbError::Sqlite`：SQL 执行失败
+pub fn has_live_image_item(conn: &Connection, image_hash: &str) -> Result<bool, DbError> {
+    let found = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM clip_images WHERE image_hash = ?1 AND is_deleted = 0)",
+        rusqlite::params![image_hash],
+        |row| row.get::<_, i64>(0),
+    )?;
+    Ok(found != 0)
+}
+
+/// 备份导入：按备份里的原始时间与收藏位插入文本/富文本条目，返回新行 id。
+///
+/// 判重由调用方先做；本函数不查重、不 bump 既有行。
+/// 条目的 `kind` 由 `html` 是否存在推导，与 `ingest` 的推导规则一致。
+///
+/// # Errors
+/// `DbError::Sqlite`：SQL 执行失败
+pub fn insert_backup_text_item(
+    conn: &Connection,
+    content: &str,
+    html: Option<&str>,
+    is_favorite: bool,
+    created_utc: i64,
+    last_modified_utc: i64,
+) -> Result<String, DbError> {
+    let id = Uuid::new_v4().to_string();
+    let kind = if html.is_some() { "richtext" } else { "text" };
+    let hash = text_hash(content);
+
+    conn.execute(
+        "INSERT INTO clip_items
+             (id, content, kind, created_utc, last_modified_utc, is_deleted,
+              text_hash, is_favorite, html_content)
+         VALUES (?1, ?2, ?3, ?4, ?5, 0, ?6, ?7, ?8)",
+        rusqlite::params![
+            id,
+            content,
+            kind,
+            created_utc,
+            last_modified_utc,
+            hash,
+            is_favorite as i64,
+            html
+        ],
+    )?;
+
+    Ok(id)
+}
+
+/// 备份导入要写入的图片条目字段集。
+///
+/// 用结构体而非长参数列表：字段超过 5 个且同属一条记录，平铺参数极易把
+/// 两个相邻的时间戳或两个相邻的 BLOB 传反。
+#[derive(Debug, Clone, Copy)]
+pub struct BackupImageInsert<'a> {
+    /// 条目内容（图片条目的尺寸描述）
+    pub content: &'a str,
+    /// 收藏标记
+    pub is_favorite: bool,
+    /// 创建时间（UTC epoch ms）
+    pub created_utc: i64,
+    /// 最后修改时间（UTC epoch ms）
+    pub last_modified_utc: i64,
+    /// 原图判重键
+    pub image_hash: &'a str,
+    /// 缩略图 PNG
+    pub thumbnail: &'a [u8],
+    /// 原图 PNG（`original_present=false` 时传空切片）
+    pub original: &'a [u8],
+    /// 原图是否已存
+    pub original_present: bool,
+}
+
+/// 备份导入：按备份里的原始字段插入图片条目及其 `clip_images` 行，返回新条目 id。
+///
+/// 两行必须同生共死：任一 INSERT 失败时由调用方的 SAVEPOINT 整体回滚，
+/// 因此本函数不自带事务（嵌套 SAVEPOINT 会让上层回滚边界变得不可预测）。
+///
+/// # Errors
+/// `DbError::Sqlite`：SQL 执行失败
+pub fn insert_backup_image_item(
+    conn: &Connection,
+    row: &BackupImageInsert<'_>,
+) -> Result<String, DbError> {
+    let item_id = Uuid::new_v4().to_string();
+    let image_id = Uuid::new_v4().to_string();
+
+    conn.execute(
+        "INSERT INTO clip_items
+             (id, content, kind, created_utc, last_modified_utc, is_deleted,
+              text_hash, is_favorite)
+         VALUES (?1, ?2, 'image', ?3, ?4, 0, NULL, ?5)",
+        rusqlite::params![
+            item_id,
+            row.content,
+            row.created_utc,
+            row.last_modified_utc,
+            row.is_favorite as i64
+        ],
+    )?;
+
+    conn.execute(
+        "INSERT INTO clip_images
+             (id, clip_item_id, thumbnail, original, original_present, image_hash,
+              created_utc, last_modified_utc, is_deleted, is_favorite)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 0, ?9)",
+        rusqlite::params![
+            image_id,
+            item_id,
+            row.thumbnail,
+            row.original,
+            row.original_present as i64,
+            row.image_hash,
+            row.created_utc,
+            row.last_modified_utc,
+            row.is_favorite as i64
+        ],
+    )?;
+
+    Ok(item_id)
+}
+
 /// 用指定 key 打开 SQLCipher 数据库并触发解密校验。
 ///
 /// 开库成功后立即开启外键约束（`PRAGMA foreign_keys = ON`）。

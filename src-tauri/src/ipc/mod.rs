@@ -7,8 +7,10 @@
 //! - `clipboard`：剪贴板取数/管理命令（list/delete/toggle_favorite）
 //! - `translate`：翻译命令（translate_text / list_translate_history）
 //! - `settings`：设置命令（get/set_hotkeys / exclude_list / translate_providers）
+//! - `portable`：备份/恢复命令（export_backup / import_backup / reveal_backup_in_finder）
 
 pub mod clipboard;
+pub mod portable;
 pub mod settings;
 pub mod system;
 pub mod translate;

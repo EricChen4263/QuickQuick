@@ -1,6 +1,11 @@
-//! 便携文件导出/导入模块（V3-F2-S06）
+//! 便携文件导出/导入模块
 //!
 //! 提供口令保护的便携文件加解密功能，用于跨设备备份与迁移剪贴板数据。
+//!
+//! 本模块分两层：
+//! 1. **加密层**：`export_portable` / `import_portable`，对任意明文做口令加密；
+//! 2. **载荷层**：`encode_backup_payload` / `decode_backup_payload`，
+//!    定义剪贴板历史在便携文件内部的明文结构（见下文「备份载荷格式」）。
 //!
 //! # 便携文件格式（小端字节序，紧凑二进制）
 //!
@@ -12,6 +17,58 @@
 //! 37      12    AES-GCM nonce（随机，加密随机数）
 //! 49      N     AES-GCM ciphertext + 16-byte authentication tag
 //! ```
+//!
+//! # 备份载荷格式
+//!
+//! 便携文件里的明文是自描述的 UTF-8 JSON 文档（`format` + `version` 双字段）：
+//!
+//! ```json
+//! {
+//!   "format": "qqbackup",
+//!   "version": 1,
+//!   "createdUtc": 1700000000000,
+//!   "appVersion": "0.3.8",
+//!   "items": [
+//!     {
+//!       "kind": "text",
+//!       "content": "纯文本内容",
+//!       "isFavorite": false,
+//!       "createdUtc": 1700000000000,
+//!       "lastModifiedUtc": 1700000000000
+//!     },
+//!     {
+//!       "kind": "richtext",
+//!       "content": "富文本内容",
+//!       "html": "<b>富文本内容</b>",
+//!       "isFavorite": true,
+//!       "createdUtc": 1700000000000,
+//!       "lastModifiedUtc": 1700000000000
+//!     },
+//!     {
+//!       "kind": "image",
+//!       "content": "[图片] 800×600",
+//!       "isFavorite": false,
+//!       "createdUtc": 1700000000000,
+//!       "lastModifiedUtc": 1700000000000,
+//!       "image": {
+//!         "imageHash": "0123456789abcdef",
+//!         "originalPresent": true,
+//!         "thumbnailBase64": "iVBORw0KGgo...",
+//!         "originalBase64": "iVBORw0KGgo..."
+//!       }
+//!     }
+//!   ]
+//! }
+//! ```
+//!
+//! 兼容边界：
+//! - **未知字段不失败**：读端按 serde 默认忽略未识别字段，将来加字段不会让旧版本解析失败；
+//! - **未知版本显式失败**：`version` 高于 [`PAYLOAD_VERSION`] 时报
+//!   [`PortableError::UnsupportedVersion`]，绝不猜测新版本语义；
+//! - **可选字段带默认值**：`html` / `image` / `appVersion` 缺省即取 `None` / 空串。
+//!
+//! 图片条目的判重键 `imageHash` 随载荷显式携带：降级条目（`originalPresent=false`）
+//! 的原图从未落库，哈希无法再由字节重算，只能沿用库内的判重键。
 //!
 //! # 安全设计
 //! - KDF：Argon2id（m=65536 KiB, t=3 次迭代, p=4 并行度），派生 32 字节对称密钥。
@@ -25,6 +82,7 @@ use aes_gcm::{
 };
 use argon2::{Algorithm, Argon2, Params, Version};
 use rand::RngCore;
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use zeroize::Zeroizing;
 
@@ -59,7 +117,10 @@ const ARGON2_PARALLELISM: u32 = 4;
 #[derive(Debug, Error)]
 pub enum PortableError {
     /// 口令错误导致 AEAD 验签失败（最终呈现给用户）
-    #[error("口令错误，无法解密便携文件")]
+    ///
+    /// 文案刻意把「口令错误」与「文件损坏」并列：AEAD 验签失败在密码学上无法
+    /// 区分两者，断言其一会让用户误判文件状态。
+    #[error("备份口令错误，或文件已损坏")]
     WrongPassphrase,
 
     /// AES-GCM 解密/验签失败（内部详情不含口令）
@@ -73,6 +134,19 @@ pub enum PortableError {
     /// Argon2 KDF 参数构建或派生失败
     #[error("密钥派生失败")]
     Kdf,
+
+    /// 备份载荷解析失败（明文不是合法 JSON，或格式标识/必填字段不符）
+    #[error("备份载荷格式无效")]
+    Payload,
+
+    /// 备份载荷版本高于当前实现支持的版本
+    #[error("备份文件版本 {found} 不受支持（当前最高支持 {supported}）")]
+    UnsupportedVersion {
+        /// 文件里声明的版本号
+        found: u32,
+        /// 本实现能解析的最高版本号
+        supported: u32,
+    },
 }
 
 /// 从口令派生 AES-256-GCM 对称密钥。
@@ -192,6 +266,104 @@ pub fn import_portable(blob: &[u8], passphrase: &str) -> Result<Vec<u8>, Portabl
         .map_err(|_| PortableError::WrongPassphrase)
 }
 
+/// 备份载荷的格式标识（写入 `format` 字段，解析时校验）
+pub const PAYLOAD_FORMAT: &str = "qqbackup";
+
+/// 备份载荷的当前版本（写入 `version` 字段）
+pub const PAYLOAD_VERSION: u32 = 1;
+
+/// 一份完整备份载荷（便携文件解密后的明文文档）。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BackupPayload {
+    /// 格式标识，必须等于 [`PAYLOAD_FORMAT`]
+    pub format: String,
+    /// 载荷版本，必须落在 `1..=PAYLOAD_VERSION` 内
+    pub version: u32,
+    /// 备份生成时刻（UTC epoch ms）
+    pub created_utc: i64,
+    /// 生成该备份的应用版本（仅供诊断，解析时不校验）
+    #[serde(default)]
+    pub app_version: String,
+    /// 条目列表，顺序即写出时的库内排序（收藏优先，组内按最近修改降序）
+    pub items: Vec<BackupItem>,
+}
+
+/// 备份中的单个剪贴板条目。
+///
+/// 文本类条目用 `content` + 可选 `html` 表达；图片条目的内容描述放在 `content`，
+/// 图片字节与判重键放在 `image`。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BackupItem {
+    /// 条目类型："text" | "richtext" | "image"
+    pub kind: String,
+    /// 条目内容（文本内容，或图片条目的尺寸描述）
+    pub content: String,
+    /// 富文本 HTML（仅 richtext 条目有）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub html: Option<String>,
+    /// 收藏标记
+    #[serde(default)]
+    pub is_favorite: bool,
+    /// 条目创建时刻（UTC epoch ms）
+    pub created_utc: i64,
+    /// 条目最后修改时刻（UTC epoch ms）
+    pub last_modified_utc: i64,
+    /// 图片字段（仅 image 条目有）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image: Option<BackupImage>,
+}
+
+/// 备份中图片条目的字节与判重信息（PNG 以 base64 承载）。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BackupImage {
+    /// 原图字节的判重键（FNV-1a 64-bit 十六进制），导入时用于 `image_hash` 去重
+    pub image_hash: String,
+    /// 原图是否随载荷携带（false = 原图曾在库内被降级剥离）
+    #[serde(default)]
+    pub original_present: bool,
+    /// 缩略图 PNG 的 base64
+    pub thumbnail_base64: String,
+    /// 原图 PNG 的 base64；`original_present=false` 时缺省
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub original_base64: Option<String>,
+}
+
+/// 把备份载荷序列化为明文 JSON 字节，随后交给 [`export_portable`] 加密。
+///
+/// # Errors
+/// - `PortableError::Payload`：序列化失败（正常数据不会发生）
+pub fn encode_backup_payload(payload: &BackupPayload) -> Result<Vec<u8>, PortableError> {
+    serde_json::to_vec(payload).map_err(|_| PortableError::Payload)
+}
+
+/// 解析明文 JSON 字节为备份载荷，并校验格式标识与版本。
+///
+/// 未知字段按 serde 默认忽略（向前兼容）；版本高于 [`PAYLOAD_VERSION`] 时显式报错。
+///
+/// # Errors
+/// - `PortableError::Payload`：不是合法 JSON、格式标识不符或版本号为 0
+/// - `PortableError::UnsupportedVersion`：版本高于本实现支持的版本
+pub fn decode_backup_payload(plaintext: &[u8]) -> Result<BackupPayload, PortableError> {
+    let payload: BackupPayload =
+        serde_json::from_slice(plaintext).map_err(|_| PortableError::Payload)?;
+
+    if payload.format != PAYLOAD_FORMAT || payload.version == 0 {
+        return Err(PortableError::Payload);
+    }
+
+    if payload.version > PAYLOAD_VERSION {
+        return Err(PortableError::UnsupportedVersion {
+            found: payload.version,
+            supported: PAYLOAD_VERSION,
+        });
+    }
+
+    Ok(payload)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -226,5 +398,165 @@ mod tests {
 
         // Assert: 不同 salt → 不同密钥
         assert_ne!(key_a, key_b, "不同 salt 必须产生不同密钥");
+    }
+
+    /// 构造覆盖全部字段的备份载荷（中文文本、HTML、图片、收藏位、时间戳）。
+    fn sample_payload() -> BackupPayload {
+        BackupPayload {
+            format: PAYLOAD_FORMAT.to_string(),
+            version: PAYLOAD_VERSION,
+            created_utc: 1_700_000_000_000,
+            app_version: "0.3.8".to_string(),
+            items: vec![
+                BackupItem {
+                    kind: "text".to_string(),
+                    content: "中文纯文本：剪贴板历史第一条".to_string(),
+                    html: None,
+                    is_favorite: false,
+                    created_utc: 1_700_000_000_001,
+                    last_modified_utc: 1_700_000_000_002,
+                    image: None,
+                },
+                BackupItem {
+                    kind: "richtext".to_string(),
+                    content: "富文本条目".to_string(),
+                    html: Some("<b>富文本条目</b><br/>第二行".to_string()),
+                    is_favorite: true,
+                    created_utc: 1_700_000_000_003,
+                    last_modified_utc: 1_700_000_000_004,
+                    image: None,
+                },
+                BackupItem {
+                    kind: "image".to_string(),
+                    content: "[图片] 800×600".to_string(),
+                    html: None,
+                    is_favorite: true,
+                    created_utc: 1_700_000_000_005,
+                    last_modified_utc: 1_700_000_000_006,
+                    image: Some(BackupImage {
+                        image_hash: "0123456789abcdef".to_string(),
+                        original_present: true,
+                        thumbnail_base64: "dGh1bWJuYWls".to_string(),
+                        original_base64: Some("b3JpZ2luYWw=".to_string()),
+                    }),
+                },
+            ],
+        }
+    }
+
+    /// 载荷序列化/反序列化往返：全部字段（含中文、HTML、图片、收藏位、时间戳）逐一保持
+    #[test]
+    fn backup_payload_round_trip_preserves_all_fields() {
+        // Arrange
+        let payload = sample_payload();
+
+        // Act
+        let encoded = encode_backup_payload(&payload).expect("载荷序列化不应失败");
+        let decoded = decode_backup_payload(&encoded).expect("载荷反序列化不应失败");
+
+        // Assert: 整体相等即覆盖每个字段的具体值
+        assert_eq!(decoded, payload, "往返后载荷必须与原始载荷完全一致");
+        assert_eq!(
+            decoded.items[1].html.as_deref(),
+            Some("<b>富文本条目</b><br/>第二行")
+        );
+        assert_eq!(
+            decoded.items[2].image.as_ref().unwrap().image_hash,
+            "0123456789abcdef"
+        );
+        assert!(decoded.items[2].is_favorite, "收藏位必须保持");
+        assert_eq!(decoded.items[0].created_utc, 1_700_000_000_001);
+    }
+
+    /// 向前兼容：未知字段被忽略而非报错（将来加字段不破坏旧版本解析）
+    #[test]
+    fn decode_backup_payload_ignores_unknown_fields() {
+        // Arrange: 顶层与条目层各注入一个本实现不认识的字段
+        let json = r#"{
+            "format": "qqbackup",
+            "version": 1,
+            "createdUtc": 1700000000000,
+            "appVersion": "9.9.9",
+            "futureSection": {"anything": [1, 2, 3]},
+            "items": [{
+                "kind": "text",
+                "content": "带未知字段的条目",
+                "isFavorite": true,
+                "createdUtc": 1,
+                "lastModifiedUtc": 2,
+                "futureFlag": "忽略我"
+            }]
+        }"#;
+
+        // Act
+        let decoded = decode_backup_payload(json.as_bytes()).expect("未知字段不应导致解析失败");
+
+        // Assert
+        assert_eq!(decoded.items.len(), 1);
+        assert_eq!(decoded.items[0].content, "带未知字段的条目");
+        assert!(decoded.items[0].is_favorite);
+        assert_eq!(decoded.app_version, "9.9.9");
+    }
+
+    /// 格式标识不符 → Payload 错误，不猜测内容
+    #[test]
+    fn decode_backup_payload_rejects_foreign_format() {
+        // Arrange
+        let json = r#"{"format":"some-other-tool","version":1,"createdUtc":0,"items":[]}"#;
+
+        // Act
+        let result = decode_backup_payload(json.as_bytes());
+
+        // Assert
+        assert!(
+            matches!(result, Err(PortableError::Payload)),
+            "外来格式必须被拒绝"
+        );
+    }
+
+    /// 版本高于当前支持 → UnsupportedVersion，且带上实际读到的版本号
+    #[test]
+    fn decode_backup_payload_rejects_newer_version() {
+        // Arrange
+        let json = r#"{"format":"qqbackup","version":99,"createdUtc":0,"items":[]}"#;
+
+        // Act
+        let result = decode_backup_payload(json.as_bytes());
+
+        // Assert
+        match result {
+            Err(PortableError::UnsupportedVersion { found, supported }) => {
+                assert_eq!(found, 99);
+                assert_eq!(supported, PAYLOAD_VERSION);
+            }
+            other => panic!("更高版本应返回 UnsupportedVersion，实际：{other:?}"),
+        }
+    }
+
+    /// 明文不是 JSON → Payload 错误，不 panic
+    #[test]
+    fn decode_backup_payload_rejects_non_json() {
+        // Act
+        let result = decode_backup_payload(b"\x00\x01\x02not-json");
+
+        // Assert
+        assert!(matches!(result, Err(PortableError::Payload)));
+    }
+
+    /// 载荷经真实加密层往返：加密 → 解密 → 解析后字段不变
+    #[test]
+    fn backup_payload_survives_encrypt_decrypt_round_trip() {
+        // Arrange
+        let payload = sample_payload();
+        let passphrase = "备份口令-SENTINEL-不要泄漏";
+        let plaintext = encode_backup_payload(&payload).expect("载荷序列化不应失败");
+
+        // Act
+        let blob = export_portable(&plaintext, passphrase).expect("加密不应失败");
+        let recovered = import_portable(&blob, passphrase).expect("解密不应失败");
+        let decoded = decode_backup_payload(&recovered).expect("载荷解析不应失败");
+
+        // Assert
+        assert_eq!(decoded, payload, "加密往返后载荷必须保持一致");
     }
 }
