@@ -12,6 +12,7 @@ import {
   deleteClipItem,
   toggleFavoriteClip,
   pasteToFront,
+  copyClipToClipboard,
   openAccessibilitySettings,
   type ClipItem,
 } from "../../ipc/ipc-client";
@@ -157,6 +158,17 @@ function ClipboardPage({ onTranslateItem }: ClipboardPageProps) {
     void handlePasteToFront(target);
   }
 
+  /**
+   * 按条目 id 只复制到系统剪贴板（⌥Enter 语义，与 popover 的 ⌥Enter 一致）。
+   * 走 copyClipToClipboard 而非浏览器剪贴板 API：由后端按 id 取 text+html，保持富文本保真。
+   */
+  function copyItemById(id: string | null): void {
+    if (id === null) return;
+    copyClipToClipboard(id).catch(() => {
+      setOpError("复制失败，请稍后重试");
+    });
+  }
+
   function handleKeyDown(event: React.KeyboardEvent) {
     // 输入法组词期间（中文拼音选候选词）所有方向键与直达键都归输入法，
     // 这里不拦截任何键，否则会把候选词选择抢成列表导航。
@@ -171,8 +183,14 @@ function ClipboardPage({ onTranslateItem }: ClipboardPageProps) {
     }
     if (event.key === "Enter") {
       event.preventDefault();
+      const targetId = resolveEnter(safeHighlight, filteredItems)?.id ?? null;
+      if (event.altKey) {
+        // ⌥Enter 与 popover 同语义：只复制，不模拟粘贴
+        copyItemById(targetId);
+        return;
+      }
       // Enter 直接取用高亮条目；没有有效高亮（空列表 / 越界）时不做任何事
-      pasteItemById(resolveEnter(safeHighlight, filteredItems)?.id ?? null);
+      pasteItemById(targetId);
       return;
     }
     if (event.metaKey || event.ctrlKey) {
