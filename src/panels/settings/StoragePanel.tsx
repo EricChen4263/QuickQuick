@@ -35,9 +35,12 @@ function toMB(bytes: number): string {
   return (bytes / (1024 * 1024)).toFixed(1);
 }
 
-/** 存储子项面板：库体积/阈值/清理 + 备份与恢复 */
+/** 存储子项面板：图片占用/库文件体积/阈值/清理 + 备份与恢复 */
 function StoragePanel() {
   const [liveCount, setLiveCount] = useState(0);
+  // 两个占用口径分开存：imageBytes 受 500 MB 上限约束（进度条用它），
+  // fileSizeBytes 是磁盘占用，二者不可互相替代。
+  const [imageBytes, setImageBytes] = useState(0);
   const [fileSizeBytes, setFileSizeBytes] = useState(0);
   const [cleanupMsg, setCleanupMsg] = useState<string | null>(null);
   const [opError, setOpError] = useState<string | null>(null);
@@ -55,6 +58,7 @@ function StoragePanel() {
       const stats = await getStorageStats();
       if (cancelled.current) return;
       setLiveCount(stats.liveCount);
+      setImageBytes(stats.imageBytes);
       setFileSizeBytes(stats.fileSizeBytes);
     } catch {
       if (cancelled.current) return;
@@ -172,7 +176,8 @@ function StoragePanel() {
     }
   }
 
-  const meterWidth = Math.min((fileSizeBytes / MAX_BYTES) * 100, 100);
+  // 进度条只能取图片占用：上限约束的就是这个量，同源才能让清理后条真的下降。
+  const meterWidth = Math.min((imageBytes / MAX_BYTES) * 100, 100);
 
   return (
     <div>
@@ -180,13 +185,25 @@ function StoragePanel() {
       <SettingGroup>
         <div className="set-row">
           <div className="grow">
-            <div className="label">库体积</div>
+            <div className="label">图片占用</div>
+            <div className="desc">
+              受 500 MB 上限约束；进度条与自动清理的阈值判据取的是同一个量
+            </div>
             <div className="meter" aria-hidden="true">
               <i style={{ width: `${meterWidth}%` }} />
             </div>
             <div className="meter-legend">
-              <span>{toMB(fileSizeBytes)} MB 已用</span>
+              <span>{toMB(imageBytes)} MB 已用</span>
               <span>上限 500 MB</span>
+            </div>
+          </div>
+        </div>
+        <div className="set-row">
+          <div className="grow">
+            <div className="label">库文件体积</div>
+            <div className="desc">
+              {toMB(fileSizeBytes)} MB · 磁盘实际占用，与上面的图片占用不是同一个量：还含文本条目、
+              索引与未回收页，SQLite 删除只把页标记为可复用，文件在 VACUUM 前不会缩小
             </div>
           </div>
         </div>
@@ -198,7 +215,7 @@ function StoragePanel() {
         </div>
         <div className="set-row">
           <div className="grow">
-            <div className="label">总量上限</div>
+            <div className="label">图片占用上限</div>
             <div className="desc">超出按分级清理：先删大图原图保缩略图，再整条清最旧非收藏</div>
           </div>
           <span className="kbd-combo num">

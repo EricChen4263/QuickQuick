@@ -413,7 +413,20 @@ export async function setLaunchOnLogin(enabled: boolean): Promise<void> {
 
 /** 存储统计，与 Rust StorageStatsDto（camelCase）对齐。 */
 export interface StorageStats {
+  /** 活跃（未软删）条目数 */
   liveCount: number;
+  /**
+   * 图片占用逻辑字节（原图 + 缩略图，排除软删行）。
+   *
+   * 与后端分级清理的 500 MiB 阈值同源，是「是否超出上限」的唯一判据，进度条用它。
+   */
+  imageBytes: number;
+  /**
+   * 库文件体积（磁盘占用）。
+   *
+   * 与 `imageBytes` 不是同一个量：还含文本条目、索引、WAL 与未回收页；
+   * SQLite 的 DELETE 只把页标记为可复用、不收缩文件，故清理后该值不会下降。
+   */
   fileSizeBytes: number;
 }
 
@@ -431,7 +444,7 @@ export interface PasteResult {
   outcome: PasteOutcome;
 }
 
-/** 读取存储统计（活跃条目数 + 库文件大小）。 */
+/** 读取存储统计（活跃条目数 + 图片占用 + 库文件体积）。 */
 export async function getStorageStats(): Promise<StorageStats> {
   try {
     return await invoke<StorageStats>("get_storage_stats");

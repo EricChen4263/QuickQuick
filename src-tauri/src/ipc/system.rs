@@ -1,7 +1,7 @@
 //! 系统域 IPC 命令层（里程碑 3 · V5-F-system）
 //!
 //! 命令清单（前端通过 invoke 对应命令名调用）：
-//! - `get_storage_stats`           — 存储统计（活跃条目数 + 库文件大小）
+//! - `get_storage_stats`           — 存储统计（活跃条目数 + 图片占用 + 库文件体积）
 //! - `cleanup_history`             — 清理历史（容量裁剪 + GC 物理删除）
 //! - `open_accessibility_settings` — 打开 macOS 辅助功能系统设置深链
 //! - `paste_to_front`              — 将指定条目写回系统剪贴板，trusted 时走完整粘贴路径
@@ -42,11 +42,23 @@ use crate::onboarding::{
 use crate::paste::{self, PasteBackend};
 
 /// 存储统计 DTO。
+///
+/// 三个数字是三个量，不能互相替代：
+/// - `image_bytes`：图片占用**逻辑字节**——未软删 `clip_images` 行的
+///   `length(original) + length(thumbnail)` 合计，与分级清理的 500 MiB 阈值同源，
+///   是「上限是否超了」的唯一判据；
+/// - `file_size_bytes`：库文件**体积**——磁盘占用，含文本条目、索引、WAL、加密开销与未回收页。
+///   SQLite 的 `DELETE` 只把页标记为可复用、不收缩文件，因此清理后该值不会下降；
+/// - `live_count`：活跃条目数。
+///
+/// 存储页的进度条必须用 `image_bytes`：拿 `file_size_bytes` 比 500 MiB 会让「清理后条不降」。
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StorageStatsDto {
     /// 活跃（未软删）条目总数
     pub live_count: i64,
+    /// 图片占用逻辑字节（原图 + 缩略图，排除软删行），与清理阈值同源
+    pub image_bytes: i64,
     /// 数据库文件大小（字节），文件不存在时为 0
     pub file_size_bytes: u64,
 }
@@ -86,10 +98,14 @@ const FOCUS_YIELD_WAIT_MS: u64 = 350;
 
 /// get_storage_stats 的纯函数实现，可在测试中直接调用。
 ///
-/// 返回活跃条目数与 db 文件大小。`db_path` 为 None 时文件大小返回 0。
+/// 返回活跃条目数、图片占用逻辑字节与 db 文件大小。`db_path` 为 None 时文件大小返回 0。
+///
+/// 图片占用直接复用 [`crate::image::total_image_bytes`]——分级清理的阈值判据也是它，
+/// 两处共用同一个函数才不会各自漂移出第二套口径。该查询失败只把图片占用降级为 0 并留痕：
+/// 占用展示取不到数据，不该让条目数这类同样有用的信息陪葬。
 ///
 /// # Errors
-/// 数据库查询失败时返回 `DbError`。
+/// 数据库查询失败（`live_count` 计数失败）时返回 `DbError`；图片占用查询失败不传播。
 pub fn get_storage_stats_impl(
     conn: &Connection,
     db_path: Option<&std::path::Path>,
@@ -99,8 +115,16 @@ pub fn get_storage_stats_impl(
         .and_then(|p| std::fs::metadata(p).ok())
         .map(|m| m.len())
         .unwrap_or(0);
+    let image_bytes = match crate::image::total_image_bytes(conn) {
+        Ok(bytes) => bytes,
+        Err(e) => {
+            eprintln!("[get_storage_stats] 图片占用查询失败，降级为 0: {e}");
+            0
+        }
+    };
     Ok(StorageStatsDto {
         live_count,
+        image_bytes,
         file_size_bytes,
     })
 }
@@ -267,7 +291,7 @@ pub fn paste_image_orchestrate(
     }
 }
 
-/// Tauri 命令：取存储统计（活跃条目数 + 库文件大小）。
+/// Tauri 命令：取存储统计（活跃条目数 + 图片占用 + 库文件体积）。
 #[tauri::command]
 pub fn get_storage_stats(
     state: State<'_, AppDb>,
@@ -905,6 +929,42 @@ mod tests {
         item_id
     }
 
+    /// 造一条可独立指定字节数的图片行（原图/缩略图 BLOB 与软删标记）。
+    ///
+    /// 与 `insert_image_clip` 的区别：id 由调用方给出、可造多行、可造软删行，
+    /// 用于验证图片占用聚合为「各行 `length(original) + length(thumbnail)` 之和」。
+    /// `clip_items` 与 `clip_images` 用同一个软删标记——软删父条目时图片行同步软删是既有语义。
+    fn insert_image_row(
+        conn: &Connection,
+        item_id: &str,
+        image_id: &str,
+        original_len: usize,
+        thumbnail_len: usize,
+        is_deleted: i32,
+    ) {
+        conn.execute(
+            "INSERT INTO clip_items
+                 (id, content, kind, created_utc, last_modified_utc, is_deleted)
+             VALUES (?1, '', 'image', 1, 1, ?2)",
+            rusqlite::params![item_id, is_deleted],
+        )
+        .expect("插入 image clip_item 失败");
+        conn.execute(
+            "INSERT INTO clip_images
+                 (id, clip_item_id, original, thumbnail, original_present,
+                  created_utc, last_modified_utc, is_deleted)
+             VALUES (?1, ?2, ?3, ?4, 1, 1, 1, ?5)",
+            rusqlite::params![
+                image_id,
+                item_id,
+                vec![7_u8; original_len],
+                vec![9_u8; thumbnail_len],
+                is_deleted,
+            ],
+        )
+        .expect("插入 clip_images 失败");
+    }
+
     struct FakeProbe {
         trusted: bool,
     }
@@ -991,12 +1051,13 @@ mod tests {
         }
     }
 
-    /// T1：get_storage_stats_impl — 空库返回 live_count=0，file_size_bytes=0（无路径）
+    /// T1：get_storage_stats_impl — 空库返回 live_count=0、image_bytes=0、file_size_bytes=0（无路径）
     #[test]
     fn get_storage_stats_impl_empty_db_returns_zero() {
         let conn = make_test_conn();
         let stats = get_storage_stats_impl(&conn, None).expect("不应失败");
         assert_eq!(stats.live_count, 0, "空库活跃数应为 0");
+        assert_eq!(stats.image_bytes, 0, "空库图片占用应为 0");
         assert_eq!(stats.file_size_bytes, 0, "无路径时文件大小应为 0");
     }
 
@@ -1017,6 +1078,54 @@ mod tests {
 
         let stats = get_storage_stats_impl(&conn, None).expect("不应失败");
         assert_eq!(stats.live_count, 2, "写入 2 条后 live_count 应为 2");
+    }
+
+    /// T2b：get_storage_stats_impl — 图片占用等于未软删行 `SUM(length(original)+length(thumbnail))`，
+    /// 软删行整条排除（2 条活行 130 + 240 = 370；1 条软删行 500 不计入）
+    #[test]
+    fn get_storage_stats_impl_image_bytes_sums_live_rows_excluding_soft_deleted() {
+        let conn = make_test_conn();
+        // 活行 A：原图 100 + 缩略图 30 = 130
+        insert_image_row(&conn, "item-a", "img-a", 100, 30, 0);
+        // 活行 B：原图 200 + 缩略图 40 = 240
+        insert_image_row(&conn, "item-b", "img-b", 200, 40, 0);
+        // 软删行 C：原图 500，必须整条被排除
+        insert_image_row(&conn, "item-c", "img-c", 500, 0, 1);
+
+        let stats = get_storage_stats_impl(&conn, None).expect("不应失败");
+
+        assert_eq!(
+            stats.image_bytes, 370,
+            "图片占用应为两条活行之和 130 + 240 = 370，软删行的 500 不得计入"
+        );
+        assert_eq!(stats.live_count, 2, "活跃条目只算未软删的两条");
+    }
+
+    /// T2c：get_storage_stats_impl — 图片占用查询失败降级为 0，但不拖垮整体统计
+    ///
+    /// 用 `DROP TABLE clip_images` 构造真实的查询失败；先断言该查询确实会失败，
+    /// 否则本测试根本没走到降级分支（挡住「删表后查询竟然还成功」的假绿）。
+    #[test]
+    fn get_storage_stats_impl_image_query_failure_degrades_to_zero() {
+        let conn = make_test_conn();
+        let item = CapturedItem {
+            text: "still counted".to_string(),
+            html: None,
+        };
+        ingest(&conn, &item).expect("入库失败");
+        conn.execute("DROP TABLE clip_images", [])
+            .expect("删表失败");
+
+        assert!(
+            crate::image::total_image_bytes(&conn).is_err(),
+            "前置条件：删表后图片占用查询必须失败，否则本测试没验证降级分支"
+        );
+
+        let stats =
+            get_storage_stats_impl(&conn, None).expect("图片占用查询失败不应让整体统计失败");
+
+        assert_eq!(stats.image_bytes, 0, "图片占用查询失败时降级为 0");
+        assert_eq!(stats.live_count, 1, "条目数不受图片查询失败影响");
     }
 
     /// T3：cleanup_history_impl — 无超限时 soft_deleted=0，purged=0

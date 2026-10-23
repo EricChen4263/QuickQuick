@@ -116,7 +116,11 @@ describe("settings-page", () => {
     mockSetPauseCapture.mockResolvedValue(undefined);
     mockGetSkipSensitive.mockResolvedValue(true);
     mockSetSkipSensitive.mockResolvedValue(undefined);
-    mockGetStorageStats.mockResolvedValue({ liveCount: 42, fileSizeBytes: 50 * 1024 * 1024 });
+    mockGetStorageStats.mockResolvedValue({
+      liveCount: 42,
+      imageBytes: 20 * 1024 * 1024,
+      fileSizeBytes: 50 * 1024 * 1024,
+    });
     mockCleanupHistory.mockResolvedValue({ softDeleted: 5, purged: 3 });
     mockGetImageThreshold.mockResolvedValue(20 * 1024 * 1024);
     mockSetImageThreshold.mockResolvedValue(undefined);
@@ -646,7 +650,7 @@ describe("settings-page", () => {
     });
   });
 
-  it("settings-page: 存储面板——条目显示已用 MB 和上限 500 MB", async () => {
+  it("settings-page: 存储面板——图片占用与库文件体积分别显示，上限 500 MB 挂在图片占用上", async () => {
     const user = userEvent.setup();
     render(<SettingsPage />);
 
@@ -654,7 +658,9 @@ describe("settings-page", () => {
     await user.click(within(nav).getByRole("button", { name: "存储" }));
 
     await waitFor(() => {
-      expect(screen.getByText(/50\.0 MB 已用/)).toBeInTheDocument();
+      // 受上限约束的是图片占用（20.0 MB），库文件体积（50.0 MB）单列展示
+      expect(screen.getByText(/20\.0 MB 已用/)).toBeInTheDocument();
+      expect(screen.getByText(/50\.0 MB · 磁盘实际占用/)).toBeInTheDocument();
       expect(screen.getByText(/上限 500 MB/)).toBeInTheDocument();
     });
   });
@@ -662,8 +668,16 @@ describe("settings-page", () => {
   it("settings-page: 存储面板——点击清理按钮调用 cleanupHistory 并刷新统计", async () => {
     mockCleanupHistory.mockResolvedValue({ softDeleted: 5, purged: 3 });
     mockGetStorageStats
-      .mockResolvedValueOnce({ liveCount: 42, fileSizeBytes: 50 * 1024 * 1024 })
-      .mockResolvedValueOnce({ liveCount: 37, fileSizeBytes: 45 * 1024 * 1024 });
+      .mockResolvedValueOnce({
+        liveCount: 42,
+        imageBytes: 20 * 1024 * 1024,
+        fileSizeBytes: 50 * 1024 * 1024,
+      })
+      .mockResolvedValueOnce({
+        liveCount: 37,
+        imageBytes: 5 * 1024 * 1024,
+        fileSizeBytes: 45 * 1024 * 1024,
+      });
 
     const user = userEvent.setup();
     render(<SettingsPage />);

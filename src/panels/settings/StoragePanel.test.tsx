@@ -37,7 +37,11 @@ const BACKUP_PATH = "/Users/tester/Documents/QuickQuick-Backup-20231114-221320.q
 describe("StoragePanel 单张图片阈值", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockGetStorageStats.mockResolvedValue({ liveCount: 10, fileSizeBytes: 1024 * 1024 });
+    mockGetStorageStats.mockResolvedValue({
+      liveCount: 10,
+      imageBytes: 0,
+      fileSizeBytes: 1024 * 1024,
+    });
     mockCleanupHistory.mockResolvedValue({ softDeleted: 0, purged: 0 });
     mockSetImageThreshold.mockResolvedValue(undefined);
   });
@@ -123,7 +127,7 @@ describe("StoragePanel 单张图片阈值", () => {
 describe("StoragePanel 备份 / 恢复", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockGetStorageStats.mockResolvedValue({ liveCount: 3, fileSizeBytes: 4096 });
+    mockGetStorageStats.mockResolvedValue({ liveCount: 3, imageBytes: 0, fileSizeBytes: 4096 });
     mockGetImageThreshold.mockResolvedValue(20 * 1024 * 1024);
     mockExportBackup.mockResolvedValue({
       path: BACKUP_PATH,
@@ -266,5 +270,91 @@ describe("StoragePanel 备份 / 恢复", () => {
     });
     expect(screen.getByText(/导入完成：新增 2 条，跳过已存在 1 条/)).toBeInTheDocument();
     confirmSpy.mockRestore();
+  });
+});
+
+describe("StoragePanel 占用口径（图片占用 vs 库文件体积）", () => {
+  /** 1 MiB，用于把构例写成人类可读的 MB 数 */
+  const MB = 1024 * 1024;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockGetImageThreshold.mockResolvedValue(20 * MB);
+    mockSetImageThreshold.mockResolvedValue(undefined);
+    mockCleanupHistory.mockResolvedValue({ softDeleted: 0, purged: 0 });
+  });
+
+  /**
+   * 取进度条填充元素（`.meter > i` 是 aria-hidden 的纯装饰，只能走 DOM 查询）。
+   *
+   * @param container - render 返回的容器
+   * @returns 进度条填充元素
+   */
+  function meterFill(container: HTMLElement): HTMLElement {
+    const fill = container.querySelector(".meter > i");
+    if (!(fill instanceof HTMLElement)) throw new Error("未找到进度条填充元素");
+    return fill;
+  }
+
+  it("图片占用 100 MB / 库文件 500 MB 时，进度条取图片占用（20%）而非文件体积（100%）", async () => {
+    // Arrange：文件体积正好等于 500 MB 上限，若进度条误取它必然画满 100%
+    mockGetStorageStats.mockResolvedValue({
+      liveCount: 10,
+      imageBytes: 100 * MB,
+      fileSizeBytes: 500 * MB,
+    });
+
+    // Act
+    const { container } = render(<StoragePanel />);
+    await screen.findByText("100.0 MB 已用");
+
+    // Assert
+    const widthPercent = Number.parseFloat(meterFill(container).style.width);
+    expect(widthPercent).toBeCloseTo(20, 5);
+  });
+
+  it("图片占用与库文件体积分别渲染，且文案写清两者区别与 500 MB 上限", async () => {
+    // Arrange
+    mockGetStorageStats.mockResolvedValue({
+      liveCount: 10,
+      imageBytes: 100 * MB,
+      fileSizeBytes: 500 * MB,
+    });
+
+    // Act
+    render(<StoragePanel />);
+
+    // Assert：图片占用一行（受上限约束）
+    expect(await screen.findByText("图片占用")).toBeInTheDocument();
+    expect(screen.getByText("100.0 MB 已用")).toBeInTheDocument();
+    expect(screen.getByText(/上限 500 MB/)).toBeInTheDocument();
+    // Assert：库文件体积单列，并标注磁盘占用语义
+    expect(screen.getByText("库文件体积")).toBeInTheDocument();
+    expect(screen.getByText(/500\.0 MB · 磁盘实际占用/)).toBeInTheDocument();
+    expect(screen.getByText(/VACUUM 前不会缩小/)).toBeInTheDocument();
+  });
+
+  it("清理后库文件体积不变时，进度条仍随图片占用下降（分子取图片占用）", async () => {
+    // Arrange：清理前后文件体积都是 500 MB（SQLite 删除不收缩文件），只有图片占用下降
+    mockGetStorageStats
+      .mockResolvedValueOnce({ liveCount: 10, imageBytes: 400 * MB, fileSizeBytes: 500 * MB })
+      .mockResolvedValueOnce({ liveCount: 8, imageBytes: 100 * MB, fileSizeBytes: 500 * MB });
+    mockCleanupHistory.mockResolvedValue({ softDeleted: 2, purged: 0 });
+    const user = userEvent.setup();
+    const { container } = render(<StoragePanel />);
+
+    // Assert：清理前 400/500 = 80%
+    await screen.findByText("400.0 MB 已用");
+    expect(Number.parseFloat(meterFill(container).style.width)).toBeCloseTo(80, 5);
+
+    // Act
+    await user.click(screen.getByRole("button", { name: "清理…" }));
+
+    // Assert：清理后 100/500 = 20%，而文件体积文案仍是 500.0 MB
+    await waitFor(() => {
+      expect(screen.getByText("100.0 MB 已用")).toBeInTheDocument();
+    });
+    expect(Number.parseFloat(meterFill(container).style.width)).toBeCloseTo(20, 5);
+    expect(screen.getByText(/500\.0 MB · 磁盘实际占用/)).toBeInTheDocument();
   });
 });

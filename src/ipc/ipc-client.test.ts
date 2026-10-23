@@ -23,6 +23,7 @@ import {
   exportBackup,
   importBackup,
   revealBackupInFinder,
+  getStorageStats,
 } from "./ipc-client";
 import type {
   ClipItem,
@@ -32,6 +33,7 @@ import type {
   Hotkeys,
   ExportBackupResult,
   ImportBackupResult,
+  StorageStats,
 } from "./ipc-client";
 
 const mockInvoke = invoke as MockedFunction<typeof invoke>;
@@ -375,5 +377,32 @@ describe("revealBackupInFinder", () => {
     const err = await revealBackupInFinder("/tmp/x.txt").catch((e: unknown) => e);
     expect(err).toBeInstanceOf(Error);
     expect((err as Error).message).toContain("只能在文件管理器中显示 .qqbp 备份文件");
+  });
+});
+
+describe("getStorageStats", () => {
+  it("使用正确命令名调用 invoke，并透传图片占用与库文件体积两个字段", async () => {
+    const stats: StorageStats = {
+      liveCount: 12,
+      imageBytes: 3 * 1024 * 1024,
+      fileSizeBytes: 40 * 1024 * 1024,
+    };
+    mockInvoke.mockResolvedValueOnce(stats);
+
+    const result = await getStorageStats();
+
+    expect(mockInvoke).toHaveBeenCalledWith("get_storage_stats");
+    expect(result).toEqual(stats);
+    // 两个口径是不同的量，必须各自原样透传，不能互相顶替
+    expect(result.imageBytes).toBe(3 * 1024 * 1024);
+    expect(result.fileSizeBytes).toBe(40 * 1024 * 1024);
+  });
+
+  it("invoke reject 字符串时重抛为 Error 且含原始消息", async () => {
+    mockInvoke.mockRejectedValueOnce("存储统计不可用");
+
+    const err = await getStorageStats().catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).message).toContain("存储统计不可用");
   });
 });
