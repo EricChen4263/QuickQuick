@@ -64,7 +64,7 @@ export default function ClipPopoverApp() {
   const inputRef = useRef<HTMLInputElement>(null);
   // ref 暴露最新的 visibleFlatList，避免 onFocusChanged 回调产生 stale closure
   const visibleFlatListRef = useRef<ClipItem[]>([]);
-  // 数字直达的高亮反馈定时器；同一时刻只允许一个待取用
+  // 数字直达的高亮反馈定时器；同一时刻最多一个待取用，且任何非数字键输入都会取消它
   const directPickTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // 文本编辑后待恢复的光标位置（受控 input 重渲染会把光标推到末尾）
   const pendingCaretRef = useRef<number | null>(null);
@@ -78,7 +78,11 @@ export default function ClipPopoverApp() {
     inputRef.current?.setSelectionRange(caret, caret);
   }, [query]);
 
-  /** 取消尚未触发的数字直达取用（Esc 关窗、组件卸载时调用，避免关窗后又粘一次） */
+  /**
+   * 取消尚未触发的数字直达取用。
+   * 触发时机：用户按了非数字键（已在做别的事）、Esc 关窗、组件卸载——
+   * 否则 50ms 后会对一个用户早已离开的条目补一次粘贴/复制。
+   */
   function cancelPendingDirectPick(): void {
     if (directPickTimerRef.current === null) return;
     clearTimeout(directPickTimerRef.current);
@@ -325,6 +329,14 @@ export default function ClipPopoverApp() {
         console.error("[clip-popover] hideAndReturnFocus on Esc failed:", err);
       });
       return;
+    }
+
+    // 非数字键一律取消尚未触发的数字直达取用：用户这一帧已经在打字、导航或确认，
+    // 50ms 后再补一次粘贴/复制必然是误操作（例如按 2 后又按 Enter 会粘两次）。
+    // 数字键不能在这里取消，否则会把同一次按键刚 arm 的定时器自己清掉。
+    // 位置在输入法防御之前：组词期间的按键同样意味着用户在打字，也要取消。
+    if (!DIGIT_KEY_PATTERN.test(e.key)) {
+      cancelPendingDirectPick();
     }
 
     // 输入法组词期间（中文拼音等）方向键用于选候选词、Enter 用于确认候选词，
