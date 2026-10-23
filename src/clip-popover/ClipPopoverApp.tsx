@@ -6,6 +6,7 @@ import { listen } from "@tauri-apps/api/event";
 import { CLIPBOARD_CHANGED_EVENT } from "../ipc/events";
 import { filterClipBySearch, groupClipItems } from "./grouping";
 import { advanceSelection } from "./keyboard-nav";
+import { isImeComposing } from "../panels/history/keyboard";
 import { PopoverList } from "./PopoverList";
 import { PopoverPreview } from "./PopoverPreview";
 import { PopoverFooter } from "./PopoverFooter";
@@ -30,7 +31,8 @@ function buildFlatList(groups: ReturnType<typeof groupClipItems>): ClipItem[] {
  *   - ↑ / ↓：在 visibleFlatList 中移动选中项（advanceSelection）
  *   - Enter：pasteToFront(selectedId) 成功后 hide 窗口
  *   - Alt+Enter：copyClipToClipboard(selectedItem.id) 成功后 hide 窗口（富文本保真）
- *   - Esc：由 main.tsx 的全局快捷键处理，不在此组件内
+ *   - Esc：关闭窗口并把焦点还给上一个外部 app（hideAndReturnFocus）
+ *   - 输入法组词期间：除 Esc 外一律不拦截，方向键与 Enter 归输入法选候选词
  */
 export default function ClipPopoverApp() {
   const [items, setItems] = useState<ClipItem[]>([]);
@@ -137,6 +139,22 @@ export default function ClipPopoverApp() {
   );
 
   function handleKeyDown(e: React.KeyboardEvent<HTMLInputElement>): void {
+    // Esc 必须排在输入法防御之前：关面板是用户的显式中断，不属于候选词交互。
+    // WKWebView 会把 Esc 键原生"清空 search input"行为吞掉，不冒泡到 document。
+    // 在 onKeyDown 处显式拦截并关窗，才能让 Esc 在输入框已获焦时正常工作。
+    // 走 hideAndReturnFocus 而非裸 hide：关闭面板同时把焦点还给上一个外部 app（方案 C）。
+    if (e.key === "Escape") {
+      e.preventDefault();
+      hideAndReturnFocus().catch((err: unknown) => {
+        console.error("[clip-popover] hideAndReturnFocus on Esc failed:", err);
+      });
+      return;
+    }
+
+    // 输入法组词期间（中文拼音等）方向键用于选候选词、Enter 用于确认候选词，
+    // 一律不拦截：一旦 preventDefault 就会把候选词选择抢成列表导航。
+    if (isImeComposing(e.nativeEvent)) return;
+
     const flatIds = visibleFlatList.map((i) => i.id);
 
     if (e.key === "ArrowDown" || e.key === "ArrowUp") {
@@ -166,16 +184,6 @@ export default function ClipPopoverApp() {
           console.error("[clip-popover] copy failed:", err);
         });
       return;
-    }
-
-    if (e.key === "Escape") {
-      // WKWebView 会把 Esc 键原生"清空 search input"行为吞掉，不冒泡到 document。
-      // 在 onKeyDown 处显式拦截并关窗，才能让 Esc 在输入框已获焦时正常工作。
-      // 走 hideAndReturnFocus 而非裸 hide：关闭面板同时把焦点还给上一个外部 app（方案 C）。
-      e.preventDefault();
-      hideAndReturnFocus().catch((err: unknown) => {
-        console.error("[clip-popover] hideAndReturnFocus on Esc failed:", err);
-      });
     }
   }
 

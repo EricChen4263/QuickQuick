@@ -1,6 +1,30 @@
 import { describe, it, expect } from "vitest";
-import { moveHighlight, quickSelectIndex, resolveEnter } from "./keyboard";
+import { moveHighlight, quickSelectIndex, resolveEnter, isImeComposing } from "./keyboard";
 import type { HistoryItem } from "./search";
+
+// P2-6 输入法防御：组词期间两种平台表现都要识别
+describe("isImeComposing", () => {
+  it("isComposing=true 判定为组词中", () => {
+    // Arrange & Act
+    const result = isImeComposing({ isComposing: true });
+    // Assert
+    expect(result).toBe(true);
+  });
+
+  it("keyCode=229（Safari/WKWebView 组词中的经典表现）判定为组词中", () => {
+    // Arrange & Act
+    const result = isImeComposing({ isComposing: false, keyCode: 229 });
+    // Assert
+    expect(result).toBe(true);
+  });
+
+  it("普通按键（无组词、keyCode 非 229）判定为不在组词中", () => {
+    // Arrange & Act
+    const result = isImeComposing({ isComposing: false, keyCode: 40 });
+    // Assert
+    expect(result).toBe(false);
+  });
+});
 
 // V1-F2-A12: 键盘流纯逻辑单测
 describe("moveHighlight", () => {

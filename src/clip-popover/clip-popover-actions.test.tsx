@@ -225,6 +225,67 @@ describe("ClipPopoverApp 键盘动作", () => {
   });
 });
 
+describe("ClipPopoverApp 输入法防御（P2-6）", () => {
+  it("composition 期间按 ArrowDown 不改变选中项", async () => {
+    render(<ClipPopoverApp />);
+    await waitFor(() => {
+      expect(screen.getAllByText("first item").length).toBeGreaterThan(0);
+    });
+
+    const input = screen.getByRole("searchbox");
+    fireEvent.keyDown(input, { key: "ArrowDown", isComposing: true });
+
+    // 选中仍是第一项：方向键在组词期间归输入法，不驱动列表导航
+    const rows = screen.getAllByRole("option");
+    expect(rows[0]).toHaveAttribute("aria-selected", "true");
+    expect(rows[1]).toHaveAttribute("aria-selected", "false");
+  });
+
+  it("keyCode=229（WKWebView 组词表现）按 ArrowDown 同样不导航", async () => {
+    render(<ClipPopoverApp />);
+    await waitFor(() => {
+      expect(screen.getAllByText("first item").length).toBeGreaterThan(0);
+    });
+
+    const input = screen.getByRole("searchbox");
+    fireEvent.keyDown(input, { key: "ArrowDown", keyCode: 229 });
+
+    const rows = screen.getAllByRole("option");
+    expect(rows[0]).toHaveAttribute("aria-selected", "true");
+    expect(rows[1]).toHaveAttribute("aria-selected", "false");
+  });
+
+  it("composition 结束后 ArrowDown 恢复导航", async () => {
+    render(<ClipPopoverApp />);
+    await waitFor(() => {
+      expect(screen.getAllByText("first item").length).toBeGreaterThan(0);
+    });
+
+    const input = screen.getByRole("searchbox");
+    fireEvent.keyDown(input, { key: "ArrowDown", isComposing: true });
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+
+    await waitFor(() => {
+      const rows = screen.getAllByRole("option");
+      expect(rows[1]).toHaveAttribute("aria-selected", "true");
+    });
+  });
+
+  it("composition 期间按 Esc 仍然关窗（Esc 是显式中断，不受组词防御影响）", async () => {
+    render(<ClipPopoverApp />);
+    await waitFor(() => {
+      expect(screen.getAllByText("first item").length).toBeGreaterThan(0);
+    });
+
+    const input = screen.getByRole("searchbox");
+    fireEvent.keyDown(input, { key: "Escape", isComposing: true });
+
+    await waitFor(() => {
+      expect(mockHideAndReturnFocus).toHaveBeenCalled();
+    });
+  });
+});
+
 describe("ClipPopoverApp 窗口焦点变化", () => {
   it("窗口获焦时输入框获得焦点", async () => {
     render(<ClipPopoverApp />);

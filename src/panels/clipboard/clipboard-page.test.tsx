@@ -672,6 +672,69 @@ describe("clipboard-page: 主窗键盘流", () => {
   });
 });
 
+// P2-6 输入法防御：主窗搜索框在组词期间不劫持方向键
+describe("clipboard-page: 输入法防御", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockDeleteClipItem.mockResolvedValue(undefined);
+    mockToggleFavoriteClip.mockResolvedValue(undefined);
+    mockPasteToFront.mockResolvedValue({ outcome: "full_paste" });
+    mockOpenAccessibilitySettings.mockResolvedValue(undefined);
+  });
+
+  it("composition 期间按 ArrowDown 不改变高亮", async () => {
+    // Arrange
+    mockListClipItems.mockResolvedValue(MOCK_ITEMS);
+    render(<ClipboardPage />);
+    await waitFor(() => {
+      expect(screen.getAllByText("Hello World").length).toBeGreaterThanOrEqual(1);
+    });
+    const previewRegion = screen.getByRole("region", { name: "预览" });
+
+    // Act：组词中按方向键
+    fireEvent.keyDown(screen.getByRole("searchbox"), { key: "ArrowDown", isComposing: true });
+
+    // Assert：预览仍是第一条
+    expect(within(previewRegion).getByText("Hello World")).toBeInTheDocument();
+  });
+
+  it("keyCode=229（WKWebView 组词表现）按 ArrowDown 同样不改变高亮", async () => {
+    // Arrange
+    mockListClipItems.mockResolvedValue(MOCK_ITEMS);
+    render(<ClipboardPage />);
+    await waitFor(() => {
+      expect(screen.getAllByText("Hello World").length).toBeGreaterThanOrEqual(1);
+    });
+    const previewRegion = screen.getByRole("region", { name: "预览" });
+
+    // Act
+    fireEvent.keyDown(screen.getByRole("searchbox"), { key: "ArrowDown", keyCode: 229 });
+
+    // Assert
+    expect(within(previewRegion).getByText("Hello World")).toBeInTheDocument();
+  });
+
+  it("composition 结束后 ArrowDown 恢复高亮移动", async () => {
+    // Arrange
+    mockListClipItems.mockResolvedValue(MOCK_ITEMS);
+    render(<ClipboardPage />);
+    await waitFor(() => {
+      expect(screen.getAllByText("Hello World").length).toBeGreaterThanOrEqual(1);
+    });
+    const searchInput = screen.getByRole("searchbox");
+    const previewRegion = screen.getByRole("region", { name: "预览" });
+
+    // Act：先组词中按一次（无效），组词结束再按一次（生效）
+    fireEvent.keyDown(searchInput, { key: "ArrowDown", isComposing: true });
+    fireEvent.keyDown(searchInput, { key: "ArrowDown" });
+
+    // Assert：高亮落到第二条
+    await waitFor(() => {
+      expect(within(previewRegion).getByText("富文本内容示例")).toBeInTheDocument();
+    });
+  });
+});
+
 // 边界探测（tester 补充，2026-06-08）
 
 describe("clipboard-page: 边界探测 - 横幅 DOM 顺序", () => {

@@ -11,6 +11,30 @@
 import type { HistoryItem } from "./search";
 
 /**
+ * 键盘事件在输入法组词期间可供判断的最小结构。
+ * 只取两个字段而非完整 KeyboardEvent，便于脱离 DOM 单测。
+ */
+export interface ImeKeyboardLike {
+  isComposing?: boolean;
+  keyCode?: number;
+}
+
+/**
+ * 判断按键是否发生在输入法组词（composition）期间。
+ * 组词期间的方向键/数字键属于输入法自身的候选词交互，调用方必须跳过列表导航与直达逻辑。
+ *
+ * 两种平台表现都要覆盖：
+ * - `isComposing === true`：标准 KeyboardEvent 字段，Chromium 系 webview 可靠；
+ * - `keyCode === 229`：Safari/WKWebView 在组词中的经典表现，此时 isComposing 可能仍为 false。
+ *
+ * @param event - 原生键盘事件（或其可观测字段）
+ * @returns 组词期间返回 true
+ */
+export function isImeComposing(event: ImeKeyboardLike): boolean {
+  return event.isComposing === true || event.keyCode === 229;
+}
+
+/**
  * 根据方向键计算下一个高亮索引。
  * 结果 clamp 在 [0, count-1]，边界不越界。
  * count=0 时返回 -1，表示列表为空、无有效高亮。

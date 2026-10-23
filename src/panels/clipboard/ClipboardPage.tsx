@@ -19,7 +19,7 @@ import type { HistoryItem } from "../history/search";
 import type { HistoryFilter } from "../history/filter";
 import { filterBySearch } from "../history/search";
 import { filterByType } from "../history/filter";
-import { moveHighlight, quickSelectIndex, resolveEnter } from "../history/keyboard";
+import { moveHighlight, quickSelectIndex, resolveEnter, isImeComposing } from "../history/keyboard";
 import { ClipItemRow } from "./ClipItemRow";
 import { ClipPreview } from "./ClipPreview";
 import { ClipSearchBar } from "./ClipSearchBar";
@@ -158,6 +158,10 @@ function ClipboardPage({ onTranslateItem }: ClipboardPageProps) {
   }
 
   function handleKeyDown(event: React.KeyboardEvent) {
+    // 输入法组词期间（中文拼音选候选词）所有方向键与直达键都归输入法，
+    // 这里不拦截任何键，否则会把候选词选择抢成列表导航。
+    if (isImeComposing(event.nativeEvent)) return;
+
     if (event.key === "ArrowDown" || event.key === "ArrowUp") {
       event.preventDefault();
       setHighlightIndex((prev) =>
