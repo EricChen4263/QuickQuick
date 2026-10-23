@@ -21,6 +21,7 @@ use crate::clipboard::{
     CapturedClip, ClipboardBackend, ClipboardSnapshot, RawImageData, SourceApp,
 };
 use crate::db::{self, IngestOutcome};
+use crate::image::{CleanupPolicy, CleanupReport};
 use crate::keyprovider::KeyProvider;
 use crate::pasteboard_meta::PasteboardMetaReader;
 use crate::privacy::CapturePolicy;
@@ -268,23 +269,49 @@ pub fn open_app_db(key_provider: &dyn KeyProvider, db_path: &Path) -> Result<Con
 /// - 有新内容 → 在 SAVEPOINT 内逐项写库；同一次捕获的多条原子写入，任一失败整体回滚
 /// - 无新内容（计数未变、策略跳过等）→ 返回 `Ok(vec![])`，不开事务
 ///
+/// 写库成功且**本轮新增了图片行**时，追加一次图片总量分级清理
+/// （`run_image_cleanup_best_effort`，阈值取 [`CleanupPolicy::default`] 的 500 MiB）。
+///
 /// # 为什么用 SAVEPOINT 而非 Transaction
 /// `db::ingest_image_as_clip` 内部已有嵌套 SAVEPOINT（`ingest_image_clip`），
 /// 若外层用 `conn.transaction()` 会因借用冲突无法将同一连接传入子函数。
 /// SAVEPOINT 通过 `execute_batch` 字符串操作规避借用，支持嵌套，两级名称不同（`capture_ingest` vs `ingest_image_clip`）。
 ///
-/// # 为什么返回 Vec<IngestOutcome>
+/// # 为什么返回 `Vec<IngestOutcome>`
 /// 混合图文复制会在一次捕获中产生文本条目和图片条目两个结果，
 /// 需要分别写库并收集各自的 IngestOutcome，Vec 是最自然的容器。
 ///
 /// # Errors
 /// `db::ingest` 或 `db::ingest_image_as_clip` 失败时，整体回滚后返回 DbError 描述字符串。
+/// 清理阶段的失败**不会**变成这里的错误（best-effort，只留痕）。
 pub fn capture_and_ingest(
     backend: &dyn ClipboardBackend,
     last_seen: &mut u64,
     conn: &Connection,
     policy: &CapturePolicy<'_>,
     max_image_bytes: u64,
+) -> Result<Vec<IngestOutcome>, String> {
+    capture_and_ingest_with_cleanup(
+        backend,
+        last_seen,
+        conn,
+        policy,
+        max_image_bytes,
+        &CleanupPolicy::default(),
+    )
+}
+
+/// [`capture_and_ingest`] 的实现体，多接一个清理策略。
+///
+/// 策略单独参数化的原因：生产用默认 500 MiB，单测要能设成极小阈值来验证
+/// 「超限自动清理」真的被触发，否则就得在测试里造 500 MiB 数据。
+fn capture_and_ingest_with_cleanup(
+    backend: &dyn ClipboardBackend,
+    last_seen: &mut u64,
+    conn: &Connection,
+    policy: &CapturePolicy<'_>,
+    max_image_bytes: u64,
+    cleanup_policy: &CleanupPolicy,
 ) -> Result<Vec<IngestOutcome>, String> {
     let clips = crate::clipboard::poll_once_with_policy(backend, last_seen, policy);
     if clips.is_empty() {
@@ -294,44 +321,376 @@ pub fn capture_and_ingest(
     conn.execute_batch("SAVEPOINT capture_ingest;")
         .map_err(|e| format!("开启事务失败：{e}"))?;
 
-    match ingest_clips(conn, clips, max_image_bytes) {
-        Ok(outcomes) => {
+    let (outcomes, new_image_rows) = match ingest_clips(conn, clips, max_image_bytes) {
+        Ok(result) => {
             conn.execute_batch("RELEASE SAVEPOINT capture_ingest;")
                 .map_err(|e| format!("提交事务失败：{e}"))?;
-            Ok(outcomes)
+            result
         }
         Err(e) => {
             let _ = conn.execute_batch(
                 "ROLLBACK TO SAVEPOINT capture_ingest; RELEASE SAVEPOINT capture_ingest;",
             );
-            Err(e)
+            return Err(e);
         }
+    };
+
+    // 清理必须在事务提交之后：它是独立的后台维护动作，失败不能回滚本轮捕获
+    if new_image_rows > 0 {
+        run_image_cleanup_best_effort(conn, cleanup_policy);
     }
+
+    Ok(outcomes)
+}
+
+/// 图片总量分级清理（best-effort）。
+///
+/// 只在「本轮新增了图片行」之后调用：
+/// - 文本轮次、图片去重命中（`Bumped`）都与图片总量无关，调用它们只是白白付一次聚合；
+/// - 500ms 轮询的空轮次更不会被调用。
+///
+/// 最坏额外开销：一次 `SELECT SUM(length(original) + length(thumbnail))`
+/// （见 [`crate::image::total_image_bytes`]，只对未软删行做聚合），以及触发时
+/// 按候选行数线性进行的 strip / 软删。相比本轮刚完成的「PNG 解码 + BLOB 入库」可忽略。
+///
+/// 失败只 eprintln 留痕，不向上传播：清理是维护性动作，不能让一次清理失败
+/// 变成「这次复制没被记录」。
+fn run_image_cleanup_best_effort(conn: &Connection, policy: &CleanupPolicy) {
+    match crate::image::tiered_cleanup(conn, policy) {
+        Ok(report) if report == CleanupReport::default() => {
+            // 未超阈值：静默（这是绝大多数情况，不应产生日志噪声）
+        }
+        Ok(report) => eprintln!(
+            "[QuickQuick] 图片总量超过 {} MiB，已自动清理：腾空原图 {} 条、整条软删 {} 条",
+            policy.max_total_bytes / (1024 * 1024),
+            report.stripped_originals,
+            report.deleted_rows
+        ),
+        Err(e) => eprintln!("[QuickQuick] 图片分级清理失败（非致命，不影响本轮捕获）：{e}"),
+    }
+}
+
+/// 一次入库结果是否让「图片总量」增长。
+///
+/// 这也是图片分级清理的唯一触发判据：
+/// - 文本条目入库与图片总量无关；
+/// - 图片命中同 hash 走 [`IngestOutcome::Bumped`]（仅置顶，BLOB 数量不变）；
+/// - 只有图片 [`IngestOutcome::Inserted`] 才会新增一行、让总量只增不减。
+fn counts_as_new_image_row(is_image_clip: bool, outcome: &IngestOutcome) -> bool {
+    is_image_clip && matches!(outcome, IngestOutcome::Inserted(_))
 }
 
 /// 逐条写库（拆出以保持主函数 ≤50 行、事务边界清晰）。
 ///
 /// 在调用方的 SAVEPOINT 保护下运行，任一条失败则由调用方回滚整批。
 /// `max_image_bytes`：图片原图大小上限，由调用方从 AppSettings 读取后传入。
+///
+/// 返回值第二项是本轮**新增**的图片行数（供调用方决定是否跑图片总量清理）。
 fn ingest_clips(
     conn: &Connection,
     clips: Vec<CapturedClip>,
     max_image_bytes: u64,
-) -> Result<Vec<IngestOutcome>, String> {
+) -> Result<(Vec<IngestOutcome>, usize), String> {
     let mut outcomes = Vec::with_capacity(clips.len());
+    let mut new_image_rows = 0usize;
     for clip in clips {
-        let outcome = match clip {
+        let (outcome, added_image_row) = match clip {
             CapturedClip::Text(item) => {
-                db::ingest(conn, &item).map_err(|e| format!("写库失败（文本）：{e}"))?
+                let outcome =
+                    db::ingest(conn, &item).map_err(|e| format!("写库失败（文本）：{e}"))?;
+                let added = counts_as_new_image_row(false, &outcome);
+                (outcome, added)
             }
             CapturedClip::Image {
                 width,
                 height,
                 png_bytes,
-            } => db::ingest_image_as_clip(conn, width, height, &png_bytes, max_image_bytes)
-                .map_err(|e| format!("写库失败（图片）：{e}"))?,
+            } => {
+                let outcome =
+                    db::ingest_image_as_clip(conn, width, height, &png_bytes, max_image_bytes)
+                        .map_err(|e| format!("写库失败（图片）：{e}"))?;
+                let added = counts_as_new_image_row(true, &outcome);
+                (outcome, added)
+            }
         };
+        if added_image_row {
+            new_image_rows += 1;
+        }
         outcomes.push(outcome);
     }
-    Ok(outcomes)
+    Ok((outcomes, new_image_rows))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::privacy::ExcludeList;
+
+    /// 单轮剪贴板后端：计数恒为 `count`，快照固定。
+    struct OneShotBackend {
+        count: u64,
+        snapshot: ClipboardSnapshot,
+    }
+
+    impl ClipboardBackend for OneShotBackend {
+        fn change_count(&self) -> u64 {
+            self.count
+        }
+
+        fn read(&self) -> ClipboardSnapshot {
+            self.snapshot.clone()
+        }
+    }
+
+    /// 建一个带完整 schema 的临时加密库（复用生产建表语句）。
+    fn open_test_db() -> (tempfile::TempDir, Connection) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let conn =
+            crate::db::open_or_create(&dir.path().join("qq.db"), &[9u8; 32]).expect("建库应成功");
+        (dir, conn)
+    }
+
+    /// 直接插一条"最旧"的图片行（created_utc 早于运行时新插入的行）。
+    fn seed_old_image_row(conn: &Connection, original_size: usize, created_utc: i64) {
+        conn.execute(
+            "INSERT INTO clip_images
+                (id, clip_item_id, thumbnail, original, original_present, image_hash,
+                 created_utc, last_modified_utc, is_deleted, is_favorite)
+             VALUES ('seeded-old', NULL, ?1, ?2, 1, 'seeded-hash', ?3, ?3, 0, 0)",
+            rusqlite::params![vec![0xABu8; 10], vec![0xCDu8; original_size], created_utc],
+        )
+        .expect("插入种子图片行应成功");
+    }
+
+    fn image_snapshot(width: usize, height: usize, rgba: Vec<u8>) -> ClipboardSnapshot {
+        ClipboardSnapshot {
+            text: None,
+            html: None,
+            image: Some(RawImageData {
+                width,
+                height,
+                bytes: rgba,
+            }),
+            has_self_marker: false,
+            is_concealed: false,
+            source_app: None,
+        }
+    }
+
+    fn text_snapshot(text: &str) -> ClipboardSnapshot {
+        ClipboardSnapshot {
+            text: Some(text.to_owned()),
+            html: None,
+            image: None,
+            has_self_marker: false,
+            is_concealed: false,
+            source_app: None,
+        }
+    }
+
+    #[test]
+    fn counts_as_new_image_row_only_for_inserted_image() {
+        // Arrange：四种组合（文本/图片 × 新增行/去重命中）
+        let inserted = IngestOutcome::Inserted("id-1".to_owned());
+        let bumped = IngestOutcome::Bumped("id-2".to_owned());
+
+        // Act & Assert：只有"图片 + 新增行"才让图片总量增长
+        assert!(
+            counts_as_new_image_row(true, &inserted),
+            "图片新增行应触发图片总量清理"
+        );
+        assert!(
+            !counts_as_new_image_row(true, &bumped),
+            "图片去重命中（仅置顶）不改变总量，不应清理"
+        );
+        assert!(
+            !counts_as_new_image_row(false, &inserted),
+            "文本条目与图片总量无关"
+        );
+        assert!(!counts_as_new_image_row(false, &bumped), "文本置顶同理");
+    }
+
+    #[test]
+    fn new_image_capture_triggers_tiered_cleanup_over_limit() {
+        // Arrange：库里已有一条很旧的图片行（原图 200 字节）
+        let (_dir, conn) = open_test_db();
+        seed_old_image_row(&conn, 200, 1_000);
+        let backend = OneShotBackend {
+            count: 1,
+            snapshot: image_snapshot(2, 2, vec![0u8; 2 * 2 * 4]),
+        };
+        let exclude = ExcludeList::default();
+        let policy = CapturePolicy {
+            paused: false,
+            skip_sensitive: true,
+            exclude: &exclude,
+        };
+        // 阈值设为种子行大小：新图入库后必然超限 → 应腾空最旧（种子）行原图
+        let cleanup = CleanupPolicy {
+            max_total_bytes: 210,
+        };
+        let mut last_seen = 0u64;
+
+        // Act
+        let outcomes = capture_and_ingest_with_cleanup(
+            &backend,
+            &mut last_seen,
+            &conn,
+            &policy,
+            usize::MAX as u64,
+            &cleanup,
+        )
+        .expect("捕获应成功");
+
+        // Assert 1：本轮确实新增了图片条目（清理的前提成立）
+        assert_eq!(outcomes.len(), 1, "应产生一条图片入库结果");
+        assert!(
+            matches!(outcomes[0], IngestOutcome::Inserted(_)),
+            "首次捕获应为新增行"
+        );
+        // Assert 2：最旧行的原图被腾空（第一级清理真的跑了）
+        assert_eq!(
+            crate::image::get_original_present(&conn, "seeded-old").expect("ok"),
+            Some(0),
+            "超限时应腾空最旧非收藏行的原图"
+        );
+        // Assert 3：清理后总量回到阈值内
+        let total = crate::image::total_image_bytes(&conn).expect("total");
+        assert!(
+            total <= cleanup.max_total_bytes,
+            "清理后总量应不超过阈值，实际 {total}"
+        );
+        // Assert 4：本轮新插入的图片行未被清理掉
+        assert_eq!(
+            crate::image::image_count(&conn).expect("image_count"),
+            2,
+            "新插入的图片行应仍在（清理只腾空最旧行的原图）"
+        );
+    }
+
+    #[test]
+    fn text_only_capture_does_not_trigger_cleanup() {
+        // Arrange：库里已经超限（种子原图 200 字节，阈值只给 100）
+        let (_dir, conn) = open_test_db();
+        seed_old_image_row(&conn, 200, 1_000);
+        let backend = OneShotBackend {
+            count: 1,
+            snapshot: text_snapshot("纯文本复制"),
+        };
+        let exclude = ExcludeList::default();
+        let policy = CapturePolicy {
+            paused: false,
+            skip_sensitive: true,
+            exclude: &exclude,
+        };
+        let cleanup = CleanupPolicy {
+            max_total_bytes: 100,
+        };
+        let mut last_seen = 0u64;
+
+        // Act
+        let outcomes = capture_and_ingest_with_cleanup(
+            &backend,
+            &mut last_seen,
+            &conn,
+            &policy,
+            usize::MAX as u64,
+            &cleanup,
+        )
+        .expect("捕获应成功");
+
+        // Assert：文本轮次不触发清理——种子行原图保持不动（即使它已超限）
+        assert_eq!(outcomes.len(), 1, "应产生一条文本入库结果");
+        assert_eq!(
+            crate::image::get_original_present(&conn, "seeded-old").expect("ok"),
+            Some(1),
+            "文本轮次不应触发图片清理（避免每轮付一次聚合开销）"
+        );
+    }
+
+    /// 只在"腾空原图"这一种更新上装触发器，让清理阶段的 strip 必然失败。
+    ///
+    /// 条件 `OLD.original_present = 1 AND NEW.original_present = 0` 精确对应
+    /// `strip_original` 的写入特征，不会误伤入库路径（入库会把 `clip_item_id` 从 NULL
+    /// 领养过来，那是另一类 UPDATE）。
+    fn block_clip_images_updates(conn: &Connection) {
+        conn.execute_batch(
+            "CREATE TRIGGER block_strip BEFORE UPDATE ON clip_images
+             WHEN OLD.original_present = 1 AND NEW.original_present = 0
+             BEGIN SELECT RAISE(ABORT, 'cleanup blocked by test trigger'); END;",
+        )
+        .expect("创建触发器应成功");
+    }
+
+    #[test]
+    fn cleanup_failure_does_not_block_capture() {
+        // Arrange：清理阶段必然失败（UPDATE 被触发器阻断），且本轮确实新增了图片行
+        let (_dir, conn) = open_test_db();
+        seed_old_image_row(&conn, 200, 1_000);
+        block_clip_images_updates(&conn);
+        let backend = OneShotBackend {
+            count: 1,
+            snapshot: image_snapshot(2, 2, vec![0u8; 2 * 2 * 4]),
+        };
+        let exclude = ExcludeList::default();
+        let policy = CapturePolicy {
+            paused: false,
+            skip_sensitive: true,
+            exclude: &exclude,
+        };
+        let cleanup = CleanupPolicy {
+            max_total_bytes: 210,
+        };
+        let mut last_seen = 0u64;
+
+        // Act
+        let result = capture_and_ingest_with_cleanup(
+            &backend,
+            &mut last_seen,
+            &conn,
+            &policy,
+            usize::MAX as u64,
+            &cleanup,
+        );
+
+        // Assert 1：清理失败没有把捕获一起回滚——本轮图片条目仍然入库成功
+        let outcomes = result.expect("清理失败不应让捕获失败");
+        assert_eq!(outcomes.len(), 1, "图片条目仍应成功入库");
+        assert!(
+            matches!(outcomes[0], IngestOutcome::Inserted(_)),
+            "新图片应为新增行"
+        );
+        // Assert 2：清理确实失败了（最旧行原图还在），证明失败路径被走到过
+        assert_eq!(
+            crate::image::get_original_present(&conn, "seeded-old").expect("ok"),
+            Some(1),
+            "清理被阻断时原图不应被改动"
+        );
+    }
+
+    #[test]
+    fn best_effort_cleanup_swallows_db_error_and_leaves_data_intact() {
+        // Arrange：超限 + UPDATE 被阻断 → tiered_cleanup 必然返回 Err
+        let (_dir, conn) = open_test_db();
+        seed_old_image_row(&conn, 200, 1_000);
+        block_clip_images_updates(&conn);
+        let cleanup = CleanupPolicy {
+            max_total_bytes: 210,
+        };
+
+        // Act：函数签名为 ()，不应 panic、不应向上抛错
+        run_image_cleanup_best_effort(&conn, &cleanup);
+
+        // Assert：失败被吞，且没有留下半清理状态（原图仍在、行仍存活）
+        assert_eq!(
+            crate::image::get_original_present(&conn, "seeded-old").expect("ok"),
+            Some(1),
+            "清理失败后不应改动原图"
+        );
+        assert_eq!(
+            crate::image::image_count(&conn).expect("image_count"),
+            1,
+            "清理失败后不应软删任何行"
+        );
+    }
 }

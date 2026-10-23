@@ -12,6 +12,8 @@
 //! - `get_image_thumbnail`       — 按 id 取缩略图 BLOB
 //! - `get_original_present`      — 按 id 取 original_present 标记（0=已跳过，1=已存）
 //! - `image_count`               — 未软删行数（测试/业务用）
+//! - `tiered_cleanup`            — 分级清理（由 `pipeline` 在新增图片行后自动触发，P1-4）
+//! - `total_image_bytes`         — 未软删图片行总字节数（清理阈值判据）
 //!
 //! 安全约定：
 //! - 所有 SQL 使用参数化查询，无字符串拼接
@@ -408,6 +410,12 @@ pub fn strip_original(conn: &Connection, id: &str) -> Result<(), DbError> {
 ///
 /// **收藏永远豁免**：`is_favorite=1` 的行不参与任何清理。
 ///
+/// # 触发点与阈值
+/// 由 [`crate::pipeline::capture_and_ingest`] 在「本轮新增了图片行」之后自动调用，
+/// 阈值取 [`CleanupPolicy::default`]（[`DEFAULT_MAX_TOTAL`] = 500 MiB），
+/// 与存储页「总量上限 500 MB · 超出按分级清理」的承诺同源。
+/// 文本轮次与图片去重命中都不会触发，避免每 500ms 付一次聚合开销。
+///
 /// # Errors
 /// `DbError::Sqlite`：SQL 执行失败
 pub fn tiered_cleanup(conn: &Connection, policy: &CleanupPolicy) -> Result<CleanupReport, DbError> {
@@ -540,5 +548,153 @@ mod tests {
             h.chars().all(|c| c.is_ascii_hexdigit()),
             "哈希应全为十六进制字符"
         );
+    }
+    /// 造一条未软删图片行（最小合法 schema 要求：id + created_utc + last_modified_utc）。
+    ///
+    /// `original_size` / `thumb_size` 用来精确控制总字节，便于造阈值边界。
+    fn insert_row(
+        conn: &Connection,
+        id: &str,
+        created_utc: i64,
+        original_size: usize,
+        thumb_size: usize,
+        is_favorite: bool,
+    ) {
+        conn.execute(
+            "INSERT INTO clip_images
+                (id, clip_item_id, thumbnail, original, original_present, image_hash,
+                 created_utc, last_modified_utc, is_deleted, is_favorite)
+             VALUES (?1, NULL, ?2, ?3, 1, ?4, ?5, ?5, 0, ?6)",
+            rusqlite::params![
+                id,
+                vec![0xABu8; thumb_size],
+                vec![0xCDu8; original_size],
+                format!("hash-{id}"),
+                created_utc,
+                i32::from(is_favorite),
+            ],
+        )
+        .expect("插入 clip_images 行应成功");
+    }
+
+    /// 建一个带完整 schema 的临时加密库（复用生产建表语句，避免测试手抄 schema 漂移）。
+    fn open_test_db() -> (tempfile::TempDir, Connection) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let conn =
+            crate::db::open_or_create(&dir.path().join("qq.db"), &[7u8; 32]).expect("建库应成功");
+        (dir, conn)
+    }
+
+    #[test]
+    fn tiered_cleanup_is_noop_when_total_equals_limit() {
+        // Arrange：总量刚好等于阈值（边界用 >，等于不应动手）
+        let (_dir, conn) = open_test_db();
+        insert_row(&conn, "old", 1_000, 100, 10, false);
+        let total = total_image_bytes(&conn).expect("total");
+        let policy = CleanupPolicy {
+            max_total_bytes: total,
+        };
+
+        // Act
+        let report = tiered_cleanup(&conn, &policy).expect("tiered_cleanup 应成功");
+
+        // Assert：报告两字段为 0，且原图未被腾空
+        assert_eq!(
+            report,
+            CleanupReport::default(),
+            "总量等于上限时不应做任何清理"
+        );
+        assert_eq!(
+            get_original_present(&conn, "old").expect("ok"),
+            Some(1),
+            "等于阈值时不应腾空原图"
+        );
+    }
+
+    #[test]
+    fn tiered_cleanup_strips_only_until_back_under_limit() {
+        // Arrange：三行非收藏，阈值刚好够留下最新一行的原图
+        let (_dir, conn) = open_test_db();
+        insert_row(&conn, "a-oldest", 1_000, 100, 10, false);
+        insert_row(&conn, "b-middle", 2_000, 100, 10, false);
+        insert_row(&conn, "c-newest", 3_000, 100, 10, false);
+        let total = total_image_bytes(&conn).expect("total");
+        let policy = CleanupPolicy {
+            // 留出最新一行（110 字节）+ 中间缩略图，故只需腾空最旧一行的原图
+            max_total_bytes: total - 100,
+        };
+
+        // Act
+        let report = tiered_cleanup(&conn, &policy).expect("tiered_cleanup 应成功");
+
+        // Assert 1：只腾空一行原图，且没有整条删除
+        assert_eq!(report.stripped_originals, 1, "只需腾空最旧一行的原图");
+        assert_eq!(report.deleted_rows, 0, "回到阈值内后不应再整条删");
+        // Assert 2：腾的是最旧那行，且缩略图仍在
+        assert_eq!(
+            get_original_present(&conn, "a-oldest").expect("ok"),
+            Some(0)
+        );
+        assert_eq!(
+            get_original_present(&conn, "b-middle").expect("ok"),
+            Some(1)
+        );
+        assert_eq!(
+            get_original_present(&conn, "c-newest").expect("ok"),
+            Some(1)
+        );
+        assert_eq!(
+            get_image_thumbnail(&conn, "a-oldest")
+                .expect("ok")
+                .map(|t| t.len()),
+            Some(10),
+            "腾空原图必须保留缩略图"
+        );
+        // Assert 3：清理后确实落在阈值内
+        assert!(
+            total_image_bytes(&conn).expect("total") <= policy.max_total_bytes,
+            "清理后总量应不超过阈值"
+        );
+    }
+
+    #[test]
+    fn tiered_cleanup_stops_when_only_favorites_remain() {
+        // Arrange：两行全是收藏，阈值设为 0（必然超限）
+        let (_dir, conn) = open_test_db();
+        insert_row(&conn, "fav-old", 1_000, 100, 10, true);
+        insert_row(&conn, "fav-new", 2_000, 100, 10, true);
+        let policy = CleanupPolicy { max_total_bytes: 0 };
+
+        // Act：必须能正常返回（不能因「超限但无可清理行」而无限循环）
+        let report = tiered_cleanup(&conn, &policy).expect("tiered_cleanup 应成功");
+
+        // Assert：一行都不动，且总量仍超限（这是被豁免的合法状态）
+        assert_eq!(
+            report,
+            CleanupReport::default(),
+            "只剩收藏行时不应清理任何东西"
+        );
+        assert_eq!(get_original_present(&conn, "fav-old").expect("ok"), Some(1));
+        assert_eq!(get_original_present(&conn, "fav-new").expect("ok"), Some(1));
+        assert!(total_image_bytes(&conn).expect("total") > 0);
+    }
+
+    #[test]
+    fn tiered_cleanup_report_fields_match_each_level() {
+        // Arrange：缩略图本身就超限（阈值 0）→ 两级都会被触发
+        let (_dir, conn) = open_test_db();
+        insert_row(&conn, "old", 1_000, 50, 10, false);
+        insert_row(&conn, "new", 2_000, 50, 10, false);
+        let policy = CleanupPolicy { max_total_bytes: 0 };
+
+        // Act
+        let report = tiered_cleanup(&conn, &policy).expect("tiered_cleanup 应成功");
+
+        // Assert：第一级字段 = 被腾空原图的行数（两行都先被 strip）
+        assert_eq!(report.stripped_originals, 2, "两行非收藏原图都应先被腾空");
+        // Assert：第二级字段 = 被整条软删的行数（缩略图仍超限，故两行都被删）
+        assert_eq!(report.deleted_rows, 2, "缩略图仍超限时两行都应被整条软删");
+        // Assert：软删后已无活跃行
+        assert_eq!(image_count(&conn).expect("image_count"), 0);
     }
 }
