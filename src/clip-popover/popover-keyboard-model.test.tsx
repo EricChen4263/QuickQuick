@@ -134,6 +134,16 @@ describe("ClipPopoverApp 键盘模型：列表移动（P2-2）", () => {
     expect(notCancelled).toBe(false);
     expect(mockPasteToFront).not.toHaveBeenCalled();
   });
+
+  it("⌥↓ 仍按原有行为下移一条（不被新增键位抢走）", async () => {
+    const input = await renderReady();
+
+    fireEvent.keyDown(input, { key: "ArrowDown", altKey: true });
+
+    await waitFor(() => {
+      expect(rowAt(1)).toHaveAttribute("aria-selected", "true");
+    });
+  });
 });
 
 describe("ClipPopoverApp 键盘模型：搜索框编辑（P2-2）", () => {

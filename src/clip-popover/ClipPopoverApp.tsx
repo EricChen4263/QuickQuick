@@ -238,10 +238,10 @@ export default function ClipPopoverApp() {
 
   /**
    * 列表移动：↑↓ 与 vim 风格 ⌃N/⌃J 下移、⌃P/⌃K 上移（Maccy 同款键位）。
-   * 带 ⌘ 的组合（⌘↑↓）由 handleEdgeJumpKey 接管，不在此处理。
+   * 带 ⌘ 的组合（⌘↑↓）由 handleEdgeJumpKey 接管，不在此处理；⌥ 与方向键组合沿用原有移动行为。
    */
   function handleMoveKey(e: React.KeyboardEvent<HTMLInputElement>, flatIds: string[]): boolean {
-    if (e.metaKey || e.altKey) return false;
+    if (e.metaKey) return false;
     let direction: "ArrowUp" | "ArrowDown" | null = null;
     if (e.key === "ArrowUp" || e.key === "ArrowDown") {
       direction = e.key;
