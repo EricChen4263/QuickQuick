@@ -326,7 +326,7 @@
   | 仅测试引用 | `onboarding::onboarding_action` `onboarding::paste_capability` `paste::focus_restore_sequence` | `onboarding.rs:72 / 84`、`paste.rs:95`（3 / 3 / 2）——纯判定函数，生产未接 |
 
 - **处置方式（明确写下，避免下一轮误删）**：本次**不删除任何代码**。逐项判断原则沿用 roadmap Q4 的「逐项接线，不搞一刀切」，且这些条目的共同特征是「语义仍需保留、只是缺接线」——
-  - `map_deepl_http_status`：应**接线**（DeepL 的 456 配额只有状态码能分辨），或明确删除并同步删注释；**不由执行者裁决**，交 lead。
+  - `map_deepl_http_status`：**已接线（commit `bf89578`，lead 裁定接线而非删除）**。接线前它不是单纯死代码，而是**缺陷**：DeepL 配额超限返回非标准 HTTP 456，落进 `map_by_http_status` 的 `ServerError` 兜底，`retry::is_transient` 把它判为瞬时，于是配额耗尽被退避重试满 3 次（`TRANSLATE_MAX_ATTEMPTS=3`，500/1000/2000ms）。接线点是 `error::map_by_http_status`（路由到 `providers::map_deepl_http_status`），**不在 provider 内部**：`HttpExecutor::execute` 返回 `Result<String, TranslateError>`，`ipc/translate.rs` 的 `normalize_ureq_error` 在非 2xx 处已丢弃状态码与 body，provider 侧永远拿不到 456。456 → 既有 `Quota` 变体（未新增变体），属永久失败、不进重试。验收：`cargo test translate::` 174 passed、全量 `cargo test` 485 passed、`clippy --all-targets -- -D warnings` 与 `fmt --check` 干净；变异（删除 456 路由分支）→ 2 条测试红。旁证：死代码清单「零引用」由 1 → 0（候选合计 188）。**未做**：`on_quota_or_failure` 仍是测试-only，UI 不会弹「填 Key / 升级套餐」引导；真机未撞配额，456 的实际响应形状来自 DeepL 文档而非实测；Windows 未编译验证。**根治方向（后续项，需动 `ipc/*`）**：让执行器返回 `(status, body)`，或让 `TranslateError` 携带 status，把状态码映射权整体交回 provider。
   - `db::*` 六项：与 P4-7 登记的「判据分裂」是同一件事，应随启动恢复路径那次改动一起处理（接线或统一删除），单独删会丢掉唯一的测试覆盖。
   - `poll_once` / `snapshot_to_clips_for_test` / `ingest_image` / `is_degraded`：**保留**——它们是契约测试的锚点（「无策略版必须保持同样基线推进语义」），删了等于自废护栏；但 `clipboard.rs` 模块头那句「运行时调用 `poll_once`」要改。
   - `set_hotkey_impl`：**保留待接线**——要么让命令回到它（并删 `set_hotkey_runtime_impl`），要么删它并把 7 条测试改指向运行时路径；两种都要 lead 裁决，因为涉及热键行为的验收口径。
