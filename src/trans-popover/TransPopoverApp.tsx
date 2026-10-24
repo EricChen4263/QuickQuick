@@ -6,7 +6,7 @@ import { listClipItems, translateText } from "../ipc/ipc-client";
 import type { TranslateResult } from "../ipc/ipc-client";
 import { writeToClipboard, speakText } from "../panels/translate/browser-api";
 import { pickLatestText } from "./source-text";
-import { TRANS_SOURCE_EVENT } from "../ipc/events";
+import { ROUTE_EVENT, TRANS_SOURCE_EVENT } from "../ipc/events";
 import MiniTranslate from "./MiniTranslate";
 
 type Status = "loading" | "empty" | "translating" | "done" | "error";
@@ -154,7 +154,7 @@ function TransPopoverApp(): React.ReactElement {
   // v1 仅跳转翻译页，不预填文本（主窗翻译输入预填为后续增强）
   async function handleExpand(): Promise<void> {
     try {
-      await emit("route", "translate");
+      await emit(ROUTE_EVENT, "translate");
       const main = await WebviewWindow.getByLabel("main");
       await main?.show();
       await main?.setFocus();

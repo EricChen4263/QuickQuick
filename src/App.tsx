@@ -2,7 +2,8 @@ import { useEffect, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { type TopLevel } from "./main-window/nav";
-import { type HotkeyTrigger } from "./shell/windowRoute";
+import { type RoutePayload } from "./shell/windowRoute";
+import { ROUTE_EVENT } from "./ipc/events";
 import { AppShell } from "./shell/AppShell";
 import ClipboardPage from "./panels/clipboard/ClipboardPage";
 import TranslatePage from "./panels/translate/TranslatePage";
@@ -10,15 +11,13 @@ import SettingsPage from "./panels/settings/SettingsPage";
 import UpdateBanner from "./components/UpdateBanner";
 import "./theme/theme.css";
 
-/** 热键路由 payload 类型（与后端 emit 的字符串对应） */
-type RoutePayload = HotkeyTrigger;
-
 /**
- * 将热键触发类型映射到对应的一级页。
- * history 热键对应剪贴板页；translate 热键对应翻译页。
+ * 将路由 payload 映射到对应的一级页。
+ * history 热键对应剪贴板页；translate 热键对应翻译页；settings 来自托盘「打开设置」。
  */
-function routeToTopLevel(trigger: HotkeyTrigger): TopLevel {
-  if (trigger === "translate") return "translate";
+function routeToTopLevel(payload: RoutePayload): TopLevel {
+  if (payload === "translate") return "translate";
+  if (payload === "settings") return "settings";
   return "clipboard";
 }
 
@@ -36,13 +35,13 @@ function App() {
     setActiveTop((_prev) => "translate");
   }
 
-  // 监听后端 route 事件，切换一级页
+  // 监听后端路由事件，切换一级页（热键 history/translate + 托盘「打开设置」）
   // cancelled flag 防止组件卸载后 Promise resolve 造成监听器泄漏
   useEffect(() => {
     let cancelled = false;
     let unlisten: (() => void) | undefined;
 
-    listen<RoutePayload>("route", (event) => {
+    listen<RoutePayload>(ROUTE_EVENT, (event) => {
       setActiveTop((_prev) => routeToTopLevel(event.payload));
     }).then((fn) => {
       if (cancelled) {

@@ -1,6 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, within } from "@testing-library/react";
+import { act, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { listen } from "@tauri-apps/api/event";
+import { ROUTE_EVENT } from "./ipc/events";
 import App from "./App";
 
 // Mock Tauri API：渲染测试环境无 Tauri 运行时
@@ -145,5 +147,37 @@ describe("app-shell", () => {
       (btn) => btn.hasAttribute("aria-pressed")
     );
     expect(themeBtns).toHaveLength(3);
+  });
+
+  // 托盘「打开设置」链路的前端一半：后端 emit(ROUTE_EVENT, "settings") 后，
+  // 主窗必须落到设置页。这条断言是唯一能挡住「路由字面量写错 → 跳到剪贴板页」
+  // 这类静默失效的地方，故必须精确断言可见页而不只是「有反应」。
+  it("app-shell: 收到 settings 路由后切到设置页，而不是停在剪贴板页", async () => {
+    // Arrange：渲染后从 listen mock 的调用记录里取出 route 监听器
+    render(<App />);
+    const registration = vi
+      .mocked(listen)
+      .mock.calls.find(([event]) => event === ROUTE_EVENT);
+    if (registration === undefined) {
+      throw new Error("App 未注册 route 事件监听，托盘「打开设置」会静默失效");
+    }
+    const handler = registration[1] as unknown as (event: {
+      payload: string;
+    }) => void;
+
+    // Act：模拟后端 `open_settings` 的 emit
+    await act(async () => {
+      handler({ payload: "settings" });
+    });
+
+    // Assert
+    expect(screen.getByTestId("page-settings")).toBeVisible();
+    expect(screen.getByTestId("page-clipboard")).not.toBeVisible();
+  });
+
+  it("app-shell: 路由事件名与后端 tray.rs 的 ROUTE_EVENT 一致", () => {
+    // Tauri 事件名跨语言无法编译期共享，Rust 侧 tray::tests::route_event_matches_frontend_contract
+    // 钉同一字面量；两侧任一改动都会在这里或那里变红。
+    expect(ROUTE_EVENT).toBe("route");
   });
 });
