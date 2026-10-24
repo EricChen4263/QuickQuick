@@ -161,6 +161,12 @@
   color: var(--fg);
 }
 
+/* 短数字输入（历史条目上限这类四位数以内的字段）：不占满 180px，数字右对齐便于读数 */
+.set-input.short-num {
+  width: 84px;
+  text-align: right;
+}
+
 /* 快捷键组合展示：等宽字体 + 多个 kbd 标签横排 */
 .kbd-combo {
   font-family: var(--mono);

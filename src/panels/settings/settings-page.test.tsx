@@ -35,6 +35,10 @@ vi.mock("../../ipc/ipc-client", () => ({
   cleanupHistory: vi.fn(),
   getImageThreshold: vi.fn(),
   setImageThreshold: vi.fn(),
+  getMaxHistoryItems: vi.fn(),
+  setMaxHistoryItems: vi.fn(),
+  MIN_HISTORY_ITEMS: 1,
+  MAX_HISTORY_ITEMS: 999,
   exportBackup: vi.fn(),
   importBackup: vi.fn(),
   revealBackupInFinder: vi.fn(),
@@ -67,6 +71,8 @@ import {
   cleanupHistory,
   getImageThreshold,
   setImageThreshold,
+  getMaxHistoryItems,
+  setMaxHistoryItems,
 } from "../../ipc/ipc-client";
 
 const mockGetVersion = vi.mocked(getVersion);
@@ -95,6 +101,8 @@ const mockGetStorageStats = vi.mocked(getStorageStats);
 const mockCleanupHistory = vi.mocked(cleanupHistory);
 const mockGetImageThreshold = vi.mocked(getImageThreshold);
 const mockSetImageThreshold = vi.mocked(setImageThreshold);
+const mockGetMaxHistoryItems = vi.mocked(getMaxHistoryItems);
+const mockSetMaxHistoryItems = vi.mocked(setMaxHistoryItems);
 
 const MOCK_HOTKEYS = {
   history: "CmdOrCtrl+Shift+H",
@@ -141,6 +149,8 @@ describe("settings-page", () => {
     mockCleanupHistory.mockResolvedValue({ softDeleted: 5, purged: 3 });
     mockGetImageThreshold.mockResolvedValue(20 * 1024 * 1024);
     mockSetImageThreshold.mockResolvedValue(undefined);
+    mockGetMaxHistoryItems.mockResolvedValue(500);
+    mockSetMaxHistoryItems.mockResolvedValue(0);
   });
 
   it("settings-page: 左侧纵向子项栏渲染六个子项（通用/热键/翻译源/隐私/存储/关于）", async () => {
@@ -793,6 +803,33 @@ describe("settings-page", () => {
       expect(screen.getByText(/50\.0 MB · 磁盘实际占用/)).toBeInTheDocument();
       expect(screen.getByText(/上限 500 MB/)).toBeInTheDocument();
     });
+  });
+
+  it("settings-page: 存储面板——历史条目上限输入框回填后端值并可提交", async () => {
+    // Arrange：后端上限为 320（非默认值，能区分「回填了后端值」与「写了死默认值」）
+    mockGetMaxHistoryItems.mockResolvedValue(320);
+    mockSetMaxHistoryItems.mockResolvedValue(70);
+    const user = userEvent.setup();
+    render(<SettingsPage />);
+
+    const nav = screen.getByRole("navigation", { name: "设置子项" });
+    await user.click(within(nav).getByRole("button", { name: "存储" }));
+
+    // Assert 1：输入框回填的是后端值
+    const input = screen.getByLabelText("历史条目上限");
+    await waitFor(() => {
+      expect(input).toHaveValue(320);
+    });
+
+    // Act：改成 250 并失焦提交
+    fireEvent.change(input, { target: { value: "250" } });
+    fireEvent.blur(input);
+
+    // Assert 2：真的调了后端，并报告本轮淘汰条数
+    await waitFor(() => {
+      expect(mockSetMaxHistoryItems).toHaveBeenCalledWith(250);
+    });
+    expect(await screen.findByText(/已按新上限清理 70 条/)).toBeInTheDocument();
   });
 
   it("settings-page: 存储面板——点击清理按钮调用 cleanupHistory 并刷新统计", async () => {

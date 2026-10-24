@@ -8,6 +8,10 @@ vi.mock("../../ipc/ipc-client", () => ({
   cleanupHistory: vi.fn(),
   getImageThreshold: vi.fn(),
   setImageThreshold: vi.fn(),
+  getMaxHistoryItems: vi.fn(),
+  setMaxHistoryItems: vi.fn(),
+  MIN_HISTORY_ITEMS: 1,
+  MAX_HISTORY_ITEMS: 999,
   exportBackup: vi.fn(),
   importBackup: vi.fn(),
   revealBackupInFinder: vi.fn(),
@@ -18,6 +22,10 @@ import {
   cleanupHistory,
   getImageThreshold,
   setImageThreshold,
+  getMaxHistoryItems,
+  setMaxHistoryItems,
+  MIN_HISTORY_ITEMS,
+  MAX_HISTORY_ITEMS,
   exportBackup,
   importBackup,
   revealBackupInFinder,
@@ -27,6 +35,8 @@ const mockGetStorageStats = vi.mocked(getStorageStats);
 const mockCleanupHistory = vi.mocked(cleanupHistory);
 const mockGetImageThreshold = vi.mocked(getImageThreshold);
 const mockSetImageThreshold = vi.mocked(setImageThreshold);
+const mockGetMaxHistoryItems = vi.mocked(getMaxHistoryItems);
+const mockSetMaxHistoryItems = vi.mocked(setMaxHistoryItems);
 const mockExportBackup = vi.mocked(exportBackup);
 const mockImportBackup = vi.mocked(importBackup);
 const mockRevealBackupInFinder = vi.mocked(revealBackupInFinder);
@@ -47,6 +57,9 @@ describe("StoragePanel 单张图片阈值", () => {
     // 不设默认就会依赖其他 describe 残留的 mock 实现，用例结果随执行顺序变化。
     mockGetImageThreshold.mockResolvedValue(20 * 1024 * 1024);
     mockSetImageThreshold.mockResolvedValue(undefined);
+    // 历史上限的两个默认值同理：不设就会让输入框回填成 "undefined"
+    mockGetMaxHistoryItems.mockResolvedValue(500);
+    mockSetMaxHistoryItems.mockResolvedValue(0);
   });
 
   it("挂载后调用 getImageThreshold，trigger 显示对应 MB（返回 10MiB → 10 MB）", async () => {
@@ -133,6 +146,8 @@ describe("StoragePanel 备份 / 恢复", () => {
     vi.clearAllMocks();
     mockGetStorageStats.mockResolvedValue({ liveCount: 3, imageBytes: 0, fileSizeBytes: 4096 });
     mockGetImageThreshold.mockResolvedValue(20 * 1024 * 1024);
+    mockGetMaxHistoryItems.mockResolvedValue(500);
+    mockSetMaxHistoryItems.mockResolvedValue(0);
     mockExportBackup.mockResolvedValue({
       path: BACKUP_PATH,
       itemCount: 3,
@@ -286,6 +301,8 @@ describe("StoragePanel 占用口径（图片占用 vs 库文件体积）", () =>
     mockGetImageThreshold.mockResolvedValue(20 * MB);
     mockSetImageThreshold.mockResolvedValue(undefined);
     mockCleanupHistory.mockResolvedValue({ softDeleted: 0, purged: 0 });
+    mockGetMaxHistoryItems.mockResolvedValue(500);
+    mockSetMaxHistoryItems.mockResolvedValue(0);
   });
 
   /**
@@ -360,5 +377,217 @@ describe("StoragePanel 占用口径（图片占用 vs 库文件体积）", () =>
     });
     expect(Number.parseFloat(meterFill(container).style.width)).toBeCloseTo(20, 5);
     expect(screen.getByText(/500\.0 MB · 磁盘实际占用/)).toBeInTheDocument();
+  });
+});
+
+describe("StoragePanel 历史条目上限", () => {
+  /** 取历史条目上限输入框（按 aria-label 定位，避免与图片阈值下拉混淆） */
+  function historyInput(): HTMLInputElement {
+    const input = screen.getByLabelText("历史条目上限");
+    if (!(input instanceof HTMLInputElement)) throw new Error("历史条目上限不是 input");
+    return input;
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockGetStorageStats.mockResolvedValue({ liveCount: 10, imageBytes: 0, fileSizeBytes: 4096 });
+    mockGetImageThreshold.mockResolvedValue(20 * 1024 * 1024);
+    mockGetMaxHistoryItems.mockResolvedValue(500);
+    mockSetMaxHistoryItems.mockResolvedValue(0);
+  });
+
+  it("挂载后读取后端上限并回填输入框（返回 42 → 输入框 42）", async () => {
+    // Arrange
+    mockGetMaxHistoryItems.mockResolvedValue(42);
+
+    // Act
+    render(<StoragePanel />);
+
+    // Assert：必须等 IPC 落地后再断言 DOM（只等 mock 被调用会读到初始值）
+    await waitFor(() => {
+      expect(mockGetMaxHistoryItems).toHaveBeenCalledTimes(1);
+      expect(historyInput().value).toBe("42");
+    });
+  });
+
+  it("上限改小并提交后调用后端，且如实报告本轮被淘汰的条数", async () => {
+    // Arrange：后端返回淘汰了 12 条，重拉的统计也随之降到 7 条
+    mockGetStorageStats
+      .mockResolvedValueOnce({ liveCount: 10, imageBytes: 0, fileSizeBytes: 4096 })
+      .mockResolvedValueOnce({ liveCount: 7, imageBytes: 0, fileSizeBytes: 4096 });
+    mockSetMaxHistoryItems.mockResolvedValue(12);
+    render(<StoragePanel />);
+    await waitFor(() => expect(historyInput().value).toBe("500"));
+
+    // Act：改成 50 并失焦提交
+    fireEvent.change(historyInput(), { target: { value: "50" } });
+    fireEvent.blur(historyInput());
+
+    // Assert：把「50」原样交给后端，并把淘汰条数告诉用户
+    await waitFor(() => {
+      expect(mockSetMaxHistoryItems).toHaveBeenCalledWith(50);
+    });
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      "已按新上限清理 12 条最旧的非收藏记录"
+    );
+    // 等统计重拉落地，既验证行为也避免留下未 act 的状态更新
+    expect(await screen.findByText("7 条活跃记录（不含软删）")).toBeInTheDocument();
+    expect(historyInput().value).toBe("50");
+  });
+
+  it("上限改小时没有淘汰任何条目则不显示清理提示", async () => {
+    // Arrange：调大上限（或调小但仍未超限）→ 后端返回 0
+    mockSetMaxHistoryItems.mockResolvedValue(0);
+    render(<StoragePanel />);
+    await waitFor(() => expect(historyInput().value).toBe("500"));
+
+    // Act
+    fireEvent.change(historyInput(), { target: { value: "800" } });
+    fireEvent.blur(historyInput());
+
+    // Assert
+    await waitFor(() => expect(mockSetMaxHistoryItems).toHaveBeenCalledWith(800));
+    await waitFor(() => expect(historyInput().value).toBe("800"));
+    expect(screen.queryByText(/已按新上限清理/)).not.toBeInTheDocument();
+  });
+
+  it("提交后重拉存储统计，让条目数随之刷新", async () => {
+    // Arrange：首次统计 500 条，提交后后端说还剩 50 条
+    mockGetStorageStats
+      .mockResolvedValueOnce({ liveCount: 500, imageBytes: 0, fileSizeBytes: 4096 })
+      .mockResolvedValueOnce({ liveCount: 50, imageBytes: 0, fileSizeBytes: 4096 });
+    mockSetMaxHistoryItems.mockResolvedValue(450);
+    render(<StoragePanel />);
+    await screen.findByText("500 条活跃记录（不含软删）");
+
+    // Act
+    fireEvent.change(historyInput(), { target: { value: "50" } });
+    fireEvent.blur(historyInput());
+
+    // Assert：统计被重新拉取，条目数降到 50
+    expect(await screen.findByText("50 条活跃记录（不含软删）")).toBeInTheDocument();
+    expect(mockGetStorageStats).toHaveBeenCalledTimes(2);
+  });
+
+  it("回车提交与失焦提交等价", async () => {
+    // Arrange
+    mockSetMaxHistoryItems.mockResolvedValue(0);
+    render(<StoragePanel />);
+    await waitFor(() => expect(historyInput().value).toBe("500"));
+
+    // Act：只按回车、不失焦
+    fireEvent.change(historyInput(), { target: { value: "200" } });
+    fireEvent.keyDown(historyInput(), { key: "Enter" });
+
+    // Assert
+    await waitFor(() => expect(mockSetMaxHistoryItems).toHaveBeenCalledWith(200));
+    await waitFor(() => expect(historyInput().value).toBe("200"));
+  });
+
+  it("非法值 0 被拒绝：不调后端、给出提示、输入框回滚到已生效值", async () => {
+    // Arrange
+    render(<StoragePanel />);
+    await waitFor(() => expect(historyInput().value).toBe("500"));
+
+    // Act
+    fireEvent.change(historyInput(), { target: { value: "0" } });
+    fireEvent.blur(historyInput());
+
+    // Assert
+    expect(await screen.findByRole("status")).toHaveTextContent(/1–999 之间的整数/);
+    expect(mockSetMaxHistoryItems).not.toHaveBeenCalled();
+    expect(historyInput().value).toBe("500");
+  });
+
+  it("非法值 1000 被拒绝（上限之外，不能悄悄截断成 999）", async () => {
+    // Arrange
+    render(<StoragePanel />);
+    await waitFor(() => expect(historyInput().value).toBe("500"));
+
+    // Act
+    fireEvent.change(historyInput(), { target: { value: "1000" } });
+    fireEvent.blur(historyInput());
+
+    // Assert
+    expect(await screen.findByRole("status")).toHaveTextContent(/1–999 之间的整数/);
+    expect(mockSetMaxHistoryItems).not.toHaveBeenCalled();
+    expect(historyInput().value).toBe("500");
+  });
+
+  it("小数被拒绝而不是悄悄取整（2.5 不能变成 2）", async () => {
+    // Arrange
+    render(<StoragePanel />);
+    await waitFor(() => expect(historyInput().value).toBe("500"));
+
+    // Act
+    fireEvent.change(historyInput(), { target: { value: "2.5" } });
+    fireEvent.blur(historyInput());
+
+    // Assert
+    expect(await screen.findByRole("status")).toHaveTextContent(/1–999 之间的整数/);
+    expect(mockSetMaxHistoryItems).not.toHaveBeenCalled();
+    expect(historyInput().value).toBe("500");
+  });
+
+  it("空输入被拒绝（清空后失焦不应把上限设成 0）", async () => {
+    // Arrange
+    render(<StoragePanel />);
+    await waitFor(() => expect(historyInput().value).toBe("500"));
+
+    // Act
+    fireEvent.change(historyInput(), { target: { value: "" } });
+    fireEvent.blur(historyInput());
+
+    // Assert
+    expect(await screen.findByRole("status")).toHaveTextContent(/1–999 之间的整数/);
+    expect(mockSetMaxHistoryItems).not.toHaveBeenCalled();
+    expect(historyInput().value).toBe("500");
+  });
+
+  it("边界值 1 与 999 都能提交", async () => {
+    // Arrange
+    render(<StoragePanel />);
+    await waitFor(() => expect(historyInput().value).toBe("500"));
+
+    // Act & Assert：最小值
+    fireEvent.change(historyInput(), { target: { value: "1" } });
+    fireEvent.blur(historyInput());
+    await waitFor(() => expect(mockSetMaxHistoryItems).toHaveBeenCalledWith(1));
+    await waitFor(() => expect(historyInput().value).toBe("1"));
+
+    // Act & Assert：最大值
+    fireEvent.change(historyInput(), { target: { value: "999" } });
+    fireEvent.blur(historyInput());
+    await waitFor(() => expect(mockSetMaxHistoryItems).toHaveBeenCalledWith(999));
+    await waitFor(() => expect(historyInput().value).toBe("999"));
+  });
+
+  it("输入框带宽高约束（min=1 / max=999 / step=1），浏览器层面也能拦非法值", async () => {
+    // Arrange
+    render(<StoragePanel />);
+    await waitFor(() => expect(historyInput().value).toBe("500"));
+
+    // Assert：与后端同一组边界，不在前端重写一套数字
+    expect(historyInput()).toHaveAttribute("type", "number");
+    expect(historyInput()).toHaveAttribute("min", String(MIN_HISTORY_ITEMS));
+    expect(historyInput()).toHaveAttribute("max", String(MAX_HISTORY_ITEMS));
+    expect(historyInput()).toHaveAttribute("step", "1");
+  });
+
+  it("后端拒绝时把错误文案展示出来并回滚输入框", async () => {
+    // Arrange：模拟后端越界报错（前端校验通过但后端不认，例如版本不一致）
+    mockSetMaxHistoryItems.mockRejectedValue(new Error("历史条目上限超出范围：1000"));
+    render(<StoragePanel />);
+    await waitFor(() => expect(historyInput().value).toBe("500"));
+
+    // Act
+    fireEvent.change(historyInput(), { target: { value: "300" } });
+    fireEvent.blur(historyInput());
+
+    // Assert：显示后端原文，输入框回到已生效值
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      "历史条目上限超出范围：1000"
+    );
+    expect(historyInput().value).toBe("500");
   });
 });

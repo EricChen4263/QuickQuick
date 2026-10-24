@@ -216,6 +216,20 @@
 - **审查打回的两处（已闭环）**：① 计划断言只在「计划串」层比较，**去掉 JOIN 的 `cimg.is_deleted = 0` 不会红**（两变体共用宏，计划逐字相同但语义漏了软删图）；已加 SQL 字面锚（`cimg.is_deleted = 0` / `length(...) > 0` / `ci.is_deleted = 0`），删任一条件必红。② 缓存读取有两处互相兜底（改一处仍绿）；已收敛到单一入口 `trySettledClipThumbnail` + hook 去掉 state 副本（渲染期派生读 + `forceRender`），两个调用点各有独立断言。
 - **未验证**：真机列表滚动时的实际 IPC 频率与首屏延迟、失败永久缓存在 SQLCipher 大库上的可接受性、占位 `min-height` 与真实缩略图的视觉衔接。
 ### P4-4 · 自动淘汰 + 可配上限（1–999，pin 豁免）
+- **状态**：done
+- **做什么**：`cleanup_keep_recent` 此前只有「立即清理」按钮能用、保留条数硬编码 500 且不可配。现在新增设置 `max_history_items`（区间 **1–999**），自动淘汰挂在 `capture_and_ingest` 的写库事务 **RELEASE 之后**，判据是「本轮有新增行」（**任意类型**的 `Inserted`）——去重命中只刷新时间戳、空轮次根本不进这条路径，故常态轮次零额外 SQL。
+- **默认值取舍（与 Maccy 的 200 不同，明确记录）**：默认 **500**。依据：本项之前「手动清理」就是硬编码 500 条，沿用默认值让存量用户升级后的历史规模不变；设置页此前**没有**对「条目数上限」做过具体数字承诺——页面上那个 `500 MB` 是**图片占用**上限（P1-9 已把图片占用与库文件体积 / 条数拆成不同口径），与条数上限不是同一个量。想对齐 Maccy 只改 `settings::DEFAULT_MAX_HISTORY_ITEMS` 一个常量。
+- **「pin 豁免」的落点**：本项目目前没有独立的 `pin` 列（字母 pin 是 P2-4，仍 blocked），等价能力是 `is_favorite`。淘汰判据 `WHERE is_deleted = 0 AND is_favorite = 0` 让收藏项**既不计数也不被删除**（对齐 Maccy 的「pin 无限豁免」）。**P2-4 落地后必须重审这条判据**：若「字母 pin」要与「收藏」区分，需要新增独立列并让它进同一条豁免条件，不能把 `pin` 塞进 `is_favorite`（那会改变收藏既有语义）。
+- **三处改动与理由**：
+  1. `db::evict_over_limit`：`cleanup_keep_recent` 的**带短路**入口——先 `COUNT(*)`（走 `idx_clip_items_live_favorite_modified` 的等值前缀，不扫表、不临时排序），只有超限才去取候选 id 列表。入库路径每次新增行都调用，未超限是绝对常态，直接复用 `cleanup_keep_recent` 会白把全部非收藏 id 取回内存再一行不删。
+  2. `pipeline::IngestLimits`：把 `max_image_bytes` / `max_history_items` / `image_cleanup` 收进一个结构体。原来 `capture_and_ingest` 已是 5 个位置参数，再加一个数字会变成 6 个、且两个都是不同单位的数字（字节 / 条数），极容易传反。测试专用的 `capture_and_ingest_with_cleanup` 因此**整个删掉**——阈值都能注入后，它和生产函数没有差别，留着等于让测试跑在一条生产走不到的路径上。
+  3. `set_max_history_items` 命令：校验 1–999 → 落盘 → **立刻**按新上限淘汰并返回本轮淘汰条数。只等下一次复制会让「上限已经改小、列表还有 400 条」同时成立。
+- **手动清理改成同一口径**：`cleanup_history_impl(conn, keep_count)` 不再读已删除的 `KEEP_RECENT_COUNT`，上限由命令层从设置读取。手动与自动各持一个数字，迟早漂成两套口径——这本来就是「硬编码 500」的形态。
+- **不产生迁移步骤（P4-7 约束下有意为之）**：本项**没有**新增 DB 列 / 索引 / 表——上限是纯配置，落在 `settings.json`（与 `max_image_bytes` 同源），淘汰复用既有的 `is_deleted` / `is_favorite` / `last_modified_utc` 与 v1 已有索引。因此 `CURRENT_SCHEMA_VERSION` 不动，`MIGRATIONS` 不追加，也没有任何「探测列是否存在」的 DDL。
+- **非法值三道防线**：前端输入拦截（`^\d+$` + 1..999，**不做「悄悄取整」**：`2.5` 直接拒收而不是变成 2）→ 命令层拒收且不落盘 → 读侧 `AppSettings::effective_max_history_items()` 把手工改坏的 0 / 10000 收敛回边界（0 收敛到 1，而不是「每次复制清空历史」）。
+- **验收**：`cargo test` **480 passed**（lib）＋全部集成套件 0 failed；`cargo clippy --all-targets -- -D warnings` 干净；`cargo fmt --all --check` 干净；`pnpm exec tsc -b` 干净；`pnpm test` **766 passed / 74 files**。
+- **可失败性（6 处变异全部打红）**：① 摘掉入库路径的淘汰触发（`if false &&`）→ 3 红；② 候选 SQL 去掉 `is_favorite = 0` → 3 红（含列表索引计划测试）；③ `MAX_HISTORY_ITEMS` 改 1000 → 3 红；④ `set_max_history_items_impl` 跳过立即淘汰 → 1 红；⑤ `counts_as_new_row` 退化成「非空即真」→ 2 红；⑥ 前端非法值不回滚输入框 → 4 红。
+- **未验证**：真机（打包 GUI）改上限的即时手感与 `clipboard-changed` → 列表刷新联动（headless 只验到事件「被发送」的调用点存在，没有真机订阅方实跑）；加密大库（数万条）首次收敛的耗时（`cleanup_keep_recent` 是逐行 UPDATE，超出部分很多时是一批写事务）；Windows。
 ### P4-5 · 搜索升级（预计算 title + 4 模式 + 多词 AND + 命中高亮）
 ### P4-6 · 翻译历史分页
 - **状态**：done

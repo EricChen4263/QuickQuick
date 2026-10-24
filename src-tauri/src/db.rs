@@ -27,6 +27,7 @@
 //! - `set_favorite`         — 设置/取消收藏（is_favorite 字段）
 //! - `list_ordered`         — 返回排序后的条目列表（收藏优先，组内按最近）
 //! - `cleanup_keep_recent`  — 容量裁剪：只删非收藏的旧项，收藏永远豁免
+//! - `evict_over_limit`     — 自动淘汰入口：非收藏条目超过可配上限时裁剪（带计数短路）
 //!
 //! 安全约定：
 //! - 密钥以 raw key 格式传入（`PRAGMA key = "x'<hex>'"`)，不写入日志
@@ -607,6 +608,36 @@ pub fn cleanup_keep_recent(conn: &Connection, keep_count: usize) -> Result<usize
         deleted += 1;
     }
     Ok(deleted)
+}
+
+/// 自动淘汰的超限判据 SQL（独立成常量，供查询计划回归测试断言生产语句本身）。
+const EVICT_LIVE_NON_FAVORITE_COUNT_SQL: &str =
+    "SELECT COUNT(*) FROM clip_items WHERE is_deleted = 0 AND is_favorite = 0";
+
+/// 把非收藏条目收敛到 `max_items` 条（入库路径的自动淘汰入口）。
+///
+/// 语义与 [`cleanup_keep_recent`] 完全一致（保留最新的 `max_items` 条非收藏条目、
+/// 收藏项既不计数也不删除），多出来的只有一条**短路判据**：
+///
+/// `cleanup_keep_recent` 会先把全部非收藏 id 取回内存再截断——入库路径每次新增行都会调用它，
+/// 而绝大多数轮次都还在上限内，那时这一步只是白取一遍 id、一行都删不了。
+/// 先 `COUNT(*)` 一次就能把这个常态轮次收敛成单个聚合：计数走
+/// `idx_clip_items_live_favorite_modified` 的等值前缀（`is_deleted` + `is_favorite`），
+/// 既不扫全表也不需要临时排序。
+///
+/// 计数与裁剪之间理论上存在「另一个写入者在中间插入新行」的窗口，但本库的写入全部串行在
+/// `AppDb` 的单个 Mutex 连接上（轮询线程与命令层共用），不存在并发写；即使发生，
+/// 后果也只是这一轮少删一条、下一轮再收敛。
+///
+/// # Errors
+/// `DbError::Sqlite`：计数或裁剪 SQL 失败
+pub fn evict_over_limit(conn: &Connection, max_items: usize) -> Result<usize, DbError> {
+    let live_non_favorite: i64 =
+        conn.query_row(EVICT_LIVE_NON_FAVORITE_COUNT_SQL, [], |row| row.get(0))?;
+    if live_non_favorite <= max_items as i64 {
+        return Ok(0);
+    }
+    cleanup_keep_recent(conn, max_items)
 }
 
 /// `ingest` 的返回结果：新建行 vs 原行置顶刷新。
@@ -3178,6 +3209,209 @@ mod tests {
         assert_eq!(
             after_order, before_order,
             "建索引不得改变列表排序结果（收藏优先 + 时间倒序 + rowid 兜底必须与索引前逐行一致）"
+        );
+    }
+
+    // ===== 自动淘汰（evict_over_limit） =====
+
+    /// 按时间戳顺序插入 `count` 条非收藏文本行，返回它们的 id（从旧到新）。
+    fn insert_aged_rows(conn: &rusqlite::Connection, prefix: &str, count: usize) -> Vec<String> {
+        (0..count)
+            .map(|i| {
+                let id = format!("{prefix}-{i:03}");
+                let ts = 1_700_000_000_000 + i as i64 * 1_000;
+                insert_text_row(conn, &id, &format!("hash-{id}"), ts, false);
+                id
+            })
+            .collect()
+    }
+
+    /// 未软删的 id 列表（按 last_modified_utc 升序，即从旧到新）。
+    fn live_ids_oldest_first(conn: &rusqlite::Connection) -> Vec<String> {
+        let mut stmt = conn
+            .prepare(
+                "SELECT id FROM clip_items WHERE is_deleted = 0
+                 ORDER BY last_modified_utc ASC, rowid ASC",
+            )
+            .expect("准备查询失败");
+        let rows = stmt
+            .query_map([], |row| row.get::<_, String>(0))
+            .expect("查询失败");
+        rows.map(|r| r.expect("读取失败")).collect()
+    }
+
+    /// 超过上限时只淘汰最旧的非收藏条目，最新的 `max_items` 条必须原样保留。
+    #[test]
+    fn evict_over_limit_soft_deletes_oldest_non_favorites() {
+        // Arrange：5 条非收藏条目（id-000 最旧），上限设 3
+        let conn = make_schema_conn();
+        let ids = insert_aged_rows(&conn, "id", 5);
+
+        // Act
+        let evicted = evict_over_limit(&conn, 3).expect("淘汰应成功");
+
+        // Assert：删掉的是最旧的两条，保留最新三条
+        assert_eq!(evicted, 2, "5 条超 3 条上限应淘汰 2 条");
+        assert_eq!(
+            live_ids_oldest_first(&conn),
+            vec![ids[2].clone(), ids[3].clone(), ids[4].clone()],
+            "留下的必须是最新的 3 条"
+        );
+        let deleted: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM clip_items WHERE is_deleted = 1",
+                [],
+                |row| row.get(0),
+            )
+            .expect("计数失败");
+        assert_eq!(deleted, 2, "被淘汰的行应置墓碑（软删），不是物理删除");
+    }
+
+    /// 收藏项豁免：既不计数，也永不因超限被删——哪怕它是最旧的一条。
+    #[test]
+    fn evict_over_limit_never_deletes_favorites() {
+        // Arrange：最旧的一条是收藏；另有 4 条非收藏
+        let conn = make_schema_conn();
+        insert_text_row(&conn, "fav-oldest", "hash-fav", 1_000, true);
+        let ids = insert_aged_rows(&conn, "id", 4);
+
+        // Act：上限 2，非收藏有 4 条
+        let evicted = evict_over_limit(&conn, 2).expect("淘汰应成功");
+
+        // Assert：收藏还在，淘汰的是非收藏里最旧的两条
+        assert_eq!(evicted, 2, "收藏不计数，4 条非收藏超 2 条上限应淘汰 2 条");
+        assert_eq!(
+            live_ids_oldest_first(&conn),
+            vec!["fav-oldest".to_string(), ids[2].clone(), ids[3].clone()],
+            "最旧的收藏必须保留，被淘汰的是非收藏中最旧的"
+        );
+    }
+
+    /// 收藏项不占名额：非收藏条数正好等于上限时一条都不该删，即使总条数远超上限。
+    #[test]
+    fn evict_over_limit_counts_only_non_favorites() {
+        // Arrange：10 条收藏 + 3 条非收藏，上限 3
+        let conn = make_schema_conn();
+        for i in 0..10 {
+            insert_text_row(
+                &conn,
+                &format!("fav-{i}"),
+                &format!("hash-fav-{i}"),
+                1_000 + i,
+                true,
+            );
+        }
+        let ids = insert_aged_rows(&conn, "id", 3);
+
+        // Act
+        let evicted = evict_over_limit(&conn, 3).expect("淘汰应成功");
+
+        // Assert：非收藏正好 3 条 → 0 删除；13 条活跃行全部还在
+        assert_eq!(evicted, 0, "非收藏条数等于上限时不应删除任何行");
+        assert_eq!(
+            live_ids_oldest_first(&conn).len(),
+            13,
+            "收藏既不计数也不被淘汰，总活跃行数不应变化（含 3 条非收藏 {ids:?}）"
+        );
+    }
+
+    /// 边界：上限为最小值 1 时，非收藏只保留最新一条。
+    #[test]
+    fn evict_over_limit_boundary_one_keeps_newest_only() {
+        let conn = make_schema_conn();
+        let ids = insert_aged_rows(&conn, "id", 3);
+
+        let evicted = evict_over_limit(&conn, 1).expect("淘汰应成功");
+
+        assert_eq!(evicted, 2, "3 条超 1 条上限应淘汰 2 条");
+        assert_eq!(
+            live_ids_oldest_first(&conn),
+            vec![ids[2].clone()],
+            "上限 1 只应留下最新的一条"
+        );
+    }
+
+    /// 边界：上限为最大值 999 时，999 条正好不触发淘汰；第 1000 条才淘汰 1 条。
+    #[test]
+    fn evict_over_limit_boundary_max_999() {
+        // Arrange：999 条（正好等于上限）
+        let conn = make_schema_conn();
+        let ids = insert_aged_rows(&conn, "id", 999);
+
+        // Act 1：正好等于上限
+        let evicted_at_limit = evict_over_limit(&conn, 999).expect("淘汰应成功");
+
+        // Assert 1：等于上限不动手（与图片分级清理「等于不动手」同一口径）
+        assert_eq!(evicted_at_limit, 0, "正好 999 条等于上限，不应淘汰");
+        assert_eq!(live_ids_oldest_first(&conn).len(), 999);
+
+        // Act 2：再多一条 → 超限 1
+        insert_text_row(&conn, "id-newest", "hash-newest", 1_800_000_000_000, false);
+        let evicted_over_limit = evict_over_limit(&conn, 999).expect("淘汰应成功");
+
+        // Assert 2：只淘汰最旧那条，新插入的必须在
+        assert_eq!(evicted_over_limit, 1, "1000 条超 999 上限应淘汰 1 条");
+        let live = live_ids_oldest_first(&conn);
+        assert_eq!(live.len(), 999, "淘汰后应回到 999 条");
+        assert!(
+            live.contains(&"id-newest".to_string()),
+            "最新插入的条目不得被淘汰"
+        );
+        assert!(
+            !live.contains(&ids[0]),
+            "最旧的一条应被淘汰，实际仍在：{:?}",
+            &live[..3]
+        );
+    }
+
+    /// 未超限时零删除，且不产生墓碑（避免「每轮入库都付一次候选 id 查询」的行为退化）。
+    #[test]
+    fn evict_over_limit_is_noop_under_limit() {
+        let conn = make_schema_conn();
+        let ids = insert_aged_rows(&conn, "id", 3);
+
+        let evicted = evict_over_limit(&conn, 10).expect("淘汰应成功");
+
+        assert_eq!(evicted, 0);
+        assert_eq!(live_ids_oldest_first(&conn), ids);
+        let deleted: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM clip_items WHERE is_deleted = 1",
+                [],
+                |row| row.get(0),
+            )
+            .expect("计数失败");
+        assert_eq!(deleted, 0, "未超限不应产生任何墓碑");
+    }
+
+    /// 空库不应报错（首次启动、或全部条目被删后）。
+    #[test]
+    fn evict_over_limit_on_empty_db_is_noop() {
+        let conn = make_schema_conn();
+
+        let evicted = evict_over_limit(&conn, 1).expect("空库淘汰应成功");
+
+        assert_eq!(evicted, 0);
+    }
+
+    /// 超限判据的计数语句必须走列表索引前缀，不能退化成全表扫 + 临时排序。
+    ///
+    /// 这是常态轮次（未超限）唯一会执行的那条 SQL，退化会直接落在每 500ms 的捕获路径上。
+    #[test]
+    fn evict_count_plan_seeks_index() {
+        let conn = make_schema_conn();
+        insert_text_row(&conn, "id-a", "hash-aaaaaaaaaaaa", 1_700_000_000_000, false);
+        ensure_indexes(&conn).expect("建索引失败");
+
+        let plan = explain_query_plan(&conn, EVICT_LIVE_NON_FAVORITE_COUNT_SQL);
+
+        assert!(
+            !plan.contains("SCAN clip_items"),
+            "超限计数应走索引定位，不能全表扫，实际计划:\n{plan}"
+        );
+        assert!(
+            plan.contains("idx_clip_items_live_favorite_modified"),
+            "超限计数应复用 (is_deleted, is_favorite) 前缀的列表索引，实际计划:\n{plan}"
         );
     }
 }

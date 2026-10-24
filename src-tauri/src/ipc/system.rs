@@ -28,7 +28,7 @@
 
 use rusqlite::{Connection, OptionalExtension};
 use serde::Serialize;
-use tauri::{Manager, State};
+use tauri::{Emitter, Manager, State};
 
 use std::sync::Arc;
 
@@ -81,9 +81,6 @@ pub struct PasteResultDto {
     pub outcome: String,
 }
 
-/// 保留条目上限：超过此数量的非收藏旧条目将被软删。
-const KEEP_RECENT_COUNT: usize = 500;
-
 /// app.hide() 后等待焦点转移完成的固定时长（毫秒）。
 ///
 /// AppKit 的前台/激活状态在非主线程（paste 命令线程）读取是 stale 的，
@@ -131,12 +128,19 @@ pub fn get_storage_stats_impl(
 
 /// cleanup_history 的纯函数实现，可在测试中直接调用。
 ///
-/// 两步清理：先软删超出 `KEEP_RECENT_COUNT` 的旧条目，再物理删除所有墓碑行。
+/// 两步清理：先按 `keep_count`（用户在设置页配的历史条目上限）软删超出的旧条目，
+/// 再物理删除所有墓碑行。
+///
+/// 手动清理与自动淘汰共用同一个上限：两处各自持有一个数字，迟早会漂成两套口径
+/// （原来是硬编码 500，正是这条 item 要消灭的形态）。
 ///
 /// # Errors
 /// 数据库操作失败时返回 `DbError`。
-pub fn cleanup_history_impl(conn: &Connection) -> Result<CleanupResultDto, DbError> {
-    let soft_deleted = db::cleanup_keep_recent(conn, KEEP_RECENT_COUNT)?;
+pub fn cleanup_history_impl(
+    conn: &Connection,
+    keep_count: usize,
+) -> Result<CleanupResultDto, DbError> {
+    let soft_deleted = db::cleanup_keep_recent(conn, keep_count)?;
     let purged = db::gc_purge_deleted(conn)?;
     Ok(CleanupResultDto {
         soft_deleted,
@@ -308,12 +312,36 @@ pub fn get_storage_stats(
     })
 }
 
-/// Tauri 命令：清理历史（容量裁剪 + GC）。
+/// Tauri 命令：清理历史（按用户配置的上限裁剪 + GC）。
+///
+/// 上限取自设置（与自动淘汰同一口径）；配置目录解析失败时回退默认值而不是让整个按钮失效
+/// ——清理是维护动作，读不到一个数字不该把它变成不可用。
+///
+/// 真的删掉东西时发 `clipboard-changed`：列表页按该事件刷新，否则清理完列表仍是旧数据。
 #[tauri::command]
-pub fn cleanup_history(state: State<'_, AppDb>) -> Result<CleanupResultDto, String> {
-    with_db(&state, |conn| {
-        cleanup_history_impl(conn).map_err(|e| e.to_string())
-    })
+pub fn cleanup_history(
+    app: tauri::AppHandle,
+    state: State<'_, AppDb>,
+) -> Result<CleanupResultDto, String> {
+    let keep_count = resolve_history_limit(&app);
+    let result = with_db(&state, |conn| {
+        cleanup_history_impl(conn, keep_count).map_err(|e| e.to_string())
+    })?;
+    if result.soft_deleted > 0 || result.purged > 0 {
+        if let Err(e) = app.emit(crate::CLIPBOARD_CHANGED_EVENT, ()) {
+            eprintln!("[QuickQuick] 清理后发送 clip-change 事件失败: {e}");
+        }
+    }
+    Ok(result)
+}
+
+/// 读一次设置里的历史条目上限（手动清理与自动淘汰共用同一口径）。
+fn resolve_history_limit(app: &tauri::AppHandle) -> usize {
+    let Ok(path) = crate::ipc::settings::resolve_config_path(app, "settings.json") else {
+        eprintln!("[QuickQuick] 无法解析配置目录，历史上限用默认值");
+        return crate::settings::AppSettings::default().effective_max_history_items();
+    };
+    crate::settings::AppSettings::load_or_default(&path).effective_max_history_items()
 }
 
 /// 辅助功能设置打开逻辑的可测实现：同步执行 `program <url>` 并按退出码返回结果。
@@ -1138,9 +1166,43 @@ mod tests {
         };
         ingest(&conn, &item).expect("入库失败");
 
-        let result = cleanup_history_impl(&conn).expect("不应失败");
+        let result = cleanup_history_impl(&conn, 500).expect("不应失败");
         assert_eq!(result.soft_deleted, 0, "未超限时 soft_deleted 应为 0");
         assert_eq!(result.purged, 0, "无墓碑时 purged 应为 0");
+    }
+
+    /// 手动清理必须用**调用方给的上限**，不是某个硬编码值：
+    /// 传 2 就只留最新 2 条非收藏（另一条被软删并由 GC 物理清除）。
+    #[test]
+    fn cleanup_history_impl_honors_given_keep_count() {
+        use crate::db::count_live;
+
+        let conn = make_test_conn();
+        for (i, text) in ["第一条", "第二条", "第三条"].iter().enumerate() {
+            conn.execute(
+                "INSERT INTO clip_items
+                     (id, content, kind, created_utc, last_modified_utc, is_deleted,
+                      text_hash, is_favorite)
+                 VALUES (?1, ?2, 'text', ?3, ?3, 0, ?4, 0)",
+                rusqlite::params![
+                    format!("row-{i}"),
+                    text,
+                    1_000 + i as i64,
+                    format!("hash-{i}")
+                ],
+            )
+            .expect("插入种子行失败");
+        }
+
+        let result = cleanup_history_impl(&conn, 2).expect("不应失败");
+
+        assert_eq!(result.soft_deleted, 1, "3 条超 2 条上限应软删 1 条");
+        assert_eq!(result.purged, 1, "软删的行应被同一次清理物理删除");
+        assert_eq!(
+            count_live(&conn).expect("count_live"),
+            2,
+            "传 2 时只应留 2 条活跃条目"
+        );
     }
 
     /// T4：fetch_paste_item — 空 id 应返回 Err

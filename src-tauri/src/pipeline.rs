@@ -263,14 +263,46 @@ pub fn open_app_db(key_provider: &dyn KeyProvider, db_path: &Path) -> Result<Con
     db::open_or_create(db_path, &key).map_err(|e| format!("数据库打开失败：{e}"))
 }
 
+/// 入库限额与入库后的维护阈值。
+///
+/// 三个值都来自用户设置（`settings::AppSettings`），由命令层读设置后传进来：
+/// pipeline 只消费数字、不依赖 settings 模块，测试可以整体替换成一个很小的阈值，
+/// 不必为了验证「超限会不会清理」去造 500 MiB 数据或 500 条历史。
+#[derive(Debug, Clone)]
+pub struct IngestLimits {
+    /// 单张图片原图大小上限（字节）：超出只存缩略图，`original_present = 0`
+    pub max_image_bytes: u64,
+    /// 历史条目条数上限（1..=999）：非收藏条目超出即淘汰最旧的，收藏项豁免
+    pub max_history_items: usize,
+    /// 图片总量分级清理策略（阈值 + 分两级腾空间）
+    pub image_cleanup: CleanupPolicy,
+}
+
+impl Default for IngestLimits {
+    /// 与用户设置的默认值同源（`AppSettings::default()`），避免默认阈值出现第二份拷贝。
+    fn default() -> Self {
+        let settings = crate::settings::AppSettings::default();
+        Self {
+            max_image_bytes: settings.max_image_bytes,
+            max_history_items: settings.effective_max_history_items(),
+            image_cleanup: CleanupPolicy::default(),
+        }
+    }
+}
+
 /// 单次剪贴板捕获并原子写库。
 ///
 /// 调用 `poll_once_with_policy` 获取捕获结果列表（空 Vec 表示无新内容）：
 /// - 有新内容 → 在 SAVEPOINT 内逐项写库；同一次捕获的多条原子写入，任一失败整体回滚
 /// - 无新内容（计数未变、策略跳过等）→ 返回 `Ok(vec![])`，不开事务
 ///
-/// 写库成功且**本轮新增了图片行**时，追加一次图片总量分级清理
-/// （`run_image_cleanup_best_effort`，阈值取 [`CleanupPolicy::default`] 的 500 MiB）。
+/// 写库成功后追加两项维护动作，都是 best-effort（失败只留痕、不回滚本轮捕获）：
+/// - 本轮**新增了行**（任意类型）→ 按 [`IngestLimits::max_history_items`] 淘汰最旧的非收藏条目；
+/// - 本轮**新增了图片行** → 按 [`IngestLimits::image_cleanup`] 做图片总量分级清理。
+///
+/// 两者的触发判据不同，因为增长源不同：条数只由「新增行」推高（去重命中只改时间戳），
+/// 图片总量只由「新增图片行」推高。用同一个判据会让文本轮次白付一次图片聚合，
+/// 或让文本条目撑破条数上限却不触发淘汰。
 ///
 /// # 为什么用 SAVEPOINT 而非 Transaction
 /// `db::ingest_image_as_clip` 内部已有嵌套 SAVEPOINT（`ingest_image_clip`），
@@ -283,35 +315,13 @@ pub fn open_app_db(key_provider: &dyn KeyProvider, db_path: &Path) -> Result<Con
 ///
 /// # Errors
 /// `db::ingest` 或 `db::ingest_image_as_clip` 失败时，整体回滚后返回 DbError 描述字符串。
-/// 清理阶段的失败**不会**变成这里的错误（best-effort，只留痕）。
+/// 清理与淘汰阶段的失败**不会**变成这里的错误（best-effort，只留痕）。
 pub fn capture_and_ingest(
     backend: &dyn ClipboardBackend,
     last_seen: &mut u64,
     conn: &Connection,
     policy: &CapturePolicy<'_>,
-    max_image_bytes: u64,
-) -> Result<Vec<IngestOutcome>, String> {
-    capture_and_ingest_with_cleanup(
-        backend,
-        last_seen,
-        conn,
-        policy,
-        max_image_bytes,
-        &CleanupPolicy::default(),
-    )
-}
-
-/// [`capture_and_ingest`] 的实现体，多接一个清理策略。
-///
-/// 策略单独参数化的原因：生产用默认 500 MiB，单测要能设成极小阈值来验证
-/// 「超限自动清理」真的被触发，否则就得在测试里造 500 MiB 数据。
-fn capture_and_ingest_with_cleanup(
-    backend: &dyn ClipboardBackend,
-    last_seen: &mut u64,
-    conn: &Connection,
-    policy: &CapturePolicy<'_>,
-    max_image_bytes: u64,
-    cleanup_policy: &CleanupPolicy,
+    limits: &IngestLimits,
 ) -> Result<Vec<IngestOutcome>, String> {
     let clips = crate::clipboard::poll_once_with_policy(backend, last_seen, policy);
     if clips.is_empty() {
@@ -321,7 +331,7 @@ fn capture_and_ingest_with_cleanup(
     conn.execute_batch("SAVEPOINT capture_ingest;")
         .map_err(|e| format!("开启事务失败：{e}"))?;
 
-    let (outcomes, new_image_rows) = match ingest_clips(conn, clips, max_image_bytes) {
+    let (outcomes, new_image_rows) = match ingest_clips(conn, clips, limits.max_image_bytes) {
         Ok(result) => {
             conn.execute_batch("RELEASE SAVEPOINT capture_ingest;")
                 .map_err(|e| format!("提交事务失败：{e}"))?;
@@ -335,12 +345,34 @@ fn capture_and_ingest_with_cleanup(
         }
     };
 
-    // 清理必须在事务提交之后：它是独立的后台维护动作，失败不能回滚本轮捕获
+    // 维护动作必须在事务提交之后：它们是独立的后台维护，失败不能回滚本轮捕获
+    if counts_as_new_row(&outcomes) {
+        run_history_eviction_best_effort(conn, limits.max_history_items);
+    }
     if new_image_rows > 0 {
-        run_image_cleanup_best_effort(conn, cleanup_policy);
+        run_image_cleanup_best_effort(conn, &limits.image_cleanup);
     }
 
     Ok(outcomes)
+}
+
+/// 淘汰超出条数上限的最旧非收藏条目（best-effort）。
+///
+/// 只在「本轮新增了行」之后调用：条数上限只能被新增行推高，去重命中（`Bumped`）
+/// 只刷新时间戳，条数不变；无新内容的空轮次更不会被调用。这样常态轮次零额外 SQL。
+///
+/// 失败只 eprintln 留痕，不向上传播：淘汰是维护性动作，不能让一次淘汰失败
+/// 变成「这次复制没被记录」。代价是这一轮可能暂时多出一两条，下一次新增行会再收敛。
+fn run_history_eviction_best_effort(conn: &Connection, max_items: usize) {
+    match db::evict_over_limit(conn, max_items) {
+        Ok(0) => {
+            // 未超上限：静默（这是绝大多数情况，不应产生日志噪声）
+        }
+        Ok(evicted) => {
+            eprintln!("[QuickQuick] 非收藏条目超过上限 {max_items} 条，已淘汰最旧的 {evicted} 条")
+        }
+        Err(e) => eprintln!("[QuickQuick] 历史条目自动淘汰失败（非致命，不影响本轮捕获）：{e}"),
+    }
 }
 
 /// 图片总量分级清理（best-effort）。
@@ -380,6 +412,20 @@ fn run_image_cleanup_best_effort(conn: &Connection, policy: &CleanupPolicy) {
 /// - 只有图片 [`IngestOutcome::Inserted`] 才会新增一行、让总量只增不减。
 fn counts_as_new_image_row(is_image_clip: bool, outcome: &IngestOutcome) -> bool {
     is_image_clip && matches!(outcome, IngestOutcome::Inserted(_))
+}
+
+/// 本轮是否新增了行（任意类型）。
+///
+/// 这是条数淘汰的唯一触发判据：
+/// - 只有 [`IngestOutcome::Inserted`] 会推高「非收藏活跃条目数」；
+/// - [`IngestOutcome::Bumped`] 只刷新 `last_modified_utc`，条数不变；
+/// - 无新内容的空轮次根本不会走到这里。
+///
+/// 文本条目同样计数：历史条数上限约束的是全部条目，不只是图片。
+fn counts_as_new_row(outcomes: &[IngestOutcome]) -> bool {
+    outcomes
+        .iter()
+        .any(|outcome| matches!(outcome, IngestOutcome::Inserted(_)))
 }
 
 /// 逐条写库（拆出以保持主函数 ≤50 行、事务边界清晰）。
@@ -456,6 +502,47 @@ mod tests {
         .expect("插入种子图片行应成功");
     }
 
+    /// 直接插一条非收藏文本行（显式时间戳，用来构造「库里已超条数上限」的前置状态）。
+    ///
+    /// 走 SQL 而不走 `db::ingest`：`ingest` 会给 `last_modified_utc` 填当前时间，
+    /// 那样所有种子行的先后关系就取决于执行顺序的毫秒差，边界测试会变得不可复现。
+    fn seed_old_text_row(conn: &Connection, id: &str, last_modified_utc: i64) {
+        conn.execute(
+            "INSERT INTO clip_items
+                (id, content, kind, created_utc, last_modified_utc, is_deleted,
+                 text_hash, is_favorite)
+             VALUES (?1, ?2, 'text', ?3, ?3, 0, ?4, 0)",
+            rusqlite::params![
+                id,
+                format!("content-{id}"),
+                last_modified_utc,
+                format!("hash-{id}")
+            ],
+        )
+        .expect("插入种子文本行应成功");
+    }
+
+    /// 某条目的墓碑状态（不存在时 panic）。
+    fn is_soft_deleted(conn: &Connection, id: &str) -> bool {
+        let flag: i64 = conn
+            .query_row(
+                "SELECT is_deleted FROM clip_items WHERE id = ?1",
+                rusqlite::params![id],
+                |row| row.get(0),
+            )
+            .expect("条目应存在");
+        flag != 0
+    }
+
+    /// 构造「不设图片阈限、只盯条数上限」的入库限额。
+    fn history_limit_limits(max_history_items: usize) -> IngestLimits {
+        IngestLimits {
+            max_image_bytes: usize::MAX as u64,
+            max_history_items,
+            ..Default::default()
+        }
+    }
+
     fn image_snapshot(width: usize, height: usize, rgba: Vec<u8>) -> ClipboardSnapshot {
         ClipboardSnapshot {
             text: None,
@@ -523,18 +610,16 @@ mod tests {
         let cleanup = CleanupPolicy {
             max_total_bytes: 210,
         };
+        let limits = IngestLimits {
+            max_image_bytes: usize::MAX as u64,
+            image_cleanup: cleanup.clone(),
+            ..Default::default()
+        };
         let mut last_seen = 0u64;
 
         // Act
-        let outcomes = capture_and_ingest_with_cleanup(
-            &backend,
-            &mut last_seen,
-            &conn,
-            &policy,
-            usize::MAX as u64,
-            &cleanup,
-        )
-        .expect("捕获应成功");
+        let outcomes = capture_and_ingest(&backend, &mut last_seen, &conn, &policy, &limits)
+            .expect("捕获应成功");
 
         // Assert 1：本轮确实新增了图片条目（清理的前提成立）
         assert_eq!(outcomes.len(), 1, "应产生一条图片入库结果");
@@ -580,18 +665,16 @@ mod tests {
         let cleanup = CleanupPolicy {
             max_total_bytes: 100,
         };
+        let limits = IngestLimits {
+            max_image_bytes: usize::MAX as u64,
+            image_cleanup: cleanup,
+            ..Default::default()
+        };
         let mut last_seen = 0u64;
 
         // Act
-        let outcomes = capture_and_ingest_with_cleanup(
-            &backend,
-            &mut last_seen,
-            &conn,
-            &policy,
-            usize::MAX as u64,
-            &cleanup,
-        )
-        .expect("捕获应成功");
+        let outcomes = capture_and_ingest(&backend, &mut last_seen, &conn, &policy, &limits)
+            .expect("捕获应成功");
 
         // Assert：文本轮次不触发清理——种子行原图保持不动（即使它已超限）
         assert_eq!(outcomes.len(), 1, "应产生一条文本入库结果");
@@ -635,17 +718,15 @@ mod tests {
         let cleanup = CleanupPolicy {
             max_total_bytes: 210,
         };
+        let limits = IngestLimits {
+            max_image_bytes: usize::MAX as u64,
+            image_cleanup: cleanup,
+            ..Default::default()
+        };
         let mut last_seen = 0u64;
 
         // Act
-        let result = capture_and_ingest_with_cleanup(
-            &backend,
-            &mut last_seen,
-            &conn,
-            &policy,
-            usize::MAX as u64,
-            &cleanup,
-        );
+        let result = capture_and_ingest(&backend, &mut last_seen, &conn, &policy, &limits);
 
         // Assert 1：清理失败没有把捕获一起回滚——本轮图片条目仍然入库成功
         let outcomes = result.expect("清理失败不应让捕获失败");
@@ -685,6 +766,297 @@ mod tests {
             crate::image::image_count(&conn).expect("image_count"),
             1,
             "清理失败后不应软删任何行"
+        );
+    }
+
+    // ===== 条数上限自动淘汰（P4-4） =====
+
+    /// 触发判据是「本轮有任何新增行」，不是「新增了图片行」。
+    #[test]
+    fn counts_as_new_row_is_true_for_any_inserted_outcome() {
+        // Arrange & Act & Assert
+        assert!(
+            counts_as_new_row(&[IngestOutcome::Inserted("id-1".to_owned())]),
+            "有新增行就应触发淘汰"
+        );
+        assert!(
+            counts_as_new_row(&[
+                IngestOutcome::Bumped("id-2".to_owned()),
+                IngestOutcome::Inserted("id-3".to_owned()),
+            ]),
+            "混合批次只要有一条新增行就应触发"
+        );
+        assert!(
+            !counts_as_new_row(&[IngestOutcome::Bumped("id-2".to_owned())]),
+            "只有去重命中（仅置顶）不改变条数，不应触发"
+        );
+        assert!(!counts_as_new_row(&[]), "空轮次不应触发");
+    }
+
+    /// 超过上限时，入库路径自动淘汰最旧的非收藏条目，本轮新增的必须留着。
+    #[test]
+    fn text_capture_evicts_oldest_when_over_history_limit() {
+        // Arrange：库里已有 4 条非收藏旧条目（时间戳递增），上限设 3
+        let (_dir, conn) = crate::image::open_test_db();
+        for i in 0..4 {
+            seed_old_text_row(&conn, &format!("old-{i:02}"), 1_000 + i as i64);
+        }
+        let backend = OneShotBackend {
+            count: 1,
+            snapshot: text_snapshot("最新一次复制"),
+        };
+        let exclude = ExcludeList::default();
+        let policy = CapturePolicy {
+            paused: false,
+            skip_sensitive: true,
+            exclude: &exclude,
+        };
+        let limits = history_limit_limits(3);
+        let mut last_seen = 0u64;
+
+        // Act
+        let outcomes = capture_and_ingest(&backend, &mut last_seen, &conn, &policy, &limits)
+            .expect("捕获应成功");
+
+        // Assert 1：本轮确实新增了一行（淘汰的前提成立）
+        assert_eq!(outcomes.len(), 1, "应产生一条文本入库结果");
+        assert!(
+            matches!(outcomes[0], IngestOutcome::Inserted(_)),
+            "首次捕获应为新增行"
+        );
+        // Assert 2：超 3 条上限 → 只留下最新的 3 条
+        assert_eq!(
+            crate::db::count_live(&conn).expect("count_live"),
+            3,
+            "4 条旧条目 + 1 条新增 = 5 条，上限 3 应淘汰到 3 条"
+        );
+        // Assert 3：被淘汰的恰好是最旧的两条，剩下两条旧条目与本轮新条目都在
+        for evicted in ["old-00", "old-01"] {
+            assert!(is_soft_deleted(&conn, evicted), "{evicted} 最旧，应被淘汰");
+        }
+        for kept in ["old-02", "old-03"] {
+            assert!(!is_soft_deleted(&conn, kept), "{kept} 不应被淘汰");
+        }
+        let IngestOutcome::Inserted(new_id) = &outcomes[0] else {
+            unreachable!("上面已断言是 Inserted");
+        };
+        assert!(
+            !is_soft_deleted(&conn, new_id),
+            "本轮刚入库的条目不得被同一轮的淘汰删掉"
+        );
+    }
+
+    /// 图片条目同样计入条数上限：判据是全类型的「新增行」。
+    #[test]
+    fn image_capture_also_triggers_history_eviction() {
+        // Arrange：3 条旧非收藏文本行，上限设 2
+        let (_dir, conn) = crate::image::open_test_db();
+        for i in 0..3 {
+            seed_old_text_row(&conn, &format!("old-{i:02}"), 1_000 + i as i64);
+        }
+        let backend = OneShotBackend {
+            count: 1,
+            snapshot: image_snapshot(2, 2, vec![0u8; 2 * 2 * 4]),
+        };
+        let exclude = ExcludeList::default();
+        let policy = CapturePolicy {
+            paused: false,
+            skip_sensitive: true,
+            exclude: &exclude,
+        };
+        let limits = history_limit_limits(2);
+        let mut last_seen = 0u64;
+
+        // Act
+        let outcomes = capture_and_ingest(&backend, &mut last_seen, &conn, &policy, &limits)
+            .expect("捕获应成功");
+
+        // Assert：图片入库同样推高条数 → 3 条旧 + 1 条新超 2 条上限 → 淘汰 2 条
+        assert!(
+            matches!(outcomes[0], IngestOutcome::Inserted(_)),
+            "首次捕获应为新增行"
+        );
+        assert_eq!(
+            crate::db::count_live(&conn).expect("count_live"),
+            2,
+            "图片条目与文本条目共用同一个条数上限"
+        );
+        assert!(
+            is_soft_deleted(&conn, "old-00") && is_soft_deleted(&conn, "old-01"),
+            "应淘汰最旧的两条旧条目"
+        );
+    }
+
+    /// 收藏项不受条数上限约束：最旧的收藏也必须留着。
+    #[test]
+    fn history_eviction_spares_favorites() {
+        // Arrange：最旧的一条是收藏，另有 3 条非收藏，上限设 2
+        let (_dir, conn) = crate::image::open_test_db();
+        conn.execute(
+            "INSERT INTO clip_items
+                (id, content, kind, created_utc, last_modified_utc, is_deleted,
+                 text_hash, is_favorite)
+             VALUES ('fav-oldest', 'content-fav', 'text', 1, 1, 0, 'hash-fav', 1)",
+            [],
+        )
+        .expect("插入收藏行应成功");
+        for i in 0..3 {
+            seed_old_text_row(&conn, &format!("old-{i:02}"), 1_000 + i as i64);
+        }
+        let backend = OneShotBackend {
+            count: 1,
+            snapshot: text_snapshot("最新一次复制"),
+        };
+        let exclude = ExcludeList::default();
+        let policy = CapturePolicy {
+            paused: false,
+            skip_sensitive: true,
+            exclude: &exclude,
+        };
+        let limits = history_limit_limits(2);
+        let mut last_seen = 0u64;
+
+        // Act
+        let outcomes = capture_and_ingest(&backend, &mut last_seen, &conn, &policy, &limits)
+            .expect("捕获应成功");
+
+        // Assert：收藏 + 最新非收藏各留一条，最旧的两条非收藏被淘汰
+        assert!(
+            matches!(outcomes[0], IngestOutcome::Inserted(_)),
+            "首次捕获应为新增行"
+        );
+        assert!(
+            !is_soft_deleted(&conn, "fav-oldest"),
+            "收藏项即使最旧也必须豁免"
+        );
+        assert!(
+            is_soft_deleted(&conn, "old-00") && is_soft_deleted(&conn, "old-01"),
+            "应淘汰非收藏里最旧的两条"
+        );
+        assert_eq!(
+            crate::db::count_live(&conn).expect("count_live"),
+            3,
+            "收藏 1 条 + 非收藏 2 条 = 3 条活跃行"
+        );
+    }
+
+    /// 去重命中（仅置顶）不推高条数，因此不触发淘汰——即使库里已经超限。
+    #[test]
+    fn dedup_bump_does_not_trigger_history_eviction() {
+        // Arrange：先正常入库一条，再补 4 条更旧的种子行（此时非收藏 5 条 > 上限 3）
+        let (_dir, conn) = crate::image::open_test_db();
+        let exclude = ExcludeList::default();
+        let policy = CapturePolicy {
+            paused: false,
+            skip_sensitive: true,
+            exclude: &exclude,
+        };
+        let limits = history_limit_limits(3);
+        let mut last_seen = 0u64;
+        let first = capture_and_ingest(
+            &OneShotBackend {
+                count: 1,
+                snapshot: text_snapshot("会被重复复制的内容"),
+            },
+            &mut last_seen,
+            &conn,
+            &policy,
+            &limits,
+        )
+        .expect("首次捕获应成功");
+        assert!(matches!(first[0], IngestOutcome::Inserted(_)));
+        // 首次捕获已把条数收敛到上限内（1 条），再补 4 条旧行造出超限状态
+        for i in 0..4 {
+            seed_old_text_row(&conn, &format!("old-{i:02}"), 1_000 + i as i64);
+        }
+        assert_eq!(
+            crate::db::count_live(&conn).expect("count_live"),
+            5,
+            "前置状态：库里已超上限 3 条"
+        );
+
+        // Act：再次复制同一内容 → 去重命中（Bumped）
+        let second = capture_and_ingest(
+            &OneShotBackend {
+                count: 2,
+                snapshot: text_snapshot("会被重复复制的内容"),
+            },
+            &mut last_seen,
+            &conn,
+            &policy,
+            &limits,
+        )
+        .expect("二次捕获应成功");
+
+        // Assert：走的是置顶刷新，且没有任何一条被淘汰（条数没增长就不该触发）
+        assert!(
+            matches!(second[0], IngestOutcome::Bumped(_)),
+            "同一内容二次复制应命中已有行"
+        );
+        assert_eq!(
+            crate::db::count_live(&conn).expect("count_live"),
+            5,
+            "去重命中不改变条数，不应触发淘汰"
+        );
+        assert!(
+            !is_soft_deleted(&conn, "old-00"),
+            "最旧行不应在去重轮次被删"
+        );
+    }
+
+    /// 只在「标记软删」这一种 UPDATE 上装触发器，让淘汰必然失败。
+    ///
+    /// 条件 `OLD.is_deleted = 0 AND NEW.is_deleted = 1` 精确对应淘汰的写入特征，
+    /// 不会误伤入库（入库是 INSERT，图片路径也不改 clip_items）。
+    fn block_clip_items_soft_delete(conn: &Connection) {
+        conn.execute_batch(
+            "CREATE TRIGGER block_evict BEFORE UPDATE ON clip_items
+             WHEN OLD.is_deleted = 0 AND NEW.is_deleted = 1
+             BEGIN SELECT RAISE(ABORT, 'eviction blocked by test trigger'); END;",
+        )
+        .expect("创建触发器应成功");
+    }
+
+    /// 淘汰失败不能把本轮捕获一起判死：条目已入库是既成事实。
+    #[test]
+    fn history_eviction_failure_does_not_block_capture() {
+        // Arrange：超限 + 软删被触发器阻断
+        let (_dir, conn) = crate::image::open_test_db();
+        block_clip_items_soft_delete(&conn);
+        for i in 0..4 {
+            seed_old_text_row(&conn, &format!("old-{i:02}"), 1_000 + i as i64);
+        }
+        let backend = OneShotBackend {
+            count: 1,
+            snapshot: text_snapshot("淘汰会失败但捕获要成功"),
+        };
+        let exclude = ExcludeList::default();
+        let policy = CapturePolicy {
+            paused: false,
+            skip_sensitive: true,
+            exclude: &exclude,
+        };
+        let limits = history_limit_limits(3);
+        let mut last_seen = 0u64;
+
+        // Act
+        let result = capture_and_ingest(&backend, &mut last_seen, &conn, &policy, &limits);
+
+        // Assert 1：捕获本身成功
+        let outcomes = result.expect("淘汰失败不应让捕获失败");
+        assert!(
+            matches!(outcomes[0], IngestOutcome::Inserted(_)),
+            "新条目仍应成功入库"
+        );
+        // Assert 2：淘汰确实失败了（5 条全在），证明失败路径被走到过而不是恒真
+        assert_eq!(
+            crate::db::count_live(&conn).expect("count_live"),
+            5,
+            "淘汰被阻断时应原样保留，不能留下半淘汰状态"
+        );
+        assert!(
+            !is_soft_deleted(&conn, "old-00"),
+            "淘汰被阻断时最旧行不应被改动"
         );
     }
 }

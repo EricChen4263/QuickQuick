@@ -262,9 +262,14 @@ fn repeated_identical_text_copy_dedups_and_bumps() {
     let exclude = ExcludeList::default();
     let policy = policy_with(&exclude);
 
-    let first =
-        pipeline::capture_and_ingest(&backend, &mut last_seen, &conn, &policy, 20 * 1024 * 1024)
-            .expect("首次捕获应成功");
+    let first = pipeline::capture_and_ingest(
+        &backend,
+        &mut last_seen,
+        &conn,
+        &policy,
+        &pipeline::IngestLimits::default(),
+    )
+    .expect("首次捕获应成功");
     let id_a = match first.as_slice() {
         [IngestOutcome::Inserted(id)] => id.clone(),
         other => panic!("首次捕获应为单个 Inserted，实际: {other:?}"),
@@ -285,9 +290,14 @@ fn repeated_identical_text_copy_dedups_and_bumps() {
         source_app: None,
     });
     backend.set_count(2);
-    let second =
-        pipeline::capture_and_ingest(&backend, &mut last_seen, &conn, &policy, 20 * 1024 * 1024)
-            .expect("第二次捕获应成功");
+    let second = pipeline::capture_and_ingest(
+        &backend,
+        &mut last_seen,
+        &conn,
+        &policy,
+        &pipeline::IngestLimits::default(),
+    )
+    .expect("第二次捕获应成功");
     assert!(
         matches!(second.as_slice(), [IngestOutcome::Inserted(_)]),
         "干扰条目应为 Inserted，实际: {second:?}"
@@ -310,9 +320,14 @@ fn repeated_identical_text_copy_dedups_and_bumps() {
         source_app: None,
     });
     backend.set_count(3);
-    let third =
-        pipeline::capture_and_ingest(&backend, &mut last_seen, &conn, &policy, 20 * 1024 * 1024)
-            .expect("第三次捕获应成功");
+    let third = pipeline::capture_and_ingest(
+        &backend,
+        &mut last_seen,
+        &conn,
+        &policy,
+        &pipeline::IngestLimits::default(),
+    )
+    .expect("第三次捕获应成功");
 
     // Assert 1：命中同内容 → Bumped 且 id 就是原行，不是新行
     assert!(
@@ -380,9 +395,14 @@ fn mixed_text_and_image_capture_yields_two_visible_clips() {
     let policy = policy_with(&exclude);
 
     // Act
-    let outcomes =
-        pipeline::capture_and_ingest(&backend, &mut last_seen, &conn, &policy, 20 * 1024 * 1024)
-            .expect("图文混合捕获应成功");
+    let outcomes = pipeline::capture_and_ingest(
+        &backend,
+        &mut last_seen,
+        &conn,
+        &policy,
+        &pipeline::IngestLimits::default(),
+    )
+    .expect("图文混合捕获应成功");
 
     // Assert 1：两条 outcome 都可见，且都是「新增行」
     assert_eq!(
@@ -461,9 +481,12 @@ fn oversize_image_keeps_thumbnail_and_stays_listed() {
     let policy = policy_with(&exclude);
 
     // Act：阈值 = PNG 体积 - 1，必然超阈值
-    let outcomes =
-        pipeline::capture_and_ingest(&backend, &mut last_seen, &conn, &policy, png_len - 1)
-            .expect("超大图捕获应成功（降级而非失败）");
+    let limits = pipeline::IngestLimits {
+        max_image_bytes: png_len - 1,
+        ..Default::default()
+    };
+    let outcomes = pipeline::capture_and_ingest(&backend, &mut last_seen, &conn, &policy, &limits)
+        .expect("超大图捕获应成功（降级而非失败）");
 
     // Assert 1：仍然入库成功（降级不等于丢条目）
     assert!(
@@ -513,7 +536,11 @@ fn image_at_exact_size_limit_keeps_original() {
     let policy = policy_with(&exclude);
 
     // Act：阈值恰好等于 PNG 体积
-    pipeline::capture_and_ingest(&backend, &mut last_seen, &conn, &policy, png_len)
+    let limits = pipeline::IngestLimits {
+        max_image_bytes: png_len,
+        ..Default::default()
+    };
+    pipeline::capture_and_ingest(&backend, &mut last_seen, &conn, &policy, &limits)
         .expect("边界捕获应成功");
 
     // Assert：原图保留
@@ -657,9 +684,14 @@ fn concealed_clip_never_reaches_database() {
     let policy = policy_with(&exclude);
 
     // Act
-    let outcomes =
-        pipeline::capture_and_ingest(&backend, &mut last_seen, &conn, &policy, 20 * 1024 * 1024)
-            .expect("敏感内容被跳过不是错误，capture_and_ingest 应返回 Ok");
+    let outcomes = pipeline::capture_and_ingest(
+        &backend,
+        &mut last_seen,
+        &conn,
+        &policy,
+        &pipeline::IngestLimits::default(),
+    )
+    .expect("敏感内容被跳过不是错误，capture_and_ingest 应返回 Ok");
 
     // Assert 1：没有任何入库结果、库里零行
     assert!(outcomes.is_empty(), "敏感内容不应产生任何 IngestOutcome");
@@ -681,8 +713,14 @@ fn concealed_clip_never_reaches_database() {
 
     // Assert 3：基线推进，下一轮不再读取
     assert_eq!(last_seen, 1, "跳过也必须推进 last_seen_count");
-    pipeline::capture_and_ingest(&backend, &mut last_seen, &conn, &policy, 20 * 1024 * 1024)
-        .expect("第二轮应成功");
+    pipeline::capture_and_ingest(
+        &backend,
+        &mut last_seen,
+        &conn,
+        &policy,
+        &pipeline::IngestLimits::default(),
+    )
+    .expect("第二轮应成功");
     assert_eq!(
         backend.read_calls(),
         1,

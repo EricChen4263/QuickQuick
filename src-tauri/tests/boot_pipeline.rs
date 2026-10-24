@@ -103,9 +103,14 @@ fn boot_pipeline_ingest_visible() {
     };
 
     // Act
-    let outcome =
-        pipeline::capture_and_ingest(&backend, &mut last_seen, &conn, &policy, 20 * 1024 * 1024)
-            .expect("capture_and_ingest 应成功");
+    let outcome = pipeline::capture_and_ingest(
+        &backend,
+        &mut last_seen,
+        &conn,
+        &policy,
+        &pipeline::IngestLimits::default(),
+    )
+    .expect("capture_and_ingest 应成功");
 
     // Assert：返回非空 Vec，首项为 Inserted
     assert_eq!(outcome.len(), 1, "首次捕获应产生 1 个 IngestOutcome");
@@ -140,9 +145,14 @@ fn boot_pipeline_dedup_bumped() {
     };
 
     // Act 1：首次捕获 → Inserted
-    let first =
-        pipeline::capture_and_ingest(&backend, &mut last_seen, &conn, &policy, 20 * 1024 * 1024)
-            .expect("首次 capture_and_ingest 应成功");
+    let first = pipeline::capture_and_ingest(
+        &backend,
+        &mut last_seen,
+        &conn,
+        &policy,
+        &pipeline::IngestLimits::default(),
+    )
+    .expect("首次 capture_and_ingest 应成功");
     assert!(
         matches!(first.first(), Some(IngestOutcome::Inserted(_))),
         "首次应为 Inserted，实际: {:?}",
@@ -151,9 +161,14 @@ fn boot_pipeline_dedup_bumped() {
 
     // Act 2：change_count 递增但内容不变 → 再次捕获同内容应返回 Bumped
     backend.set_count(2);
-    let second =
-        pipeline::capture_and_ingest(&backend, &mut last_seen, &conn, &policy, 20 * 1024 * 1024)
-            .expect("第二次 capture_and_ingest 应成功");
+    let second = pipeline::capture_and_ingest(
+        &backend,
+        &mut last_seen,
+        &conn,
+        &policy,
+        &pipeline::IngestLimits::default(),
+    )
+    .expect("第二次 capture_and_ingest 应成功");
 
     // Assert：返回 Bumped，行数仍为 1
     assert!(
@@ -184,14 +199,25 @@ fn boot_pipeline_no_change_none() {
         exclude: &exclude,
     };
 
-    pipeline::capture_and_ingest(&backend, &mut last_seen, &conn, &policy, 20 * 1024 * 1024)
-        .expect("初始 ingest 应成功");
+    pipeline::capture_and_ingest(
+        &backend,
+        &mut last_seen,
+        &conn,
+        &policy,
+        &pipeline::IngestLimits::default(),
+    )
+    .expect("初始 ingest 应成功");
 
     // 此时 last_seen == 1，backend.count 仍为 1 → 无变化
     // Act：再次轮询，count 未变
-    let no_change =
-        pipeline::capture_and_ingest(&backend, &mut last_seen, &conn, &policy, 20 * 1024 * 1024)
-            .expect("无变化时 capture_and_ingest 应返回 Ok(None)");
+    let no_change = pipeline::capture_and_ingest(
+        &backend,
+        &mut last_seen,
+        &conn,
+        &policy,
+        &pipeline::IngestLimits::default(),
+    )
+    .expect("无变化时 capture_and_ingest 应返回 Ok(None)");
 
     // Assert：返回 None，库中仍只有 1 条
     assert!(no_change.is_empty(), "change_count 未变时应返回空 Vec");

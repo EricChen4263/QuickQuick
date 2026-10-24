@@ -49,6 +49,25 @@ fn default_max_image_bytes() -> u64 {
     20 * 1024 * 1024
 }
 
+/// 历史条目上限的合法区间下限。
+///
+/// 1 是「只留最新一条」的极限，不允许 0：那等于每复制一次就把历史清空，
+/// 与「保留历史」的产品前提相反。
+pub const MIN_HISTORY_ITEMS: usize = 1;
+
+/// 历史条目上限的合法区间上限（对齐 Maccy 的 1–999 语义）。
+pub const MAX_HISTORY_ITEMS: usize = 999;
+
+/// 历史条目上限的默认值。
+///
+/// 沿用「手动清理」此前硬编码的 500 条，使存量用户升级后行为不变；
+/// 与 Maccy 的默认 200 不同（见 docs/design/v04-work-items.md P4-4）。
+pub const DEFAULT_MAX_HISTORY_ITEMS: usize = 500;
+
+fn default_max_history_items() -> usize {
+    DEFAULT_MAX_HISTORY_ITEMS
+}
+
 /// 应用全局设置：捕获行为、隐私开关、UI 偏好与翻译配置
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppSettings {
@@ -89,6 +108,13 @@ pub struct AppSettings {
     /// 单张图片原图大小上限（字节）；超出则只存缩略图（original_present=0）。默认 20MiB。
     #[serde(default = "default_max_image_bytes")]
     pub max_image_bytes: u64,
+    /// 历史条目上限（1..=999，默认 500）：超过后自动淘汰最旧的非收藏条目
+    ///
+    /// 约束的**只是非收藏条目**——收藏项既不计数也不被淘汰（对齐 Maccy 的 pin 无限豁免）。
+    /// 消费侧请读 [`AppSettings::effective_max_history_items`] 而不是本字段：settings.json 可能
+    /// 被手工改坏（0 / 10000），直接用会让历史被清空或淘汰彻底失效。
+    #[serde(default = "default_max_history_items")]
+    pub max_history_items: usize,
 }
 
 impl Default for AppSettings {
@@ -104,11 +130,26 @@ impl Default for AppSettings {
             auto_update: default_auto_update(),
             theme: default_theme(),
             max_image_bytes: default_max_image_bytes(),
+            max_history_items: default_max_history_items(),
         }
     }
 }
 
 impl AppSettings {
+    /// 历史条目上限（已收敛到 [`MIN_HISTORY_ITEMS`]..=[`MAX_HISTORY_ITEMS`]）。
+    ///
+    /// 写路径（`set_max_history_items`）已经拒收越界值，这里再收敛一次是给**读路径**兜底：
+    /// settings.json 是明文文件，用户或旧版本脚本可以写出 0 或 10000。收敛而不报错，是因为
+    /// 报错会让整份设置（含排除名单、翻译源）退化成默认值，代价远大于把一个数字夹回边界。
+    ///
+    /// 非法输入的具体处理：
+    /// - `0` → `MIN_HISTORY_ITEMS`（保留最新一条，而不是清空历史）
+    /// - 大于上限 → `MAX_HISTORY_ITEMS`（等于回到「界面上能选到的最大上限」）
+    pub fn effective_max_history_items(&self) -> usize {
+        self.max_history_items
+            .clamp(MIN_HISTORY_ITEMS, MAX_HISTORY_ITEMS)
+    }
+
     /// 将当前设置序列化为 JSON 并写入指定路径。
     ///
     /// # Errors
@@ -203,6 +244,7 @@ mod tests {
             auto_update: false,
             theme: "dark".to_string(),
             max_image_bytes: 5 * 1024 * 1024,
+            max_history_items: 42,
         };
         let json = serde_json::to_string(&original).expect("序列化应成功");
         let restored: AppSettings = serde_json::from_str(&json).expect("反序列化应成功");
@@ -217,6 +259,7 @@ mod tests {
         assert_eq!(restored.auto_update, original.auto_update);
         assert_eq!(restored.theme, original.theme);
         assert_eq!(restored.max_image_bytes, 5 * 1024 * 1024);
+        assert_eq!(restored.max_history_items, 42, "历史条目上限应原样保留");
     }
 
     /// 旧 JSON（没有 exclude_mode / ignore_regexes）能反序列化：模式回落到黑名单、
@@ -274,5 +317,69 @@ mod tests {
     fn default_max_image_bytes_is_20mib() {
         let d = AppSettings::default();
         assert_eq!(d.max_image_bytes, 20 * 1024 * 1024);
+    }
+
+    /// 旧 JSON（无 max_history_items 字段）反序列化后取默认 500 条：
+    /// 与「手动清理」此前硬编码的 500 条一致，存量用户升级后行为不变。
+    #[test]
+    fn legacy_json_missing_max_history_items_uses_default_500() {
+        let json = r#"{"excluded_apps":["1Password"]}"#;
+        let settings: AppSettings = serde_json::from_str(json).expect("旧 JSON 反序列化应成功");
+
+        assert_eq!(
+            settings.max_history_items, 500,
+            "缺字段时应沿用既有硬编码的 500 条，不能悄悄改成别的值"
+        );
+        assert_eq!(
+            settings.effective_max_history_items(),
+            500,
+            "生效值应与持久化值一致"
+        );
+    }
+
+    /// Default impl 与 serde default fn 的 max_history_items 必须同一来源。
+    #[test]
+    fn default_max_history_items_is_500() {
+        let d = AppSettings::default();
+        assert_eq!(d.max_history_items, DEFAULT_MAX_HISTORY_ITEMS);
+        assert_eq!(d.max_history_items, 500);
+    }
+
+    /// 读路径兜底：手写 0 会被收敛到下限 1（保留最新一条），不会变成「每次复制清空历史」。
+    #[test]
+    fn effective_max_history_items_clamps_zero_to_min() {
+        let settings = AppSettings {
+            max_history_items: 0,
+            ..AppSettings::default()
+        };
+
+        assert_eq!(settings.effective_max_history_items(), MIN_HISTORY_ITEMS);
+    }
+
+    /// 读路径兜底：手写超大值会被收敛到上限 999，而不是「等于关闭淘汰」。
+    #[test]
+    fn effective_max_history_items_clamps_oversize_to_max() {
+        let settings = AppSettings {
+            max_history_items: 10_000,
+            ..AppSettings::default()
+        };
+
+        assert_eq!(settings.effective_max_history_items(), MAX_HISTORY_ITEMS);
+    }
+
+    /// 合法区间两端必须原样透出（clamp 不能把边界值也改掉）。
+    #[test]
+    fn effective_max_history_items_keeps_boundary_values_intact() {
+        for value in [MIN_HISTORY_ITEMS, 500, MAX_HISTORY_ITEMS] {
+            let settings = AppSettings {
+                max_history_items: value,
+                ..AppSettings::default()
+            };
+            assert_eq!(
+                settings.effective_max_history_items(),
+                value,
+                "区间内的值 {value} 不应被收敛改动"
+            );
+        }
     }
 }

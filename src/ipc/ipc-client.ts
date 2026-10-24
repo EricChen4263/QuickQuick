@@ -447,6 +447,41 @@ export async function setImageThreshold(bytes: number): Promise<void> {
   }
 }
 
+/**
+ * 历史条目上限的合法区间（与 Rust 侧 `settings::MIN/MAX_HISTORY_ITEMS` 对齐）。
+ *
+ * 前端只做输入拦截（min/max + 提交前校验），真正生效的拒收在后端：
+ * 输入框可以被脚本绕过，边界只有一处可信。
+ */
+export const MIN_HISTORY_ITEMS = 1;
+export const MAX_HISTORY_ITEMS = 999;
+
+/** 读取历史条目上限（默认 500，后端已收敛到 1–999）。 */
+export async function getMaxHistoryItems(): Promise<number> {
+  try {
+    return await invoke<number>("get_max_history_items");
+  } catch (err) {
+    throw toError(err);
+  }
+}
+
+/**
+ * 设置历史条目上限。
+ *
+ * 后端会在写入后**立刻**按新上限淘汰最旧的非收藏条目，并返回本轮淘汰条数；
+ * 越界（< 1 或 > 999）时返回中文 Err 且不落盘。
+ *
+ * @param items - 上限条数
+ * @returns 本次调用中被淘汰的历史条目数（未超限时为 0）
+ */
+export async function setMaxHistoryItems(items: number): Promise<number> {
+  try {
+    return await invoke<number>("set_max_history_items", { items });
+  } catch (err) {
+    throw toError(err);
+  }
+}
+
 /** 读取当前 UI 主题（"auto" | "light" | "dark"）。 */
 export async function getTheme(): Promise<string> {
   try {

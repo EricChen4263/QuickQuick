@@ -21,6 +21,10 @@
 //! - `set_auto_update`          — 写 AppSettings.auto_update 并 save
 //! - `get_theme`                — 读 AppSettings.theme
 //! - `set_theme`                — 校验值∈{auto,light,dark}，合法才写入
+//! - `get_image_threshold`      — 读 AppSettings.max_image_bytes
+//! - `set_image_threshold`      — 校验范围后写入 max_image_bytes
+//! - `get_max_history_items`    — 读 AppSettings.max_history_items（已收敛到 1..=999）
+//! - `set_max_history_items`    — 校验 1..=999 → 写入 → 立即按新上限淘汰历史
 //! - `get_launch_on_login`      — 读 autostart.json enabled
 //! - `set_launch_on_login`      — 写 autostart.json + 调用 OS autolaunch
 
@@ -36,7 +40,7 @@ use std::collections::HashMap;
 use crate::autostart::AutostartConfig;
 use crate::hotkey::{HotkeyAction, HotkeyConfig, HotkeyRegistrar};
 use crate::ipc::translate::resolve_provider_or_fallback;
-use crate::settings::AppSettings;
+use crate::settings::{AppSettings, MAX_HISTORY_ITEMS, MIN_HISTORY_ITEMS};
 use crate::translate::credential::{
     credential_schema, delete_credentials, load_credentials_for_display, save_credentials,
     DbCredStore,
@@ -664,6 +668,61 @@ pub fn set_image_threshold_impl(bytes: u64, settings_path: &Path) -> Result<(), 
     settings.save(settings_path).map_err(|e| e.to_string())
 }
 
+/// `get_max_history_items` 的纯函数实现：从 settings.json 读取历史条目上限。
+///
+/// 返回值已按 `1..=999` 收敛（见 [`AppSettings::effective_max_history_items`]）：
+/// 前端把读到的值回填到输入框，若把手工写坏的 0 或 10000 原样透出，
+/// 用户会看到一个自己没设过、也输不进去的值。
+///
+/// # Errors
+/// 此函数实际上永不返回 `Err`（`load_or_default` 静默回退默认值）。
+/// 签名保留 `Result` 以与命令层 `?` 传播保持一致。
+pub fn get_max_history_items_impl(settings_path: &Path) -> Result<usize, String> {
+    Ok(AppSettings::load_or_default(settings_path).effective_max_history_items())
+}
+
+/// `set_max_history_items` 的纯函数实现：校验 → 持久化 → 立即按新上限收敛。
+///
+/// 合法区间 `1..=999`（对齐 Maccy 的 1–999 语义）；越界返回中文 Err 且**不落盘**，
+/// 避免把非法值写进设置文件后每次开库都要靠读侧 clamp 兜底。
+///
+/// 为什么写完要立刻裁剪而不是等下一次复制：上限调小后历史可能立刻超限，
+/// 若只等下一次捕获才收敛，用户会看到「上限已经写 50 了、列表还有 400 条」。
+/// 裁剪失败只留痕不报错——设置已经落盘，下一次新增条目还会再收敛一遍；
+/// 因为一次裁剪失败把用户的设置回滚掉，代价更大。
+///
+/// 返回本轮被淘汰的条数（`conn` 为 `None` 时恒为 0，用于设置与裁剪解耦的场景）。
+///
+/// # Errors
+/// - 越界值：返回说明合法范围的错误字符串（不写文件）
+/// - 文件写入失败：返回错误字符串
+pub fn set_max_history_items_impl(
+    items: usize,
+    settings_path: &Path,
+    conn: Option<&rusqlite::Connection>,
+) -> Result<usize, String> {
+    if !(MIN_HISTORY_ITEMS..=MAX_HISTORY_ITEMS).contains(&items) {
+        return Err(format!(
+            "历史条目上限超出范围：{items}，合法范围为 {MIN_HISTORY_ITEMS} 到 {MAX_HISTORY_ITEMS} 条"
+        ));
+    }
+
+    let mut settings = AppSettings::load_or_default(settings_path);
+    settings.max_history_items = items;
+    settings.save(settings_path).map_err(|e| e.to_string())?;
+
+    let Some(conn) = conn else {
+        return Ok(0);
+    };
+    match crate::db::evict_over_limit(conn, items) {
+        Ok(evicted) => Ok(evicted),
+        Err(e) => {
+            eprintln!("[QuickQuick] 按新上限淘汰历史失败（非致命，下次入库会再收敛）：{e}");
+            Ok(0)
+        }
+    }
+}
+
 /// `get_launch_on_login` 的纯函数实现：从 autostart.json 读取 enabled 值。
 ///
 /// # Errors
@@ -782,6 +841,40 @@ pub fn get_image_threshold(app: AppHandle) -> Result<u64, String> {
 pub fn set_image_threshold(app: AppHandle, bytes: u64) -> Result<(), String> {
     let path = resolve_config_path(&app, "settings.json")?;
     set_image_threshold_impl(bytes, &path)
+}
+
+/// Tauri 命令：读取历史条目上限（1–999 条，已收敛）。
+#[tauri::command]
+pub fn get_max_history_items(app: AppHandle) -> Result<usize, String> {
+    let path = resolve_config_path(&app, "settings.json")?;
+    get_max_history_items_impl(&path)
+}
+
+/// Tauri 命令：设置历史条目上限并立即按新上限淘汰（返回本轮淘汰条数）。
+///
+/// 裁剪成功且真的删了条目时发 `clipboard-changed`：列表页常驻挂载、只按该事件刷新，
+/// 不发的话用户会看到「设置页说已清理、列表还是旧数据」。emit 失败只记日志，不影响返回值。
+#[tauri::command]
+pub fn set_max_history_items(
+    app: AppHandle,
+    state: State<'_, super::AppDb>,
+    items: usize,
+) -> Result<usize, String> {
+    let path = resolve_config_path(&app, "settings.json")?;
+    // 连接可能因启动期开库失败而为 None：那时设置照常落盘，只是没法立刻裁剪。
+    let guard = state
+        .conn
+        .lock()
+        .map_err(|e| format!("数据库锁获取失败：{e}"))?;
+    let evicted = set_max_history_items_impl(items, &path, guard.as_ref())?;
+    drop(guard);
+
+    if evicted > 0 {
+        if let Err(e) = app.emit(crate::CLIPBOARD_CHANGED_EVENT, ()) {
+            eprintln!("[QuickQuick] 历史上限收敛后发送 clip-change 事件失败: {e}");
+        }
+    }
+    Ok(evicted)
 }
 
 /// Tauri 命令：读取开机自启状态。
@@ -1494,5 +1587,221 @@ mod tests {
             "google_free 无凭据字段，不可配置"
         );
         assert!(!find("lingva").needs_config, "lingva 无凭据字段，不可配置");
+    }
+
+    // ===== 历史条目上限（P4-4） =====
+
+    /// 无配置文件时读到默认 500 条（与旧版硬编码的「手动清理 500 条」一致）。
+    #[test]
+    fn get_max_history_items_returns_default_500_when_no_file() {
+        let file = NamedTempFile::new().unwrap();
+        let nonexistent = file.path().with_extension("nonexistent_settings.json");
+
+        let items = get_max_history_items_impl(&nonexistent).unwrap();
+
+        assert_eq!(items, 500, "默认上限应为 500 条");
+    }
+
+    /// 写入后能读回同一个值。
+    #[test]
+    fn set_max_history_items_persists_and_read_reads_back() {
+        let file = NamedTempFile::new().unwrap();
+
+        let evicted = set_max_history_items_impl(42, file.path(), None).unwrap();
+
+        assert_eq!(evicted, 0, "没给连接时不应淘汰任何条目");
+        assert_eq!(get_max_history_items_impl(file.path()).unwrap(), 42);
+    }
+
+    /// 区间两端（1 / 999）都必须被接受，且原样持久化。
+    #[test]
+    fn set_max_history_items_accepts_boundaries() {
+        let file = NamedTempFile::new().unwrap();
+
+        set_max_history_items_impl(1, file.path(), None).unwrap();
+        assert_eq!(get_max_history_items_impl(file.path()).unwrap(), 1);
+
+        set_max_history_items_impl(999, file.path(), None).unwrap();
+        assert_eq!(get_max_history_items_impl(file.path()).unwrap(), 999);
+    }
+
+    /// 0 被拒绝：不写文件、报错文案点明合法范围。
+    ///
+    /// 前置写入 300 是关键：只断言 `Err` 无法证明「没落盘」，
+    /// 必须证明文件里还是上一次的合法值。
+    #[test]
+    fn set_max_history_items_rejects_zero_without_touching_file() {
+        let file = NamedTempFile::new().unwrap();
+        set_max_history_items_impl(300, file.path(), None).unwrap();
+
+        let err = set_max_history_items_impl(0, file.path(), None).unwrap_err();
+
+        assert!(err.contains("范围"), "错误信息应说明范围：{err}");
+        assert!(
+            err.contains("1") && err.contains("999"),
+            "错误信息应点明 1 到 999：{err}"
+        );
+        assert_eq!(
+            get_max_history_items_impl(file.path()).unwrap(),
+            300,
+            "非法值不得落盘（文件应保留上一次的合法值）"
+        );
+    }
+
+    /// 1000 被拒绝（上限之外不能悄悄截成 999）。
+    #[test]
+    fn set_max_history_items_rejects_over_max() {
+        let file = NamedTempFile::new().unwrap();
+        set_max_history_items_impl(300, file.path(), None).unwrap();
+
+        let err = set_max_history_items_impl(1000, file.path(), None).unwrap_err();
+
+        assert!(err.contains("范围"), "错误信息应说明范围：{err}");
+        assert_eq!(
+            get_max_history_items_impl(file.path()).unwrap(),
+            300,
+            "越界 set 后文件不应被改动"
+        );
+    }
+
+    /// 上限调小后必须**立刻**按新上限收敛，不能等下一次复制。
+    #[test]
+    fn set_max_history_items_trims_existing_rows_immediately() {
+        // Arrange：库里 5 条非收藏条目（时间戳递增）
+        let (_dir, conn) = crate::image::open_test_db();
+        for i in 0..5 {
+            conn.execute(
+                "INSERT INTO clip_items
+                     (id, content, kind, created_utc, last_modified_utc, is_deleted,
+                      text_hash, is_favorite)
+                 VALUES (?1, ?2, 'text', ?3, ?3, 0, ?4, 0)",
+                rusqlite::params![
+                    format!("row-{i}"),
+                    format!("content-{i}"),
+                    1_000 + i,
+                    format!("hash-{i}")
+                ],
+            )
+            .expect("插入种子行失败");
+        }
+        let file = NamedTempFile::new().unwrap();
+
+        // Act
+        let evicted = set_max_history_items_impl(2, file.path(), Some(&conn)).unwrap();
+
+        // Assert：写入 + 立即淘汰 + 只留最新的两条
+        assert_eq!(evicted, 3, "5 条超 2 条上限应淘汰 3 条");
+        assert_eq!(get_max_history_items_impl(file.path()).unwrap(), 2);
+        assert_eq!(
+            crate::db::count_live(&conn).expect("count_live"),
+            2,
+            "调小上限后历史应立刻收敛"
+        );
+        let survivors: Vec<String> = {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT id FROM clip_items WHERE is_deleted = 0 ORDER BY last_modified_utc ASC",
+                )
+                .expect("准备查询失败");
+            let rows = stmt
+                .query_map([], |row| row.get::<_, String>(0))
+                .expect("查询失败");
+            rows.map(|r| r.expect("读取失败")).collect()
+        };
+        assert_eq!(
+            survivors,
+            vec!["row-3".to_string(), "row-4".to_string()],
+            "保留的必须是最新的两条"
+        );
+    }
+
+    /// 裁剪失败（连接不可写）不影响设置落盘：设置已经保存，下一次入库还会再收敛。
+    #[test]
+    fn set_max_history_items_keeps_settings_when_trim_fails() {
+        // Arrange：任何「标记软删」的 UPDATE 都被触发器阻断
+        let (_dir, conn) = crate::image::open_test_db();
+        conn.execute_batch(
+            "CREATE TRIGGER block_evict BEFORE UPDATE ON clip_items
+             WHEN OLD.is_deleted = 0 AND NEW.is_deleted = 1
+             BEGIN SELECT RAISE(ABORT, 'eviction blocked by test trigger'); END;",
+        )
+        .expect("创建触发器应失败");
+        for i in 0..3 {
+            conn.execute(
+                "INSERT INTO clip_items
+                     (id, content, kind, created_utc, last_modified_utc, is_deleted,
+                      text_hash, is_favorite)
+                 VALUES (?1, ?2, 'text', ?3, ?3, 0, ?4, 0)",
+                rusqlite::params![
+                    format!("row-{i}"),
+                    format!("content-{i}"),
+                    1_000 + i,
+                    format!("hash-{i}")
+                ],
+            )
+            .expect("插入种子行失败");
+        }
+        let file = NamedTempFile::new().unwrap();
+
+        // Act：裁剪必然失败，但整体调用不应失败
+        let result = set_max_history_items_impl(1, file.path(), Some(&conn));
+
+        // Assert：设置已落盘，条目保持原样（淘汰没成功也没留半状态）
+        assert_eq!(result.expect("裁剪失败不应让设置失败"), 0);
+        assert_eq!(
+            get_max_history_items_impl(file.path()).unwrap(),
+            1,
+            "设置必须已落盘"
+        );
+        assert_eq!(
+            crate::db::count_live(&conn).expect("count_live"),
+            3,
+            "淘汰被阻断时条目应原样保留"
+        );
+    }
+
+    /// 读路径兜底：settings.json 被手工写成 0 时读回的是下限 1，不是 0。
+    #[test]
+    fn get_max_history_items_clamps_hand_edited_zero() {
+        let file = NamedTempFile::new().unwrap();
+        std::fs::write(file.path(), r#"{"max_history_items":0}"#).unwrap();
+
+        assert_eq!(
+            get_max_history_items_impl(file.path()).unwrap(),
+            1,
+            "手写 0 必须被收敛到下限 1，否则每次复制都会清空历史"
+        );
+    }
+
+    /// 读路径兜底：手写超大值收敛到上限 999。
+    #[test]
+    fn get_max_history_items_clamps_hand_edited_oversize() {
+        let file = NamedTempFile::new().unwrap();
+        std::fs::write(file.path(), r#"{"max_history_items":10000}"#).unwrap();
+
+        assert_eq!(
+            get_max_history_items_impl(file.path()).unwrap(),
+            999,
+            "手写超大值必须收敛到上限 999"
+        );
+    }
+
+    /// 写入历史上限不能丢其他字段（排除名单/翻译源等）。
+    #[test]
+    fn set_max_history_items_preserves_other_settings() {
+        let file = NamedTempFile::new().unwrap();
+        let initial = AppSettings {
+            excluded_apps: vec!["1Password".to_string()],
+            selected_provider: "deepl".to_string(),
+            ..AppSettings::default()
+        };
+        initial.save(file.path()).unwrap();
+
+        set_max_history_items_impl(77, file.path(), None).unwrap();
+
+        let restored = AppSettings::load_or_default(file.path());
+        assert_eq!(restored.excluded_apps, vec!["1Password".to_string()]);
+        assert_eq!(restored.selected_provider, "deepl");
+        assert_eq!(restored.max_history_items, 77);
     }
 }

@@ -5,6 +5,10 @@ import {
   cleanupHistory,
   getImageThreshold,
   setImageThreshold,
+  getMaxHistoryItems,
+  setMaxHistoryItems,
+  MAX_HISTORY_ITEMS,
+  MIN_HISTORY_ITEMS,
   exportBackup,
   importBackup,
   revealBackupInFinder,
@@ -21,6 +25,9 @@ const MAX_BYTES = 500 * 1024 * 1024;
 /** 默认单张图片阈值（MB） */
 const DEFAULT_IMAGE_THRESHOLD_MB = 20;
 
+/** 历史条目上限的默认值（与后端 AppSettings 默认值一致，仅用于 IPC 未返回时占位） */
+const DEFAULT_HISTORY_ITEMS = 500;
+
 /** 图片阈值预设档位（MB），全在后端合法区间 1..500 MiB 内 */
 const IMAGE_THRESHOLD_OPTIONS = [5, 10, 20, 50, 100] as const;
 
@@ -35,6 +42,21 @@ function toMB(bytes: number): string {
   return (bytes / (1024 * 1024)).toFixed(1);
 }
 
+/**
+ * 校验历史条目上限的输入文本，合法则返回条数，否则返回 null。
+ *
+ * 只接受十进制整数：`"2.5"`、`"1e3"`、`""`、`"abc"` 全部判非法。
+ * `Number.parseInt("2.5")` 会得到 2，那种「悄悄取整」会让用户以为自己设了 2.5 条，
+ * 实际生效的是别的数字，所以这里用正则先卡形状，再判区间。
+ */
+function parseHistoryLimitInput(raw: string): number | null {
+  const trimmed = raw.trim();
+  if (!/^\d+$/.test(trimmed)) return null;
+  const value = Number(trimmed);
+  if (value < MIN_HISTORY_ITEMS || value > MAX_HISTORY_ITEMS) return null;
+  return value;
+}
+
 /** 存储子项面板：图片占用/库文件体积/阈值/清理 + 备份与恢复 */
 function StoragePanel() {
   const [liveCount, setLiveCount] = useState(0);
@@ -45,6 +67,12 @@ function StoragePanel() {
   const [cleanupMsg, setCleanupMsg] = useState<string | null>(null);
   const [opError, setOpError] = useState<string | null>(null);
   const [imageThresholdMB, setImageThresholdMB] = useState(DEFAULT_IMAGE_THRESHOLD_MB);
+  // 历史条目上限：inputText 是输入框当前文本，savedItems 是后端已确认生效的值。
+  // 两者分开才能允许用户自由编辑（含清空、输错），而不让「输入框显示的」和
+  // 「真正生效的」悄悄分叉——提交失败时 inputText 回滚到 savedItems。
+  const [historyInput, setHistoryInput] = useState(String(DEFAULT_HISTORY_ITEMS));
+  const [savedHistoryItems, setSavedHistoryItems] = useState(DEFAULT_HISTORY_ITEMS);
+  const [historyMsg, setHistoryMsg] = useState<string | null>(null);
   const [passphrase, setPassphrase] = useState("");
   const [backupPath, setBackupPath] = useState<string | null>(null);
   const [backupUsedFallbackDir, setBackupUsedFallbackDir] = useState(false);
@@ -82,6 +110,19 @@ function StoragePanel() {
     };
     void loadThreshold();
 
+    const loadHistoryLimit = async () => {
+      try {
+        const items = await getMaxHistoryItems();
+        if (cancelled.current) return;
+        setSavedHistoryItems(items);
+        setHistoryInput(String(items));
+      } catch {
+        if (cancelled.current) return;
+        console.error("历史条目上限加载失败，使用默认值 500 条");
+      }
+    };
+    void loadHistoryLimit();
+
     return () => {
       cancelled.current = true;
     };
@@ -93,6 +134,37 @@ function StoragePanel() {
       setImageThresholdMB(mb);
     } catch (err) {
       console.error("设置图片阈值失败:", err);
+    }
+  }
+
+  /**
+   * 提交历史条目上限（失焦或回车触发）。
+   *
+   * 三条约束：
+   * - 非法输入（非整数 / 越界）**不调后端**，把输入框回滚到已生效值并给出提示：
+   *   输入框显示的值必须等于真正生效的值，否则用户会误以为设置成功了。
+   * - 提交成功后用后端返回的条数报告本轮淘汰量：上限调小会立刻删条目，
+   *   不告诉用户「刚才删了几条」等于偷偷改了他的历史。
+   * - 提交后重拉统计，让上面的条目数随之更新。
+   */
+  async function commitHistoryLimit() {
+    const parsed = parseHistoryLimitInput(historyInput);
+    if (parsed === null) {
+      setHistoryMsg(`上限需为 ${MIN_HISTORY_ITEMS}–${MAX_HISTORY_ITEMS} 之间的整数`);
+      setHistoryInput(String(savedHistoryItems));
+      return;
+    }
+
+    try {
+      const evicted = await setMaxHistoryItems(parsed);
+      setSavedHistoryItems(parsed);
+      setHistoryInput(String(parsed));
+      setHistoryMsg(evicted > 0 ? `已按新上限清理 ${evicted} 条最旧的非收藏记录` : null);
+      const cancelled = { current: false };
+      await fetchStats(cancelled);
+    } catch (err) {
+      setHistoryMsg(err instanceof Error ? err.message : "历史条目上限设置失败");
+      setHistoryInput(String(savedHistoryItems));
     }
   }
 
@@ -212,6 +284,37 @@ function StoragePanel() {
             <div className="label">条目数</div>
             <div className="desc">{liveCount} 条活跃记录（不含软删）</div>
           </div>
+        </div>
+        <div className="set-row">
+          <div className="grow">
+            <label className="label" htmlFor="history-limit">
+              历史条目上限
+            </label>
+            <div className="desc">
+              超过此数量的非收藏条目会在入库时自动淘汰最旧的；收藏项不计数也不删除。
+              范围 {MIN_HISTORY_ITEMS}–{MAX_HISTORY_ITEMS} 条，改小会立即生效。
+            </div>
+            {historyMsg !== null && (
+              <div className="desc" role="status">
+                {historyMsg}
+              </div>
+            )}
+          </div>
+          <input
+            id="history-limit"
+            className="set-input short-num num"
+            type="number"
+            min={MIN_HISTORY_ITEMS}
+            max={MAX_HISTORY_ITEMS}
+            step={1}
+            aria-label="历史条目上限"
+            value={historyInput}
+            onChange={(e) => setHistoryInput(e.target.value)}
+            onBlur={() => void commitHistoryLimit()}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") void commitHistoryLimit();
+            }}
+          />
         </div>
         <div className="set-row">
           <div className="grow">

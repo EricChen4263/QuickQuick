@@ -46,7 +46,10 @@ use tauri_plugin_updater::UpdaterExt;
 
 /// 剪贴板变化事件名。与前端 src/ipc/events.ts 的 CLIPBOARD_CHANGED_EVENT 必须一致。
 /// Tauri 事件名跨语言无法编译期共享，改动需两端同步。
-const CLIPBOARD_CHANGED_EVENT: &str = "clipboard-changed";
+///
+/// 设置层也会发它：把历史条目上限调小后立刻按新上限淘汰，列表需要跟着刷新，
+/// 否则用户会在「设置页已清理」与「列表还显示 500 条」之间看到矛盾。
+pub(crate) const CLIPBOARD_CHANGED_EVENT: &str = "clipboard-changed";
 
 /// 后台更新检查的首检延迟（秒）。
 ///
@@ -188,6 +191,8 @@ pub fn run() {
             ipc::settings::set_theme,
             ipc::settings::get_image_threshold,
             ipc::settings::set_image_threshold,
+            ipc::settings::get_max_history_items,
+            ipc::settings::set_max_history_items,
             ipc::settings::get_launch_on_login,
             ipc::settings::set_launch_on_login,
             ipc::settings::get_provider_credential_schema,
@@ -459,25 +464,13 @@ fn start_clipboard_poll(
                 exclude: rules,
             };
 
-            // 每轮（约 500ms）读一次 settings.json 取 max_image_bytes。
+            // 每轮（约 500ms）读一次 settings.json 取入库限额。
             // settings.json < 1 KB，桌面端有 OS 页缓存，开销可接受；
-            // 好处是用户在 UI 调整阈值后下一轮即生效，无需重启。
-            // 读取或路径解析失败时回退默认值（20 MiB），不中断轮询。
-            let max_image_bytes = ipc::settings::resolve_config_dir(&handle)
-                .ok()
-                .map(|dir| {
-                    settings::AppSettings::load_or_default(&dir.join("settings.json"))
-                        .max_image_bytes
-                })
-                .unwrap_or_else(|| settings::AppSettings::default().max_image_bytes);
+            // 好处是用户在 UI 调整阈值/上限后下一轮即生效，无需重启。
+            // 读取或路径解析失败时回退默认值，不中断轮询。
+            let limits = resolve_ingest_limits(&handle);
 
-            match pipeline::capture_and_ingest(
-                &backend,
-                &mut last_seen,
-                conn,
-                &policy,
-                max_image_bytes,
-            ) {
+            match pipeline::capture_and_ingest(&backend, &mut last_seen, conn, &policy, &limits) {
                 Ok(outcomes) => {
                     // 有新条目或条目被置顶时通知前端刷新列表
                     if should_notify_clip_change(&outcomes) {
@@ -502,6 +495,25 @@ fn start_clipboard_poll(
             }
         }
     });
+}
+
+/// 读一次 settings.json 组装本轮入库限额；读不到时回退默认值。
+///
+/// 每轮都重读而不是启动时读一次，是为了「UI 改完下一轮即生效」：
+/// 上限调小后用户不必重启应用。条数上限走 [`settings::AppSettings::effective_max_history_items`]，
+/// 它会把手工写坏的值（0 / 10000）收敛回 1..=999，避免一次误编辑把历史清空或让淘汰静默失效。
+fn resolve_ingest_limits(handle: &tauri::AppHandle) -> pipeline::IngestLimits {
+    let Ok(dir) = ipc::settings::resolve_config_dir(handle) else {
+        return pipeline::IngestLimits::default();
+    };
+    let settings = settings::AppSettings::load_or_default(&dir.join("settings.json"));
+    pipeline::IngestLimits {
+        max_image_bytes: settings.max_image_bytes,
+        max_history_items: settings.effective_max_history_items(),
+        // 图片总量阈值目前不可配（500 MiB 由 image::DEFAULT_MAX_TOTAL 定义，存储页的进度条
+        // 与它同源），所以这里直接用模块默认值，不从设置里读第三个字段。
+        image_cleanup: crate::image::CleanupPolicy::default(),
+    }
 }
 
 /// 读取自启动偏好配置并应用到 OS LaunchAgent。
