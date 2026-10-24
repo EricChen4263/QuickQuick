@@ -11,6 +11,7 @@
 //! - "暂停捕获" / "恢复捕获"（随暂停态换文案）→ 切换暂停
 //! - "打开设置" → 主窗口前置 + 路由到设置页
 //! - "检查更新" / "正在检查更新…" / "已是最新版本" / … → 走既有 updater 链路
+//! - "清空未固定…" → 前置主窗口并发确认请求；用户在前端二次确认后才真删
 //! - "QuickQuick v<当前版本>"（disabled 只读项）→ 展示真实打包版本
 //! - "退出" → app.exit(0)
 //!
@@ -46,6 +47,7 @@ const MENU_ID_SHOW: &str = "show";
 const MENU_ID_PAUSE: &str = "pause";
 const MENU_ID_OPEN_SETTINGS: &str = "open-settings";
 const MENU_ID_CHECK_UPDATE: &str = "check-update";
+const MENU_ID_CLEAR_UNPINNED: &str = "clear-unpinned";
 const MENU_ID_VERSION: &str = "version";
 const MENU_ID_QUIT: &str = "quit";
 
@@ -63,6 +65,14 @@ const ROUTE_EVENT: &str = "route";
 
 /// 路由事件 payload：要求主窗口切到设置页（前端 `RoutePayload` 的 settings 分支）。
 const ROUTE_SETTINGS: &str = "settings";
+
+/// 清空未固定的确认请求事件名：托盘只负责「请求」，真正的删除由前端二次确认后触发。
+///
+/// 与前端 `src/ipc/events.ts` 的 `TRAY_CLEAR_UNPINNED_REQUEST_EVENT` 必须一致。
+/// 为什么不在托盘里直接删：清空历史不可撤销，而原生菜单承载不了确认框；
+/// 把确认放在 webview 的 `window.confirm`（原生模态）里，用户才能看清
+/// 「收藏项会保留」这句前提。
+const CLEAR_UNPINNED_REQUEST_EVENT: &str = "tray-clear-unpinned-request";
 
 /// 托盘提示文案：暂停态、「仅忽略下一次」与更新检查结果组合成一条可见反馈。
 ///
@@ -222,6 +232,10 @@ impl MenuEntry {
 
 /// 构建托盘菜单的全部条目（顺序、文案、启用位的唯一真源）。
 ///
+/// 分组语义：「显示 / 暂停」是高频态切换；「打开设置 / 检查更新 / 清空未固定」是
+/// 一次性动作（清空是破坏性动作，放在该组末尾、与只读的版本号之间用分隔线隔开，
+/// 避免误触紧邻的「退出」）；「版本号」是只读事实；「退出」独占末组。
+///
 /// 「版本号」是 disabled 只读项：它只陈述事实、不承载动作，放在「退出」之前的
 /// 独立分组里，符合「关于」类信息的位置预期。
 fn menu_entries(paused: bool, version: &str, update: &UpdateStatus) -> Vec<MenuEntry> {
@@ -235,6 +249,7 @@ fn menu_entries(paused: bool, version: &str, update: &UpdateStatus) -> Vec<MenuE
             update_item_label(update),
             update_item_enabled(update),
         ),
+        MenuEntry::item(MENU_ID_CLEAR_UNPINNED, "清空未固定…", true),
         MenuEntry::Separator,
         MenuEntry::item(MENU_ID_VERSION, version_label(version), false),
         MenuEntry::Separator,
@@ -368,6 +383,7 @@ fn handle_menu_event(app: &tauri::AppHandle, item_id: &str) {
         MENU_ID_PAUSE => toggle_pause_capture(app),
         MENU_ID_OPEN_SETTINGS => open_settings(app),
         MENU_ID_CHECK_UPDATE => start_update_check(app),
+        MENU_ID_CLEAR_UNPINNED => request_clear_unpinned(app),
         MENU_ID_QUIT => app.exit(0),
         // 版本号是 disabled 只读项（不会派发事件）；未知 id 一律忽略
         _ => {}
@@ -575,6 +591,58 @@ fn open_settings(app: &tauri::AppHandle) {
     show_and_focus_window(app);
 }
 
+/// 请求清空未固定：前置主窗口，再由前端弹二次确认。
+///
+/// 这里**不删任何数据**——托盘只发请求。删除是不可撤销操作，确认框必须由用户
+/// 看得见的窗口承载；前端在用户点「确定」后才 invoke [`clear_unpinned_history`]。
+/// 顺序是先显示窗口再广播：确认框是模态，窗口还隐藏时弹出来用户根本看不到。
+fn request_clear_unpinned(app: &tauri::AppHandle) {
+    show_and_focus_window(app);
+    if let Err(e) = app.emit(CLEAR_UNPINNED_REQUEST_EVENT, ()) {
+        // 事件发不出去时用户会看到窗口被唤起却没弹确认框，属于「点了没反应」，
+        // 故必须留痕以便定位；用户可重试或改用设置页清理。
+        eprintln!("[QuickQuick] 托盘：广播清空未固定请求失败: {e}");
+    }
+}
+
+/// 清空未固定的纯实现（命令层与单测共用同一入口）。
+///
+/// `keep_count = 0` 是本功能的**定义**而非可调参数：非收藏项一条都不保留，
+/// 收藏项由底层查询的 `is_favorite = 0` 条件豁免。抽成函数是为了让单测调用
+/// 生产路径本身，而不是在测试里自己再传一次 0（那样改坏生产参数测试也不会红）。
+fn clear_unpinned_impl(
+    conn: &rusqlite::Connection,
+) -> Result<crate::ipc::system::CleanupResultDto, crate::db::DbError> {
+    crate::ipc::system::cleanup_history_impl(conn, 0)
+}
+
+/// Tauri 命令：清空未固定历史（软删全部非收藏项 + GC 物理删除墓碑），返回本轮计数。
+///
+/// 「未固定」的判定完全交给既有 [`crate::ipc::system::cleanup_history_impl`]：
+/// 传 `keep_count = 0` 即「非收藏项一条都不保留」，其底层查询
+/// `WHERE is_deleted = 0 AND is_favorite = 0` 天然让收藏项豁免。复用而非另写 SQL，
+/// 是为了让「清空未固定」与「容量裁剪」「自动淘汰」共用同一份口径——
+/// 三处各写一条删除语句，迟早漂成三套语义。
+///
+/// 真的删掉东西时发 `clipboard-changed`：列表页按该事件刷新，否则清空后列表仍是旧数据。
+///
+/// # Errors
+/// 数据库不可用或 SQL 失败时返回可读中文错误（`with_db` 已处理启动期开库失败）。
+#[tauri::command]
+pub fn clear_unpinned_history(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, crate::ipc::AppDb>,
+) -> Result<crate::ipc::system::CleanupResultDto, String> {
+    let result =
+        crate::ipc::with_db(&state, |conn| clear_unpinned_impl(conn).map_err(|e| e.to_string()))?;
+    if result.soft_deleted > 0 || result.purged > 0 {
+        if let Err(e) = app.emit(crate::CLIPBOARD_CHANGED_EVENT, ()) {
+            eprintln!("[QuickQuick] 清空未固定后发送 clip-change 事件失败: {e}");
+        }
+    }
+    Ok(result)
+}
+
 /// 显示 main 窗口并设置焦点；失败时记录日志不 panic。
 ///
 /// 可见性为 `pub(crate)` 供 single-instance 插件回调复用：第二个实例启动时，
@@ -619,10 +687,11 @@ mod tests {
     }
 
     use super::{
-        can_start_update_check, menu_entries, next_status, pause_item_text, tooltip_text,
-        update_item_enabled, update_item_label, version_label, MenuEntry, UpdateEvent,
-        UpdateStatus, MENU_ID_CHECK_UPDATE, MENU_ID_OPEN_SETTINGS, MENU_ID_PAUSE, MENU_ID_QUIT,
-        MENU_ID_SHOW, MENU_ID_VERSION, ROUTE_EVENT, ROUTE_SETTINGS, TOOLTIP_IDLE,
+        can_start_update_check, clear_unpinned_impl, menu_entries, next_status, pause_item_text,
+        tooltip_text, update_item_enabled, update_item_label, version_label, MenuEntry, UpdateEvent,
+        UpdateStatus, CLEAR_UNPINNED_REQUEST_EVENT, MENU_ID_CHECK_UPDATE, MENU_ID_CLEAR_UNPINNED,
+        MENU_ID_OPEN_SETTINGS, MENU_ID_PAUSE, MENU_ID_QUIT, MENU_ID_SHOW, MENU_ID_VERSION,
+        ROUTE_EVENT, ROUTE_SETTINGS, TOOLTIP_IDLE,
     };
 
     /// 把菜单条目压成 `(id, 文案, 启用位)` 便于断言顺序与文案；分隔线 id 为 `None`。
@@ -662,6 +731,7 @@ mod tests {
                 None,
                 Some(MENU_ID_OPEN_SETTINGS),
                 Some(MENU_ID_CHECK_UPDATE),
+                Some(MENU_ID_CLEAR_UNPINNED),
                 None,
                 Some(MENU_ID_VERSION),
                 None,
@@ -686,10 +756,28 @@ mod tests {
                 "暂停捕获",
                 "打开设置",
                 "检查更新",
+                "清空未固定…",
                 "QuickQuick v0.3.8",
                 "退出",
             ]
         );
+    }
+
+    /// 「清空未固定…」必须是破坏性动作里唯一带省略号的一项：省略号是 macOS 约定，
+    /// 表示点了还会再问一次（本实现确实由前端弹二次确认），不能悄悄变成直接删除。
+    #[test]
+    fn clear_unpinned_item_announces_confirmation_with_ellipsis() {
+        // Arrange & Act
+        let rows = items(&menu_entries(false, "0.3.8", &UpdateStatus::Idle));
+        let clear_row = rows
+            .iter()
+            .find(|(id, _, _)| *id == MENU_ID_CLEAR_UNPINNED)
+            .expect("菜单必须含清空未固定项");
+
+        // Assert：可点击（不是只读）且文案以省略号结尾
+        assert!(clear_row.1.ends_with('…'));
+        assert_eq!(clear_row.1, "清空未固定…");
+        assert!(clear_row.2);
     }
 
     #[test]
@@ -962,5 +1050,93 @@ mod tests {
         // Arrange & Act & Assert
         assert_eq!(ROUTE_EVENT, "route");
         assert_eq!(ROUTE_SETTINGS, "settings");
+    }
+
+    /// 清空未固定的请求事件名必须与前端 `src/ipc/events.ts` 的
+    /// `TRAY_CLEAR_UNPINNED_REQUEST_EVENT` 一致。托盘只发请求、前端负责二次确认，
+    /// 两侧任一侧改了字面量，这条链路会静默失效（点了没反应），故两侧各钉一条。
+    #[test]
+    fn clear_unpinned_request_event_matches_frontend_contract() {
+        // Arrange & Act & Assert
+        assert_eq!(
+            CLEAR_UNPINNED_REQUEST_EVENT,
+            "tray-clear-unpinned-request"
+        );
+    }
+
+    // ===== 清空未固定：真库行为锚定 =====
+
+    /// 建一个临时加密库并按生产路径写两条文本条目，其中一条设为收藏。
+    ///
+    /// 走 `db::open_or_create`（生产开库入口）而非手工建表：这样「清空未固定」的
+    /// 断言落在**真实 schema + 真实索引**上，手工建表会漏掉迁移带来的列差异。
+    /// 返回收藏项的 id，供断言「活下来的是哪一条」。
+    fn seeded_db_with_one_favorite() -> (tempfile::TempDir, rusqlite::Connection, String) {
+        let dir = tempfile::tempdir().expect("创建临时目录失败");
+        let path = dir.path().join("quickquick.db");
+        let conn = crate::db::open_or_create(&path, &[7u8; 32]).expect("建库应成功");
+
+        let keep = crate::clipboard::CapturedItem {
+            text: "收藏项：不要删我".to_string(),
+            html: None,
+        };
+        let drop = crate::clipboard::CapturedItem {
+            text: "未固定项：清空时该删".to_string(),
+            html: None,
+        };
+        let keep_id = match crate::db::ingest(&conn, &keep).expect("入库收藏项失败") {
+            crate::db::IngestOutcome::Inserted(id) | crate::db::IngestOutcome::Bumped(id) => id,
+        };
+        crate::db::ingest(&conn, &drop).expect("入库未固定项失败");
+        crate::db::set_favorite(&conn, &keep_id, true).expect("设置收藏失败");
+
+        (dir, conn, keep_id)
+    }
+
+    /// 清空未固定只删非收藏项：收藏项必须仍然存活，且计数只统计被删的那一条。
+    ///
+    /// 这是「收藏项不得被删」的可失败锚定：若把底层查询的 `is_favorite = 0`
+    /// 条件去掉（或改成 `is_favorite = 1`），收藏项会被软删、存活断言立刻变红。
+    #[test]
+    fn clear_unpinned_removes_only_non_favorites() {
+        // Arrange
+        let (_dir, conn, keep_id) = seeded_db_with_one_favorite();
+        assert_eq!(crate::db::count_live(&conn).expect("统计失败"), 2);
+
+        // Act
+        let result = clear_unpinned_impl(&conn).expect("清空未固定应成功");
+
+        // Assert
+        assert_eq!(result.soft_deleted, 1, "只应软删那一条非收藏项");
+        assert_eq!(result.purged, 1, "软删后的墓碑应被同轮 GC 物理删除");
+        assert_eq!(
+            crate::db::count_live(&conn).expect("统计失败"),
+            1,
+            "清空后只剩收藏项"
+        );
+        let live = crate::db::list_ordered(&conn).expect("列表查询失败");
+        assert_eq!(live.len(), 1);
+        assert_eq!(live[0].id, keep_id, "活下来的必须是那条收藏项");
+        assert!(live[0].is_favorite, "存活的必须是收藏项");
+    }
+
+    /// 没有非收藏项时清空是幂等的空操作：不能误删收藏项，也不该报错。
+    ///
+    /// 与上一条互补：上一条防「该删的没删/不该删的删了」，这条防「重复点击出问题」。
+    #[test]
+    fn clear_unpinned_is_noop_when_only_favorites_remain() {
+        // Arrange：先清一次，此时库里只剩收藏项
+        let (_dir, conn, keep_id) = seeded_db_with_one_favorite();
+        clear_unpinned_impl(&conn).expect("首次清空应成功");
+
+        // Act：再清一次
+        let second = clear_unpinned_impl(&conn).expect("重复清空应成功");
+
+        // Assert
+        assert_eq!(second.soft_deleted, 0);
+        assert_eq!(second.purged, 0);
+        let live = crate::db::list_ordered(&conn).expect("列表查询失败");
+        assert_eq!(live.len(), 1, "重复清空不得动收藏项");
+        assert_eq!(live[0].id, keep_id);
     }
 }

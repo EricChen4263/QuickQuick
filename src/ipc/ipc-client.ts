@@ -569,6 +569,21 @@ export async function cleanupHistory(): Promise<CleanupResult> {
   }
 }
 
+/**
+ * 清空未固定历史：软删全部非收藏项并物理删除墓碑，返回本轮计数。
+ *
+ * 与 {@link cleanupHistory}（按用户配置的上限裁剪）的区别是保留上限为 0，
+ * 即「非收藏项一条不留」；收藏项由后端查询条件豁免，前端不参与筛选。
+ * 调用方必须先取得用户二次确认——本操作不可撤销。
+ */
+export async function clearUnpinnedHistory(): Promise<CleanupResult> {
+  try {
+    return await invoke<CleanupResult>("clear_unpinned_history");
+  } catch (err) {
+    throw toError(err);
+  }
+}
+
 /** 打开 macOS 辅助功能系统设置深链。 */
 export async function openAccessibilitySettings(): Promise<void> {
   try {

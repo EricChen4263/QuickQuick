@@ -24,6 +24,12 @@ export const SELECTED_PROVIDER_CHANGED_EVENT = "selected-provider-changed" as co
 // 设置是其中的页面而非独立窗口）；Tauri 事件名跨语言无法编译期共享，改动需两端同步。
 export const ROUTE_EVENT = "route" as const;
 
+// 托盘「清空未固定…」的确认请求事件名（无 payload）。
+// 注意：与后端 src-tauri/src/tray.rs 的 CLEAR_UNPINNED_REQUEST_EVENT 必须保持一致。
+// 托盘只发请求、不删数据：清空历史不可撤销，确认框由主窗口用 window.confirm 承载，
+// 用户确认后前端才 invoke clear_unpinned_history。
+export const TRAY_CLEAR_UNPINNED_REQUEST_EVENT = "tray-clear-unpinned-request" as const;
+
 // trans-popover 待译文本推送事件名。
 // 注意：与后端 src-tauri/src/popover.rs 的 TRANS_SOURCE_EVENT 常量必须保持一致。
 // 触发热键时 Rust 就地取词后推给 trans-popover 窗口，免去前端 listClipItems 往返；

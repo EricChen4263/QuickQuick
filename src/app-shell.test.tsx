@@ -2,7 +2,8 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { act, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { listen } from "@tauri-apps/api/event";
-import { ROUTE_EVENT } from "./ipc/events";
+import { ROUTE_EVENT, TRAY_CLEAR_UNPINNED_REQUEST_EVENT } from "./ipc/events";
+import { clearUnpinnedHistory } from "./ipc/ipc-client";
 import App from "./App";
 
 // Mock Tauri API：渲染测试环境无 Tauri 运行时
@@ -25,6 +26,8 @@ vi.mock("./ipc/ipc-client", () => ({
   listClipItems: vi.fn().mockReturnValue(new Promise(() => {})),
   deleteClipItem: vi.fn().mockResolvedValue(undefined),
   toggleFavoriteClip: vi.fn().mockResolvedValue(undefined),
+  // 托盘「清空未固定」链路：默认返回空计数，具体用例用 mockResolvedValueOnce 覆盖
+  clearUnpinnedHistory: vi.fn().mockResolvedValue({ softDeleted: 0, purged: 0 }),
   translateText: vi.fn().mockReturnValue(new Promise(() => {})),
   listTranslateHistory: vi.fn().mockReturnValue(new Promise(() => {})),
   getTranslateProviders: vi.fn().mockReturnValue(new Promise(() => {})),
@@ -179,5 +182,63 @@ describe("app-shell", () => {
     // Tauri 事件名跨语言无法编译期共享，Rust 侧 tray::tests::route_event_matches_frontend_contract
     // 钉同一字面量；两侧任一改动都会在这里或那里变红。
     expect(ROUTE_EVENT).toBe("route");
+  });
+
+  // ===== 托盘「清空未固定…」：二次确认 =====
+
+  /** 从 listen mock 的调用记录里取出指定事件的处理器（App 注册监听后才有）。 */
+  function listenerFor(eventName: string): (payload: unknown) => void {
+    const registration = vi
+      .mocked(listen)
+      .mock.calls.find(([event]) => event === eventName);
+    if (registration === undefined) {
+      throw new Error(`App 未注册 ${eventName} 事件监听，对应菜单项会静默失效`);
+    }
+    return registration[1] as unknown as (payload: unknown) => void;
+  }
+
+  it("app-shell: 确认清空未固定后才调后端命令，并回显被清条目数", async () => {
+    // Arrange：用户点「确定」。两个计数故意取不同值——回执说的是「非收藏项」条数，
+    // 取错字段（用 purged 冒充 softDeleted）必须能被这条断言抓住。
+    vi.mocked(clearUnpinnedHistory).mockResolvedValueOnce({ softDeleted: 3, purged: 5 });
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+    render(<App />);
+    const handler = listenerFor(TRAY_CLEAR_UNPINNED_REQUEST_EVENT);
+
+    // Act
+    await act(async () => {
+      handler({});
+    });
+
+    // Assert：先确认再删；确认文案必须写明「收藏项会保留」这一代价边界
+    expect(confirmSpy).toHaveBeenCalledTimes(1);
+    const confirmMessage = confirmSpy.mock.calls[0]?.[0];
+    expect(confirmMessage).toContain("收藏项会保留");
+    expect(clearUnpinnedHistory).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId("clear-unpinned-result")).toHaveTextContent(
+      "已清空 3 条非收藏项"
+    );
+  });
+
+  it("app-shell: 用户取消时不调用后端命令，也不显示结果", async () => {
+    // Arrange：用户点「取消」
+    vi.spyOn(window, "confirm").mockReturnValue(false);
+    render(<App />);
+    const handler = listenerFor(TRAY_CLEAR_UNPINNED_REQUEST_EVENT);
+
+    // Act
+    await act(async () => {
+      handler({});
+    });
+
+    // Assert：不可撤销操作在取消路径上必须一行都不删
+    expect(clearUnpinnedHistory).not.toHaveBeenCalled();
+    expect(screen.queryByTestId("clear-unpinned-result")).not.toBeInTheDocument();
+  });
+
+  it("app-shell: 清空未固定事件名与后端 tray.rs 的 CLEAR_UNPINNED_REQUEST_EVENT 一致", () => {
+    // 与 ROUTE_EVENT 同理：Rust 侧 clear_unpinned_request_event_matches_frontend_contract
+    // 钉同一字面量，两侧任一改动都会变红，避免「点了没反应」。
+    expect(TRAY_CLEAR_UNPINNED_REQUEST_EVENT).toBe("tray-clear-unpinned-request");
   });
 });

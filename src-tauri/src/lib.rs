@@ -201,6 +201,7 @@ pub fn run() {
             ipc::settings::delete_provider_credentials,
             ipc::system::get_storage_stats,
             ipc::system::cleanup_history,
+            tray::clear_unpinned_history,
             ipc::system::open_accessibility_settings,
             ipc::system::paste_to_front,
             ipc::system::copy_clip_to_clipboard,
