@@ -162,7 +162,21 @@
 ### P3-3 · pasteboard 类型白名单（可配）
 ### P3-4 · 文件类型条目（捕获 + 图标 + 复制回写）
 ### P3-5 · 忽略规则三层增强（应用黑/白名单 + 类型集合 + 内容正则）
+- **状态**：部分完成（内容正则 + 名单黑白模式 done；类型集合 blocked）
+- **结果**：commits `67dac67`（后端）、`74faf56`（前端）、`a9345c4`（复审修复：阶梯测试锁住 Concealed↔ContentRegex 相邻对 + 白名单来源未知提示）。
+- **判定顺序（契约，已钉死）**：`Paused → SkipOnce → Concealed → ContentRegex → 名单规则 → SelfMark → None`。**加变体的坑**：原来 `CapturePolicy` 在 `src-tauri/tests/**` 有 30+ 处字面量构造，新增字段会让刚落地的 P3-0 契约护栏整体 E0063；故新规则挂到 `IgnoreRules`（`ExcludeList` 的语义化别名，应用名单与正则是两个独立字段），`should_skip*` 签名不变。
+- **失败方向（已定）**：非法正则只留痕 + 丢弃该条 + **不跳过**（写错规则的代价应是「这条没生效」，不是「剪贴板被一条写错的正则全吞」）；设置侧原文照存，用户才能在面板里修正半成品。
+- **白名单语义（已定）**：空名单 = 视同未启用（一开就全吞会先丢数据）；非空但来源身份未知 = 不记录（白名单是「证明它在名单内才记」），设置页已补提示文案。
+- **审查打回的 BLOCK（已闭环）**：优先级阶梯测试漏了 `Concealed ↔ ContentRegex` 这一相邻对——第 3 层用无正则规则集、第 4 层显式 `is_concealed=false`，两层从未同现，把正则提前也不会红。修法是把阶梯改成「每步同时命中所有更弱层、只关掉一颗条件」，并另加最小对照 + 反向对照的相邻对专测。
+- **类型集合忽略 = blocked**：依赖 P3-1 的 `types()` 遍历能力，建议与 P3-1 合并落地（规则集已是现成的挂载点）。
+- **未验证**：Windows `GetKeyState` 分支未编译（符号/feature 已按 `windows-sys 0.61.2` 核对）；真机面板 chip 交互。
 ### P3-6 · 暂停语义补齐（托盘 `⌥` 点击、`⌥⇧` 仅忽略下一次）
+- **状态**：done
+- **结果**：commits `2e67530`、`a9345c4`。`tray_click_action` 纯函数（`⇧` 单独按退回「显示」，避免按错键时什么都不发生）；修饰键读取 macOS `NSEvent::modifierFlags_class()`、Windows `GetKeyState`；tooltip 三态 + 菜单文案反映暂停态。
+- **`skip-once` 的关键取舍**：消费点在**轮询循环层**，判据是 `change_count() > last_seen`（与 `poll_once_with_policy` 同口径）。**不能**用「本轮入库结果为空」——那时内容已进库；**也不能**让空轮消费——用户按完 `⌥⇧` 后往往几轮没复制，一次 swap 就把机会白吃了。与暂停的可观察行为一致，故合流进 `policy.paused`，原因靠当轮规则副本的 `RoundSilence::SkipOnce` 区分。
+- **已知边界（注释已写明）**：若置位后第一次变化恰好是本工具自写回（自产标记），这次机会会被用掉——探针只看到「剪贴板变了」，与用户「这一次别记」的心智一致。
+- **审查结论**：**BLOCK 1 条（纯测试缺口）已闭环**；其余 15 点成立，含独立核实「空轮不消费」「当轮标记不泄漏到下一轮」「tooltip 无永久停留路径」「托盘与设置页共用同一份实现」。
+- **风险（中，只能真机定）**：Tauri `TrayIconEvent::Click` 不含 flags 字段，只能在 handler 里读「当前」修饰键；事件经 tao event-loop proxy 转发，用户若在 handler 执行前松开 ⌥/⇧ 会退化成「显示窗口」。**未编译验证 Windows**。
 ### P3-7 · 多 pasteboard item 合并
 ### P3-8 · 去重精度提升（集合包含判定 + 复制次数累加）
 ### P3-9 · OCR（图片可被文字搜索命中，Swift helper + IPC）
@@ -172,6 +186,14 @@
 ## Phase 4 · 存储与性能
 
 ### P4-1 · 建索引（`is_deleted+last_modified_utc`、`text_hash`、`image_hash`）
+- **状态**：done
+- **结果**：commits `af474c1`（索引 + 计划测试）、`153f066`（复审修复：计划测试的空断言与列序可证伪）。5 条索引，全部 `CREATE INDEX IF NOT EXISTS`、无表结构变更：
+  `idx_clip_items_live_favorite_modified(is_deleted,is_favorite,last_modified_utc)` / `idx_clip_items_text_hash(text_hash,is_deleted)` / `idx_clip_images_image_hash(image_hash,is_deleted)` / `idx_clip_images_live_favorite_created(is_deleted,is_favorite,created_utc)` / `idx_clip_images_clip_item_id(clip_item_id)`。
+- **三处按实测而非字面做的判断**：① `is_favorite` 必须进列表索引——否则计划里仍留 `USE TEMP B-TREE FOR ORDER BY`（照 roadmap 字面建会退化，审查用变异确认这是承重墙）；② hash 索引必须带第二列 `is_deleted`——只建单列时在生产那些**没有 `sqlite_stat1` 统计**的库上，规划器会改走 `is_deleted` 前缀索引即扫全部未软删行；③ `clip_images(clip_item_id)` 是必要项——外键级联删除实测 10k 父行 × 2k 子行 0.47s → 0.01s，且消除列表 LEFT JOIN 的自动索引。
+- **明确不建**：`(is_deleted, last_modified_utc)` 单列变体（不消除临时排序，白付写入成本）；`clip_images(is_deleted)`（`total_image_bytes` 是全量聚合，索引无法覆盖）；`top_id` 专用索引（见下方子项）。
+- **审查打回的弱点（已闭环）**：计划测试里有一句 `!after.contains("SCAN clip_items")` 是恒真断言（SQL 用别名 `ci`，计划串写 `SCAN ci`），且「hash 索引列序为什么必须是 `text_hash` 在前」这条理由没有任何测试钉住（变异成 `(is_deleted, text_hash)` 是 0 红）。已修正别名、把断言升级为带约束串（`(text_hash=? AND is_deleted=?)`）、并新增「不得退化成另一条索引」的反向断言；现在列序互换会红。
+- **量级观测（不作时间断言）**：2 万条 / 500 图，文本去重 1.6ms → 53µs（~30×），图片去重 62µs → 19µs；**列表查询墙钟基本持平**（35.7ms → 25.3ms，大头是 Rust 侧全量行映射），其收益是计划形态（去掉临时排序）而非可测墙钟——不要对外声称「列表提速」。
+- **未验证**：真机落盘 SQLCipher 大库首次升级的建索引代价、5 条索引对 ingest 尾延迟与开库成本的影响、Windows。
 - **顺带子项（P3-0 审查登记，不单独立项）**：`db::top_id` 用 `ORDER BY last_modified_utc DESC LIMIT 1`，缺 `rowid DESC` 兜底，与 `list_items_with_images` / `list_ordered` 不一致——同毫秒并列时两处「最前条目」口径会给出**相反**答案（审查用 2 万轮探针实测：并列 4904 次里 `top_id` 与 `list_ordered` 首元素 100% 不一致）。但生产代码无调用点（仅 `tests/clipboard.rs` 两处测试用），且当前不可复现 flaky。**修法不是简单加一行**：加 `, rowid DESC` 会让那两个测试红（它们的期望行恰好是低 rowid），正确做法是同步把断言改成不依赖并列时选哪行（参考 `capture_contract.rs` 第 1 条的哨兵时间戳 + 相对关系写法）。
 ### P4-2 · 分页 + 虚拟滚动
 ### P4-3 · 缩略图移出 IPC payload（消除 base64 全量重传）
