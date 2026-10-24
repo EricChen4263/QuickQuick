@@ -5,6 +5,9 @@
 tsconfig.tsbuildinfo
 # pnpm 11 在本仓（存在 pnpm-workspace.yaml）默认把 store 建在项目内，不入库
 /.pnpm-store
+# 覆盖率报告（make coverage 的前端产物，只进 CI artifact，不入库；
+# 后端报告落在已忽略的 /src-tauri/target 下）
+/coverage
 # 系统/编辑器
 .DS_Store
 *.log

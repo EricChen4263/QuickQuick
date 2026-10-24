@@ -8,6 +8,7 @@
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
     "tauri": "tauri"
   },
   "dependencies": {
@@ -28,6 +29,7 @@
     "@types/react": "^18.3.1",
     "@types/react-dom": "^18.3.1",
     "@vitejs/plugin-react": "^4.3.1",
+    "@vitest/coverage-v8": "2.1.9",
     "jsdom": "^29.1.1",
     "knip": "^6.42.1",
     "typescript": "^5.5.4",

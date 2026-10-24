@@ -1,0 +1,80 @@
+name: coverage
+
+# 覆盖率基线：独立工作流、手动触发（workflow_dispatch）。
+#
+# 为什么不挂在 pull_request 上：后端覆盖率要在编译期插桩（-C instrument-coverage），
+# 全量重建比 make verify 慢一个量级；而路线图 P6-2 的定调是「先建立基线再谈阈值」，
+# 数字此刻不具备拦截判据，挂到每个 PR 上只会白烧 CI 分钟。
+#
+# 与 verify.yml 的分工：verify.yml 是 PR/push 门禁（跑 make verify），本工作流只出报告。
+# 两者互不引用——改门禁逻辑不需要动这里，改报告也不影响门禁。
+#
+# 不设任何覆盖率阈值：本工作流只让报告可见（日志 + artifact），不因数字高低而失败。
+# 阈值等基线稳定后单独立项再谈。
+
+on:
+  workflow_dispatch:
+
+# 只读：出报告不需要写仓库。
+permissions:
+  contents: read
+
+concurrency:
+  group: coverage-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  coverage:
+    name: 覆盖率报告（前端 v8 + 后端 llvm-cov）
+    runs-on: macos-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11        # 与 verify.yml / release.yml / 本地一致：allowBuilds 键为 pnpm 11 专有
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22        # pnpm 11 要求 Node ≥22.13
+          cache: pnpm
+
+      # cargo-llvm-cov 依赖 rustup 的 llvm-tools-preview 提供 llvm-profdata / llvm-cov，
+      # 缺了它 cargo llvm-cov 会直接报「llvm-tools-preview is required」。
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      # prebuilt 二进制安装，省掉现场编译 cargo-llvm-cov 的几分钟。
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov
+
+      - name: 安装前端依赖
+        run: pnpm install --frozen-lockfile
+
+      # 下面两步复用 Makefile 的同一批目标，避免 CI 与本地命令各写一套。
+      # 后端目标自带 dist 前置（tauri::generate_context! 要求 frontendDist 存在）。
+
+      - name: 前端覆盖率（vitest + @vitest/coverage-v8）
+        run: make coverage-js
+
+      - name: 后端覆盖率（cargo-llvm-cov）
+        run: make coverage-rs
+
+      - name: 上传覆盖率报告
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          # 前端：HTML + json-summary；后端：llvm-cov 的 HTML 与 lcov。
+          path: |
+            coverage/
+            src-tauri/target/coverage/
+          if-no-files-found: warn
+          retention-days: 30

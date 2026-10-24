@@ -8,7 +8,7 @@ SHELL := /usr/bin/env bash
 # Universal mac 构建需要两个 darwin target
 MAC_UNIVERSAL_TARGET := universal-apple-darwin
 
-.PHONY: help doctor dev fmt check test test-js test-rs verify deadcode deadcode-gate build bump clean
+.PHONY: help doctor dev fmt check test test-js test-rs verify deadcode deadcode-gate coverage coverage-js coverage-rs build bump clean
 
 help:
 	@echo "QuickQuick make 目标："
@@ -21,6 +21,7 @@ help:
 	@echo "  make dist                构建前端产物（dist/，Rust 编译前置；缺失时上面几个目标自动触发）"
 	@echo "  make deadcode            死代码报告：knip 全量 + 后端零生产引用清单（不拦截）"
 	@echo "  make deadcode-gate       死代码门禁：未接线文件 + 未声明依赖（CI 拦截项）"
+	@echo "  make coverage            覆盖率基线：前端 vitest v8 + 后端 cargo-llvm-cov（只报告，不设阈值）"
 	@echo "  make build               本地出 Universal mac .dmg/.app"
 	@echo "  make bump VERSION=x.y.z  同步三处版本号（package.json/tauri.conf.json/Cargo.toml）"
 	@echo "  make clean               清构建产物（dist + cargo target）"
@@ -108,6 +109,31 @@ deadcode-gate:
 	@echo "== 前端死代码门禁（未接线文件 + 未声明依赖）=="
 	pnpm exec knip --include files,unlisted
 	@echo "前端死代码门禁通过。"
+
+# 覆盖率基线：只产出报告，不设任何阈值——路线图 P6-2 的定调是「先建立基线再谈阈值」，
+# 所以本目标永不因覆盖率低而失败，也不参与 make verify。
+# 前端：vitest + @vitest/coverage-v8（版本须与 vitest 主次版本一致，升级要成对改）。
+# 后端：cargo-llvm-cov，编译期插桩，比普通测试慢一个量级，故不挂在日常链路上。
+coverage: coverage-js coverage-rs
+
+coverage-js:
+	@echo "== 前端覆盖率 (vitest v8) =="
+	pnpm test:coverage
+	@echo "报告：coverage/index.html（HTML）/ coverage/coverage-summary.json（汇总）"
+
+# 前置 dist 与 test-rs 同理：tauri::generate_context! 要求 frontendDist 目录存在。
+coverage-rs: dist
+	@echo "== 后端覆盖率 (cargo-llvm-cov) =="
+	@command -v cargo-llvm-cov >/dev/null 2>&1 || { \
+	  echo "缺 cargo-llvm-cov（Rust 覆盖率插桩工具）。装法："; \
+	  echo "  rustup component add llvm-tools-preview"; \
+	  echo "  cargo install cargo-llvm-cov"; \
+	  exit 1; }
+	cd src-tauri && cargo llvm-cov --html --output-dir target/coverage
+	@echo "-- 后端覆盖率总表（每文件 Regions / Functions / Lines）--"
+	cd src-tauri && cargo llvm-cov report
+	cd src-tauri && cargo llvm-cov report --lcov --output-path target/coverage/lcov.info
+	@echo "报告：src-tauri/target/coverage/html/index.html（HTML）/ src-tauri/target/coverage/lcov.info（lcov）"
 
 build:
 	@echo "== 出 Universal mac 安装包（首次需 rustup target add x86_64-apple-darwin）=="
