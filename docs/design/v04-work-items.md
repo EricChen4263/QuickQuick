@@ -235,6 +235,7 @@
 - **文案与出口**：`DbError::Display` 是唯一真相来源（不在 lib.rs 再写一份子串分类）；`AppDb` 携带 `open_error` 把原因透出到前端文案——因为**打包后的 GUI 应用看不到 `eprintln` 的 stderr**，「诚实只存在于用户看不到的地方」等于没做。
 - **待用户裁决**：`SchemaTooNew`/`MigrationFailed` 时是否弹系统对话框并退出（当前是「记日志 + 以无库状态运行 + 前端显示准确原因」）。
 - **登记的风险（P6-3 口径）**：`db::open_or_recover` 生产 0 调用点（只有 4 处测试调用），且与生产 `reset_and_reopen` **判据分裂**（一个认 `DbError::Sqlite`、一个认 `is_resettable_open_error` 的字符串标记）——未来若被接进启动路径会**静默改变恢复策略**。它是 `pub fn` + `pub mod`，`dead_code` 与 cargo-udeps 都发现不了。
+- **审查结论（复审，前一个 reviewer 跑 2.5 小时后失败、无产出，故重派一次限时长复审）**：**非 BLOCK**，6 个必核点全部成立，2 处变异均有效（把版本超前检查后移 → 红 2；让步骤用原始 `COMMIT` 逃出事务 → 红 1，证明回滚断言不是结构性空转）。它纠正了两处事实：① 改后 `PRAGMA foreign_keys = ON` 共 3 处（`open_with_key`、`ensure_schema` 事务外、测试 helper），全仓唯一开库入口是 `open_or_create`，故所有建库路径都覆盖到；② `AppDb` 测试构造点实际是 **5 处**（`ipc_clipboard.rs` 2 + `ipc/mod.rs` 4），不是执行者说的 2 处——但没有遗漏导致失败的构造点，`cargo check --all-targets` 与 `cargo test` 均绿。
 - **未验证**：真机旧库升级、大库首次建 5 条索引的启动期墙钟、前端是否原样展示这些文案（未实跑界面）、Windows。
 
 ---
