@@ -21,6 +21,7 @@ import { PopoverList } from "./PopoverList";
 import { PopoverPreview } from "./PopoverPreview";
 import { PopoverFooter } from "./PopoverFooter";
 import { useDeferredPreviewId } from "./useDeferredPreview";
+import { applyModifierKey, NO_MODIFIERS, type ModifierState } from "./footer-hints";
 
 /**
  * 从分组结果构建扁平有序列表（收藏 → 今天 → 更早）。
@@ -46,9 +47,11 @@ const DIGIT_KEY_PATTERN = /^[0-9]$/;
  *   - query: 搜索框值（受控）
  *   - selectedId: 当前选中条目 ID
  *   - previewSession: 面板会话序号，每次重新打开面板递增，用来重置预览延迟档位
+ *   - modifiers: 当前按下的修饰键，仅驱动底部徽标切换
  *
  * 预览区（右侧）不直接跟随 selectedId：选中项经 useDeferredPreviewId 分级延迟后才显示
  * （首个预览 1500ms、此后切换 200ms），避免快速翻页时预览区逐条闪烁。
+ * 底部徽标随按下的修饰键切换分层提示（默认层 / ⌃ 层 / ⌘ 层 / ⌥ 层，见 footer-hints）。
  *
  * 键盘交互（由 search input 的 onKeyDown 处理）：
  *   - ↑ / ↓、⌃N/⌃J（下）与 ⌃P/⌃K（上）：在 visibleFlatList 中移动选中项（advanceSelection）
@@ -67,6 +70,8 @@ export default function ClipPopoverApp() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   // 面板会话序号：每次窗口重新获得焦点（面板被打开）递增，预览延迟档位随之重置
   const [previewSession, setPreviewSession] = useState(0);
+  // 当前按下的修饰键：只驱动底部徽标切换，不参与任何取用/移动判定
+  const [modifiers, setModifiers] = useState<ModifierState>(NO_MODIFIERS);
 
   const inputRef = useRef<HTMLInputElement>(null);
   // ref 暴露最新的 visibleFlatList，避免 onFocusChanged 回调产生 stale closure
@@ -100,6 +105,19 @@ export default function ClipPopoverApp() {
   useEffect(() => {
     return () => {
       cancelPendingDirectPick();
+    };
+  }, []);
+
+  // 窗口失焦时把修饰键状态清空。
+  // 用户在按住 ⌃ 期间切走（⌘Tab、点击别的 app），释放那一帧的 keyup 不会再打到本窗口，
+  // 没有这条兜底就会一直停在「⌃ 层」徽标上，回到面板也不恢复。
+  useEffect(() => {
+    function resetModifiers(): void {
+      setModifiers(NO_MODIFIERS);
+    }
+    window.addEventListener("blur", resetModifiers);
+    return () => {
+      window.removeEventListener("blur", resetModifiers);
     };
   }, []);
 
@@ -157,7 +175,11 @@ export default function ClipPopoverApp() {
     let unlisten: (() => void) | null = null;
 
     win.onFocusChanged(({ payload: focused }) => {
-      if (!focused) return;
+      if (!focused) {
+        // 面板失焦：按住中的修饰键不会再收到 keyup，必须在离开时清掉
+        setModifiers(NO_MODIFIERS);
+        return;
+      }
       inputRef.current?.focus();
       setQuery("");
       setPreviewSession((session) => session + 1);
@@ -337,6 +359,10 @@ export default function ClipPopoverApp() {
   }
 
   function handleKeyDown(e: React.KeyboardEvent<HTMLInputElement>): void {
+    // 修饰键按下先同步给底部徽标：这一步只影响展示，不拦截任何按键。
+    // 非修饰键不会改变状态（applyModifierKey 原样返回同一引用），因此普通输入不引发重渲染。
+    setModifiers((prev) => applyModifierKey(prev, e.key, "down"));
+
     // Esc 必须排在输入法防御之前：关面板是用户的显式中断，不属于候选词交互。
     // WKWebView 会把 Esc 键原生"清空 search input"行为吞掉，不冒泡到 document。
     // 在 onKeyDown 处显式拦截并关窗，才能让 Esc 在输入框已获焦时正常工作。
@@ -372,6 +398,11 @@ export default function ClipPopoverApp() {
     handleConfirmKey(e);
   }
 
+  /** 修饰键释放：只更新底部徽标，松开后回到默认层提示 */
+  function handleKeyUp(e: React.KeyboardEvent<HTMLInputElement>): void {
+    setModifiers((prev) => applyModifierKey(prev, e.key, "up"));
+  }
+
   if (loadError) {
     return (
       <div className="popover-error">
@@ -392,6 +423,7 @@ export default function ClipPopoverApp() {
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           onKeyDown={handleKeyDown}
+          onKeyUp={handleKeyUp}
           autoFocus
           aria-label="搜索剪贴板"
         />
@@ -404,7 +436,7 @@ export default function ClipPopoverApp() {
         />
         <PopoverPreview item={displayedItem} />
       </div>
-      <PopoverFooter />
+      <PopoverFooter modifiers={modifiers} />
     </div>
   );
 }
