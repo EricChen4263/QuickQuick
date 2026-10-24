@@ -4,6 +4,13 @@ import { invoke } from "@tauri-apps/api/core";
 export interface ClipItem {
   id: string;
   content: string;
+  /**
+   * 搜索/展示用的预计算标题（后端落库，截断到 1000 字符）。
+   *
+   * 可选字段：后端还未提供时前端回退 `content`；
+   * 搜索与高亮统一经 `clipSearchText` 取文本，避免两处口径分叉。
+   */
+  title?: string;
   /** 条目类型，与 Rust ClipKind 对齐；用字面量联合消除拼写错误静默通过的隐患。 */
   kind: "text" | "richtext" | "image";
   isFavorite: boolean;
