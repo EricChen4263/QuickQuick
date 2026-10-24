@@ -4,7 +4,8 @@ category: implementation
 subject: Maccy 对标 · Phase 3 P3-9 OCR 阶段 A（独立 Swift Vision helper 原型，不接入 app）
 summary: 交付 tools/ocr-helper/ 下可独立复跑的 CLI（ImageIO 读图 + VNRecognizeTextRequest .accurate + 固定键序 JSON），自造 CoreGraphics/CoreText 夹具并逐条断言。行级完全命中 47/62（纯英文 100%、纯中文 75%、混排 75%、密集截图 77%），但字符准确率 96.4%–100%、密集图 99.28%——错例全是「整行只错一个字」（h↔n、全角括号、大小写）。实测暴露两个决定阶段 B 形态的事实：ANE 编译缓存按「可执行文件名」命名空间、首次调用 17–25s（同名第二次 323ms）；revision 3 的置信度只在 0.30/0.50/1.00 三档跳动且正确行也可能是 0.30，不可用于阈值过滤。
 evidence:
-  commits: []
+  commits:
+    - "90c3e25 feat: 新增独立 Swift Vision OCR helper 原型与夹具验证（P3-9 阶段 A）"
   commands:
     - "bash tools/ocr-helper/build.sh"
     - "bash tools/ocr-helper/verify.sh"
