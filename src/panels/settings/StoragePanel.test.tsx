@@ -562,6 +562,35 @@ describe("StoragePanel 历史条目上限", () => {
     await waitFor(() => expect(historyInput().value).toBe("999"));
   });
 
+  it("值没变时不打后端（路过输入框失焦不应产生一次落盘 + 一次淘汰查询）", async () => {
+    // Arrange
+    render(<StoragePanel />);
+    await waitFor(() => expect(historyInput().value).toBe("500"));
+
+    // Act：原样失焦（用户只是路过，没有改值）
+    fireEvent.blur(historyInput());
+
+    // Assert：一次都不该调后端，统计也不该重拉
+    await waitFor(() => expect(historyInput().value).toBe("500"));
+    expect(mockSetMaxHistoryItems).not.toHaveBeenCalled();
+    expect(mockGetStorageStats).toHaveBeenCalledTimes(1);
+  });
+
+  it("前导零被归一化（输入 050 视为 50，回填为 50 而不是 050）", async () => {
+    // Arrange
+    mockSetMaxHistoryItems.mockResolvedValue(0);
+    render(<StoragePanel />);
+    await waitFor(() => expect(historyInput().value).toBe("500"));
+
+    // Act
+    fireEvent.change(historyInput(), { target: { value: "050" } });
+    fireEvent.blur(historyInput());
+
+    // Assert
+    await waitFor(() => expect(mockSetMaxHistoryItems).toHaveBeenCalledWith(50));
+    await waitFor(() => expect(historyInput().value).toBe("50"));
+  });
+
   it("输入框带宽高约束（min=1 / max=999 / step=1），浏览器层面也能拦非法值", async () => {
     // Arrange
     render(<StoragePanel />);

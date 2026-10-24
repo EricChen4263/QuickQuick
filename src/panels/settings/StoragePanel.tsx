@@ -140,7 +140,9 @@ function StoragePanel() {
   /**
    * 提交历史条目上限（失焦或回车触发）。
    *
-   * 三条约束：
+   * 四条约束：
+   * - 值没变就不打后端：失焦会无条件触发本函数，标签页里路过一次输入框
+   *   不该换来一次 settings.json 落盘加一次淘汰查询。
    * - 非法输入（非整数 / 越界）**不调后端**，把输入框回滚到已生效值并给出提示：
    *   输入框显示的值必须等于真正生效的值，否则用户会误以为设置成功了。
    * - 提交成功后用后端返回的条数报告本轮淘汰量：上限调小会立刻删条目，
@@ -151,6 +153,11 @@ function StoragePanel() {
     const parsed = parseHistoryLimitInput(historyInput);
     if (parsed === null) {
       setHistoryMsg(`上限需为 ${MIN_HISTORY_ITEMS}–${MAX_HISTORY_ITEMS} 之间的整数`);
+      setHistoryInput(String(savedHistoryItems));
+      return;
+    }
+    if (parsed === savedHistoryItems) {
+      // 顺手归一化文本（"050" → "50"）：否则输入框会留着一个与已生效值"看起来不同"的串
       setHistoryInput(String(savedHistoryItems));
       return;
     }

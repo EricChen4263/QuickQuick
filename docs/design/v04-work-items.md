@@ -227,7 +227,7 @@
 - **手动清理改成同一口径**：`cleanup_history_impl(conn, keep_count)` 不再读已删除的 `KEEP_RECENT_COUNT`，上限由命令层从设置读取。手动与自动各持一个数字，迟早漂成两套口径——这本来就是「硬编码 500」的形态。
 - **不产生迁移步骤（P4-7 约束下有意为之）**：本项**没有**新增 DB 列 / 索引 / 表——上限是纯配置，落在 `settings.json`（与 `max_image_bytes` 同源），淘汰复用既有的 `is_deleted` / `is_favorite` / `last_modified_utc` 与 v1 已有索引。因此 `CURRENT_SCHEMA_VERSION` 不动，`MIGRATIONS` 不追加，也没有任何「探测列是否存在」的 DDL。
 - **非法值三道防线**：前端输入拦截（`^\d+$` + 1..999，**不做「悄悄取整」**：`2.5` 直接拒收而不是变成 2）→ 命令层拒收且不落盘 → 读侧 `AppSettings::effective_max_history_items()` 把手工改坏的 0 / 10000 收敛回边界（0 收敛到 1，而不是「每次复制清空历史」）。
-- **验收**：`cargo test` **480 passed**（lib）＋全部集成套件 0 failed；`cargo clippy --all-targets -- -D warnings` 干净；`cargo fmt --all --check` 干净；`pnpm exec tsc -b` 干净；`pnpm test` **766 passed / 74 files**。
+- **验收**：`cargo test` **480 passed**（lib）＋全部集成套件 0 failed；`cargo clippy --all-targets -- -D warnings` 干净；`cargo fmt --all --check` 干净；`pnpm exec tsc -b` 干净；`pnpm test` **768 passed / 74 files**。
 - **可失败性（6 处变异全部打红）**：① 摘掉入库路径的淘汰触发（`if false &&`）→ 3 红；② 候选 SQL 去掉 `is_favorite = 0` → 3 红（含列表索引计划测试）；③ `MAX_HISTORY_ITEMS` 改 1000 → 3 红；④ `set_max_history_items_impl` 跳过立即淘汰 → 1 红；⑤ `counts_as_new_row` 退化成「非空即真」→ 2 红；⑥ 前端非法值不回滚输入框 → 4 红。
 - **未验证**：真机（打包 GUI）改上限的即时手感与 `clipboard-changed` → 列表刷新联动（headless 只验到事件「被发送」的调用点存在，没有真机订阅方实跑）；加密大库（数万条）首次收敛的耗时（`cleanup_keep_recent` 是逐行 UPDATE，超出部分很多时是一批写事务）；Windows。
 ### P4-5 · 搜索升级（预计算 title + 4 模式 + 多词 AND + 命中高亮）

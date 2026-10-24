@@ -52,6 +52,8 @@ evidence:
 ## 非法值三道防线
 
 1. 前端：`^\d+$` + 1..999，**不做「悄悄取整」**——`2.5` 直接拒收，而不是 `parseInt` 成 2 让用户以为自己设了 2.5 条；失焦/回车提交，非法时把输入框回滚到已生效值（「输入框显示的值必须等于真正生效的值」）。
+至于「只是路过输入框」：失焦会无条件触发提交，所以在调后端之前先比对已生效值，值没变就直接归一化文本返回——否则每次路过都会落盘一次 `settings.json` 并跑一次淘汰查询。这条也钉了用例（原样失焦不调后端、`050` 归一化成 `50`）。
+
 2. 命令层：越界拒收且**不落盘**（测试先写 300、再试 0/1000，断言文件里还是 300 ——只断言 `Err` 无法证明没落盘）。
 3. 读侧：`effective_max_history_items()` 把手工改坏的 0 / 10000 收敛回 1 / 999。0 收敛到 **1** 而不是「保持 0」：保持 0 等于每次复制都清空历史，那是数据损失而不是「严格」。
 
@@ -62,7 +64,7 @@ cd src-tauri && cargo test                         → 480 passed（lib）+ 全�
 cd src-tauri && cargo clippy --all-targets -- -D warnings → No issues found
 cd src-tauri && cargo fmt --all --check            → 干净（只 format 本 item 涉及的文件，未批量格式化他人未提交文件）
 pnpm exec tsc -b                                   → 无错误
-pnpm test                                          → 74 files / 766 tests 全绿
+pnpm test                                          → 74 files / 768 tests 全绿
 ```
 
 ### 变异验证（6 处全部打红，未留在最终代码里）
