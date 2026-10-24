@@ -124,7 +124,7 @@ describe("isNearBottom", () => {
   });
 
   it("距离底部恰好等于阈值时进入追加区", () => {
-    // 距离底部 = 2000 - (2000 - 400 - NEAR_BOTTOM_THRESHOLD_PX) - 400 = 阈值
+    // 该 scrollTop 下 scrollHeight - scrollTop - clientHeight 恰好等于阈值
     const scrollTop = 2000 - 400 - NEAR_BOTTOM_THRESHOLD_PX;
     expect(isNearBottom(scrollTop, 2000, 400)).toBe(true);
   });
