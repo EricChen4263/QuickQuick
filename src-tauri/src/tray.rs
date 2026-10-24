@@ -633,8 +633,9 @@ pub fn clear_unpinned_history(
     app: tauri::AppHandle,
     state: tauri::State<'_, crate::ipc::AppDb>,
 ) -> Result<crate::ipc::system::CleanupResultDto, String> {
-    let result =
-        crate::ipc::with_db(&state, |conn| clear_unpinned_impl(conn).map_err(|e| e.to_string()))?;
+    let result = crate::ipc::with_db(&state, |conn| {
+        clear_unpinned_impl(conn).map_err(|e| e.to_string())
+    })?;
     if result.soft_deleted > 0 || result.purged > 0 {
         if let Err(e) = app.emit(crate::CLIPBOARD_CHANGED_EVENT, ()) {
             eprintln!("[QuickQuick] 清空未固定后发送 clip-change 事件失败: {e}");
@@ -688,10 +689,10 @@ mod tests {
 
     use super::{
         can_start_update_check, clear_unpinned_impl, menu_entries, next_status, pause_item_text,
-        tooltip_text, update_item_enabled, update_item_label, version_label, MenuEntry, UpdateEvent,
-        UpdateStatus, CLEAR_UNPINNED_REQUEST_EVENT, MENU_ID_CHECK_UPDATE, MENU_ID_CLEAR_UNPINNED,
-        MENU_ID_OPEN_SETTINGS, MENU_ID_PAUSE, MENU_ID_QUIT, MENU_ID_SHOW, MENU_ID_VERSION,
-        ROUTE_EVENT, ROUTE_SETTINGS, TOOLTIP_IDLE,
+        tooltip_text, update_item_enabled, update_item_label, version_label, MenuEntry,
+        UpdateEvent, UpdateStatus, CLEAR_UNPINNED_REQUEST_EVENT, MENU_ID_CHECK_UPDATE,
+        MENU_ID_CLEAR_UNPINNED, MENU_ID_OPEN_SETTINGS, MENU_ID_PAUSE, MENU_ID_QUIT, MENU_ID_SHOW,
+        MENU_ID_VERSION, ROUTE_EVENT, ROUTE_SETTINGS, TOOLTIP_IDLE,
     };
 
     /// 把菜单条目压成 `(id, 文案, 启用位)` 便于断言顺序与文案；分隔线 id 为 `None`。
@@ -1058,10 +1059,7 @@ mod tests {
     #[test]
     fn clear_unpinned_request_event_matches_frontend_contract() {
         // Arrange & Act & Assert
-        assert_eq!(
-            CLEAR_UNPINNED_REQUEST_EVENT,
-            "tray-clear-unpinned-request"
-        );
+        assert_eq!(CLEAR_UNPINNED_REQUEST_EVENT, "tray-clear-unpinned-request");
     }
 
     // ===== 清空未固定：真库行为锚定 =====
