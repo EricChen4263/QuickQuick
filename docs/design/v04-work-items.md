@@ -226,6 +226,8 @@
 - **残留（重要）**：窗口是前缀而非真虚拟滚动，重度滚动后 DOM 仍会回到全量（2000 条时 `⌘↓` 到末条 = 2000 个节点）。真实收益是「首屏 100 条 + 增量挂载」把一次性 2000 次节点创建摊到滚动过程中。
 - **补真虚拟滚动的触发信号**：用户库常态到数千条**且真机滚动掉帧**；届时需要先解决「行高可变」的测量问题（`ResizeObserver` 或测量缓存），不能靠固定行高糊过去。
 - **未验证**：真机滚动流畅度、`⌘↑`/`⌘↓` 真机键位；`PopoverList` 仍是全量渲染（分组标题 + 扁平索引是另一套模型，未做）。
+- **P5-5 审查挂号约束**：若分页落地，`first_copied` 排序（P5-5）只能在已取回页内稳定重排，跨页顺序会错乱；分页时须改为 SQL 层排序或服务端全量重排。当前全量取回无 LIMIT，不是 bug。
+
 ### P4-3 · 缩略图移出 IPC payload（消除 base64 全量重传）
 - **状态**：done
 - **结果**：commits `c661590`（后端）、`77fc4cb`（前端）、`1469e79`（复审加固）。`ClipItemDto.thumbnail_data_url` → `has_thumbnail: bool`；新增只读函数 `db::list_items_with_image_flag`，缩略图 BLOB **连出库都不做**（投影 `CASE WHEN thumbnail IS NOT NULL AND length(thumbnail) > 0 THEN 1 ELSE 0`）；新增 `get_clip_thumbnail(image_id)` 复用 `image::get_image_thumbnail`（不另写 SQL），不存在/软删/零字节 BLOB 一律 `Ok(None)`；前端模块级 `settled` 缓存 + 在途去重，`invoke` 不进组件（可测「只拉一次」）。
@@ -310,7 +312,13 @@
   2. **tooltip 覆盖范围**：本轮只给四个新设置项写「默认值」tooltip。既有约 15 项设置（通用/隐私/存储/热键）**未**加，路线图 Phase 5 的「每项设置加 tooltip 写明默认值」那一行仍需逐项核对默认值后另行处理。
   3. **枚举写坏的爆炸半径**（与 `exclude_mode` 历史行为一致，已用测试钉住）：`settings.json` 里 `sort_order` / `highlight_style` 写成非法字符串会让**整份设置**反序列化失败并回退全默认。
 - **未验证 / 待人工**：真机手感（各档预览延迟的实际体验、16/48px 缩略图与下划线/加粗的观感、长列表切排序后的滚动位置）、打包 GUI 下的实际表现、Windows（本项未新增平台相关代码，但整条链路未在 Windows 编译验证）。
-- **审查**：由执行端自检 + 三轮变异自证，**未做独立 reviewer 审查**（审查由 lead 另派）。
+- **独立审查（lead 另派 `settings-expansion-review`，对象 `07fd8f6`）**：结论 **非 BLOCK**。默认值逐项对照 `07fd8f6^` 一致；契约（57 个命令注册、5 个新命令前后端参数名一致、枚举 snake_case、DTO camelCase）核对通过；`tsc`、设置子集 288 测试、`cargo check --all-targets` 退出 0。审查提出的既有风险 **已登记为 P5-8**（见下），不在本项修。已据审查修正 `ipc/clipboard.rs` 注释：行数 = 历史上限 + 收藏数，并无硬上界。
+### P5-8 · settings.json 读失败后写回覆盖（既有缺陷，P5-5 审查挂号）
+- **状态**：ready（未开工；非 P5-5 引入，但 P5-5 新增的 4 个 setter 扩大了入口面）
+- **问题**：`settings.rs` `load_or_default` 对任一解析失败静默回退 `Default`（`:291-293`）；`save` 为整文件 `fs::write`（非原子，`:267-271`）。任一非法字段或 JSON 语法错 → 读回默认值 → 下一次任意 setter 把**整份默认值**写回，覆盖热键、排除应用、凭据引用等无关设置。约 20 处既有 setter 同构。
+- **做什么**：短期——`load` 失败且文件存在时，拒绝写入（返回错误）或先备份为 `settings.json.bak` 再写；中期——单字段 setter 改为读 `serde_json::Value` 后只改目标键。
+- **验收**：构造非法 settings.json 后调用任一 setter，文件内容不被默认值覆盖（或已备份）；变异可红。
+
 ### P5-6 · i18n 框架 + 中英双语（namespace 分区 + 出货白名单）
 ### P5-7 · 设置页搜索
 

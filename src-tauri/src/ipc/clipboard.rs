@@ -64,7 +64,8 @@ pub fn list_clip_items_impl(conn: &Connection) -> Result<Vec<ClipItemDto>, DbErr
 /// 为什么不在 SQL 里换 ORDER BY 列：列表主查询的索引是
 /// `(is_deleted, is_favorite, last_modified_utc)`，改按 `created_utc` 排序会退化成
 /// 全表扫 + 临时 B-tree；而新建索引要动迁移与 schema，超出本项范围。
-/// 行数上界就是历史条目上限（默认 500、最高 999），内存里一次稳定排序的代价可忽略。
+/// 行数 = 历史上限（默认 500、最高 999）+ 收藏条目数（收藏既不计数也不被淘汰，见 P4-4），
+/// 因此行数并无硬上界；内存里一次稳定排序的代价仍可忽略（O(n log n)）。
 ///
 /// 图片条目的 `has_thumbnail` 透传自图片行、`image_id` 透传；
 /// 文本条目两者分别为 `false` / `None`。
