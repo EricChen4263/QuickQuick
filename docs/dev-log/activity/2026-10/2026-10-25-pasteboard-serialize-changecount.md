@@ -4,7 +4,7 @@ category: implementation
 subject: Maccy 对标 · P1-8 + P3-2（全部 NSPasteboard 访问串行到主线程 + changeCount 替代内容哈希轮询，去重语义不变）
 summary: macOS 剪贴板轮询改为「主线程读 changeCount 标量 → 变了才在主线程做一次全量读 → 快照交后台入库」，复制/粘贴写回与 MacOsPasteBackend 的读写也经同一主线程通道。探针（主线程 + 4 个后台线程同时跑读写全路径，每轮 2800 次 × 3 次运行）0 崩溃；去掉主线程派发的变异 3/3 崩溃（SIGSEGV ×1、SIGTRAP ×2）。changeCount 检测改为恒真时契约测试红 2 条。用户已裁决去重语义保持现状，repeated_identical_text_copy_dedups_and_bumps 未改断言。
 evidence:
-  commits: []
+  commits: ["71d18f8"]
   commands:
     - "cargo test（810 passed / 37 suites）"
     - "cargo clippy --all-targets -- -D warnings（干净）"
