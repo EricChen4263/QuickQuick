@@ -197,9 +197,22 @@
 - **顺带子项（P3-0 审查登记，不单独立项）**：`db::top_id` 用 `ORDER BY last_modified_utc DESC LIMIT 1`，缺 `rowid DESC` 兜底，与 `list_items_with_images` / `list_ordered` 不一致——同毫秒并列时两处「最前条目」口径会给出**相反**答案（审查用 2 万轮探针实测：并列 4904 次里 `top_id` 与 `list_ordered` 首元素 100% 不一致）。但生产代码无调用点（仅 `tests/clipboard.rs` 两处测试用），且当前不可复现 flaky。**修法不是简单加一行**：加 `, rowid DESC` 会让那两个测试红（它们的期望行恰好是低 rowid），正确做法是同步把断言改成不依赖并列时选哪行（参考 `capture_contract.rs` 第 1 条的哨兵时间戳 + 相对关系写法）。
 ### P4-2 · 分页 + 虚拟滚动
 ### P4-3 · 缩略图移出 IPC payload（消除 base64 全量重传）
+- **状态**：done
+- **结果**：commits `c661590`（后端）、`77fc4cb`（前端）、`1469e79`（复审加固）。`ClipItemDto.thumbnail_data_url` → `has_thumbnail: bool`；新增只读函数 `db::list_items_with_image_flag`，缩略图 BLOB **连出库都不做**（投影 `CASE WHEN thumbnail IS NOT NULL AND length(thumbnail) > 0 THEN 1 ELSE 0`）；新增 `get_clip_thumbnail(image_id)` 复用 `image::get_image_thumbnail`（不另写 SQL），不存在/软删/零字节 BLOB 一律 `Ok(None)`；前端模块级 `settled` 缓存 + 在途去重，`invoke` 不进组件（可测「只拉一次」）。
+- **为什么保留 `list_items_with_images`**：`src-tauri/tests/capture_contract.rs` 有 3 处断言 `row.thumbnail` 非空，改行结构会让刚落地的 P3-0 契约护栏编译不过。故走「加只读函数 + 两个变体共用 SQL 骨架」；计划测试用 `assert_eq!(flag_plan, blob_plan)` 防「改一个忘另一个」。
+- **payload 口径（可复现，勿引用单一数字）**：改后 10 条含图条目 JSON = **2,301 B（230 B/条），与缩略图体积完全解耦**（三档输入——高熵噪点/渐变/纯色——均为 2,301 B）；改前 = `2,301 + 1.33 × 缩略图字节总和`，所以「改前」不是一个固定值：噪点图档 523,955 B（228×）、渐变档 20,423 B（8.9×）、纯色档 5,275 B（2.3×）。**对外只说「改后固定 230 B/条」**，不要说「228×」。
+- **失败策略（刻意）**：取图失败也缓存为 null、不自动重试——取不到通常是该行已被清理或 BLOB 为空，重试只会把滚动放大成请求风暴；代价是瞬时故障要重开窗口才自愈，已写进注释。
+- **审查打回的两处（已闭环）**：① 计划断言只在「计划串」层比较，**去掉 JOIN 的 `cimg.is_deleted = 0` 不会红**（两变体共用宏，计划逐字相同但语义漏了软删图）；已加 SQL 字面锚（`cimg.is_deleted = 0` / `length(...) > 0` / `ci.is_deleted = 0`），删任一条件必红。② 缓存读取有两处互相兜底（改一处仍绿）；已收敛到单一入口 `trySettledClipThumbnail` + hook 去掉 state 副本（渲染期派生读 + `forceRender`），两个调用点各有独立断言。
+- **未验证**：真机列表滚动时的实际 IPC 频率与首屏延迟、失败永久缓存在 SQLCipher 大库上的可接受性、占位 `min-height` 与真实缩略图的视觉衔接。
 ### P4-4 · 自动淘汰 + 可配上限（1–999，pin 豁免）
 ### P4-5 · 搜索升级（预计算 title + 4 模式 + 多词 AND + 命中高亮）
 ### P4-6 · 翻译历史分页
+- **状态**：done
+- **结果**：commits `95d3045`、`fb5d366`（复审补强）。`TRANSLATE_HISTORY_PAGE_LIMIT = 200`（历史栏一屏上限，钉住 payload）+ `TRANSLATE_HISTORY_RETENTION = 500`（2.5× 分页上限，给表体量上界）；查询加 `LIMIT ?1` 且保留 `created_utc DESC, rowid DESC`；写入后 best-effort 清理，**先 `COUNT(*)` 短路**，只有超限才跑一次 `DELETE ... OFFSET 500`。
+- **收敛点**：只在写入路径（唯一写入口），读路径保持纯读——`list_translate_history` 会被挂载与事件反复调用，读里顺手 DELETE 会把纯读变隐式写、还可能撞写锁。代价：**旧库只在用户下一次翻译时收敛**。
+- **清理失败不影响主链路**：吞错 + `eprintln`。测试用 `BEFORE DELETE` 触发器「先插审计行再 `RAISE(FAIL)`」——比只读连接好在「写入成功、清理失败」这个真形态能构造出来，且审计行证明清理**真的被尝试过**，避免恒真假绿。
+- **审查打回的「测试拦不住退化」（已闭环）**：把 `total <= RETENTION` 改成 `total < 0`（每次写入都跑 DELETE）原本 **0 红**。触发器方案在这里**必然假绿**——未超限时那条 DELETE 即使执行也是删 0 行，而行级触发器 0 行匹配就 0 次触发。改用 `sqlite3_set_authorizer` 在 **prepare 阶段**统计 `SQLITE_DELETE`，删 0 行也会计数；并配**正向对照**（超限写入后计数必须变 1），否则「0 次」可能只是探针没接上。
+- **未验证**：加密库上 `COUNT(*)` 与 `DELETE ... OFFSET` 的实际耗时、旧库万级首次翻译的一次性收敛耗时（与主写同锁的尾延迟）、Windows。
 ### P4-7 · 迁移框架版本化（`PRAGMA user_version` 承担 schema 版本）
 
 ---
