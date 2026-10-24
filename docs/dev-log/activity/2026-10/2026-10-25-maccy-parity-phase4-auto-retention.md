@@ -5,7 +5,7 @@ subject: Maccy 对标 · Phase 4 自动淘汰 + 可配历史上限（P4-4）
 summary: 把「手动清理才生效、保留条数硬编码 500」改成「入库成功即自动淘汰 + 设置页可配 1–999（默认 500）+ 收藏项既不计数也不删除」；淘汰挂在本轮确有新增行之后，常态轮次零额外 SQL，上限调小立即收敛并回报淘汰条数。
 evidence:
   commits:
-    - feat(storage): 入库自动淘汰 + 可配历史上限（P4-4）
+    - 7df0e60 feat(storage): 入库自动淘汰 + 可配历史上限 1–999（P4-4）
   commands:
     - "cd src-tauri && cargo test"
     - "cd src-tauri && cargo clippy --all-targets -- -D warnings"
