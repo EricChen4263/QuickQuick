@@ -247,20 +247,25 @@ pub fn run() {
 ///
 /// 三平台统一用 `LocalKeyProvider`（机器绑定本地密钥库，去 Keychain、永不弹密码）取得
 /// SQLCipher 密钥，数据库文件放在 app_config_dir()。
-/// 无论开库成功与否，都调用 `app.manage(AppDb(...))`：成功放 `Some(conn)`，失败放 `None`。
-/// 这保证 Tauri 状态始终已注册，避免前端 invoke 时因状态缺失在 dispatch 层 panic。
-/// 开库失败时仅 eprintln 记录原因，不 panic——IPC 命令将通过 `with_db` 返回 Err 而非崩溃。
+/// 无论开库成功与否都注册状态：成功放连接，失败放 `None` **并把失败原因一起存进状态**
+/// （`open_error`）。这既保证 Tauri 状态始终已注册、避免前端 invoke 时因状态缺失在
+/// dispatch 层 panic，也让失败原因能透到前端——打包后的 GUI 没有用户可见的 stderr，
+/// 只打日志等于用户什么都看不到。
+/// 开库失败不 panic：IPC 命令通过 `with_db` 返回带原因的错误而非崩溃。
 fn setup_app_db(app: &mut tauri::App) {
-    let conn_opt = match ipc::settings::resolve_config_dir(app.handle()) {
+    let (conn_opt, open_error) = match ipc::settings::resolve_config_dir(app.handle()) {
         Ok(dir) => open_db_with_reset(&dir),
         Err(e) => {
             eprintln!("[QuickQuick] 无法获取/创建配置目录，数据库将不可用: {e}");
-            None
+            (None, Some(format!("无法获取或创建配置目录：{e}")))
         }
     };
 
-    // 无论 conn_opt 是 Some 还是 None，都注册状态，防止 dispatch 层 panic
-    app.manage(ipc::AppDb(Mutex::new(conn_opt)));
+    // 无论成功与否都注册状态，防止 dispatch 层 panic
+    app.manage(ipc::AppDb {
+        conn: Mutex::new(conn_opt),
+        open_error,
+    });
 }
 
 /// 构造本地 ECDICT 词典 DAO 并注册为 Tauri 状态。
@@ -289,21 +294,24 @@ fn setup_ecdict_db(app: &mut tauri::App) {
 ///
 /// 重置只发生一次：备份后用全新随机主密钥重建空库。预发布、单用户，剪贴板历史重置可接受
 /// （翻译 secret 需用户到设置页重填一次，见 release note）。
-fn open_db_with_reset(dir: &std::path::Path) -> Option<rusqlite::Connection> {
+///
+/// 返回 `(连接, 失败原因)`：成功时原因为 `None`；失败时原因为用户可读文案，会随
+/// `AppDb.open_error` 透到前端（打包后用户看不到 stderr，只打日志等于没说）。
+fn open_db_with_reset(dir: &std::path::Path) -> (Option<rusqlite::Connection>, Option<String>) {
     let db_path = dir.join("quickquick.db");
     let provider = keyprovider::LocalKeyProvider::new(dir);
 
     match pipeline::open_app_db(&provider, &db_path) {
-        Ok(conn) => Some(conn),
+        Ok(conn) => (Some(conn), None),
         Err(e) if is_resettable_open_error(&e) => {
             eprintln!("[QuickQuick] 开库失败，执行一次性重置（备份旧库与旧密钥后重建）: {e}");
             reset_and_reopen(dir, &db_path)
         }
         Err(e) => {
-            // 启动期唯一能写清病因的地方，必须保留 `DbError` 的完整文案：
+            // 同一句既写日志（开发可见）又作为前端可见原因（用户可见）：
             // 版本超前会带上库内版本与支持版本，迁移失败会带上 from→to 与底层原因。
             eprintln!("[QuickQuick] 数据库打开失败，IPC 命令将返回错误而非崩溃: {e}");
-            None
+            (None, Some(e))
         }
     }
 }
@@ -324,30 +332,35 @@ fn is_resettable_open_error(err: &str) -> bool {
 }
 
 /// 执行一次性重置：备份旧库 + 旧 master.key，用新 LocalKeyProvider 重建空库。
+///
+/// 返回值与 [`open_db_with_reset`] 一致：备份失败或重建仍失败时，原因会带给前端。
 fn reset_and_reopen(
     dir: &std::path::Path,
     db_path: &std::path::Path,
-) -> Option<rusqlite::Connection> {
+) -> (Option<rusqlite::Connection>, Option<String>) {
     if db_path.exists() {
         if let Err(e) = db::backup_corrupt_file(db_path) {
             eprintln!("[QuickQuick] 旧库备份失败，放弃重置: {e}");
-            return None;
+            return (None, Some(format!("旧数据库备份失败，未能重置数据库：{e}")));
         }
     }
     let key_path = dir.join("master.key");
     if key_path.exists() {
         if let Err(e) = db::backup_corrupt_file(&key_path) {
             eprintln!("[QuickQuick] 旧 master.key 备份失败，放弃重置: {e}");
-            return None;
+            return (
+                None,
+                Some(format!("旧密钥文件备份失败，未能重置数据库：{e}")),
+            );
         }
     }
 
     let provider = keyprovider::LocalKeyProvider::new(dir);
     match pipeline::open_app_db(&provider, db_path) {
-        Ok(conn) => Some(conn),
+        Ok(conn) => (Some(conn), None),
         Err(e) => {
             eprintln!("[QuickQuick] 重置后重建数据库仍失败，IPC 命令将返回错误: {e}");
-            None
+            (None, Some(e))
         }
     }
 }
@@ -417,7 +430,7 @@ fn start_clipboard_poll(
             let Ok(state) = handle.try_state::<ipc::AppDb>().ok_or(()) else {
                 continue;
             };
-            let Ok(guard) = state.0.lock() else {
+            let Ok(guard) = state.conn.lock() else {
                 continue;
             };
             // 数据库不可用时静默跳过本轮，不 panic

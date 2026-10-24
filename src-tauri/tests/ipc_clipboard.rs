@@ -199,7 +199,10 @@ fn list_clip_items_html_null_for_plaintext() {
 #[test]
 fn ipc_clipboard_with_db_none_returns_db_unavailable_err() {
     // Arrange：构造持有 None 的 AppDb（模拟开库失败场景）
-    let db_state = AppDb(Mutex::new(None));
+    let db_state = AppDb {
+        conn: Mutex::new(None),
+        open_error: None,
+    };
 
     // Act：调用 with_db，闭包永远不会被执行
     let result = with_db(&db_state, |_conn| Ok(42u32));
@@ -220,7 +223,10 @@ fn ipc_clipboard_with_db_none_returns_db_unavailable_err() {
 fn ipc_clipboard_with_db_some_executes_closure_ok() {
     // Arrange：构造持有真实临时库连接的 AppDb
     let (_dir, conn) = open_tmp_db();
-    let db_state = AppDb(Mutex::new(Some(conn)));
+    let db_state = AppDb {
+        conn: Mutex::new(Some(conn)),
+        open_error: None,
+    };
 
     // Act：闭包读取空列表
     let result = with_db(&db_state, |c| {
