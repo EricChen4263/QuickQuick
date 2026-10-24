@@ -20,62 +20,26 @@
 //!
 //! 本模块只回答"平台是否声明了标记 / 剪贴板归谁写"，不做任何内容启发式分析。
 //!
-//! # 为什么 macOS 上必须把平台读取搬到主线程
+//! # macOS 上的线程约束
 //!
-//! `NSPasteboard` **不是线程安全的**：同一进程内两个线程同时调
-//! `NSPasteboard::types()` 会 SIGSEGV（本机隔离探针实测 3/3 崩溃，单线程读从不崩）。
-//! 而本仓库的剪贴板轮询跑在后台线程、每次变化都要读类型集合；同时主线程有 AppKit
-//! run loop 与其它 pasteboard 访问，两者一撞就是**整个 app 崩溃**，不是丢一次捕获。
+//! `NSPasteboard` **不是线程安全的**：同一进程内两个线程同时调 `types()`、
+//! `changeCount` 或经 arboard 读写正文都会 SIGSEGV。所以本模块里 macOS 分支的
+//! [`read_pasteboard_meta`]（读类型集合）与 [`mark_self_write`]（追加自产标记）
+//! **只能在串行线程上调用**——串行通道、超时与降级见 `pasteboard_serial` 模块：
+//! 生产的 `MainThreadPasteboardBackend` 在同一个主线程任务里读完类型集合与正文，
+//! 写回路径经同一通道进入 [`mark_self_write`]。
 //!
-//! 所以平台读取被抽成可注入的 [`PasteboardMetaReader`]：
-//! - macOS 用 [`MainThreadMetaReader`]，把读取投递到主线程串行执行并阻塞等待结果，
-//!   轮询线程只拿到一份 [`PasteboardMeta`] 快照；
-//! - Windows 用 [`DirectMetaReader`] 就地读——Win32 剪贴板 API 本身允许跨线程调用，
-//!   就地读还能保留"一次开合剪贴板读完全部标记"的优化。
-//!
-//! # 残留风险（未消除，⚠️ 已实测复现，不是理论担忧）
-//!
-//! 本改动只把**元数据读取**搬到了主线程。轮询线程仍会通过 arboard 读正文
-//! （`get_text` / `get_html` / `get_image`，见 `pipeline::ArboardBackend::change_count`
-//! 与 `read`），写回路径（arboard 写入 + 本模块的 [`mark_self_write`]）也在调用它的
-//! 线程上直接碰 `NSPasteboard`。
-//!
-//! 隔离探针实测（本机 aarch64 macOS，200 次循环）：让一个线程调
-//! `NSPasteboard.types()`、另一个线程跑 `arboard::Clipboard::get_text()`，
-//! **3/3 次进程崩溃**（SIGSEGV / SIGTRAP）。也就是说：把 `types()` 挪走之后，
-//! 「后台线程经 arboard 读正文」与「主线程 AppKit 活动」并发仍会崩。
-//!
-//! 因此本模块的主线程派发只能理解为"消掉了已知必崩的那条元数据读取路径"，
-//! **不等于**"消除了跨线程 pasteboard 访问"。
-//!
-//! ## 定性：这是既有问题，不是本次改动引入的
-//!
-//! Phase 1 之前，轮询线程就已经通过 arboard 读 `NSPasteboard`
-//! （`get_text` / `html` / `get_image`），而主线程上的同步 IPC 命令会通过 arboard
-//! 写 `NSPasteboard`——「两个线程都碰 `NSPasteboard`」这件事在本轮改造之前就存在。
-//! 本次改造先多引入了一个 API 面（后台线程的 `types()`），随即又把它移回主线程：
-//! 净效果是**消除了我们自己新增的那一面**，而既有的那一类无法在 P1-1 范围内消除。
-//!
-//! ## 根治路径与挂号
-//!
-//! 只把 `read()` 也搬到主线程是**不划算的半修**：`change_count()` 仍会每 500ms 在
-//! 后台读 arboard，与主线程写入照样并发——付了主线程做图片转换的代价，风险却不闭环。
-//!
-//! 真正的根治属于 **P1-8 / Phase 3**：换掉 arboard 直连 `NSPasteboard`、用
-//! `changeCount` 取代内容哈希轮询、并把全部访问串行化到同一线程。其中
-//! `changeCount` 会改变去重语义（同一内容复制两次各记一条），是用户可见变化，
-//! 需要单独走一个小版本的验收与审查，不能塞进 P1-1。
-//!
-//! 本轮结论：把 `types()` 移出后台线程，并留下可注入接缝
-//! （[`PasteboardMetaReader`] / [`MetaDispatch`]）——这正是未来全部访问串行化要用的
-//! 那个接缝；风险挂号到 P1-8，与 Phase 3 一起做。
+//! Windows 的剪贴板 API 允许跨线程调用，[`DirectMetaReader`] 就地读，
+//! 还能保留"一次开合剪贴板读完全部标记"的优化。
 
 // 写入门闩只在 macOS 之外的生产路径使用（macOS 有真实私有类型标记），
 // 但测试构建也要编译它来覆盖 arm/consume 语义。
 #[cfg(any(test, not(target_os = "macos")))]
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
-use std::sync::{mpsc, Arc, Mutex};
+#[cfg(not(target_os = "macos"))]
+use std::sync::Arc;
+use std::sync::Mutex;
 
 // 来源应用身份定义在 clipboard 模块（它是剪贴板快照的类型），此处重导出，
 // 使 `read_pasteboard_meta` 的返回类型在本模块公开可见。
@@ -86,12 +50,6 @@ pub use crate::clipboard::SourceApp;
 /// 轮询每 500ms 一次，失败若逐条打印会刷爆日志；节流的目的是让维护者
 /// 仍能看出"读取在持续失败"，而不是把日志变成噪声。
 const READ_FAILURE_LOG_EVERY: u64 = 100;
-
-/// 等待主线程完成一次平台读取的超时。
-///
-/// 取 300ms：正常主线程读取是微秒级，留两个数量级余量即可；
-/// 主线程恰好卡在别处时也不能让轮询线程无限期挂住（超时按降级值处理并留痕）。
-const MAIN_THREAD_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(300);
 
 /// 累计的平台读取失败次数（跨线程累加，仅用于日志节流）。
 static READ_FAILURE_COUNT: AtomicU64 = AtomicU64::new(0);
@@ -107,7 +65,7 @@ fn should_log_failure(count: u64) -> bool {
 ///
 /// 为什么要留痕：全降级路径此前完全静默，用户与维护者无法区分
 /// "平台读失败（敏感过滤实际没生效）"和"这份内容确实不敏感"。
-fn log_read_failure(stage: &str, detail: &str) {
+pub(crate) fn log_read_failure(stage: &str, detail: &str) {
     let count = READ_FAILURE_COUNT.fetch_add(1, AtomicOrdering::Relaxed) + 1;
     if should_log_failure(count) {
         eprintln!("[pasteboard_meta] 平台标记读取失败（累计 {count} 次，{stage}）：{detail}");
@@ -268,26 +226,27 @@ impl LastExternalSourceApp {
     }
 }
 
-/// 平台剪贴板元数据的读取策略。
+/// 平台剪贴板元数据的读取策略（非 macOS）。
 ///
-/// 抽成 trait 是因为**同一个读取动作在两个平台上必须跑在不同线程**：
-/// macOS 的 `NSPasteboard` 跨线程并发调用会崩（见模块文档），必须回主线程；
-/// Windows 的剪贴板 API 允许跨线程，就地读更省（一次开合读完所有标记）。
-/// 让 [`crate::pipeline::ArboardBackend`] 依赖这个抽象，而不是自己决定线程。
+/// 抽成 trait 让 [`crate::pipeline::ArboardBackend`] 依赖抽象而不是平台函数。
+/// macOS 不走这条路：类型集合必须与正文在同一次串行任务里读完，见 `pasteboard_serial`。
+#[cfg(not(target_os = "macos"))]
 pub trait PasteboardMetaReader: Send + Sync {
     /// 读取一次平台元数据；失败返回全降级值而不是 panic。
     fn read(&self) -> PasteboardMeta;
 }
 
-/// 就地读取实现（Windows 与非 macOS 平台）。
+/// 就地读取实现（Windows 与其它非 macOS 平台）。
 ///
 /// 直接在当前线程调 [`read_pasteboard_meta`]：这些平台的剪贴板 API 支持跨线程，
 /// 且读来源应用身份需要打开剪贴板，就地读可以一次开合读完全部标记。
+#[cfg(not(target_os = "macos"))]
 pub struct DirectMetaReader {
-    /// 最近外部前台应用身份（macOS 之外一般为空，Windows 走剪贴板所有者）
+    /// 最近外部前台应用身份（Windows 走剪贴板所有者，一般为空）
     tracker: Arc<LastExternalSourceApp>,
 }
 
+#[cfg(not(target_os = "macos"))]
 impl DirectMetaReader {
     /// 用给定的应用身份记录构造读取器。
     #[must_use]
@@ -296,123 +255,11 @@ impl DirectMetaReader {
     }
 }
 
+#[cfg(not(target_os = "macos"))]
 impl PasteboardMetaReader for DirectMetaReader {
     fn read(&self) -> PasteboardMeta {
         read_pasteboard_meta(&self.tracker)
     }
-}
-
-/// 待投递到主线程执行的读取任务。
-type PasteboardMetaTask = Box<dyn FnOnce() -> PasteboardMeta + Send + 'static>;
-
-/// 把"读一次平台元数据"投递到指定线程执行并等待结果的执行器。
-///
-/// 抽成 trait 的唯一目的是让主线程派发这条路径**可被探针覆盖**：
-/// 生产用 [`TauriMainThreadDispatch`]（真主线程），
-/// 验证时注入"单一线程串行执行"的实现，复现同一不变量（所有 `NSPasteboard` 调用同线程）。
-pub trait MetaDispatch: Send + Sync {
-    /// 派发任务并等待结果；派发失败或等待超时返回 `None`（由调用方降级）。
-    fn dispatch(&self, task: PasteboardMetaTask) -> Option<PasteboardMeta>;
-}
-
-/// 生产派发器：投递到 Tauri 主线程（AppKit run loop 所在线程）并阻塞等待。
-///
-/// 与 `popover.rs` 里的 `on_main_thread_blocking` 同构（`run_on_main_thread` +
-/// `mpsc::recv_timeout`，已在主线程时就地执行避免自死锁），区别只在回传的是
-/// [`PasteboardMeta`] 而不是 `bool`，故在本模块内独立实现，不复用/改动 `popover.rs`。
-pub struct TauriMainThreadDispatch {
-    app: tauri::AppHandle,
-}
-
-impl TauriMainThreadDispatch {
-    /// 用应用句柄构造派发器。
-    #[must_use]
-    pub fn new(app: tauri::AppHandle) -> Self {
-        Self { app }
-    }
-}
-
-impl MetaDispatch for TauriMainThreadDispatch {
-    fn dispatch(&self, task: PasteboardMetaTask) -> Option<PasteboardMeta> {
-        // 已在主线程：就地执行。若仍走派发，主线程会阻塞等待自己，必然超时。
-        if is_main_thread() {
-            return Some(task());
-        }
-
-        let (tx, rx) = mpsc::channel::<PasteboardMeta>();
-        if let Err(e) = self.app.run_on_main_thread(move || {
-            // 接收端可能已超时放弃，发送失败不值得记录
-            let _ = tx.send(task());
-        }) {
-            log_read_failure("主线程派发", &format!("run_on_main_thread 失败：{e}"));
-            return None;
-        }
-
-        match rx.recv_timeout(MAIN_THREAD_READ_TIMEOUT) {
-            Ok(meta) => Some(meta),
-            Err(_) => {
-                log_read_failure(
-                    "主线程派发",
-                    &format!("等待超时（{}ms）", MAIN_THREAD_READ_TIMEOUT.as_millis()),
-                );
-                None
-            }
-        }
-    }
-}
-
-/// 主线程读取器（macOS 生产实现）。
-///
-/// 把平台读取投递到主线程执行，轮询线程只拿到一份快照——
-/// 这样进程内所有 `NSPasteboard::types()` 调用都发生在同一线程上。
-pub struct MainThreadMetaReader<D: MetaDispatch = TauriMainThreadDispatch> {
-    dispatch: D,
-    tracker: Arc<LastExternalSourceApp>,
-}
-
-impl MainThreadMetaReader<TauriMainThreadDispatch> {
-    /// 用 Tauri 应用句柄构造（生产路径）。
-    #[must_use]
-    pub fn new(app: tauri::AppHandle, tracker: Arc<LastExternalSourceApp>) -> Self {
-        Self {
-            dispatch: TauriMainThreadDispatch::new(app),
-            tracker,
-        }
-    }
-}
-
-impl<D: MetaDispatch> MainThreadMetaReader<D> {
-    /// 用自定义派发器构造。
-    ///
-    /// 生产路径请用 [`MainThreadMetaReader::new`]；本构造器主要用于验证
-    /// "所有读取串行到同一线程"这条不变量（探针注入单线程派发器）。
-    #[must_use]
-    pub fn with_dispatch(dispatch: D, tracker: Arc<LastExternalSourceApp>) -> Self {
-        Self { dispatch, tracker }
-    }
-}
-
-impl<D: MetaDispatch + 'static> PasteboardMetaReader for MainThreadMetaReader<D> {
-    fn read(&self) -> PasteboardMeta {
-        let tracker = Arc::clone(&self.tracker);
-        let task: PasteboardMetaTask = Box::new(move || read_pasteboard_meta(&tracker));
-        // 派发失败/超时：全降级值（不 panic、不阻塞调用方），失败原因已在派发器里留痕
-        self.dispatch.dispatch(task).unwrap_or_default()
-    }
-}
-
-/// 当前线程是否就是 macOS 主线程。
-///
-/// 非 macOS 不存在这个区分（[`MainThreadMetaReader`] 也不会在这些平台被构造），
-/// 故返回 `false` 让派发逻辑走正常路径。
-#[cfg(target_os = "macos")]
-fn is_main_thread() -> bool {
-    objc2::MainThreadMarker::new().is_some()
-}
-
-#[cfg(not(target_os = "macos"))]
-fn is_main_thread() -> bool {
-    false
 }
 
 /// 从 Windows 可执行文件完整路径取应用名（去目录与 `.exe` 后缀）。
@@ -508,8 +355,8 @@ mod macos_ffi {
     /// 读取 `NSPasteboard.generalPasteboard()` 当前声明的全部类型名。
     ///
     /// 只收集字符串，不判断含义——判定交给纯谓词层。
-    /// **调用方必须保证本函数在 macOS 主线程执行**（见模块文档：`NSPasteboard`
-    /// 跨线程并发调用会 SIGSEGV），生产路径由 [`super::MainThreadMetaReader`] 保证。
+    /// **调用方必须保证本函数在串行线程（macOS 主线程）上执行**（见模块文档：
+    /// `NSPasteboard` 跨线程并发调用会 SIGSEGV），生产路径由 `pasteboard_serial` 保证。
     ///
     /// `types()` 返回 `None` 时留痕后再降级为空集合：`None` 既可能是"剪贴板确实没有数据"，
     /// 也可能是读取失败，API 本身不给区分，故日志措辞如实说明两种可能。
@@ -946,104 +793,6 @@ mod tests {
             Some("com.1password.1password"),
             "快照单值标识应优先取 bundle id"
         );
-    }
-    /// 测试用派发器：记录被派发的任务数，回传一个合成结果。
-    ///
-    /// 故意**不执行**传入的任务：任务体是真实平台读取，执行会把 `NSPasteboard`
-    /// 调用带到测试线程上（见模块测试注释）。这里只验证"读取器把活交给了派发器、
-    /// 并把派发器的结果原样返回"这一契约。
-    struct RecordingDispatch {
-        calls: std::sync::Arc<std::sync::atomic::AtomicUsize>,
-        reply: PasteboardMeta,
-    }
-
-    impl RecordingDispatch {
-        /// 构造并返回（派发器, 计数句柄）：句柄与派发器共享同一计数，
-        /// 便于把派发器所有权交给读取器后仍能读回调用次数。
-        fn replying(
-            reply: PasteboardMeta,
-        ) -> (Self, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
-            let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-            (
-                Self {
-                    calls: std::sync::Arc::clone(&calls),
-                    reply,
-                },
-                calls,
-            )
-        }
-    }
-
-    impl MetaDispatch for RecordingDispatch {
-        fn dispatch(&self, _task: PasteboardMetaTask) -> Option<PasteboardMeta> {
-            self.calls.fetch_add(1, AtomicOrdering::SeqCst);
-            Some(self.reply.clone())
-        }
-    }
-
-    /// 测试用派发器：模拟派发失败/等待超时。
-    struct FailingDispatch;
-
-    impl MetaDispatch for FailingDispatch {
-        fn dispatch(&self, _task: PasteboardMetaTask) -> Option<PasteboardMeta> {
-            None
-        }
-    }
-
-    #[test]
-    fn main_thread_reader_delegates_to_dispatch_and_returns_its_result() {
-        // Arrange：派发器会回传一个可识别的合成结果
-        let reply = PasteboardMeta {
-            is_concealed: true,
-            has_self_marker: false,
-            source_app: Some(SourceApp {
-                bundle_id: Some("com.1password.1password".to_owned()),
-                display_name: Some("1Password".to_owned()),
-            }),
-        };
-        let (dispatch, _calls) = RecordingDispatch::replying(reply.clone());
-        let reader =
-            MainThreadMetaReader::with_dispatch(dispatch, Arc::new(LastExternalSourceApp::new()));
-
-        // Act
-        let meta = reader.read();
-
-        // Assert：读取走的是派发器，且返回派发器的结果而不是自己另读一遍
-        assert_eq!(meta, reply, "读取器应原样返回被派发任务的结果");
-    }
-
-    #[test]
-    fn main_thread_reader_dispatches_exactly_once_per_read() {
-        // Arrange：计数句柄与派发器共享，派发器所有权交给读取器
-        let (dispatch, calls) = RecordingDispatch::replying(PasteboardMeta::default());
-        let reader =
-            MainThreadMetaReader::with_dispatch(dispatch, Arc::new(LastExternalSourceApp::new()));
-
-        // Act
-        let _ = reader.read();
-
-        // Assert
-        assert_eq!(
-            calls.load(AtomicOrdering::SeqCst),
-            1,
-            "一次读取只应派发一次"
-        );
-    }
-
-    #[test]
-    fn main_thread_reader_degrades_to_default_when_dispatch_fails() {
-        // Arrange：派发失败（主线程忙/已退出）
-        let reader = MainThreadMetaReader::with_dispatch(
-            FailingDispatch,
-            Arc::new(LastExternalSourceApp::new()),
-        );
-
-        // Act
-        let meta = reader.read();
-
-        // Assert：降级为全空值，不 panic、不阻塞
-        assert_eq!(meta, PasteboardMeta::default(), "派发失败必须降级为默认值");
-        assert!(!meta.is_concealed && !meta.has_self_marker);
     }
 
     #[test]

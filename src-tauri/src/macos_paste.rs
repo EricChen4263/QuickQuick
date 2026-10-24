@@ -6,6 +6,9 @@
 //! - `MacOsAccessibilityProbe` — 调用 AXIsProcessTrusted() FFI
 //! - `MacOsPasteBackend`       — NSPasteboard.changeCount + arboard 写入 + CGEvent Cmd+V
 //!
+//! macOS 上所有 `NSPasteboard` 访问（changeCount、正文读写、自产标记）都经
+//! `pasteboard_serial` 串行通道进入主线程，避免与轮询线程的读取并发（并发会 SIGSEGV）。
+//!
 //! 非 macOS 平台提供降级实现：
 //! - `FallbackAccessibilityProbe` — is_trusted() 永远返回 false
 //! - `FallbackPasteBackend`       — no-op send_paste，arboard 写入（9b 接入处由 probe=false 拦截）
@@ -27,12 +30,30 @@ use crate::paste::PasteBackend;
 /// 写入成功后追加"本工具自产"标记（macOS 私有 UTI / 其余平台写入门闩），
 /// 让轮询引擎跳过这次自身写入，避免粘贴后历史里又多一条、顺序被打乱。
 ///
+/// macOS 上写入与追加标记合成**一个**串行任务，且使用串行线程上现场创建的剪贴板句柄
+/// （入参句柄不会被使用）：轮询的全量读也在同一线程，两者不可能交错，
+/// 因而不会读到「正文已写、标记未到」的中间态而把自己的写入再记一遍。
+///
 /// # Errors
 /// arboard 写入失败时返回错误字符串（由调用方降级记录日志，不 panic）。
 pub(crate) fn write_item_to_clipboard(
     clipboard: &mut arboard::Clipboard,
     item: &CapturedItem,
 ) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        let _ = clipboard;
+        write_item_serialized(item)
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        write_item_now(clipboard, item)
+    }
+}
+
+/// 在当前线程立即写入文本载荷并追加自产标记（调用方负责线程约束）。
+fn write_item_now(clipboard: &mut arboard::Clipboard, item: &CapturedItem) -> Result<(), String> {
     let written = match &item.html {
         Some(html) if !html.is_empty() => clipboard
             .set()
@@ -54,10 +75,30 @@ pub(crate) fn write_item_to_clipboard(
 /// 避免对大图做无谓全量克隆（set_image 同步消费、不需要更长生命周期）。
 /// 抽出供 macOS / fallback 两个后端复用，镜像 `write_item_to_clipboard` 的错误处理。
 /// 同样在写入成功后追加自产标记（图片回读字节不可比，但"是不是我写的"仍可判定）。
+/// macOS 上的串行化语义同 [`write_item_to_clipboard`]。
 ///
 /// # Errors
 /// arboard `set_image` 失败时返回错误字符串（由调用方按需降级，不 panic）。
 pub(crate) fn write_image_to_clipboard(
+    clipboard: &mut arboard::Clipboard,
+    width: usize,
+    height: usize,
+    rgba: &[u8],
+) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        let _ = clipboard;
+        write_image_serialized(width, height, rgba)
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        write_image_now(clipboard, width, height, rgba)
+    }
+}
+
+/// 在当前线程立即写入图片并追加自产标记（调用方负责线程约束）。
+fn write_image_now(
     clipboard: &mut arboard::Clipboard,
     width: usize,
     height: usize,
@@ -74,6 +115,34 @@ pub(crate) fn write_image_to_clipboard(
     Ok(())
 }
 
+/// macOS：经串行通道写入文本载荷（写入 + 标记同一任务）。
+#[cfg(target_os = "macos")]
+pub(crate) fn write_item_serialized(item: &CapturedItem) -> Result<(), String> {
+    let item = item.clone();
+    crate::pasteboard_serial::run_global(crate::pasteboard_serial::WRITE_TIMEOUT, move || {
+        let mut clipboard =
+            arboard::Clipboard::new().map_err(|e| format!("剪贴板初始化失败: {e}"))?;
+        write_item_now(&mut clipboard, &item)
+    })
+    .map_err(|e| e.to_string())?
+}
+
+/// macOS：经串行通道写入图片（写入 + 标记同一任务）。
+#[cfg(target_os = "macos")]
+pub(crate) fn write_image_serialized(
+    width: usize,
+    height: usize,
+    rgba: &[u8],
+) -> Result<(), String> {
+    let rgba = rgba.to_vec();
+    crate::pasteboard_serial::run_global(crate::pasteboard_serial::WRITE_TIMEOUT, move || {
+        let mut clipboard =
+            arboard::Clipboard::new().map_err(|e| format!("剪贴板初始化失败: {e}"))?;
+        write_image_now(&mut clipboard, width, height, &rgba)
+    })
+    .map_err(|e| e.to_string())?
+}
+
 /// 追加自产标记；失败只记日志，不影响本次写入结果。
 ///
 /// 标记失败的实际后果是"这次写入可能被自己再捕获一次"，比让粘贴整体失败轻得多，
@@ -87,10 +156,13 @@ fn mark_self_write_or_log() {
 // macOS 平台实现
 #[cfg(target_os = "macos")]
 mod macos_impl {
+    use std::sync::atomic::{AtomicU64, Ordering};
+
     use super::{
-        write_image_to_clipboard, write_item_to_clipboard, AccessibilityProbe, CapturedItem,
+        write_image_serialized, write_item_serialized, AccessibilityProbe, CapturedItem,
         PasteBackend,
     };
+    use crate::pasteboard_serial::{run_global, SCALAR_READ_TIMEOUT};
 
     // AXIsProcessTrusted 声明：链接 ApplicationServices 框架，最小化依赖
     // 依据：https://developer.apple.com/documentation/applicationservices/axisprocesstrusted
@@ -117,42 +189,51 @@ mod macos_impl {
         }
     }
 
-    /// 读取 NSPasteboard.generalPasteboard().changeCount()，转 u64。
-    ///
-    /// NSInteger 在 macOS 64-bit 为 i64；changeCount 单调递增、始终非负，
-    /// 用 max(0, v) 后转 u64 保证类型安全（负值在实践中不出现，防御性处理）。
-    fn read_nspasteboard_change_count() -> u64 {
-        use objc2_app_kit::NSPasteboard;
-        let pb = NSPasteboard::generalPasteboard();
-        let n = pb.changeCount();
-        n.max(0) as u64
-    }
-
     /// macOS 生产粘贴后端。
     ///
-    /// - `change_count`：读 NSPasteboard.changeCount()
-    /// - `write_with_marker`：arboard 写文本（与 pipeline ArboardBackend 一致，bump changeCount）
-    /// - `current_text`：arboard 读文本
-    /// - `send_paste`：CGEvent 合成 Cmd+V 并 post 到 HID 事件流
+    /// 全部 `NSPasteboard` 访问都经串行通道：
+    /// - `change_count`：串行线程上读 `NSPasteboard.changeCount()`
+    /// - `write_with_marker` / `write_image`：串行线程上写正文并追加自产标记
+    /// - `current_text`：串行线程上读文本
+    /// - `send_paste`：CGEvent 合成 Cmd+V 并 post 到 HID 事件流（不碰 pasteboard）
     pub struct MacOsPasteBackend {
-        clipboard: arboard::Clipboard,
+        /// 最近一次成功读到的计数：串行线程忙或超时时回放，粘贴确认逻辑据此判断「未递增」
+        last_count: AtomicU64,
     }
 
     impl MacOsPasteBackend {
-        /// 创建实例；arboard 初始化失败时返回 `Err(String)`。
+        /// 创建实例；剪贴板不可用（如 launchd 守护进程下取不到 generalPasteboard）时返回 `Err`。
         ///
         /// # Errors
-        /// arboard::Clipboard::new() 失败时返回包含原因的错误字符串。
+        /// 串行线程上 `arboard::Clipboard::new()` 失败，或串行通道不可用时返回错误字符串。
         pub fn new() -> Result<Self, String> {
-            let clipboard = arboard::Clipboard::new()
-                .map_err(|e| format!("MacOsPasteBackend: 剪贴板初始化失败: {e}"))?;
-            Ok(Self { clipboard })
+            run_global(SCALAR_READ_TIMEOUT, || {
+                arboard::Clipboard::new()
+                    .map(|_| ())
+                    .map_err(|e| format!("MacOsPasteBackend: 剪贴板初始化失败: {e}"))
+            })
+            .map_err(|e| format!("MacOsPasteBackend: 剪贴板初始化失败: {e}"))??;
+            Ok(Self {
+                last_count: AtomicU64::new(0),
+            })
         }
     }
 
     impl PasteBackend for MacOsPasteBackend {
         fn change_count(&self) -> u64 {
-            read_nspasteboard_change_count()
+            match run_global(
+                SCALAR_READ_TIMEOUT,
+                crate::pasteboard_serial::read_change_count,
+            ) {
+                Ok(count) => {
+                    self.last_count.store(count, Ordering::Relaxed);
+                    count
+                }
+                Err(e) => {
+                    eprintln!("[MacOsPasteBackend] 读取 changeCount 失败，沿用上次值: {e}");
+                    self.last_count.load(Ordering::Relaxed)
+                }
+            }
         }
 
         /// 将条目写入剪贴板（arboard），写入会使 NSPasteboard.changeCount 递增。
@@ -160,17 +241,21 @@ mod macos_impl {
         /// 有非空 html 时写富文本（HTML + 纯文本兜底 alt），否则写纯文本，
         /// 让粘贴还原保真格式（设计§四任务4 决策2：粘贴带富文本）。
         fn write_with_marker(&mut self, item: &CapturedItem) {
-            if let Err(e) = write_item_to_clipboard(&mut self.clipboard, item) {
+            if let Err(e) = write_item_serialized(item) {
                 eprintln!("[MacOsPasteBackend] write_with_marker 失败: {e}");
             }
         }
 
         fn current_text(&self) -> Option<String> {
-            // arboard Clipboard::get_text 需要 &mut self，此处通过新实例读取以满足 &self 签名。
-            // 创建临时剪贴板实例读取当前内容，代价为单次系统调用，可接受。
-            arboard::Clipboard::new()
-                .ok()
-                .and_then(|mut cb| cb.get_text().ok())
+            run_global(SCALAR_READ_TIMEOUT, || {
+                arboard::Clipboard::new()
+                    .ok()
+                    .and_then(|mut cb| cb.get_text().ok())
+            })
+            .unwrap_or_else(|e| {
+                eprintln!("[MacOsPasteBackend] 读取当前文本失败: {e}");
+                None
+            })
         }
 
         /// 发送 Cmd+V 键盘事件到 HID 系统事件流，模拟粘贴。
@@ -225,7 +310,7 @@ mod macos_impl {
         ///
         /// 失败时返回 Err（不吞错），让调用方据此跳过 send_paste；图片无 marker 回读确认（见 trait 文档）。
         fn write_image(&mut self, width: usize, height: usize, rgba: &[u8]) -> Result<(), String> {
-            write_image_to_clipboard(&mut self.clipboard, width, height, rgba)
+            write_image_serialized(width, height, rgba)
         }
     }
 }

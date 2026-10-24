@@ -5,24 +5,31 @@
 //! 职责：
 //! - `open_app_db`        — 取密钥 → 开/建加密库（纯函数，可注入 fake KeyProvider）
 //! - `capture_and_ingest` — 轮询剪贴板 → 有新内容则写库（纯函数，可注入 fake backend）
-//! - `ArboardBackend`     — 生产剪贴板后端（arboard crate 跨平台实现）
+//! - `ArboardBackend`     — 非 macOS 的剪贴板后端（arboard + 内容指纹模拟计数）
+//!
+//! macOS 的生产后端是 `pasteboard_serial::MainThreadPasteboardBackend`：
+//! 以 `NSPasteboard.changeCount` 做变化检测，全部访问串行到主线程。
+//! `ArboardBackend` 在 macOS 上不编译——内容指纹轮询要求每 500ms 把文本、HTML、
+//! 图片 RGBA 全读一遍再哈希，而 macOS 上这些读取必须在主线程执行。
 //!
 //! 设计原则：
 //! open_app_db / capture_and_ingest 均为纯依赖注入风格，不持有任何全局状态，
 //! 便于单测在不触碰真实 OS 钥匙串、真实剪贴板的情况下驱动完整管道逻辑。
-//! 生产接线（ArboardBackend + LocalKeyProvider + 轮询线程）在 lib.rs 完成。
+//! 生产接线（剪贴板后端 + LocalKeyProvider + 轮询线程）在 lib.rs 完成。
 
 use std::path::Path;
+#[cfg(not(target_os = "macos"))]
 use std::sync::{Arc, Mutex};
 
 use rusqlite::Connection;
 
-use crate::clipboard::{
-    CapturedClip, ClipboardBackend, ClipboardSnapshot, RawImageData, SourceApp,
-};
+use crate::clipboard::{CapturedClip, ClipboardBackend};
+#[cfg(not(target_os = "macos"))]
+use crate::clipboard::{ClipboardSnapshot, RawImageData, SourceApp};
 use crate::db::{self, IngestOutcome};
 use crate::image::{CleanupPolicy, CleanupReport};
 use crate::keyprovider::KeyProvider;
+#[cfg(not(target_os = "macos"))]
 use crate::pasteboard_meta::PasteboardMetaReader;
 use crate::privacy::CapturePolicy;
 
@@ -33,8 +40,8 @@ const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
 
 /// 计算字节切片的 FNV-1a 64-bit 哈希（显式稳定算法，非 Rust 默认 hash）。
 ///
-/// 用于 ArboardBackend 的变化检测：将剪贴板内容哈希与上次比较，
-/// 值变化时内部计数单调+1，模拟 macOS NSPasteboard.changeCount 语义。
+/// 用于 `ArboardBackend`（非 macOS）的变化检测：将剪贴板内容哈希与上次比较，
+/// 值变化时内部计数单调+1，模拟 `changeCount` 语义。
 fn fnv1a_64(data: &[u8]) -> u64 {
     let mut hash = FNV_OFFSET;
     for byte in data {
@@ -44,7 +51,10 @@ fn fnv1a_64(data: &[u8]) -> u64 {
     hash
 }
 
-/// 生产剪贴板后端（arboard 跨平台实现）。
+/// 非 macOS 平台的剪贴板后端（arboard 跨平台实现）。
+///
+/// macOS 不使用它：见模块文档。Windows 的剪贴板 API 允许跨线程调用，
+/// 所以这里仍在轮询线程上就地读取。
 ///
 /// `change_count` 语义：读取当前剪贴板文本与图片，用复合 FNV-1a 哈希与上次比较；
 /// 内容变化时内部单调计数+1，返回该计数。headless 环境无系统剪贴板时
@@ -58,6 +68,7 @@ fn fnv1a_64(data: &[u8]) -> u64 {
 ///
 /// # 真实运行归 pending-manual
 /// arboard 需要 GUI 环境，不为其编写联网/GUI 自动化测试。
+#[cfg(not(target_os = "macos"))]
 pub struct ArboardBackend {
     /// arboard Clipboard 实例，Mutex 保护跨线程访问
     clipboard: Mutex<arboard::Clipboard>,
@@ -65,23 +76,19 @@ pub struct ArboardBackend {
     last_hash: Mutex<u64>,
     /// 单调递增的变化计数
     count: Mutex<u64>,
-    /// 平台标记读取策略。
-    ///
-    /// 为什么不是直接调 `read_pasteboard_meta`：macOS 的 `NSPasteboard` 跨线程并发
-    /// 调用会 SIGSEGV，必须由注入的读取器负责把读取搬到主线程（见 `pasteboard_meta` 文档）。
+    /// 平台标记读取策略（Windows 就地读，见 `lib.rs` 的 `build_meta_reader`）。
     meta_reader: Arc<dyn PasteboardMetaReader>,
     /// 最近一次 `read` 采集到的来源应用完整身份，供 `source_app_identity` 复用。
     ///
-    /// 缓存一次而不是重复读平台层：读取要跨主线程派发（macOS）或开合剪贴板（Windows），
-    /// 同一次捕获没必要读两遍。
+    /// 缓存一次而不是重复读平台层：读取要开合剪贴板（Windows），同一次捕获没必要读两遍。
     last_source_app: Mutex<Option<SourceApp>>,
 }
 
+#[cfg(not(target_os = "macos"))]
 impl ArboardBackend {
     /// 创建 ArboardBackend 实例。
     ///
-    /// `meta_reader` 决定平台标记在哪个线程读：macOS 传主线程派发实现，
-    /// Windows/其它平台传就地读实现（见 `lib.rs` 的 `build_meta_reader`）。
+    /// `meta_reader` 决定平台标记如何读取：Windows/其它平台传就地读实现。
     ///
     /// # Errors
     /// arboard::Clipboard::new() 在无 GUI 环境（headless CI）可能失败，
@@ -152,6 +159,7 @@ pub fn composite_hash_bytes(
     Some(fnv1a_64(&combined))
 }
 
+#[cfg(not(target_os = "macos"))]
 impl ClipboardBackend for ArboardBackend {
     fn change_count(&self) -> u64 {
         let Ok(mut cb) = self.clipboard.lock() else {
@@ -201,9 +209,8 @@ impl ClipboardBackend for ArboardBackend {
         });
 
         // arboard 抽象不暴露平台类型集合，故标记经注入的读取器取：
-        // 敏感（macOS ConcealedType / TransientType；Windows 两个剪贴板格式）、
-        // 自产标记（macOS 私有 UTI；Windows 写入门闩）、来源应用身份。
-        // 三者来自同一次读取，描述的是同一份内容；macOS 上该读取在主线程执行。
+        // 敏感（Windows 两个剪贴板格式）、自产标记（Windows 写入门闩）、来源应用身份。
+        // 三者来自同一次读取，描述的是同一份内容。
         let meta = self.meta_reader.read();
         let source_app = meta.source_app.clone();
         *self
@@ -233,6 +240,7 @@ impl ClipboardBackend for ArboardBackend {
     }
 }
 
+#[cfg(not(target_os = "macos"))]
 impl ArboardBackend {
     /// 清空来源应用身份缓存（读取失败时调用，避免沿用上一轮的身份误判来源）。
     fn reset_source_app_cache(&self) {
@@ -472,6 +480,7 @@ fn ingest_clips(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::clipboard::{ClipboardSnapshot, RawImageData};
     use crate::privacy::ExcludeList;
 
     /// 单轮剪贴板后端：计数恒为 `count`，快照固定。

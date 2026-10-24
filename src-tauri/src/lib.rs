@@ -6,7 +6,8 @@
 //! 子模块：
 //! - `hotkey`：全局热键配置、改键持久化与冲突检测
 //! - `ipc`：所有 Tauri 命令（clipboard / translate / settings）
-//! - `pipeline`：启动数据管道（open_app_db / capture_and_ingest / ArboardBackend）
+//! - `pipeline`：启动数据管道（open_app_db / capture_and_ingest）
+//! - `pasteboard_serial`：macOS 剪贴板访问的主线程串行通道与生产后端
 //! - `popover`：popover 窗口的显示/隐藏与定位逻辑（clip-popover / trans-popover）
 //! - `settings`：应用配置（排除名单、provider 选择）
 //! - `tray`：系统托盘菜单构建（setup 阶段调用）
@@ -24,6 +25,7 @@ pub mod macos_paste;
 pub mod onboarding;
 pub mod paste;
 pub mod pasteboard_meta;
+pub mod pasteboard_serial;
 pub mod pipeline;
 mod popover;
 pub mod portable;
@@ -424,39 +426,60 @@ fn reset_and_reopen(
     }
 }
 
-/// 选择平台标记读取策略。
+/// 构造平台剪贴板后端。
 ///
-/// macOS：`NSPasteboard` 跨线程并发调用会 SIGSEGV（本仓库隔离探针实测必崩），
-/// 故必须把读取投递到主线程串行执行，轮询线程只拿快照。
-/// 其余平台：Win32 剪贴板 API 允许跨线程，就地读还能保留"一次开合读完全部标记"的优化。
-fn build_meta_reader(
+/// macOS：`NSPasteboard` 不是线程安全的（并发访问必 SIGSEGV），故安装进程级串行通道，
+/// 后端的 `changeCount` 检测与全量读取全部落在主线程，轮询线程只拿快照。
+/// 其余平台：Win32 剪贴板 API 允许跨线程，沿用 arboard + 内容指纹后端就地读取。
+fn build_clipboard_backend(
     handle: &tauri::AppHandle,
     source_app: Arc<pasteboard_meta::LastExternalSourceApp>,
-) -> Arc<dyn pasteboard_meta::PasteboardMetaReader> {
+) -> Result<Box<dyn clipboard::ClipboardBackend + Send>, String> {
     #[cfg(target_os = "macos")]
     {
-        Arc::new(pasteboard_meta::MainThreadMetaReader::new(
-            handle.clone(),
-            source_app,
+        let serial = Arc::new(pasteboard_serial::SerialPasteboard::new(Arc::new(
+            pasteboard_serial::TauriMainThreadExecutor::new(handle.clone()),
+        )));
+        // 写回路径（复制 / 粘贴）与轮询共用同一条通道；已安装过（重复启动）则沿用旧的
+        if !pasteboard_serial::install_global(Arc::clone(&serial)) {
+            eprintln!("[QuickQuick] 剪贴板串行通道已安装，沿用既有通道");
+        }
+        Ok(Box::new(
+            pasteboard_serial::MainThreadPasteboardBackend::new(serial, source_app),
         ))
     }
 
     #[cfg(not(target_os = "macos"))]
     {
         let _ = handle;
-        Arc::new(pasteboard_meta::DirectMetaReader::new(source_app))
+        let reader = Arc::new(pasteboard_meta::DirectMetaReader::new(source_app));
+        pipeline::ArboardBackend::new(reader)
+            .map(|b| Box::new(b) as Box<dyn clipboard::ClipboardBackend + Send>)
     }
+}
+
+/// 数据库当前是否可用（已开库且连接锁未中毒）。
+///
+/// 轮询在观察剪贴板之前先问一次：库不可用时每轮都去读一遍全量快照毫无意义，
+/// 而 macOS 上全量读是主线程任务。
+fn db_is_ready(handle: &tauri::AppHandle) -> bool {
+    handle
+        .try_state::<ipc::AppDb>()
+        .is_some_and(|state| state.conn.lock().is_ok_and(|guard| guard.is_some()))
 }
 
 /// 启动剪贴板轮询后台线程（500ms 间隔）。
 ///
-/// 线程持有 AppHandle，每次迭代通过 state::<AppDb>() 取得数据库锁后写入。
-/// ArboardBackend 在 headless 环境下初始化可能失败，此时仅记录警告不启动线程。
+/// 每轮分两阶段：
+/// 1. **无锁观察**（`clipboard::observe_backend`）：只读 `changeCount`，变了才读一份快照。
+///    macOS 上这一步要等主线程，所以此时**不得持有** `AppDb` / 忽略规则锁，
+///    否则「本线程持锁等主线程、主线程等同一把锁」会互等到超时；
+/// 2. **持锁入库**：套隐私策略、写库，沿用 `capture_and_ingest`。
+///
+/// 后端初始化失败（headless 环境）时仅记录警告不启动线程。
 /// `paused` 和 `skip_sensitive` 在每次迭代通过 `Relaxed` load 读取，运行时生效。
 /// `source_app` 与主线程的应用激活观察者共享：观察者写身份，本线程只读，
 /// 用于排除名单的 bundle id / 显示名匹配。
-///
-/// 平台标记读取经 [`build_meta_reader`] 选择线程策略（macOS 必须主线程）。
 ///
 /// # 为什么不在线程内 panic
 /// 后台线程崩溃不会影响主线程，但会导致轮询静默停止；
@@ -469,8 +492,7 @@ fn start_clipboard_poll(
     exclude_list: Arc<RwLock<privacy::IgnoreRules>>,
     source_app: Arc<pasteboard_meta::LastExternalSourceApp>,
 ) {
-    let meta_reader = build_meta_reader(&handle, source_app);
-    let backend = match pipeline::ArboardBackend::new(meta_reader) {
+    let backend = match build_clipboard_backend(&handle, source_app) {
         Ok(b) => b,
         Err(e) => {
             eprintln!("[QuickQuick] 剪贴板后端初始化失败，轮询不启动: {e}");
@@ -486,13 +508,22 @@ fn start_clipboard_poll(
                 clipboard::POLL_INTERVAL_MS,
             ));
 
+            // 数据库不可用时静默跳过本轮，不 panic；也避免白读一遍全量快照
+            if !db_is_ready(&handle) {
+                continue;
+            }
+
+            // 阶段一（无锁）：计数没变则整轮结束，连库锁都不取
+            let Some(observed) = clipboard::observe_backend(backend.as_ref(), last_seen) else {
+                continue;
+            };
+
             let Ok(state) = handle.try_state::<ipc::AppDb>().ok_or(()) else {
                 continue;
             };
             let Ok(guard) = state.conn.lock() else {
                 continue;
             };
-            // 数据库不可用时静默跳过本轮，不 panic
             let Some(conn) = guard.as_ref() else {
                 continue;
             };
@@ -505,7 +536,7 @@ fn start_clipboard_poll(
             // 「仅忽略下一次」必须先于本轮捕获判定：`capture_and_ingest` 内部才做变化检测，
             // 等它返回时内容已入库，再消费开关只能算事后补救。消费规则本身全在
             // `privacy::resolve_skip_once`（含「空轮不消费」与代价说明）。
-            let skip_once_now = privacy::resolve_skip_once(&skip_once, &backend, last_seen);
+            let skip_once_now = privacy::resolve_skip_once(&skip_once, &observed, last_seen);
             // 置位那一轮才为规则集派生带标记的副本（把「本轮静默原因是 SkipOnce」
             // 带进 policy）；常态轮次直接借用共享规则集，零额外分配。
             let round_rules = skip_once_now.then(|| exclude_guard.for_skip_once_round());
@@ -524,7 +555,7 @@ fn start_clipboard_poll(
             // 读取或路径解析失败时回退默认值，不中断轮询。
             let limits = resolve_ingest_limits(&handle);
 
-            match pipeline::capture_and_ingest(&backend, &mut last_seen, conn, &policy, &limits) {
+            match pipeline::capture_and_ingest(&observed, &mut last_seen, conn, &policy, &limits) {
                 Ok(outcomes) => {
                     // 有新条目或条目被置顶时通知前端刷新列表
                     if should_notify_clip_change(&outcomes) {

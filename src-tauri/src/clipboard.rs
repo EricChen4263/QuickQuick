@@ -11,6 +11,7 @@
 //! - `RawImageData`              — 剪贴板图片原始 RGBA 字节
 //! - `poll_once`                 — 核心判定逻辑（返回 Vec<CapturedClip>）
 //! - `poll_once_with_policy`     — 带隐私策略的捕获（返回 Vec<CapturedClip>）
+//! - `observe_backend`           — 无锁观察：计数变了才读快照，得到 `ObservedClipboard`
 //!
 //! 私有 UTI 标记机制（防自污染）：
 //! 工具自写剪贴板时，在系统剪贴板中留下"这是 QuickQuick 写的"标记
@@ -21,10 +22,13 @@
 //! 这样可在不检查内容的情况下安全跳过工具自身的写入，避免循环捕获。
 //!
 //! 轮询周期：
-//! 实际运行时由后台线程以 `POLL_INTERVAL_MS` 为间隔循环调用 `poll_once`。
-//! 单元测试只测 `poll_once` / `poll_once_with_policy` 的判定逻辑，
+//! 实际运行时由后台线程以 `POLL_INTERVAL_MS` 为间隔循环：先 `observe_backend`
+//! （无锁，只在计数变化时读一次快照），再把得到的 `ObservedClipboard` 交给
+//! `poll_once_with_policy` / `capture_and_ingest` 完成隐私门控与入库。
+//! 单元测试只测这些函数的判定逻辑，
 //! 通过 FakeBackend 构造计数序列驱动，无 sleep、无 OS 依赖。
 
+use std::cell::RefCell;
 use std::io::Cursor;
 
 use image::ImageEncoder;
@@ -109,6 +113,21 @@ pub struct ClipboardSnapshot {
     pub source_app: Option<String>,
 }
 
+impl ClipboardSnapshot {
+    /// 全空快照：没有任何内容、也没有任何标记。
+    #[must_use]
+    pub fn empty() -> Self {
+        Self {
+            text: None,
+            html: None,
+            image: None,
+            has_self_marker: false,
+            is_concealed: false,
+            source_app: None,
+        }
+    }
+}
+
 /// 捕获成功后的双字段结果。
 ///
 /// `text` 为纯文本键，用于显示、搜索、判重（设计§三#5）。
@@ -179,6 +198,20 @@ pub trait ClipboardBackend {
     /// 仅在 `change_count` 递增时调用，避免频繁 IPC 开销。
     fn read(&self) -> ClipboardSnapshot;
 
+    /// 在一次访问里取「读取时刻的计数 + 快照」；读取失败返回 `None`。
+    ///
+    /// `seen_count` 是调用方刚从 [`ClipboardBackend::change_count`] 拿到的值。
+    /// 默认实现把它原样当作读取时刻的计数，并调用 [`ClipboardBackend::read`]——
+    /// 对计数与读取各自独立的后端（测试 fake、Windows 的内容指纹后端）等价于旧行为。
+    ///
+    /// 必须覆盖它的后端：计数与读取要在**同一次**平台访问里取（macOS 串行线程），
+    /// 否则「读到计数」与「读到内容」之间剪贴板再变一次，会让下一轮把同一内容再读一遍。
+    /// 返回 `None` 表示这次没读到（串行线程忙或超时）：调用方**不得推进**基线，
+    /// 下一轮自然重试，而不是把一次读取失败当成「剪贴板为空」吞掉。
+    fn read_observed(&self, seen_count: u64) -> Option<(u64, ClipboardSnapshot)> {
+        Some((seen_count, self.read()))
+    }
+
     /// 返回本次变化的来源应用完整身份（bundle id + 本地化显示名）。
     ///
     /// 默认 `None`：测试后端与不提供应用身份的平台无需实现。
@@ -191,6 +224,91 @@ pub trait ClipboardBackend {
     fn source_app_identity(&self) -> Option<SourceApp> {
         None
     }
+}
+
+/// 一次「无锁观察」的结果：某一时刻的计数，以及（计数前进时）当时读到的整份快照。
+///
+/// 它本身是一个只回放既成事实的 [`ClipboardBackend`]：`change_count` 返回观察时的计数，
+/// `read` 交出观察时读到的快照（**只能取一次**，避免对大图再克隆一份）。
+/// 于是轮询循环可以把「碰剪贴板」（可能要等主线程）与「取数据库锁、套隐私策略、入库」
+/// 拆成两个阶段，且阶段二照旧调用 [`poll_once_with_policy`] / `capture_and_ingest`，
+/// 判定语义（基线推进、计数回退、隐私门控、去重）一行都不用复制。
+pub struct ObservedClipboard {
+    count: u64,
+    snapshot: RefCell<Option<ClipboardSnapshot>>,
+    source_app: Option<SourceApp>,
+}
+
+impl ObservedClipboard {
+    /// 只带计数、不带快照：用于计数回退——轮询逻辑见到回退只会下调基线，不会读内容。
+    #[must_use]
+    pub fn count_only(count: u64) -> Self {
+        Self {
+            count,
+            snapshot: RefCell::new(None),
+            source_app: None,
+        }
+    }
+
+    /// 带快照与来源应用身份。
+    #[must_use]
+    pub fn with_snapshot(
+        count: u64,
+        snapshot: ClipboardSnapshot,
+        source_app: Option<SourceApp>,
+    ) -> Self {
+        Self {
+            count,
+            snapshot: RefCell::new(Some(snapshot)),
+            source_app,
+        }
+    }
+}
+
+impl ClipboardBackend for ObservedClipboard {
+    fn change_count(&self) -> u64 {
+        self.count
+    }
+
+    /// 交出观察时读到的快照；已被取走（或本就没读）时返回全空快照。
+    fn read(&self) -> ClipboardSnapshot {
+        self.snapshot
+            .borrow_mut()
+            .take()
+            .unwrap_or_else(ClipboardSnapshot::empty)
+    }
+
+    fn source_app_identity(&self) -> Option<SourceApp> {
+        self.source_app.clone()
+    }
+}
+
+/// 无锁观察：只在计数相对基线发生变化时才读内容。
+///
+/// - 计数等于基线 → `None`：本轮什么都不用做，调用方连数据库锁都不必取；
+/// - 计数回退 → 只带计数返回，交给后续判定下调基线（不读内容）；
+/// - 计数前进 → 经 [`ClipboardBackend::read_observed`] 读一份快照；读取失败返回 `None`，
+///   **基线保持不动**，下一轮自然重试。
+///
+/// 调用方在整个观察期间不得持有主线程也可能争用的锁，见 `pasteboard_serial` 模块文档。
+#[must_use]
+pub fn observe_backend(
+    backend: &dyn ClipboardBackend,
+    last_seen_count: u64,
+) -> Option<ObservedClipboard> {
+    let current = backend.change_count();
+    if current == last_seen_count {
+        return None;
+    }
+    if current < last_seen_count {
+        return Some(ObservedClipboard::count_only(current));
+    }
+
+    let (count, snapshot) = backend.read_observed(current)?;
+    let source_app = backend.source_app_identity();
+    Some(ObservedClipboard::with_snapshot(
+        count, snapshot, source_app,
+    ))
 }
 
 /// 将 RGBA 原始字节编码为 PNG。

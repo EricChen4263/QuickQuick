@@ -87,8 +87,8 @@
 use std::cell::{Cell, RefCell};
 
 use quickquick_lib::clipboard::{
-    poll_once, poll_once_with_policy, snapshot_to_clips_for_test, CapturedClip, ClipboardBackend,
-    ClipboardSnapshot, RawImageData, SourceApp,
+    observe_backend, poll_once, poll_once_with_policy, snapshot_to_clips_for_test, CapturedClip,
+    ClipboardBackend, ClipboardSnapshot, RawImageData, SourceApp,
 };
 use quickquick_lib::db::{self, IngestOutcome};
 use quickquick_lib::image::{get_image_original, get_original_present};
@@ -244,14 +244,13 @@ fn image_snapshot(width: usize, height: usize, rgba: Vec<u8>) -> ClipboardSnapsh
 /// 同一文本被连续复制两次（两次计数递增）时，现有语义是「去重 + Bump（置顶刷新）」，
 /// 而不是「产生新条目」。
 ///
-/// 为什么这条对 P3-1 是前置：P3-1 之后 P3-2 会用真实 `changeCount` 替换内容哈希轮询。
-/// 现在 `ArboardBackend::change_count()` 只在**内容指纹变化**时递增，所以真机上
-/// 「同一内容复制两次」根本不会产生第二次捕获，用户看到的是「什么也没发生」；
-/// 换成真实 `changeCount` 后第二次复制会真的走到 `db::ingest`，命中同 hash 后 Bump，
-/// 用户能看到「该条被置顶」。**这是用户可见的语义变化，必须单独验收。**
+/// 为什么这条是去重语义的锚：macOS 的变化检测改用真实 `NSPasteboard.changeCount` 后，
+/// 「同一内容复制两次」会真的产生第二次计数递增并走到 `db::ingest`；本断言钉死此时的
+/// 入库结果仍是「命中同 hash → Bump 置顶」，而不是新增一行。
+/// （非 macOS 仍由内容指纹模拟计数，同内容二次复制根本不会触发第二次捕获。）
 ///
-/// 本断言锁定 P3-1 前后必须保持的入库契约：不新增行、返回 `Bumped(原 id)`、
-/// 既有行的 `last_modified_utc` 被刷新。P3-2 若有意改变语义，必须同步改本条并说明理由。
+/// 本断言锁定的入库契约：不新增行、返回 `Bumped(原 id)`、既有行的 `last_modified_utc`
+/// 被刷新。若有意改变去重语义，必须同步改本条并说明理由。
 #[test]
 fn repeated_identical_text_copy_dedups_and_bumps() {
     // Arrange：先入库一条，再把它的时间戳压成哨兵值 1，
@@ -1062,4 +1061,181 @@ fn poll_once_advances_baseline_for_self_marker() {
         last_seen, 9,
         "poll_once 跳过时同样必须推进基线，避免反复读取自己写入的内容"
     );
+}
+
+// ===================== 无锁观察：changeCount 变了才读内容 =====================
+
+/// 计数没变时：不读内容、没有观察结果（轮询线程连数据库锁都不用取）。
+///
+/// 这是「changeCount 取代每轮全量读」的承重断言：若检测被改成恒真，
+/// 每 500ms 都会读一遍文本 + HTML + 图片，`read_calls` 就不再是 0。
+#[test]
+fn observe_unchanged_count_returns_none_and_never_reads() {
+    // Arrange：基线与当前计数相同
+    let backend = FakeBackend::text(5, "未变化的内容");
+
+    // Act
+    let observed = observe_backend(&backend, 5);
+
+    // Assert
+    assert!(observed.is_none(), "计数未变不应产生观察结果");
+    assert_eq!(backend.read_calls(), 0, "计数未变不得读取内容");
+}
+
+/// 计数前进时：只读一次，并把快照与来源身份原样交给后续判定。
+#[test]
+fn observe_advanced_count_reads_once_and_replays_snapshot_and_identity() {
+    // Arrange
+    let backend = FakeBackend::text(6, "新复制的内容").with_identity(SourceApp {
+        bundle_id: Some("com.example.editor".to_owned()),
+        display_name: Some("Editor".to_owned()),
+    });
+
+    // Act
+    let observed = observe_backend(&backend, 5).expect("计数前进应产生观察结果");
+
+    // Assert：观察结果自身就是一个只回放既成事实的后端
+    assert_eq!(backend.read_calls(), 1, "一次变化只读一次内容");
+    assert_eq!(observed.change_count(), 6);
+    assert_eq!(
+        observed.source_app_identity().and_then(|a| a.display_name),
+        Some("Editor".to_owned()),
+        "来源身份应随观察一起回放"
+    );
+    let snapshot = observed.read();
+    assert_eq!(snapshot.text.as_deref(), Some("新复制的内容"));
+}
+
+/// 计数回退：不读内容，只带计数回去让后续逻辑下调基线。
+#[test]
+fn observe_regressed_count_does_not_read_and_lets_baseline_drop() {
+    // Arrange
+    let backend = FakeBackend::text(2, "重置后的内容");
+    let mut last_seen = 9u64;
+
+    // Act
+    let observed = observe_backend(&backend, last_seen).expect("回退也应交给后续判定");
+    let clips = poll_once_with_policy(
+        &observed,
+        &mut last_seen,
+        &policy_with(&ExcludeList::default()),
+    );
+
+    // Assert
+    assert_eq!(backend.read_calls(), 0, "计数回退不得读取内容");
+    assert!(clips.is_empty(), "计数回退不应捕获任何内容");
+    assert_eq!(last_seen, 2, "基线应下调到新计数");
+}
+
+/// 读取失败（串行线程忙 / 超时）：没有观察结果，调用方不推进基线，下一轮自然重试。
+#[test]
+fn observe_failed_read_returns_none_so_baseline_is_not_advanced() {
+    // Arrange：计数前进但全量读失败
+    struct FailingReadBackend;
+    impl ClipboardBackend for FailingReadBackend {
+        fn change_count(&self) -> u64 {
+            8
+        }
+        fn read(&self) -> ClipboardSnapshot {
+            unreachable!("read_observed 已被覆盖为失败，不应再走默认 read")
+        }
+        fn read_observed(&self, _seen: u64) -> Option<(u64, ClipboardSnapshot)> {
+            None
+        }
+    }
+
+    // Act & Assert
+    assert!(
+        observe_backend(&FailingReadBackend, 7).is_none(),
+        "读取失败不能被当成「剪贴板为空」吞掉"
+    );
+}
+
+/// 读取时刻的计数以 `read_observed` 返回值为准：读取期间剪贴板又变了，
+/// 基线只推进到「读到的那一版」，下一轮会再读一次，而不是把中途变化吞掉。
+#[test]
+fn observe_uses_count_at_read_time_as_baseline() {
+    // Arrange：轮询时计数 10，读取瞬间计数已是 11
+    struct RacingBackend;
+    impl ClipboardBackend for RacingBackend {
+        fn change_count(&self) -> u64 {
+            10
+        }
+        fn read(&self) -> ClipboardSnapshot {
+            unreachable!("read_observed 已被覆盖")
+        }
+        fn read_observed(&self, _seen: u64) -> Option<(u64, ClipboardSnapshot)> {
+            Some((
+                11,
+                ClipboardSnapshot {
+                    text: Some("读取瞬间的内容".to_owned()),
+                    html: None,
+                    image: None,
+                    has_self_marker: false,
+                    is_concealed: false,
+                    source_app: None,
+                },
+            ))
+        }
+    }
+    let mut last_seen = 9u64;
+
+    // Act
+    let observed = observe_backend(&RacingBackend, last_seen).expect("应有观察结果");
+    let exclude = ExcludeList::default();
+    let clips = poll_once_with_policy(&observed, &mut last_seen, &policy_with(&exclude));
+
+    // Assert
+    assert_eq!(clips.len(), 1, "读到的内容应被捕获");
+    assert_eq!(
+        last_seen, 11,
+        "基线应推进到读取时刻的计数，而不是轮询时的 10"
+    );
+}
+
+/// 端到端：同一文本连续两次复制（计数各递增一次）经「观察 → 入库」两阶段，
+/// 仍是「只留一行并置顶」——去重语义没有因为检测机制改变而变。
+#[test]
+fn observe_then_ingest_keeps_dedup_and_bump_semantics() {
+    // Arrange
+    let (_dir, conn) = temp_db();
+    let backend = FakeBackend::text(1, "同一段文本");
+    let exclude = ExcludeList::default();
+    let policy = policy_with(&exclude);
+    let limits = pipeline::IngestLimits::default();
+    let mut last_seen = 0u64;
+
+    // Act：第一次复制
+    let first_obs = observe_backend(&backend, last_seen).expect("首次应有观察");
+    let first = pipeline::capture_and_ingest(&first_obs, &mut last_seen, &conn, &policy, &limits)
+        .expect("首次入库应成功");
+    // 第二次复制：计数递增、内容相同
+    backend.set_count(2);
+    let second_obs = observe_backend(&backend, last_seen).expect("二次复制计数递增应有观察");
+    let second = pipeline::capture_and_ingest(&second_obs, &mut last_seen, &conn, &policy, &limits)
+        .expect("二次入库应成功");
+    // 第三轮：计数不变，不应再读
+    let reads_before_idle = backend.read_calls();
+    let idle = observe_backend(&backend, last_seen);
+
+    // Assert
+    let id = match first.as_slice() {
+        [IngestOutcome::Inserted(id)] => id.clone(),
+        other => panic!("首次应为 Inserted，实际 {other:?}"),
+    };
+    assert_eq!(
+        second,
+        vec![IngestOutcome::Bumped(id)],
+        "二次复制应命中原行并置顶"
+    );
+    let rows: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM clip_items WHERE is_deleted = 0",
+            [],
+            |r| r.get(0),
+        )
+        .expect("数行应成功");
+    assert_eq!(rows, 1, "去重：同一文本只留一行");
+    assert!(idle.is_none(), "计数不变的空轮不应产生观察结果");
+    assert_eq!(backend.read_calls(), reads_before_idle, "空轮不得再读内容");
 }
