@@ -292,9 +292,25 @@
 - **验收**：22 条前端测试；Rust 侧 `tests/onboarding.rs`；全量 `cargo test` 与 vitest 通过（以 `7f72e43` 为准，见下方验证记录）。
 - **待人工**：系统辅助功能授权弹窗的实际行为、授权后即时恢复手感、打包 GUI 呈现。
 ### P5-5 · 设置项扩充（排序、图片高度、预览延迟、命中高亮、容量上限、弹出位置）
-- **状态**：in_progress（**工作区未落盘，尚未开工代码**：本轮派给的 `retention-execute` 在中断前没有写入任何文件；容量上限已由 P4-4 完成，弹出位置归 P2-9 blocked）
-- **本轮范围**：排序（最近/首次复制）、图片高度、首次预览延迟、命中高亮样式、各项 tooltip 写明默认值。
-- **依赖**：「按复制次数」排序依赖 P3-8 的 `copy_count` 列（迁移 v4），本轮不做。
+- **状态**：done（commit `07fd8f6`）。本轮只做四项：排序方式、图片高度、首次预览延迟、命中高亮样式，外加这四项的「默认值 tooltip」。**容量上限归 P4-4（已完成，未重复做）**；**弹出位置归 P2-9（blocked）**；设置页搜索归 P5-7、i18n 归 P5-6；「按复制次数」排序依赖 P3-8 的 `copy_count` 列（迁移 v4），本轮不做。
+- **新增设置页子项「外观」**（设置页由 6 项变 7 项）：四个控件 + 四个默认值 tooltip（`SettingRow` 新增可选 `tooltip`，渲染为原生 `title`）。导航/sections 及其测试同步改成 7 项。
+- **排序方式**：`recent`（默认）/ `first_copied`。默认档**逐条等同改动前顺序**（直接沿用库里 `is_favorite DESC, last_modified_utc DESC, rowid DESC`，不做任何额外排序）；`first_copied` 按 `(is_favorite DESC, created_utc DESC)` 做**稳定重排**——同 key 沿用库顺序兜底，收藏优先级仍是第一键。**实现不在 SQL 里换 ORDER BY 列**：列表索引是 `(is_deleted, is_favorite, last_modified_utc)`，改按 `created_utc` 会退化成全表扫 + 临时 B-tree，而新建索引要动迁移/schema（本项明令禁止）。行数上界是历史条目上限（默认 500 / 最高 999），内存稳定排序代价可忽略。**不改去重、收藏、淘汰语义**；`pick_latest_translate_text_impl` 固定走 `recent`，翻译取数不随展示偏好漂移（有专门用例）。
+- **图片高度**：`image_height_px` 16–48（默认 **24**，与改动前 `.popover-row-thumb` 硬编码一致）。**只作用于弹出面板行内缩略图**（主窗口列表的 44×32 缩略图不受影响，故设置项标签写作「弹出面板图片高度」）；经 `.popover-shell` 上的 CSS 自定义属性 `--popover-thumb-height` 下发，宽度固定、`object-fit: cover` 裁切。
+- **首次预览延迟**：`preview_first_delay_ms` 200–5000（默认 **1500**，与改动前 `PREVIEW_FIRST_DELAY_MS` 同源引用，不再两处各写一个 1500）。只作用于「面板本次打开后的首个预览」；**后续切换固定 200ms，不开放配置**。弹窗在每次开面板（焦点回调递增会话序号）与收到列表刷新事件时重读设置。
+- **命中高亮样式**：`default`（背景 + 加粗，默认，与改动前视觉一致）/ `underline` / `bold`。实现是根容器上的 `data-hit-style` 属性 + CSS 覆盖，命中区间与 `<mark class="clip-hit">` 结构不变。主窗与弹窗共用同一设置。
+- **读写与校验**：新增 5 个 IPC（`get_appearance_settings` 一次读四项 + 4 个 setter）。写路径对非法枚举与越界数值**拒收且不落盘**（错误文案列全合法值/范围）；读路径再收敛一次（`effective_*`），兜手工改坏的 settings.json。前端另有 `normalizeAppearanceSettings` 在 IPC 边界归一，任一字段坏掉只回落该字段默认值。
+- **落盘后何时生效**：排序与命中高亮落盘后发既有的 `clipboard-changed`（该事件在本工程里就是「列表需要重新取数」的信号，先例是 `set_max_history_items` 淘汰后），主窗与弹窗立刻刷新；图片高度与预览延迟**不发**，避免为纯 CSS/时序变更白传一次列表 payload。
+- **验收（实跑，2026-10-25）**：
+  - `rtk pnpm exec tsc -b` → 退出 0。
+  - `rtk pnpm test` → **79 文件 / 853 测试全绿**（本轮新增 3 个测试文件 + 6 处既有文件补用例/补 mock）。
+  - `cd src-tauri && cargo fmt --all --check` → 退出 0；`cargo clippy --all-targets -- -D warnings` → 干净；`cargo test` → **838 passed / 0 failed**。
+  - **变异自证（三轮，均在最终树上做并还原）**：① 短路 `sort_rows_for_order` 的 `FirstCopied` 分支 → 红 3（两档排序差异、首次复制顺序、翻译取数不随排序漂移）；② `PREVIEW_SWITCH_DELAY_MS` 200→300 → 红 5（preview-delay 2、preview-defer 2、popover-appearance 1）；③ `PREVIEW_FIRST_DELAY_MS` 1500→800 → 红 5（含两处 tooltip 默认值断言）。还原后对应子集全绿，工作区无残留变异。
+- **已知边界 / 待裁决**：
+  1. **「首次复制」只在分组内严格有序**：弹窗列表仍按「收藏 / 今天 / 更早」用 `last_modified_utc` 分组，因此跨组的全局单调性不成立（一条今天被重新复制的旧条目会进「今天」组，但组内按 created 排）。是否在 `first_copied` 下改分组口径（或干脆不分组），属产品决策，本轮未改分组。
+  2. **tooltip 覆盖范围**：本轮只给四个新设置项写「默认值」tooltip。既有约 15 项设置（通用/隐私/存储/热键）**未**加，路线图 Phase 5 的「每项设置加 tooltip 写明默认值」那一行仍需逐项核对默认值后另行处理。
+  3. **枚举写坏的爆炸半径**（与 `exclude_mode` 历史行为一致，已用测试钉住）：`settings.json` 里 `sort_order` / `highlight_style` 写成非法字符串会让**整份设置**反序列化失败并回退全默认。
+- **未验证 / 待人工**：真机手感（各档预览延迟的实际体验、16/48px 缩略图与下划线/加粗的观感、长列表切排序后的滚动位置）、打包 GUI 下的实际表现、Windows（本项未新增平台相关代码，但整条链路未在 Windows 编译验证）。
+- **审查**：由执行端自检 + 三轮变异自证，**未做独立 reviewer 审查**（审查由 lead 另派）。
 ### P5-6 · i18n 框架 + 中英双语（namespace 分区 + 出货白名单）
 ### P5-7 · 设置页搜索
 
