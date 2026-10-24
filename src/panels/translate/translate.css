@@ -291,6 +291,21 @@
   border-radius: var(--r-lg);
 }
 
+/* 历史栏头部块：标题行 + 可选的「仅显示最近 N 条」提示
+   作为 .tx-history grid 的第一行（auto），提示出现时把列表整体下推，不破坏 1fr 滚动行 */
+.tx-hist-head {
+  min-width: 0;
+}
+
+/* 分页提示：条数达到后端单页上限时出现，弱化为说明性文字，不与标题争视觉权重 */
+.tx-hist-limit {
+  margin: 0;
+  padding: 0 18px 10px;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--muted);
+}
+
 /* 历史列表可滚区
    min-height:0 配合父 grid 1fr 行，确保内容超出时在此滚动 */
 .tx-hist-list {

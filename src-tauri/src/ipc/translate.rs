@@ -5,7 +5,7 @@
 //!
 //! 命令清单（前端通过 invoke 对应的命令名调用）：
 //! - `translate_text`            — 翻译文本，写入历史，返回译文与方向
-//! - `list_translate_history`    — 按时间倒序列出翻译历史（供 A08 历史栏回填）
+//! - `list_translate_history`    — 按时间倒序返回最近一页翻译历史（供 A08 历史栏回填）
 
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
@@ -552,7 +552,9 @@ fn plain_dto(translated: String, source: &Lang, target: &Lang) -> TranslateResul
 
 /// `list_translate_history` 的纯函数实现，可在测试中直接调用。
 ///
-/// 按 created_utc 倒序返回全部翻译历史记录。
+/// 按 created_utc 倒序返回**最近**一页翻译历史，条数上限由
+/// [`crate::translate::history::TRANSLATE_HISTORY_PAGE_LIMIT`] 决定（不在本层重复定义，
+/// 避免两处上限各自漂移）。
 ///
 /// # Errors
 /// `DbError::Sqlite`：数据库查询失败
@@ -606,7 +608,10 @@ pub fn translate_text(
     result
 }
 
-/// Tauri 命令：按时间倒序列出翻译历史。
+/// Tauri 命令：按时间倒序返回最近一页翻译历史。
+///
+/// 返回条数上限由 `translate::history::TRANSLATE_HISTORY_PAGE_LIMIT` 决定，
+/// 因此前端拿到的可能是「最近 N 条」而非全量（前端历史栏据此给出条数提示）。
 #[tauri::command]
 pub fn list_translate_history(state: State<'_, AppDb>) -> Result<Vec<TranslateHistoryDto>, String> {
     with_db(&state, |conn| {
