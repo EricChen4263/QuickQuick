@@ -98,6 +98,13 @@
   align-items: center;
   cursor: default;
   transition: background-color 110ms ease, border-color 110ms ease, color 110ms ease;
+  /* 离屏行交给浏览器跳过布局与绘制：行高由内容决定（文本一行 41px / 两行 60px、
+     图片行 54px），不能用固定行高窗口化，所以只跳过视口外行的渲染。
+     contain-intrinsic-size 取 50px 作首次占位折中；auto 关键字让浏览器记住已渲染行的
+     真实高度，估高只在未渲染时生效，滚动中自我校正，不产生滚动条跳动。
+     不支持 content-visibility 的浏览器会忽略这两条声明，退化为普通渲染，无副作用。 */
+  content-visibility: auto;
+  contain-intrinsic-size: auto 50px;
 }
 
 .clip-row:hover {

@@ -2,9 +2,12 @@
  * 剪贴板历史页（双栏布局：左侧列表栏 + 右侧预览区）。
  * 挂载时通过 IPC 取数，支持搜索过滤、类型筛选、键盘流、收藏/删除管理。
  * 对应验收项 V1-F2-A07。
+ *
+ * 列表按增量渲染：首屏只渲染首块，滚动接近底部再追加，选中项越出窗口时扩窗。
+ * 搜索与类型筛选仍在内存里对全量匹配，窗口只治理 DOM 行数，不裁剪可达范围。
  */
 
-import { useEffect, useRef, useState, useCallback } from "react";
+import { useEffect, useRef, useState, useCallback, useMemo } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { CLIPBOARD_CHANGED_EVENT } from "../../ipc/events";
 import {
@@ -20,7 +23,22 @@ import type { HistoryItem } from "../history/search";
 import type { HistoryFilter } from "../history/filter";
 import { filterBySearch } from "../history/search";
 import { filterByType } from "../history/filter";
-import { moveHighlight, quickSelectIndex, resolveEnter, isImeComposing } from "../history/keyboard";
+import {
+  moveHighlight,
+  quickSelectIndex,
+  resolveEnter,
+  isImeComposing,
+  firstIndex,
+  lastIndex,
+} from "../history/keyboard";
+import {
+  RENDER_BLOCK_SIZE,
+  initialRenderCount,
+  growRenderCount,
+  nextRenderCount,
+  shouldResetRenderCount,
+  isNearBottom,
+} from "./render-window";
 import { ClipItemRow } from "./ClipItemRow";
 import { ClipPreview } from "./ClipPreview";
 import { ClipSearchBar } from "./ClipSearchBar";
@@ -67,6 +85,11 @@ function ClipboardPage({ onTranslateItem }: ClipboardPageProps) {
     () => localStorage.getItem(ONBOARD_DISMISSED_KEY) === "true",
   );
   const [pasteMsg, setPasteMsg] = useState<string | null>(null);
+  // 列表渲染窗口大小（不是「已加载条数」）：只决定 DOM 里渲染多少行
+  const [renderCount, setRenderCount] = useState(RENDER_BLOCK_SIZE);
+  const listRef = useRef<HTMLDivElement>(null);
+  // 已同步过滚动的选中索引，用于避免「追加渲染」引起的被动滚动回到高亮行
+  const scrolledHighlightRef = useRef(-1);
 
   // 组件生命周期级 cancelled ref，供 handleToggleFavorite / handleDelete 共享。
   // 卸载时 cleanup 置 true，loadItems 内的 guard 据此跳过已卸载组件的 setState。
@@ -135,6 +158,9 @@ function ClipboardPage({ onTranslateItem }: ClipboardPageProps) {
   const afterSearch = filterBySearch(historyItems, searchQuery);
   const filteredItems = filterByType(afterSearch, typeFilter);
 
+  // id → 条目索引：列表渲染与取用都按 id 反查，避免每行对 items 做一次线性查找
+  const clipById = useMemo(() => new Map(items.map((c) => [c.id, c])), [items]);
+
   // 高亮索引 clamp 到有效范围
   const safeHighlight =
     filteredItems.length === 0
@@ -143,8 +169,52 @@ function ClipboardPage({ onTranslateItem }: ClipboardPageProps) {
 
   const highlightedClipItem =
     safeHighlight >= 0
-      ? items.find((c) => c.id === filteredItems[safeHighlight].id) ?? null
+      ? clipById.get(filteredItems[safeHighlight].id) ?? null
       : null;
+
+  // 实际渲染行数：窗口大小收敛到过滤结果总数
+  const visibleCount = Math.min(renderCount, filteredItems.length);
+
+  // 过滤条件键：任一项变化都意味着结果集换了，旧窗口必须作废
+  const filterKey = `${typeFilter}\u0000${searchQuery}`;
+  const prevFilterKeyRef = useRef(filterKey);
+
+  // 过滤条件变化 → 窗口重置回首屏块。
+  // 不重置的话「搜完再清空」会留下一个巨大的窗口，等于没治理 DOM 行数。
+  useEffect(() => {
+    const isFilterChanged = shouldResetRenderCount(prevFilterKeyRef.current, filterKey);
+    if (!isFilterChanged) return;
+    prevFilterKeyRef.current = filterKey;
+    setRenderCount(initialRenderCount(filteredItems.length));
+  }, [filterKey, filteredItems.length]);
+
+  // 选中项越出窗口 → 把窗口扩到能包含它。
+  // 键盘导航遍历的是完整过滤结果，⌘↓ 跳末条、连按 ↓、删除后索引回落都可能一步跳出
+  // 已渲染范围；不扩窗的话高亮行不在 DOM 里，表现为「高亮消失且滚不过去」。
+  useEffect(() => {
+    setRenderCount((prev) => nextRenderCount(prev, safeHighlight, filteredItems.length));
+  }, [safeHighlight, filteredItems.length]);
+
+  // 选中项变化后把高亮行滚入可视区（block:nearest 只在越界时滚动，不打断已可见项）。
+  // 扩窗是异步的：选中项那一行还没进 DOM 时先记下未同步状态，等扩窗引发的
+  // renderCount 变化再补一次滚动。用 ref 记录已同步索引，避免追加渲染时把列表拽回高亮行。
+  useEffect(() => {
+    if (safeHighlight < 0 || scrolledHighlightRef.current === safeHighlight) return;
+    const selectedRow = listRef.current?.querySelector('[aria-selected="true"]') ?? null;
+    if (selectedRow === null) return;
+    selectedRow.scrollIntoView({ block: "nearest" });
+    scrolledHighlightRef.current = safeHighlight;
+  }, [safeHighlight, renderCount]);
+
+  /**
+   * 滚动接近底部时追加一块渲染窗口。
+   * 判定放在纯函数里，组件只负责取容器的几何信息，便于脱离 DOM 单测。
+   */
+  function handleListScroll(event: React.UIEvent<HTMLDivElement>): void {
+    const el = event.currentTarget;
+    if (!isNearBottom(el.scrollTop, el.scrollHeight, el.clientHeight)) return;
+    setRenderCount((prev) => growRenderCount(prev, filteredItems.length));
+  }
 
   /**
    * 按条目 id 执行「粘贴到前台」。
@@ -153,7 +223,7 @@ function ClipboardPage({ onTranslateItem }: ClipboardPageProps) {
    */
   function pasteItemById(id: string | null): void {
     if (id === null) return;
-    const target = items.find((c) => c.id === id);
+    const target = clipById.get(id);
     if (!target) return;
     void handlePasteToFront(target);
   }
@@ -173,6 +243,17 @@ function ClipboardPage({ onTranslateItem }: ClipboardPageProps) {
     // 输入法组词期间（中文拼音选候选词）所有方向键与直达键都归输入法，
     // 这里不拦截任何键，否则会把候选词选择抢成列表导航。
     if (isImeComposing(event.nativeEvent)) return;
+
+    // ⌘↑ / ⌘↓ 跳首条 / 末条（与 popover 同键位）。
+    // 目标索引可能远在已渲染窗口之外，扩窗由选中项同步 effect 负责。
+    if (event.metaKey && (event.key === "ArrowUp" || event.key === "ArrowDown")) {
+      event.preventDefault();
+      const target =
+        event.key === "ArrowUp" ? firstIndex(filteredItems.length) : lastIndex(filteredItems.length);
+      if (target < 0) return;
+      setHighlightIndex(target);
+      return;
+    }
 
     if (event.key === "ArrowDown" || event.key === "ArrowUp") {
       event.preventDefault();
@@ -291,9 +372,11 @@ function ClipboardPage({ onTranslateItem }: ClipboardPageProps) {
           />
         )}
         <div
+          ref={listRef}
           className="clip-list"
           role="listbox"
           aria-label="剪贴板历史"
+          onScroll={handleListScroll}
         >
           {filteredItems.length === 0 ? (
             <EmptyState
@@ -302,8 +385,8 @@ function ClipboardPage({ onTranslateItem }: ClipboardPageProps) {
               description="复制任意内容后将显示在这里"
             />
           ) : (
-            filteredItems.map((histItem, idx) => {
-              const clipItem = items.find((c) => c.id === histItem.id);
+            filteredItems.slice(0, visibleCount).map((histItem, idx) => {
+              const clipItem = clipById.get(histItem.id);
               if (!clipItem) return null;
               return (
                 <ClipItemRow
