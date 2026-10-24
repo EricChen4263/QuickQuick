@@ -7,23 +7,38 @@ evidence:
   commits:
     - "d057ae2 feat(tray): 托盘菜单补齐暂停/打开设置/检查更新/版本号（P5-1）"
     - "e92c87d feat(tray): 托盘「清空未固定…」二次确认后清空非收藏历史（P5-1）"
+    - "dadfe2f test(tray): 锚定「清空未固定」请求编排顺序（先 show 再 emit）"
   commands:
     - "rtk proxy git diff -- <托盘文件>  # 生成可用补丁（rtk git diff 会改写成人类可读摘要，git apply 不能用）"
     - "rtk git worktree add /tmp/qq-audit/wt HEAD"
     - "cargo check --all-targets / cargo clippy --all-targets -- -D warnings"
-    - "cargo test  # 提交态 778 passed / 0 failed"
-    - "npx vitest run  # 提交态 74 files / 771 tests passed"
+    - "cargo test  # 全 target：7f72e43 基线 810 passed / 0 failed；变异①下 5 failed"
+    - "cargo test --lib tray::  # 32 passed"
+    - "npx vitest run src/ipc/ipc-client.test.ts src/app-shell.test.tsx  # 56 passed"
     - "npx tsc -b"
   urls: []
 ---
 
 # AI 活动记录 · P5-1 托盘菜单补齐（接手 + 补齐）
 
+## 数字出处（本次实跑，可复算）
+
+| 指标 | 数值 | 取数 commit | 命令 |
+|---|---|---|---|
+| Rust 全 target 测试（干净基线） | **810 passed / 0 failed** | `7f72e43` | `cargo test` |
+| Rust tray 模块单测 | **32 passed** | `dadfe2f` | `cargo test --lib tray::` |
+| 变异①（去掉 `is_favorite = 0`）红测试数 | **5 failed** | `7f72e43` + db.rs 变异 | `cargo test`（全 target） |
+| 前端相关用例 | **56 passed**（ipc-client 42 + app-shell 14） | `dadfe2f` | `npx vitest run src/ipc/ipc-client.test.ts src/app-shell.test.tsx` |
+| lib.rs 中 `tray::refresh_tray_indicator` 调用点 | **1 处** | `92d8a9c` 与当前 HEAD 均为 1 | `git show <commit>:src-tauri/src/lib.rs \| grep -n "tray::"` |
+| lib.rs 中 `tray::` 引用总数 | **4 处**（审计时点 `92d8a9c`）／**5 处**（补注册后） | 见左右 | 同上 |
+
+> 历史数字口径提醒：卡片早先记的「审计阶段 769 / 补齐后 778」是**当时各自时点**的实跑总量，不是同一棵树的派生值；上面这张表是本次在 `7f72e43`/`dadfe2f` 上重新实跑的数字，两者不可混用。
+
 ## 摘要
 
 - **接手**：工作区里 6 个托盘相关文件有 728 行无主改动（tray.rs +712 等），作者与完整性未知。先在隔离 worktree 里只读审计，结论是「编译/测试全绿、无半成品、与 P3-6 无冲突，但 P5-1 缺 1 项」，再单独提交（`d057ae2`）。
-- **补齐**：缺的是「清空未固定」。新增菜单项 + 二次确认链路（`e92c87d`）。
-- 审计阶段实跑：`cargo check` / `clippy -D warnings` / `cargo test`（769）/ `vitest`（768）/ `tsc` 全绿；补齐后提交态为 Rust 778、前端 771。
+- **补齐**：缺的是「清空未固定」。新增菜单项 + 二次确认链路（`e92c87d`）；复审后补「请求编排顺序」护栏（`dadfe2f`）。
+- 审计时点实跑：`cargo check` / `clippy -D warnings` / `cargo test`（769）/ `vitest`（768）/ `tsc` 全绿；补齐提交态 `e92c87d` 实跑 Rust 778、前端 771。数字口径见上方「数字出处」。
 
 ## 审计发现（接手部分）
 
@@ -32,7 +47,7 @@ evidence:
 两处值得记的判断：
 
 1. **「检查更新」确实复用了既有链路**：托盘调的是 `ipc::update::check_for_updates`（lib.rs 已注册的 `#[tauri::command]`），只在其上加了 `UpdateStatus` 状态机；没有第二套 endpoint。
-2. **与 P3-6 无冲突**：`2e67530` 已是 HEAD 祖先，`handle_tray_icon_event` 仍走 `privacy::tray_click_action`（⌥/⌥⇧/无修饰），`refresh_tray_indicator` 签名未变，故 lib.rs 三处调用点不需要动。
+2. **与 P3-6 无冲突**：`2e67530` 已是 HEAD 祖先，`handle_tray_icon_event` 仍走 `privacy::tray_click_action`（⌥/⌥⇧/无修饰），`refresh_tray_indicator` 签名未变。**调用点计数（实测，勿沿用旧说法）**：`tray::refresh_tray_indicator` 在 lib.rs 只有 **1 处**调用点（轮询线程消费 ⌥⇧ 后的刷新）；审计时点 `92d8a9c` 的 lib.rs 共有 **4 处** `tray::` 引用（`show_and_focus_window` ×2 / `setup_tray` ×1 / `refresh_tray_indicator` ×1），补上命令注册后当前 HEAD 为 **5 处**。早先卡片写的「三处调用点」不准确，以本节为准。
 
 ## 「清空未固定」为什么是二次确认
 
@@ -50,15 +65,31 @@ evidence:
 
 真库锚定（`tempfile::tempdir()` + `db::open_or_create`，走生产开库入口而非手工建表）：入库 2 条文本、收藏其中 1 条 → 清空 → 断言收藏项仍 live、非收藏项被软删、`soft_deleted=1`、`purged=1`。另有一条「只剩收藏项时重复清空是幂等空操作」。
 
-三次变异全部实跑，都成功变红：
+五次变异全部实跑，每次都在还原前确认红、还原后确认逐字节干净：
 
-| 变异 | 结果 |
-|---|---|
-| `db.rs` 候选 SQL 去掉 `AND is_favorite = 0` | 2 条红：`只应软删那一条非收藏项` left=2 right=1；`重复清空不得动收藏项` left=0 right=1 |
-| `App.tsx` 删掉 `if (!window.confirm(...)) return;` 守卫 | 「取消时不调用后端命令」红 |
-| `App.tsx` 回执改用 `result.purged` 冒充非收藏项条数 | 期望「已清空 3 条」实得「已清空 5 条」红 |
+| # | 变异 | 红测试 |
+|---|---|---|
+| ① | `db.rs` 候选 SQL 去掉 `AND is_favorite = 0` | **5 条**（全量 `cargo test`，见下清单） |
+| ② | `App.tsx` 删掉 `if (!window.confirm(...)) return;` 守卫 | `app-shell: 用户取消时不调用后端命令` |
+| ③ | `App.tsx` 回执改用 `result.purged` 冒充非收藏项条数 | `app-shell: 确认清空未固定后才调后端命令…`（期望「已清空 3 条」实得「已清空 5 条」） |
+| ④ | `tray.rs` 交换 `run_clear_unpinned_request` 里 show / emit 两行 | 2 条：`clear_unpinned_request_shows_window_before_emitting`、`clear_unpinned_request_shows_window_first_even_when_emit_fails`（断言 left `["emit","show"]` vs right `["show","emit"]`） |
+| ⑤ | `tray.rs` 删掉 `show_window();` 调用 | 同上 2 条（断言 left `["emit"]` vs right `["show","emit"]`） |
 
-第三条变异是**变异测试自己发现的问题**：最初 mock 里 `softDeleted: 3, purged: 3` 同值，取错字段根本抓不到。改成 `purged: 5` 后才真正钉住「回执说的是非收藏项条数」。
+**变异①的红测试是 5 条，不是早先记的 2 条。** 早先只跑了 `cargo test --lib tray::tests::clear_unpinned` 子集，把「我新加的 2 条」当成了全部；跑全量才看到另外 3 条既有测试同样钉着这个条件：
+
+1. `db::tests::cleanup_keep_recent_plan_seeks_index`
+2. `db::tests::evict_over_limit_never_deletes_favorites`
+3. `pipeline::tests::history_eviction_spares_favorites`
+4. `tray::tests::clear_unpinned_is_noop_when_only_favorites_remain`
+5. `tray::tests::clear_unpinned_removes_only_non_favorites`
+
+**这条教训比数字本身重要**：变异红测试数必须用**全量**测试统计。只看自己新写的子集，会系统性低估「这个条件被多少测试保护着」，进而误判覆盖强度——而「有多少既有测试会因为这条判据松动而红」恰恰是判断防护厚度的依据。
+
+变异③是**变异测试自己发现的问题**：最初 mock 里 `softDeleted: 3, purged: 3` 同值，取错字段根本抓不到。改成 `purged: 5` 后才真正钉住「回执说的是非收藏项条数」。
+
+变异④⑤针对的是复审指出的空洞：`request_clear_unpinned` 的「先 show 再 emit」顺序此前没有任何测试锁，交换两行或删掉 show 时「功能看起来没报错」但确认框会弹在隐藏窗口里。修法是把编排抽成 `run_clear_unpinned_request(show_window, emit_request)`，测试注入两个 fake 闭包把调用记进同一个日志，断言序列恰为 `["show", "emit"]`；第二条覆盖 emit 失败时 show 仍必须已经发生（防「先 emit、失败就提前 return」这类改写）。
+
+**这两条测试覆盖不到的残余（如实登记）**：它们锚的是 `run_clear_unpinned_request` 这份编排。若有人改写 `request_clear_unpinned` 这个 4 行接线、绕开编排函数直接 `emit`，测试不会红。要锁住包装层需要能伪造 `tauri::AppHandle`，成本远高于收益；可缓解的一点是两个闭包签名不同（`FnOnce()` vs `FnOnce() -> Result<(), String>`），参数互换会直接编译失败。
 
 ## 一个必须记下来的工程坑：lib.rs 已被他人改动
 
