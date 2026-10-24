@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { PopoverPreview } from "./PopoverPreview";
+import { PREVIEW_WAITING_TEXT, type PreviewState } from "./preview-state";
 import type { ClipItem } from "../ipc/ipc-client";
 
 function makeTextItem(overrides: Partial<ClipItem> = {}): ClipItem {
@@ -14,14 +15,34 @@ function makeTextItem(overrides: Partial<ClipItem> = {}): ClipItem {
   };
 }
 
+/** 以「有条目」态渲染：绝大多数用例只关心条目内容渲染 */
+function renderItem(item: ClipItem) {
+  return render(<PopoverPreview state={{ kind: "item", item }} />);
+}
+
+/** 以任意态渲染（占位 / 空态用例） */
+function renderState(state: PreviewState) {
+  return render(<PopoverPreview state={state} />);
+}
+
 describe("PopoverPreview 渲染", () => {
-  it("无选中项时渲染空态文案「无选中项」", () => {
-    render(<PopoverPreview item={null} />);
+  it("无选中项（empty 态）时渲染空态文案「无选中项」", () => {
+    renderState({ kind: "empty" });
     expect(screen.getByText("无选中项")).toBeDefined();
   });
 
+  it("已选中但分级延迟未到点（waiting 态）时渲染中性占位，不渲染「无选中项」", () => {
+    renderState({ kind: "waiting" });
+
+    expect(screen.getByText("预览稍后显示")).toBeDefined();
+    expect(screen.getByText(PREVIEW_WAITING_TEXT)).toBeDefined();
+    expect(screen.queryByText("无选中项")).toBeNull();
+    // 占位不暗示在加载本地数据
+    expect(screen.queryByText(/加载/)).toBeNull();
+  });
+
   it("文本条目渲染 content 内容", () => {
-    render(<PopoverPreview item={makeTextItem()} />);
+    renderItem(makeTextItem());
     expect(screen.getByText("hello preview")).toBeDefined();
   });
 
@@ -33,7 +54,7 @@ describe("PopoverPreview 渲染", () => {
       thumbnailDataUrl: "data:image/webp;base64,xxx",
     });
 
-    render(<PopoverPreview item={item} />);
+    renderItem(item);
 
     const img = screen.getByRole("img", { name: "图片预览" });
     expect(img).toBeDefined();
@@ -43,18 +64,18 @@ describe("PopoverPreview 渲染", () => {
   it("图片条目无 thumbnailDataUrl 时渲染占位文字「[图片]」", () => {
     const item = makeTextItem({ id: "img-2", content: "", kind: "image" });
 
-    render(<PopoverPreview item={item} />);
+    renderItem(item);
 
     expect(screen.getByText("[图片]")).toBeDefined();
   });
 
   it("收藏条目渲染「已收藏」badge", () => {
-    render(<PopoverPreview item={makeTextItem({ isFavorite: true })} />);
+    renderItem(makeTextItem({ isFavorite: true }));
     expect(screen.getByText("已收藏")).toBeDefined();
   });
 
   it("非收藏条目不渲染「已收藏」badge", () => {
-    render(<PopoverPreview item={makeTextItem({ isFavorite: false })} />);
+    renderItem(makeTextItem({ isFavorite: false }));
     expect(screen.queryByText("已收藏")).toBeNull();
   });
 
@@ -65,7 +86,7 @@ describe("PopoverPreview 渲染", () => {
       htmlContent: "<b>hi</b><table><tr><td>x</td></tr></table>",
     });
 
-    const { container } = render(<PopoverPreview item={item} />);
+    const { container } = renderItem(item);
 
     const content = container.querySelector(".popover-preview-content");
     expect(content).not.toBeNull();
@@ -82,7 +103,7 @@ describe("PopoverPreview 渲染", () => {
         '<img src=x onerror="alert(1)">点<script>alert(2)</script>击<a href="javascript:alert(3)">x</a><iframe src="javascript:alert(4)"></iframe>',
     });
 
-    const { container } = render(<PopoverPreview item={item} />);
+    const { container } = renderItem(item);
 
     const content = container.querySelector(".popover-preview-content");
     expect(content).not.toBeNull();

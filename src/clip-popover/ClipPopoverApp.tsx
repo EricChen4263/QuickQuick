@@ -21,6 +21,7 @@ import { PopoverList } from "./PopoverList";
 import { PopoverPreview } from "./PopoverPreview";
 import { PopoverFooter } from "./PopoverFooter";
 import { useDeferredPreviewId } from "./useDeferredPreview";
+import { resolvePreviewState } from "./preview-state";
 import { applyModifierKey, NO_MODIFIERS, type ModifierState } from "./footer-hints";
 
 /**
@@ -50,7 +51,8 @@ const DIGIT_KEY_PATTERN = /^[0-9]$/;
  *   - modifiers: 当前按下的修饰键，仅驱动底部徽标切换
  *
  * 预览区（右侧）不直接跟随 selectedId：选中项经 useDeferredPreviewId 分级延迟后才显示
- * （首个预览 1500ms、此后切换 200ms），避免快速翻页时预览区逐条闪烁。
+ * （首个预览 1500ms、此后切换 200ms），避免快速翻页时预览区逐条闪烁；
+ * 延迟窗口内渲染中性占位而不是「无选中项」（三态判定见 preview-state.ts）。
  * 底部徽标随按下的修饰键切换分层提示（默认层 / ⌃ 层 / ⌘ 层 / ⌥ 层，见 footer-hints）。
  *
  * 键盘交互（由 search input 的 onKeyDown 处理）：
@@ -230,6 +232,13 @@ export default function ClipPopoverApp() {
   const displayedItem = useMemo(
     () => visibleFlatList.find((i) => i.id === displayedId) ?? null,
     [visibleFlatList, displayedId]
+  );
+
+  // 「有选中项但预览还没到点」与「真的没有选中项」必须分开渲染：
+  // 前者若说「无选中项」，会和左侧列表里明晃晃的高亮行自相矛盾。
+  const preview = useMemo(
+    () => resolvePreviewState(displayedItem, selectedItem !== null),
+    [displayedItem, selectedItem]
   );
 
   /** 执行取用并关窗：Enter 确认与数字直达共用同一条粘贴路径 */
@@ -434,7 +443,7 @@ export default function ClipPopoverApp() {
           selectedId={selectedId}
           onSelect={(item) => setSelectedId(item.id)}
         />
-        <PopoverPreview item={displayedItem} />
+        <PopoverPreview state={preview} />
       </div>
       <PopoverFooter modifiers={modifiers} />
     </div>

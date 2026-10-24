@@ -202,6 +202,15 @@ body {
   font-size: 13px;
 }
 
+/* 分级延迟窗口内的中性占位：居中弱化，且不声称「无选中项」 */
+.popover-preview-waiting {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted);
+  font-size: 13px;
+}
+
 /* kicker：类型 · 时间 元信息行 */
 .popover-preview-kicker {
   display: flex;

@@ -608,7 +608,10 @@ describe("ClipPopoverApp 窗口焦点变化", () => {
     expect(document.activeElement).not.toBe(input);
 
     // 模拟窗口获焦事件
-    capturedFocusCallback!({ payload: true });
+    // 用 act 包裹：面板重新获焦会重置预览会话使其重渲染，裸调用会在 act 之外触发 setState
+    act(() => {
+      capturedFocusCallback!({ payload: true });
+    });
 
     await waitFor(() => {
       expect(document.activeElement).toBe(input);
@@ -632,7 +635,10 @@ describe("ClipPopoverApp 窗口焦点变化", () => {
     expect(input).toHaveValue("hello");
 
     // 触发窗口获焦
-    capturedFocusCallback!({ payload: true });
+    // 用 act 包裹：面板重新获焦会重置预览会话使其重渲染，裸调用会在 act 之外触发 setState
+    act(() => {
+      capturedFocusCallback!({ payload: true });
+    });
 
     await waitFor(() => {
       expect(input).toHaveValue("");
@@ -661,7 +667,10 @@ describe("ClipPopoverApp 窗口焦点变化", () => {
     });
 
     // 触发窗口获焦，应回到第一项
-    capturedFocusCallback!({ payload: true });
+    // 用 act 包裹：面板重新获焦会重置预览会话使其重渲染，裸调用会在 act 之外触发 setState
+    act(() => {
+      capturedFocusCallback!({ payload: true });
+    });
 
     await waitFor(() => {
       const rows = screen.getAllByRole("option");

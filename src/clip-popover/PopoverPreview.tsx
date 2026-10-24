@@ -1,9 +1,11 @@
 import type { ClipItem } from "../ipc/ipc-client";
 import { sanitizeRichHtml } from "../panels/clipboard/sanitize-html";
 import { handleRichLinkClick } from "../panels/clipboard/rich-link";
+import { PREVIEW_WAITING_TEXT, type PreviewState } from "./preview-state";
 
 interface PopoverPreviewProps {
-  item: ClipItem | null;
+  /** 预览区三态，由 resolvePreviewState 判定（见 preview-state.ts） */
+  state: PreviewState;
 }
 
 /** 将 kind 值转为人读标签 */
@@ -56,11 +58,20 @@ function ImageContent({ item }: { item: ClipItem }) {
 
 /**
  * Popover 右侧预览区：展示选中条目的类型·时间 kicker + 内容。
- * 无选中项时显示空态提示。
+ * 三态渲染：有条目 / 分级延迟占位 / 真的没有选中项——状态本身由 resolvePreviewState 判定，
+ * 本组件只按态渲染，避免在 JSX 里堆叠条件。
  * selectedId 与扁平列表由 ClipPopoverApp 持有，B2 键盘流直接改 selectedId 即可。
  */
-export function PopoverPreview({ item }: PopoverPreviewProps) {
-  if (!item) {
+export function PopoverPreview({ state }: PopoverPreviewProps) {
+  if (state.kind === "waiting") {
+    return (
+      <div className="popover-preview popover-preview-waiting">
+        <span>{PREVIEW_WAITING_TEXT}</span>
+      </div>
+    );
+  }
+
+  if (state.kind === "empty") {
     return (
       <div className="popover-preview popover-preview-empty">
         <span>无选中项</span>
@@ -68,6 +79,7 @@ export function PopoverPreview({ item }: PopoverPreviewProps) {
     );
   }
 
+  const item = state.item;
   return (
     <div className="popover-preview">
       <div className="popover-preview-kicker">

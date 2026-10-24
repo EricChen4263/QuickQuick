@@ -73,17 +73,20 @@ function previewText(container: HTMLElement): string {
 }
 
 describe("ClipPopoverApp 行内预览分级延迟（P2-10）", () => {
-  it("首个预览等 1500ms 才出现，此前只显示空态", async () => {
+  it("首个预览等 1500ms 才出现，此前显示中性占位而不是「无选中项」", async () => {
     const container = await renderReady();
 
-    // 数据已在内存：列表立刻就有 4 条，等待只发生在预览区
+    // 数据已在内存：列表立刻就有 4 条且已有选中项，等待只发生在预览区
     expect(screen.getAllByRole("option")).toHaveLength(4);
-    expect(previewText(container)).toBe("无选中项");
+    expect(screen.getAllByRole("option")[0]?.getAttribute("aria-selected")).toBe("true");
+    // 列表里明明有高亮行，预览区就不能说「无选中项」
+    expect(previewText(container)).toBe("预览稍后显示");
+    expect(previewText(container)).not.toContain("无选中项");
 
     act(() => {
       vi.advanceTimersByTime(1499);
     });
-    expect(previewText(container)).toBe("无选中项");
+    expect(previewText(container)).toBe("预览稍后显示");
     expect(previewText(container)).not.toContain("first item");
 
     act(() => {
@@ -155,6 +158,15 @@ describe("ClipPopoverApp 行内预览分级延迟（P2-10）", () => {
     expect(previewText(container)).toContain("fourth item");
   });
 
+  it("列表为空（真的没有选中项）时仍显示「无选中项」，不退化成延迟占位", async () => {
+    mockListClipItems.mockResolvedValue([]);
+    const container = await renderReady();
+
+    expect(screen.queryAllByRole("option")).toHaveLength(0);
+    expect(previewText(container)).toBe("无选中项");
+    expect(previewText(container)).not.toContain("预览稍后显示");
+  });
+
   it("面板重新打开（重新获得焦点）后首个预览重新等 1500ms", async () => {
     const container = await renderReady();
     act(() => {
@@ -165,7 +177,7 @@ describe("ClipPopoverApp 行内预览分级延迟（P2-10）", () => {
     act(() => {
       capturedFocusCallback?.({ payload: true });
     });
-    expect(previewText(container)).toBe("无选中项");
+    expect(previewText(container)).toBe("预览稍后显示");
 
     act(() => {
       vi.advanceTimersByTime(1499);
