@@ -20,6 +20,7 @@ import {
 import { PopoverList } from "./PopoverList";
 import { PopoverPreview } from "./PopoverPreview";
 import { PopoverFooter } from "./PopoverFooter";
+import { useDeferredPreviewId } from "./useDeferredPreview";
 
 /**
  * 从分组结果构建扁平有序列表（收藏 → 今天 → 更早）。
@@ -44,6 +45,10 @@ const DIGIT_KEY_PATTERN = /^[0-9]$/;
  *   - items: IPC 加载的全量条目
  *   - query: 搜索框值（受控）
  *   - selectedId: 当前选中条目 ID
+ *   - previewSession: 面板会话序号，每次重新打开面板递增，用来重置预览延迟档位
+ *
+ * 预览区（右侧）不直接跟随 selectedId：选中项经 useDeferredPreviewId 分级延迟后才显示
+ * （首个预览 1500ms、此后切换 200ms），避免快速翻页时预览区逐条闪烁。
  *
  * 键盘交互（由 search input 的 onKeyDown 处理）：
  *   - ↑ / ↓、⌃N/⌃J（下）与 ⌃P/⌃K（上）：在 visibleFlatList 中移动选中项（advanceSelection）
@@ -60,6 +65,8 @@ export default function ClipPopoverApp() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  // 面板会话序号：每次窗口重新获得焦点（面板被打开）递增，预览延迟档位随之重置
+  const [previewSession, setPreviewSession] = useState(0);
 
   const inputRef = useRef<HTMLInputElement>(null);
   // ref 暴露最新的 visibleFlatList，避免 onFocusChanged 回调产生 stale closure
@@ -144,6 +151,7 @@ export default function ClipPopoverApp() {
   }, []);
 
   // 每次窗口获得焦点时：聚焦输入框、重置搜索、选中回第一项
+  // 同时递增面板会话序号：本次打开的首个预览要重新走 1500ms 档，而不是沿用上次的 200ms
   useEffect(() => {
     const win = getCurrentWindow();
     let unlisten: (() => void) | null = null;
@@ -152,6 +160,7 @@ export default function ClipPopoverApp() {
       if (!focused) return;
       inputRef.current?.focus();
       setQuery("");
+      setPreviewSession((session) => session + 1);
       const firstId = visibleFlatListRef.current[0]?.id ?? null;
       setSelectedId(firstId);
     }).then((fn) => {
@@ -188,6 +197,17 @@ export default function ClipPopoverApp() {
   const selectedItem = useMemo(
     () => visibleFlatList.find((i) => i.id === selectedId) ?? null,
     [visibleFlatList, selectedId]
+  );
+
+  // 预览区跟随「延迟后的 ID」，而不是 selectedId：快速连按时中间项来不及到期就被下一项覆盖，
+  // 因此预览不会逐条闪过去。
+  const displayedId = useDeferredPreviewId(selectedItem?.id ?? null, previewSession);
+
+  // 按延迟后的 ID 从当前列表取对象而不是缓存条目本身：列表刷新（如收藏状态变化）后
+  // 预览用的是新数据，不会停在打开面板那一刻的旧快照。
+  const displayedItem = useMemo(
+    () => visibleFlatList.find((i) => i.id === displayedId) ?? null,
+    [visibleFlatList, displayedId]
   );
 
   /** 执行取用并关窗：Enter 确认与数字直达共用同一条粘贴路径 */
@@ -382,7 +402,7 @@ export default function ClipPopoverApp() {
           selectedId={selectedId}
           onSelect={(item) => setSelectedId(item.id)}
         />
-        <PopoverPreview item={selectedItem} />
+        <PopoverPreview item={displayedItem} />
       </div>
       <PopoverFooter />
     </div>
