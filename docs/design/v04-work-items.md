@@ -75,7 +75,11 @@
 - **验收**：瞬时错误重试 2 次且退避序列断言 `[500]`、永久错误 1 次不重试、被取代的 generation 丢弃且零缓存/零历史、回环 HTTP 实测 401/403/429/503 归一、`is_timeout` 覆盖 TimedOut 与 ConnectionRefused 两种。
 
 ### P1-8 · 串行化全部 `NSPasteboard` 访问（新增 · 由 P1-1 复审挂号）
-- **状态**：ready
+- **状态**：done（与 P3-2 合成一次改动，commit `71d18f8`；活动卡 `2026-10-25-pasteboard-serialize-changecount.md`）
+- **结果摘要**：新增 `pasteboard_serial` 主线程串行通道（带超时、panic 拦截、已在主线程则就地执行）；轮询两阶段（无锁观察 → 持锁入库）；P1-1 的 `MetaDispatch` / `MainThreadMetaReader` 被通用通道取代并删除。
+- **验收实跑**：探针 `examples/pasteboard_serial_probe.rs` 4 后台线程 × 700 轮 + 主线程并发，3/3 次 0 崩溃；变异 `--no-dispatch` 3/3 崩溃；`cargo test` 810 通过。
+- **待人工**：真机长跑（切 app / 粘贴 / 复制混合）；4K 大图主线程全量读体感。
+- **未验证**：Windows 全路径未编译（仅 cfg 翻转的 Linux 副本 `cargo check --lib`）。
 - **为什么挂**：P1-1 复审时探针实证：**同一进程内两个线程并发访问 `NSPasteboard`（含 `types()` 与 arboard 正文读）会 SIGSEGV**。这条崩溃类**早于本轮 Phase 1 就存在**（轮询线程 arboard 读 + IPC 命令线程 arboard 写自 `f4c7211`/`73a64f4` 起并存），P1-1 只消除了自己新增的那一面（把 `types()` 移到主线程）。强行在 P1-1 闭环等于提前做 P3-2。
 - **做什么**：把 `pipeline::ArboardBackend` 的全部 `NSPasteboard` 访问（`change_count` 的三段读 + `read` 的三段读 + 写回路径）统一走单一「主线程串行执行 + 结果快照」通道；与 P3-2「`changeCount` 替代内容哈希轮询」一起做（后者会改变去重语义：同一内容复制两次各记一条，属用户可见变化，需单独验收）。
 - **验收**：探针「主线程与后台线程同时跑全部读路径，连续 N 次不崩」+ 真机长跑（切 app / 粘贴 / 复制混合）无崩溃。
@@ -111,7 +115,8 @@
 - **结果**：commits `f86d714`、`c11f85f`（复审修复）、`4e3ce3d`。仅「搜索框为空且无修饰键」时生效；50ms 高亮反馈后取用；越界不做任何事。
 - **审查打回的 BLOCK（已闭环）**：50ms 待取用定时器原先只被「数字 / Esc / 卸载」取消，Enter / ⌥Enter / 打字 / 方向键都会留下它继续触发——探针实证「同一条目粘两次」「粘贴+复制双发」「用户已在打字却粘了一条」。修法是非数字键在 `handleKeyDown` 顶层统一取消（放在 IME guard **之前**，因为组词期间的按键同样意味着用户在打字）。
 ### P2-4 · 字母 pin（`b`–`y` 持久化键位 + 设置页管理）
-- **状态**：blocked（需 `pin` 列 + 迁移框架；建议与 Phase 4 的迁移版本化一起做）
+- **状态**：design（前置已满足：迁移框架 P4-7 已完成；**设计文档 `docs/design/pin-letter-design.md` 尚未落盘**，派发的 `pin-architect` 中断前无产出）
+- **迁移编号**：占用 **v3**；P3-8 的 `copy_count` 预留 **v4**。实现前必须重审 P4-4 淘汰豁免条件（`is_favorite` 与新 pin 列的关系）。
 ### P2-5 · cycle 模式（按住热键连按翻页、松手即粘贴）
 - **状态**：blocked（依赖面板吞 ⌘V 语义与全局 `flagsChanged`）
 ### P2-6 · 输入法防御（composition 期间禁用方向键导航）
@@ -137,6 +142,10 @@
 - **结果**：commit `39511f4`。四层徽标（默认/⌃/⌘/⌥），默认层收下「`1–0` 直达」——这是上一轮新增但零 UI 线索的能力，discoverability 的主缺口。独立审查 **非 BLOCK**，并独立核实「⌘ > ⌃ > ⌥、⇧ 无独立层」的优先级与真实分发一致（`handleMoveKey` 首行 `if (e.metaKey) return false`，所以按住 ⌘ 时 `⌃N/⌃P` 根本不生效）。
 - **已知边界**：只跟踪修饰键自身的 keydown/keyup，不读 `e.ctrlKey` 标志位——「先按住 ⌃ 再唤面板」会显示默认层（键位仍生效）；`onKeyUp` 只挂 input，焦点在面板内但不在 input 时松开会短暂卡层，已有 blur 与 `onFocusChanged(false)` 两条兜底。
 - **待人工**：5 个徽标在底部条是否溢出、「换一批」缺 opacity 过渡的视觉跳动。
+
+### P2-12 · 悬停与键盘仲裁（鼠标真实移动才交还主导权）
+- **状态**：in_progress（`popover-hover-execute` 被中断；工作区有**未提交**改动：`ClipPopoverApp.tsx`、`PopoverList.tsx`(+test)、`keyboard-nav.ts`(+test)，以及未跟踪的 `hover-arbitration.test.tsx`。**未验证、未提交**，需续派给原 owner 收口或由 lead 复核。）
+- **来源**：roadmap Phase 2「悬停与键盘仲裁」，原台账无条目，本轮登记。
 
 ### Phase 2 遗留挂号（本轮记录，未立项）
 - 主窗 `⌘0` 取不到第 10 条（`quickSelectIndex` 只认 1–9）。
@@ -238,6 +247,7 @@
 - **可失败性（6 处变异全部打红）**：① 摘掉入库路径的淘汰触发（`if false &&`）→ 3 红；② 候选 SQL 去掉 `is_favorite = 0` → 3 红（含列表索引计划测试）；③ `MAX_HISTORY_ITEMS` 改 1000 → 3 红；④ `set_max_history_items_impl` 跳过立即淘汰 → 1 红；⑤ `counts_as_new_row` 退化成「非空即真」→ 2 红；⑥ 前端非法值不回滚输入框 → 4 红。
 - **未验证**：真机（打包 GUI）改上限的即时手感与 `clipboard-changed` → 列表刷新联动（headless 只验到事件「被发送」的调用点存在，没有真机订阅方实跑）；加密大库（数万条）首次收敛的耗时（`cleanup_keep_recent` 是逐行 UPDATE，超出部分很多时是一批写事务）；Windows。
 ### P4-5 · 搜索升级（预计算 title + 4 模式 + 多词 AND + 命中高亮）
+- **状态**：部分完成（P4-5a 后端 title 预计算落库与分批回填已完成；**尾部搜索（>1000 字符不可搜）未解决**，依赖两段式加载设计；设计文档 `docs/design/search-two-stage-design.md` 尚未落盘，`search-architect` 中断前无产出）
 ### P4-6 · 翻译历史分页
 - **状态**：done
 - **结果**：commits `95d3045`、`fb5d366`（复审补强）。`TRANSLATE_HISTORY_PAGE_LIMIT = 200`（历史栏一屏上限，钉住 payload）+ `TRANSLATE_HISTORY_RETENTION = 500`（2.5× 分页上限，给表体量上界）；查询加 `LIMIT ?1` 且保留 `created_utc DESC, rowid DESC`；写入后 best-effort 清理，**先 `COUNT(*)` 短路**，只有超限才跑一次 `DELETE ... OFFSET 500`。
@@ -264,10 +274,24 @@
 ## Phase 5 · 产品化
 
 ### P5-1 · 托盘菜单补齐（暂停/清空/设置/检查更新/版本）
+- **状态**：done（图标显示最近内容为可选项，**未做**）
+- **结果**：commits `d057ae2`（菜单补齐：暂停 / 打开设置 / 检查更新 / 版本号）、`e92c87d`（「清空未固定…」二次确认后清空非收藏历史）、`6a8bd62`（审计活动卡）、`dadfe2f`（编排顺序锚定）、`c101813`（活动卡数字订正）。
+- **关键约束**：清空只删 `is_favorite=0`；前端确认文案明示「收藏项会保留」；「检查更新」复用 `ipc/update.rs`；版本号取自配置而非硬编码。
+- **验收**：`cargo test --lib tray::` 32 通过；编排顺序变异（交换 show/emit、删 show）各使 2 条测试变红；清空谓词有 `is_favorite` 锚定测试（变异下全量 5 条红）。
+- **待人工**：托盘菜单观感与分组；打包 WKWebView 中 `window.confirm` 模态表现；清空后列表经 `clipboard-changed` 刷新的真机联调。
+- **未验证**：Windows（`current_modifiers` 的 `GetKeyState` 分支未编译）。
 ### P5-2 · 系统通知
 ### P5-3 · 音效（捕获/取用，与通知开关解耦）
 ### P5-4 · 首次引导向导（多步 + 授权后自动恢复）
+- **状态**：done（commits `ca26682`、`a51a48f`）
+- **结果**：四步向导；新只读 IPC `get_onboarding_status`（body 在 `onboarding.rs`，`lib.rs` 仅 1 行注册）；「授权后收起」**只收起辅助功能那一步**，不跳过整个向导，以免跳过自启确认。
+- **待裁决（已标注）**：路线图字面写的是「授权后自动恢复」，当前实现是「收起授权步骤」。若需字面一致，只需把收起目标从 `AutostartConfirm→Done` 两侧同改一行；lead 尚未裁定。
+- **验收**：22 条前端测试；Rust 侧 `tests/onboarding.rs`；全量 `cargo test` 与 vitest 通过（以 `7f72e43` 为准，见下方验证记录）。
+- **待人工**：系统辅助功能授权弹窗的实际行为、授权后即时恢复手感、打包 GUI 呈现。
 ### P5-5 · 设置项扩充（排序、图片高度、预览延迟、命中高亮、容量上限、弹出位置）
+- **状态**：in_progress（**工作区未落盘，尚未开工代码**：本轮派给的 `retention-execute` 在中断前没有写入任何文件；容量上限已由 P4-4 完成，弹出位置归 P2-9 blocked）
+- **本轮范围**：排序（最近/首次复制）、图片高度、首次预览延迟、命中高亮样式、各项 tooltip 写明默认值。
+- **依赖**：「按复制次数」排序依赖 P3-8 的 `copy_count` 列（迁移 v4），本轮不做。
 ### P5-6 · i18n 框架 + 中英双语（namespace 分区 + 出货白名单）
 ### P5-7 · 设置页搜索
 
