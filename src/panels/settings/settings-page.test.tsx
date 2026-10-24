@@ -711,6 +711,15 @@ describe("settings-page", () => {
     expect(
       screen.queryByText("黑名单：名单内应用的内容不记录")
     ).not.toBeInTheDocument();
+    // 白名单下「识别不到来源应用就不记」必须提前告知，否则用户会以为内容丢了
+    expect(
+      screen.getByText(
+        "只有这些应用处于前台时才记录剪贴板；识别不到来源应用的内容也不会被记录"
+      )
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText("处于前台时不记录剪贴板的应用")
+    ).not.toBeInTheDocument();
   });
 
   it("settings-page: 隐私面板——添加内容正则调用 setIgnoreRegexes 并渲染 chip", async () => {

@@ -1160,12 +1160,20 @@ mod tests {
     // ===== 判定优先级阶梯（顺序本身是契约） =====
 
     /// 逐层叠加「更弱的规则」，断言每一步的 reason 恰为该层——有人调换顺序会立刻红。
+    ///
+    /// **构造要求：每一步的快照与规则必须同时命中所有更弱的层**，否则相邻两层从未
+    /// 同时成立，把它们的顺序互换也不会红（「Concealed 与 ContentRegex 从未同现」
+    /// 就是这么漏掉的）。所以这里统一用「全条件齐备」的快照，逐层把条件关掉一颗。
     #[test]
     fn skip_reason_priority_ladder_is_locked() {
-        // 全条件齐备的快照：敏感 + 文本命中正则 + 来源在名单内 + 自产标记
-        let rules = blacklist_rules(&["1Password"]);
-        let regex_hit_text = regex_rules(&["pinned"]);
-        let mut all_hits = ClipboardSnapshot {
+        // 同一份规则：应用名单命中 + 文本命中内容正则
+        let rules = ExcludeList::with_rules(
+            &["1Password".to_string()],
+            ExcludeMode::Blacklist,
+            &["pinned".to_string()],
+        );
+        // 全条件齐备：敏感 + 文本命中正则 + 来源在名单内 + 自产标记
+        let all_hits = ClipboardSnapshot {
             text: Some("pinned secret".to_string()),
             html: None,
             image: None,
@@ -1174,8 +1182,10 @@ mod tests {
             source_app: Some("1Password".to_string()),
         };
         let source = named_source("1Password");
+        assert_eq!(rules.regex_count(), 1, "前置条件：内容正则必须已生效");
+        assert!(rules.contains("1password"), "前置条件：应用名单必须已生效");
 
-        // 1) 本轮静默（一次性忽略）压过一切；用带标记的当轮副本表达
+        // 1) 「仅忽略下一次」压过一切（含暂停）；用带标记的当轮副本表达
         let skip_once_round = rules.for_skip_once_round();
         let policy = CapturePolicy {
             paused: true,
@@ -1187,7 +1197,7 @@ mod tests {
             Some(SkipReason::SkipOnce)
         );
 
-        // 2) 持久化暂停
+        // 2) 持久化暂停压过 Concealed / ContentRegex / 名单 / 自产标记
         let policy = CapturePolicy {
             paused: true,
             skip_sensitive: true,
@@ -1198,7 +1208,9 @@ mod tests {
             Some(SkipReason::Paused)
         );
 
-        // 3) 敏感标记
+        // 3) 敏感标记压过内容正则 / 名单 / 自产标记
+        //    这里**保留 is_concealed = true 且正则会命中**，否则 Concealed 与
+        //    ContentRegex 这两个相邻层永远不同现，互换顺序不会红。
         let policy = CapturePolicy {
             paused: false,
             skip_sensitive: true,
@@ -1206,43 +1218,28 @@ mod tests {
         };
         assert_eq!(
             should_skip_with_source(&all_hits, &policy, Some(&source)),
-            Some(SkipReason::Concealed)
+            Some(SkipReason::Concealed),
+            "Concealed 必须先于 ContentRegex：否则把正则提前也测不出来"
         );
 
-        // 4) 内容正则（压过来源名单与自产标记）
+        // 4) 关掉敏感标记后轮到内容正则（仍压过名单与自产标记）
         let mut regex_and_listed = all_hits.clone();
         regex_and_listed.is_concealed = false;
-        regex_and_listed.text = Some("pinned secret".to_string());
-        let rules_with_regex = ExcludeList::with_rules(
-            &["1Password".to_string()],
-            ExcludeMode::Blacklist,
-            &["pinned".to_string()],
-        );
-        let policy = CapturePolicy {
-            paused: false,
-            skip_sensitive: true,
-            exclude: &rules_with_regex,
-        };
         assert_eq!(
             should_skip_with_source(&regex_and_listed, &policy, Some(&source)),
             Some(SkipReason::ContentRegex)
         );
 
-        // 5) 应用名单（压过自产标记）
-        all_hits.is_concealed = false;
-        all_hits.text = Some("harmless".to_string());
-        let policy = CapturePolicy {
-            paused: false,
-            skip_sensitive: true,
-            exclude: &rules,
-        };
+        // 5) 文本不再命中正则后轮到应用名单（仍压过自产标记）
+        let mut listed_only = regex_and_listed.clone();
+        listed_only.text = Some("harmless".to_string());
         assert_eq!(
-            should_skip_with_source(&all_hits, &policy, Some(&source)),
+            should_skip_with_source(&listed_only, &policy, Some(&source)),
             Some(SkipReason::Excluded)
         );
 
-        // 6) 自产标记（前面都不命中时兜底）
-        let mut self_marked_only = all_hits.clone();
+        // 6) 名单也不命中后由自产标记兜底
+        let mut self_marked_only = listed_only.clone();
         self_marked_only.source_app = None;
         let empty_rules = ExcludeList::default();
         let policy = CapturePolicy {
@@ -1259,9 +1256,30 @@ mod tests {
         let mut clean = self_marked_only.clone();
         clean.has_self_marker = false;
         assert_eq!(should_skip_with_source(&clean, &policy, None), None);
+    }
 
-        // 顺带锁住「内容正则规则集」与「应用名单规则集」是两条独立的规则
-        assert_eq!(regex_hit_text.regex_count(), 1);
-        assert!(regex_hit_text.matches_ignored_content("pinned secret"));
+    /// 相邻对专测：敏感标记与内容正则同时命中时必须报 Concealed。
+    ///
+    /// 阶梯用例覆盖的是「逐层」，这条覆盖「这两层恰好只差一个条件」的最小对照，
+    /// 任何把 ContentRegex 判定提到 Concealed 之前的改动都会红。
+    #[test]
+    fn concealed_takes_priority_over_content_regex() {
+        // Arrange：文本命中正则，且平台标记为敏感
+        let rules = regex_rules(&["pinned"]);
+        let policy = default_policy(&rules);
+        let mut snap = make_snapshot();
+        snap.text = Some("pinned secret".to_string());
+        snap.is_concealed = true;
+        assert!(
+            rules.matches_ignored_content("pinned secret"),
+            "前置条件：文本必须真的命中正则"
+        );
+
+        // Act & Assert
+        assert_eq!(should_skip(&snap, &policy), Some(SkipReason::Concealed));
+
+        // 反向对照：同一份快照关掉敏感标记，reason 立刻变成 ContentRegex
+        snap.is_concealed = false;
+        assert_eq!(should_skip(&snap, &policy), Some(SkipReason::ContentRegex));
     }
 }
