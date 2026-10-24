@@ -196,6 +196,17 @@
 - **未验证**：真机落盘 SQLCipher 大库首次升级的建索引代价、5 条索引对 ingest 尾延迟与开库成本的影响、Windows。
 - **顺带子项（P3-0 审查登记，不单独立项）**：`db::top_id` 用 `ORDER BY last_modified_utc DESC LIMIT 1`，缺 `rowid DESC` 兜底，与 `list_items_with_images` / `list_ordered` 不一致——同毫秒并列时两处「最前条目」口径会给出**相反**答案（审查用 2 万轮探针实测：并列 4904 次里 `top_id` 与 `list_ordered` 首元素 100% 不一致）。但生产代码无调用点（仅 `tests/clipboard.rs` 两处测试用），且当前不可复现 flaky。**修法不是简单加一行**：加 `, rowid DESC` 会让那两个测试红（它们的期望行恰好是低 rowid），正确做法是同步把断言改成不依赖并列时选哪行（参考 `capture_contract.rs` 第 1 条的哨兵时间戳 + 相对关系写法）。
 ### P4-2 · 分页 + 虚拟滚动
+- **状态**：部分完成（**P4-2a 增量渲染 done**；DB 分页与真虚拟滚动**待定**，理由见下）
+- **结果**：commits `481019c`、`39d8031`、`f4ad0d2`。`filteredItems` 仍是全量，只把 `.map()` 改成 `.slice(0, visibleCount).map()`：首屏 100 条、滚到底部阈值（240px）按块追加 100。
+- **三条明确不做（各有理由，勿"顺手"改回）**：
+  1. **不做 DB 分页**：搜索/类型筛选是在内存里对全量做匹配；只给 DB 加分页会让搜索只能命中「已加载的那一段」，是正确性回归。等 P4-5 的两段式加载（轻量索引全量 + 可见行取正文）落地才可做。
+  2. **不做固定行高窗口化**：`.clip-text` 两行截断导致行高在 41/54/60px 之间变化，固定行高必须强制等高 → 改视觉。窗口是「前缀 0..renderedCount」，选中项越窗时按块扩窗。
+  3. **不用 `content-visibility: auto`**：它会让离屏行**退出无障碍树**，对纯键盘/读屏用户是隐蔽的可达性回归；实测撤掉后 DOM 节点数**逐位不变**（250 条时 3066 → 1266），收益 100% 来自 slice。
+- **正确性关键**：键盘导航仍遍历完整 `filteredItems`（selection 是 id 态）；选中项越出窗口时按块扩窗（`ceil((idx+1)/100)*100`），且**扩窗后下一帧才滚动**（`scrolledHighlightRef` 防止追加渲染把列表拽回高亮行）。顺带补了主窗缺失的 `⌘↑`/`⌘↓`（复用既有 `firstIndex`/`lastIndex`）。
+- **审查结论**：非 BLOCK，3 处变异全红；且审出并已修一个盲区——`filterKey` 若从「类型 + 搜索词」退化成按 `filteredItems.length` 判定，**全量 705 测试 0 红**（「搜索 A → 搜索 B 且命中条数相同」时不重置）。
+- **残留（重要）**：窗口是前缀而非真虚拟滚动，重度滚动后 DOM 仍会回到全量（2000 条时 `⌘↓` 到末条 = 2000 个节点）。真实收益是「首屏 100 条 + 增量挂载」把一次性 2000 次节点创建摊到滚动过程中。
+- **补真虚拟滚动的触发信号**：用户库常态到数千条**且真机滚动掉帧**；届时需要先解决「行高可变」的测量问题（`ResizeObserver` 或测量缓存），不能靠固定行高糊过去。
+- **未验证**：真机滚动流畅度、`⌘↑`/`⌘↓` 真机键位；`PopoverList` 仍是全量渲染（分组标题 + 扁平索引是另一套模型，未做）。
 ### P4-3 · 缩略图移出 IPC payload（消除 base64 全量重传）
 - **状态**：done
 - **结果**：commits `c661590`（后端）、`77fc4cb`（前端）、`1469e79`（复审加固）。`ClipItemDto.thumbnail_data_url` → `has_thumbnail: bool`；新增只读函数 `db::list_items_with_image_flag`，缩略图 BLOB **连出库都不做**（投影 `CASE WHEN thumbnail IS NOT NULL AND length(thumbnail) > 0 THEN 1 ELSE 0`）；新增 `get_clip_thumbnail(image_id)` 复用 `image::get_image_thumbnail`（不另写 SQL），不存在/软删/零字节 BLOB 一律 `Ok(None)`；前端模块级 `settled` 缓存 + 在途去重，`invoke` 不进组件（可测「只拉一次」）。
@@ -214,6 +225,17 @@
 - **审查打回的「测试拦不住退化」（已闭环）**：把 `total <= RETENTION` 改成 `total < 0`（每次写入都跑 DELETE）原本 **0 红**。触发器方案在这里**必然假绿**——未超限时那条 DELETE 即使执行也是删 0 行，而行级触发器 0 行匹配就 0 次触发。改用 `sqlite3_set_authorizer` 在 **prepare 阶段**统计 `SQLITE_DELETE`，删 0 行也会计数；并配**正向对照**（超限写入后计数必须变 1），否则「0 次」可能只是探针没接上。
 - **未验证**：加密库上 `COUNT(*)` 与 `DELETE ... OFFSET` 的实际耗时、旧库万级首次翻译的一次性收敛耗时（与主写同锁的尾延迟）、Windows。
 ### P4-7 · 迁移框架版本化（`PRAGMA user_version` 承担 schema 版本）
+- **状态**：done
+- **结果**：commits `e085606`（框架）、`63fd95a`（错误文案）、`5102013`（原因透出到前端）。`CURRENT_SCHEMA_VERSION = 1` + `struct Migration { to_version, apply: fn(&Transaction) -> Result<(), DbError> }` + `const MIGRATIONS`；所有步骤 + 版本写入在**单个事务**内，任一步失败连第一步的 DDL 一起回滚。
+- **两条不可退让的设计**：
+  1. **`create_tables` / `ensure_indexes` 冻结为 v1 基线快照**，不再每次开库跑。理由：版本号必须是「库是什么形态」的唯一真相；若把 `IF NOT EXISTS` DDL 留在开库路径上，未来往那里加列就会**绕过版本号**在用户开库时生效，同一个 `user_version` 下长出两种表形态，后续迁移的前提立刻失效。代价（刻意接受）：**外力删掉表/索引后不再自动补回**。
+  2. **迁移错误不复用 `DbError::Sqlite`**：`open_or_recover` 会把 `Sqlite` 当「库已损坏」去改名备份，那样一次版本超前就会把完好的库搬走。新增 `SchemaTooNew` / `MigrationFailed` 两个变体，`classify_failure` 归 Permanent。
+- **给后来人的硬约束**（已写进 `db.rs` 模块头）：新增列/索引/表 → 追加 `Migration { to_version: N+1 }` + bump 常量，步骤内写**无条件** DDL；禁止再写「探测列是否存在」。
+- **P4-5 的前置约束**：给预计算 `title` 列做回填时，**不要把全表 `UPDATE` 塞进迁移步骤**（会在启动期同步路径上把写锁拖到秒级，同时 5 条 `CREATE INDEX` 也要全表扫）；正确做法是迁移只加列，回填走开库后的**分批幂等 backfill**（`WHERE title IS NULL` 分批）。
+- **文案与出口**：`DbError::Display` 是唯一真相来源（不在 lib.rs 再写一份子串分类）；`AppDb` 携带 `open_error` 把原因透出到前端文案——因为**打包后的 GUI 应用看不到 `eprintln` 的 stderr**，「诚实只存在于用户看不到的地方」等于没做。
+- **待用户裁决**：`SchemaTooNew`/`MigrationFailed` 时是否弹系统对话框并退出（当前是「记日志 + 以无库状态运行 + 前端显示准确原因」）。
+- **登记的风险（P6-3 口径）**：`db::open_or_recover` 生产 0 调用点（只有 4 处测试调用），且与生产 `reset_and_reopen` **判据分裂**（一个认 `DbError::Sqlite`、一个认 `is_resettable_open_error` 的字符串标记）——未来若被接进启动路径会**静默改变恢复策略**。它是 `pub fn` + `pub mod`，`dead_code` 与 cargo-udeps 都发现不了。
+- **未验证**：真机旧库升级、大库首次建 5 条索引的启动期墙钟、前端是否原样展示这些文案（未实跑界面）、Windows。
 
 ---
 
