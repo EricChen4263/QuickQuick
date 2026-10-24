@@ -1,8 +1,8 @@
-//! 热键配置模块：默认值、改键持久化、冲突检测抽象
+//! 热键配置模块：默认值、改键持久化
 //!
 //! 设计要点：
-//! - `HotkeyRegistrar` trait 将真实系统注册与业务逻辑解耦，便于 headless 单测。
-//! - `rebind` 先试注册，成功才持久化写入，失败则原样不动，保证配置一致性。
+//! - 本模块只负责配置读写，**不承担系统注册职责**：运行时注册/注销由命令层
+//!   `ipc::settings::set_hotkey_runtime_impl` 编排（注册新键 → 落盘 → 注销旧键）。
 //! - 使用 thiserror 枚举化错误，Display 文本中文，符合项目规范。
 
 use serde::{Deserialize, Serialize};
@@ -32,18 +32,6 @@ pub enum HotkeyError {
     /// 文件 I/O 失败
     #[error("热键配置文件读写失败：{0}")]
     IoError(#[from] std::io::Error),
-}
-
-/// 热键注册器抽象——将系统 API 调用与业务逻辑隔离，使冲突路径可 headless 测试。
-///
-/// 真实实现在运行时通过 Tauri global shortcut API 完成；
-/// 测试侧传入 fake 实现，无需启动 GUI。
-pub trait HotkeyRegistrar {
-    /// 尝试向系统注册加速键。
-    ///
-    /// # Errors
-    /// - `HotkeyError::AlreadyInUse`：该键已被占用
-    fn register(&self, accelerator: &str) -> Result<(), HotkeyError>;
 }
 
 fn default_history_accelerator() -> String {
@@ -93,10 +81,10 @@ impl HotkeyConfig {
         }
     }
 
-    /// 在调用方已经完成运行时注册校验后，更新指定动作的加速键字符串。
+    /// 更新指定动作的加速键字符串。
     ///
-    /// 此函数不做系统注册尝试；命令层运行时改键需要先注册新键、保存配置、
-    /// 再注销旧键，不能复用会二次注册的 `rebind`。
+    /// 此函数只改内存配置，不做系统注册；命令层的运行时改键必须先注册新键、
+    /// 保存配置、再注销旧键，注册与注销都由调用方负责编排。
     pub(crate) fn set_accelerator(&mut self, action: HotkeyAction, accelerator: &str) {
         match action {
             HotkeyAction::History => {
@@ -109,32 +97,6 @@ impl HotkeyConfig {
                 self.main_accelerator = accelerator.to_string();
             }
         }
-    }
-
-    /// 尝试将指定动作改绑到新加速键。
-    ///
-    /// 先通过 `registrar.register` 试注册：
-    /// - 成功 → 更新内存配置并返回 `Ok(())`。
-    /// - 失败 → 原配置**不变**，将错误原样上抛。
-    ///
-    /// # Errors
-    /// - `HotkeyError::AlreadyInUse`：新键已被占用，配置未改动
-    pub fn rebind(
-        &mut self,
-        action: HotkeyAction,
-        accelerator: &str,
-        registrar: &dyn HotkeyRegistrar,
-    ) -> Result<(), HotkeyError> {
-        if self.get_accelerator(action) == accelerator {
-            return Ok(());
-        }
-
-        // 先试注册；失败则提前返回，保证配置不变
-        registrar.register(accelerator)?;
-
-        // 注册成功后才写入内存配置
-        self.set_accelerator(action, accelerator);
-        Ok(())
     }
 
     /// 将当前配置序列化为 JSON 并写入指定路径。

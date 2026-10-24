@@ -1,41 +1,19 @@
-//! 集成测试：热键配置默认值、改键持久化与冲突检测
+//! 集成测试：热键配置默认值与持久化往返
 //!
-//! 对应验收项：V0-F2-A01、V0-F2-A02
+//! 对应验收项：V0-F2-A01
+//!
+//! 改键与冲突检测的可测逻辑都在生产路径上（运行时注册 → 落盘 → 注销旧键），
+//! 因此那些断言位于 `tests/ipc_settings.rs` 针对 `set_hotkey_runtime_impl` 的用例；
+//! 本文件只覆盖**不涉及系统注册**的配置读写：默认值、save/load 往返、旧配置兼容。
 
-use quickquick_lib::hotkey::{HotkeyAction, HotkeyConfig, HotkeyError, HotkeyRegistrar};
+use quickquick_lib::hotkey::{HotkeyAction, HotkeyConfig};
 use tempfile::tempdir;
 
-/// fake registrar：总是成功注册
-struct AlwaysOkRegistrar;
-
-impl HotkeyRegistrar for AlwaysOkRegistrar {
-    fn register(&self, _accelerator: &str) -> Result<(), HotkeyError> {
-        Ok(())
-    }
-}
-
-/// fake registrar：对特定键返回 AlreadyInUse，其余成功
-struct ConflictRegistrar {
-    /// 冲突的加速键字符串
-    conflicting_key: String,
-}
-
-impl HotkeyRegistrar for ConflictRegistrar {
-    fn register(&self, accelerator: &str) -> Result<(), HotkeyError> {
-        // 仅当加速键与冲突键完全相同时拒绝
-        if accelerator == self.conflicting_key {
-            Err(HotkeyError::AlreadyInUse)
-        } else {
-            Ok(())
-        }
-    }
-}
-
-/// V0-F2-A01：断言默认热键正确；rebind 后配置更新；save/load 往返一致
+/// V0-F2-A01：断言默认热键正确；save/load 往返一致
 #[test]
-fn hotkey_defaults_and_rebind() {
+fn hotkey_defaults_and_save_load_roundtrip() {
     // Arrange
-    let mut config = HotkeyConfig::default();
+    let config = HotkeyConfig::default();
 
     // Assert 默认值
     assert_eq!(
@@ -54,18 +32,6 @@ fn hotkey_defaults_and_rebind() {
         "主界面热键默认值不符"
     );
 
-    // Act：rebind History 到新键（用总是成功的 fake registrar）
-    let registrar = AlwaysOkRegistrar;
-    let result = config.rebind(HotkeyAction::History, "CmdOrCtrl+Shift+H", &registrar);
-
-    // Assert：rebind 成功且配置已更新
-    assert!(result.is_ok(), "rebind 应成功：{:?}", result);
-    assert_eq!(
-        config.get_accelerator(HotkeyAction::History),
-        "CmdOrCtrl+Shift+H",
-        "rebind 后历史热键应更新"
-    );
-
     // Act：持久化往返
     let dir = tempdir().expect("创建临时目录失败");
     let config_path = dir.path().join("hotkey.json");
@@ -74,52 +40,57 @@ fn hotkey_defaults_and_rebind() {
     let loaded = HotkeyConfig::load(&config_path).expect("load 失败");
 
     // Assert：load 回来的值与 save 前一致
-    assert_eq!(
-        loaded.get_accelerator(HotkeyAction::History),
-        "CmdOrCtrl+Shift+H",
-        "load 回的 History 键应与 save 前一致"
-    );
-    assert_eq!(
-        loaded.get_accelerator(HotkeyAction::Translate),
-        "CmdOrCtrl+Shift+T",
-        "load 回的 Translate 键应未变"
-    );
-    assert_eq!(
-        loaded.get_accelerator(HotkeyAction::Main),
-        "CmdOrCtrl+Shift+M",
-        "load 回的 Main 键应保持默认"
-    );
+    for (action, expected) in [
+        (HotkeyAction::History, "CmdOrCtrl+Shift+C"),
+        (HotkeyAction::Translate, "CmdOrCtrl+Shift+T"),
+        (HotkeyAction::Main, "CmdOrCtrl+Shift+M"),
+    ] {
+        assert_eq!(
+            loaded.get_accelerator(action),
+            expected,
+            "load 回的 {action:?} 键应与 save 前一致"
+        );
+    }
 }
 
-/// V0-F2-A01（补）：rebind Translate 只改 Translate 字段，History 字段保持默认不变
+/// V0-F2-A01（补）：非默认热键落盘后 save/load 往返一致，且不影响其它字段
+///
+/// 对应原 `hotkey_defaults_and_rebind` 里「改键后 save/load 往返」的那一半断言：
+/// 改键动作已由 `ipc_settings_*_runtime_then_get_returns_new_value` 在生产路径上覆盖，
+/// 本用例独立守住「自定义值经磁盘往返仍不丢、不串字段」。
 #[test]
-fn hotkey_rebind_translate_isolates_field() {
-    // Arrange
-    let mut config = HotkeyConfig::default();
-    let registrar = AlwaysOkRegistrar;
+fn hotkey_custom_accelerator_survives_save_load_roundtrip() {
+    // Arrange：写一份非默认 history 的配置（等价于改键成功后的落盘结果）
+    let dir = tempdir().expect("创建临时目录失败");
+    let first_path = dir.path().join("hotkey.json");
+    std::fs::write(
+        &first_path,
+        r#"{
+  "history_accelerator": "CmdOrCtrl+Shift+H",
+  "translate_accelerator": "CmdOrCtrl+Shift+T",
+  "main_accelerator": "CmdOrCtrl+Shift+M"
+}"#,
+    )
+    .expect("写入自定义配置失败");
 
-    // Act：将 Translate 改绑到新键
-    let result = config.rebind(HotkeyAction::Translate, "CmdOrCtrl+Shift+Y", &registrar);
+    // Act：读出后再写到新路径，二次读回
+    let loaded = HotkeyConfig::load(&first_path).expect("load 失败");
+    let second_path = dir.path().join("hotkey-roundtrip.json");
+    loaded.save(&second_path).expect("save 失败");
+    let reloaded = HotkeyConfig::load(&second_path).expect("二次 load 失败");
 
-    // Assert：rebind 成功，Translate 已更新
-    assert!(result.is_ok(), "Translate rebind 应成功：{:?}", result);
-    assert_eq!(
-        config.get_accelerator(HotkeyAction::Translate),
-        "CmdOrCtrl+Shift+Y",
-        "rebind 后 Translate 热键应更新"
-    );
-
-    // Assert：History 字段保持默认，未被串改
-    assert_eq!(
-        config.get_accelerator(HotkeyAction::History),
-        "CmdOrCtrl+Shift+C",
-        "rebind Translate 不应影响 History 字段"
-    );
-    assert_eq!(
-        config.get_accelerator(HotkeyAction::Main),
-        "CmdOrCtrl+Shift+M",
-        "rebind Translate 不应影响 Main 字段"
-    );
+    // Assert：自定义 history 保留，另两个字段未被串改
+    for (action, expected) in [
+        (HotkeyAction::History, "CmdOrCtrl+Shift+H"),
+        (HotkeyAction::Translate, "CmdOrCtrl+Shift+T"),
+        (HotkeyAction::Main, "CmdOrCtrl+Shift+M"),
+    ] {
+        assert_eq!(
+            reloaded.get_accelerator(action),
+            expected,
+            "往返后 {action:?} 键应保持一致"
+        );
+    }
 }
 
 /// 旧 hotkey.json 只有 history/translate 字段时，load 应补齐 main 默认值
@@ -155,66 +126,5 @@ fn hotkey_load_legacy_config_without_main_uses_default_main() {
         loaded.get_accelerator(HotkeyAction::Main),
         "CmdOrCtrl+Shift+M",
         "旧配置缺 main 时应补默认值"
-    );
-}
-
-/// rebind Main 只改 Main 字段，History/Translate 字段保持不变
-#[test]
-fn hotkey_rebind_main_isolates_field() {
-    // Arrange
-    let mut config = HotkeyConfig::default();
-    let registrar = AlwaysOkRegistrar;
-
-    // Act
-    let result = config.rebind(HotkeyAction::Main, "CmdOrCtrl+Shift+Q", &registrar);
-
-    // Assert
-    assert!(result.is_ok(), "Main rebind 应成功：{:?}", result);
-    assert_eq!(
-        config.get_accelerator(HotkeyAction::Main),
-        "CmdOrCtrl+Shift+Q",
-        "rebind 后 Main 热键应更新"
-    );
-    assert_eq!(
-        config.get_accelerator(HotkeyAction::History),
-        "CmdOrCtrl+Shift+C",
-        "rebind Main 不应影响 History 字段"
-    );
-    assert_eq!(
-        config.get_accelerator(HotkeyAction::Translate),
-        "CmdOrCtrl+Shift+T",
-        "rebind Main 不应影响 Translate 字段"
-    );
-}
-
-/// V0-F2-A02：冲突键 rebind → 返回错误且错误含"已被占用"；原配置不变；不 panic
-#[test]
-fn hotkey_conflict_rejected() {
-    // Arrange
-    let mut config = HotkeyConfig::default();
-    let original_history = config.get_accelerator(HotkeyAction::History).to_owned();
-
-    let registrar = ConflictRegistrar {
-        conflicting_key: "CmdOrCtrl+Shift+X".to_string(),
-    };
-
-    // Act：尝试绑定到冲突键
-    let result = config.rebind(HotkeyAction::History, "CmdOrCtrl+Shift+X", &registrar);
-
-    // Assert：应返回错误
-    assert!(result.is_err(), "冲突键 rebind 应失败");
-
-    // Assert：错误信息含"已被占用"
-    let err_msg = result.unwrap_err().to_string();
-    assert!(
-        err_msg.contains("已被占用"),
-        "错误信息应含'已被占用'，实际: {err_msg}"
-    );
-
-    // Assert：原配置未被改动
-    assert_eq!(
-        config.get_accelerator(HotkeyAction::History),
-        original_history,
-        "冲突时原配置不应改动"
     );
 }

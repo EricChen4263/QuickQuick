@@ -38,7 +38,7 @@ use tauri::{AppHandle, Emitter, Manager, State};
 use std::collections::HashMap;
 
 use crate::autostart::AutostartConfig;
-use crate::hotkey::{HotkeyAction, HotkeyConfig, HotkeyRegistrar};
+use crate::hotkey::{HotkeyAction, HotkeyConfig};
 use crate::ipc::translate::resolve_provider_or_fallback;
 use crate::settings::{AppSettings, MAX_HISTORY_ITEMS, MIN_HISTORY_ITEMS};
 use crate::translate::credential::{
@@ -121,32 +121,6 @@ pub fn get_hotkeys_impl(hotkey_path: &Path) -> Result<HotkeyDto, String> {
         translate: config.get_accelerator(HotkeyAction::Translate).to_string(),
         main: config.get_accelerator(HotkeyAction::Main).to_string(),
     })
-}
-
-/// `set_hotkey` 的纯函数实现，可在测试中直接调用。
-///
-/// 流程：加载（文件不存在则用默认值）→ rebind（含冲突检测）→ save。
-/// 冲突时 rebind 返回 AlreadyInUse，映射为包含"已被占用"的错误字符串。
-///
-/// # Errors
-/// - 冲突：错误字符串含"已被占用"
-/// - 文件读写失败：错误字符串描述 I/O 问题
-pub fn set_hotkey_impl(
-    action: HotkeyAction,
-    accelerator: &str,
-    hotkey_path: &Path,
-    registrar: &dyn HotkeyRegistrar,
-) -> Result<(), String> {
-    let mut config = if hotkey_path.exists() {
-        HotkeyConfig::load(hotkey_path).map_err(|e| e.to_string())?
-    } else {
-        HotkeyConfig::default()
-    };
-
-    config
-        .rebind(action, accelerator, registrar)
-        .map_err(|e| e.to_string())?;
-    config.save(hotkey_path).map_err(|e| e.to_string())
 }
 
 /// 命令层运行时热键注册器：封装真实 Tauri global shortcut 和测试 fake。
