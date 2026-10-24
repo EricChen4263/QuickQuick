@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { advanceSelection } from "./keyboard-nav";
+import { advanceSelection, createInputOwnership } from "./keyboard-nav";
 
 describe("advanceSelection", () => {
   const ids = ["a", "b", "c", "d"];
@@ -50,5 +50,56 @@ describe("advanceSelection", () => {
 
   it("单元素列表 ArrowUp 保持同一 id", () => {
     expect(advanceSelection("x", "ArrowUp", ["x"])).toBe("x");
+  });
+});
+
+describe("createInputOwnership（悬停与键盘的主导权仲裁）", () => {
+  it("初始由键盘主导，悬停不得改选中项", () => {
+    const ownership = createInputOwnership();
+
+    expect(ownership.isPointerOwner()).toBe(false);
+  });
+
+  it("坐标变化过的移动算真实位移，主导权交给鼠标", () => {
+    const ownership = createInputOwnership();
+
+    const isRealMove = ownership.observePointerMove(12, 34);
+
+    expect(isRealMove).toBe(true);
+    expect(ownership.isPointerOwner()).toBe(true);
+  });
+
+  it("与上次同坐标的移动不算真实位移（滚动补发的 mousemove）", () => {
+    const ownership = createInputOwnership();
+    ownership.observePointerMove(12, 34);
+
+    const isRealMove = ownership.observePointerMove(12, 34);
+
+    expect(isRealMove).toBe(false);
+  });
+
+  it("交还键盘后，同坐标的移动仍然不算真实位移", () => {
+    // Arrange：鼠标先真实移动到 (12,34)，再按方向键把主导权交还键盘
+    const ownership = createInputOwnership();
+    ownership.observePointerMove(12, 34);
+    ownership.handToKeyboard();
+
+    // Act：键盘导航让列表滚动，静止指针下补发同坐标移动
+    const isRealMove = ownership.observePointerMove(12, 34);
+
+    // Assert：坐标没变就不许抢，主导权仍在键盘
+    expect(isRealMove).toBe(false);
+    expect(ownership.isPointerOwner()).toBe(false);
+  });
+
+  it("交还键盘后，坐标真的变化则重新交给鼠标", () => {
+    const ownership = createInputOwnership();
+    ownership.observePointerMove(12, 34);
+    ownership.handToKeyboard();
+
+    const isRealMove = ownership.observePointerMove(12, 60);
+
+    expect(isRealMove).toBe(true);
+    expect(ownership.isPointerOwner()).toBe(true);
   });
 });

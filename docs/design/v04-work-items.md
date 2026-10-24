@@ -144,7 +144,10 @@
 - **待人工**：5 个徽标在底部条是否溢出、「换一批」缺 opacity 过渡的视觉跳动。
 
 ### P2-12 · 悬停与键盘仲裁（鼠标真实移动才交还主导权）
-- **状态**：in_progress（`popover-hover-execute` 被中断；工作区有**未提交**改动：`ClipPopoverApp.tsx`、`PopoverList.tsx`(+test)、`keyboard-nav.ts`(+test)，以及未跟踪的 `hover-arbitration.test.tsx`。**未验证、未提交**，需续派给原 owner 收口或由 lead 复核。）
+- **状态**：done（lead 复核收口；活动卡 `2026-10-25-hover-arbitration-p2-12.md`）
+- **结果**：`keyboard-nav.ts` 新增 `InputOwnership` 仲裁器（键盘导航收回主导权；仅坐标真实变化的 pointer 移动交还鼠标）；`PopoverList` 悬停改选中受 `isPointerOwner()` 守卫；`ClipPopoverApp` 在方向键/首尾/数字直达/搜索输入/面板重开处 `handToKeyboard()`。
+- **验收**：clip-popover 164 通过；全量 `pnpm test` 75 文件 804 通过；`tsc -b` 0；变异（去掉悬停守卫）→ 仲裁测试 4 条红。
+- **未验证 / 待人工**：真机长列表上键盘翻页时静止鼠标的手感；**未做独立 reviewer 审查**（自检 + 变异自证）。
 - **来源**：roadmap Phase 2「悬停与键盘仲裁」，原台账无条目，本轮登记。
 
 ### Phase 2 遗留挂号（本轮记录，未立项）

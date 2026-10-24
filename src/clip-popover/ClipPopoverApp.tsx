@@ -6,7 +6,7 @@ import { listen } from "@tauri-apps/api/event";
 import { CLIPBOARD_CHANGED_EVENT } from "../ipc/events";
 import { groupClipItems } from "./grouping";
 import { DEFAULT_SEARCH_MODE, prepareQuery, searchClipsWithPlan } from "./clip-search";
-import { advanceSelection } from "./keyboard-nav";
+import { advanceSelection, createInputOwnership } from "./keyboard-nav";
 import {
   isImeComposing,
   directPickIndex,
@@ -71,6 +71,8 @@ export default function ClipPopoverApp() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  // 悬停与键盘的主导权仲裁：面板打开时由键盘主导，真实 pointer 位移才交给鼠标
+  const [ownership] = useState(createInputOwnership);
   // 面板会话序号：每次窗口重新获得焦点（面板被打开）递增，预览延迟档位随之重置
   const [previewSession, setPreviewSession] = useState(0);
   // 当前按下的修饰键：只驱动底部徽标切换，不参与任何取用/移动判定
@@ -187,6 +189,8 @@ export default function ClipPopoverApp() {
       setQuery("");
       setPreviewSession((session) => session + 1);
       const firstId = visibleFlatListRef.current[0]?.id ?? null;
+      // 面板重新打开后选中项由键盘接管：上一次留在指针下的行不得直接成为选中项
+      ownership.handToKeyboard();
       setSelectedId(firstId);
     }).then((fn) => {
       unlisten = fn;
@@ -290,6 +294,8 @@ export default function ClipPopoverApp() {
     const target = index === null ? null : visibleFlatList[index];
     if (target === null) return true;
 
+    // 数字直达也是键盘在选，主导权归键盘：此后静止的鼠标不得把手动选中的目标改掉
+    ownership.handToKeyboard();
     setSelectedId(target.id);
     cancelPendingDirectPick();
     directPickTimerRef.current = setTimeout(() => {
@@ -309,6 +315,8 @@ export default function ClipPopoverApp() {
     e.preventDefault();
     // 空列表没有可跳转目标，但按键仍归面板（不落回输入框默认行为）
     if (targetIndex < 0) return true;
+    // 键盘跳首尾：主导权立即收回键盘，鼠标真实移动过之前悬停不得改选中
+    ownership.handToKeyboard();
     setSelectedId(flatIds[targetIndex]);
     return true;
   }
@@ -327,6 +335,8 @@ export default function ClipPopoverApp() {
     }
     if (direction === null) return false;
     e.preventDefault();
+    // 键盘移动选中项：主导权立即收回键盘，鼠标真实移动过之前悬停不得改选中
+    ownership.handToKeyboard();
     setSelectedId(advanceSelection(selectedId, direction, flatIds));
     return true;
   }
@@ -434,6 +444,15 @@ export default function ClipPopoverApp() {
     setModifiers((prev) => applyModifierKey(prev, e.key, "up"));
   }
 
+  /**
+   * 搜索词变化：列表与选中项跟着重算，主导权回到键盘。
+   * 打字同样会让列表滚动，静止的鼠标不该因为某一行被滚到指针下就抢走选中项。
+   */
+  function handleQueryChange(e: React.ChangeEvent<HTMLInputElement>): void {
+    ownership.handToKeyboard();
+    setQuery(e.target.value);
+  }
+
   if (loadError) {
     return (
       <div className="popover-error">
@@ -452,7 +471,7 @@ export default function ClipPopoverApp() {
           className="popover-search-input"
           placeholder="搜索剪贴板…"
           value={query}
-          onChange={(e) => setQuery(e.target.value)}
+          onChange={handleQueryChange}
           onKeyDown={handleKeyDown}
           onKeyUp={handleKeyUp}
           autoFocus
@@ -471,6 +490,7 @@ export default function ClipPopoverApp() {
           selectedId={selectedId}
           hitRanges={hitRangesById}
           onSelect={(item) => setSelectedId(item.id)}
+          ownership={ownership}
         />
         <PopoverPreview state={preview} />
       </div>
