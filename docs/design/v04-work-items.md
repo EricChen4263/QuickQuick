@@ -255,5 +255,70 @@
 ## Phase 6 · 工程加固
 
 ### P6-1 · CI 加验证（PR/push 跑 `make verify`）
+- **状态**：done（workflow 已落地并通过静态校验；**未在 CI 实跑**，见下）
+- **做什么**：新增 `.github/workflows/verify.yml`（`push` 到 `main` / 所有 `pull_request` / `workflow_dispatch`），两个 job：
+  - `verify`：`checkout → pnpm 11 → node 22 → rust-toolchain(stable + rustfmt,clippy) → rust-cache → pnpm install --frozen-lockfile → make verify`。
+  - `deadcode`：同款前端依赖，跑 `make deadcode-gate`（阻塞）+ knip 全量与后端清单（`continue-on-error: true`，只报告）。
+  - `concurrency` 按 ref 分组并 `cancel-in-progress`，避免 PR 连推叠跑。
+- **三处不要把事实写反**：
+  1. **`release.yml` 本来就不跑验证**——它只在 `v*` tag 上打包发布（版本守卫 + 生成 ECDICT + tauri-action）。Makefile 里 `verify` 上方原注释「与 CI release 工作流复用同一条标准」是误记，已改成指向 `verify.yml`。本次**零改动** `release.yml`。
+  2. **verify 不需要 ECDICT 词库**：实测干净树（`resources/` 空目录、无 `ecdict.db`）下 `cargo test` 照常编过——`bundle.resources` 的 glob 取不到文件只是空映射，不报错。所以没有复制 release.yml 的生成步骤，少一步网络依赖、少一个失败面。
+  3. **干净克隆真正缺的是 `dist/`（本次只在干净树上实跑才暴露）**：`tauri::generate_context!` 是编译期宏，要求 `tauri.conf.json` 的 `frontendDist`（`"../dist"`）**目录存在**，否则 `proc macro panicked: ... this path doesn't exist`，clippy 与 cargo test 双双退出 101。本机一直有残留 `dist/`，所以本地 `make verify` 从来没暴露过这个前提。已修在 Makefile：新增 `dist` 前置目标（`pnpm exec vite build`，**仅在 `dist/` 不存在时触发**），并挂到 `check` / `test` / `test-rs` / `verify` 上。这不是业务代码改动，但它是「`make verify` 在干净树上可跑」这个前提的必要条件——不修，新 workflow 第一次跑必红。
+- **平台矩阵：只跑 macOS（`macos-latest`）**，与发布矩阵里的 macOS 腿一致。Windows 不纳入，理由是**事实而非取舍**：后端 Windows 分支从未编译验证过（P1-1/P1-2/P1-3/P1-5/P1-7 均登记「Windows 全路径未编译验证」），挂上 `windows-latest` 会立刻红，而修它必须动 `src-tauri/src/**`（本 item 明令禁止）；且本机只有 `aarch64-apple-darwin` target，无法先本地预演。**开启条件**：Windows 分支能本地/临时 workflow 编过并通过 `cargo test` 后，再把 `windows-latest` 加进矩阵（届时 `make verify` 在 Windows runner 上还需要 `make`，GitHub 的 windows 镜像不自带，得改成等价的直跑命令）。
+- **验收**：
+  - `actionlint 1.7.12`（含 `shellcheck 0.11.0` 集成）对 `verify.yml` 与 `release.yml` **均 0 报错**。
+  - **干净树实跑（最接近 CI 的一次）**：`git archive HEAD` 解出 HEAD + 只覆盖本 item 的改动，**无 `dist/`、无 `ecdict.db`**，`pnpm install --frozen-lockfile && make verify` → `VERIFY_EXIT=0`（`vite build` 由 `dist` 前置目标自动触发 398ms；tsc 无错误；fmt 干净；clippy 干净；vitest 74 文件 **751** 测试；cargo test **718 passed / 0 failed**）。之所以比工作树少，是因为工作树里还有别人未提交的新代码与新测试。
+  - **工作树上也跑通过一次**（当时 `dist/` 与若干未提交改动并存）：vitest 74 文件 **753** 测试、cargo test **739 passed / 0 failed**。之后再跑工作树会红在 `cargo fmt --check`，原因是别人正在改 `db.rs` / `lib.rs`（P4-4 自动淘汰），与本 item 无关——这也说明「验证必须跑在能复现的树上」，不能拿脏工作树的一次红/绿当结论。
+- **未在 CI 实跑（如实标注）**：本机无 GitHub runner，`verify.yml` 一次都没在真实 Actions 上跑过。已用 actionlint 保证「语法 / 事件 / runner 标签 / 表达式 / shell」层面成立，但**首次真跑仍可能暴露镜像差异**（例如 rust-cache 键、pnpm store 行为、macOS 镜像的 make 版本）。第一次 PR 请当作「验证 workflow 本身」的复盘对象，红了先看是不是镜像差异而不是代码。
+
 ### P6-2 · 覆盖率基线
 ### P6-3 · 死代码检测（knip / cargo-udeps）
+- **状态**：done（工具接入 + 基线清单 + 门禁分流；告警本身**零删除**，待裁决项见下）
+- **前端 · knip**：`knip.json` 只钉三件事——三个 HTML 入口（`index.html` / `src/clip-popover/index.html` / `src/trans-popover/index.html`，与 `vite.config.ts` 的 `rollupOptions.input` 对齐）、`project: src/**/*.{ts,tsx}`、默认忽略。`knip` + `knip.json` 的版本随 `package.json` 的 devDependencies 走（当前 knip 6.42.1）。
+  - **入口钉死是必须的**：去掉 `src/trans-popover/index.html` 后 `src/trans-popover/main.tsx` 立刻被判为未使用文件，说明第二个 webview 的接线只靠 HTML 入口这一根线，不能靠自动推断。
+  - **灵敏度已实测**：临时新建一个未被任何文件引用的 `src/**/unused-probe.ts`，knip 会报 `Unused files (1)`；探针已删除。
+- **门禁分流（关键取舍）**：`make deadcode-gate` = `knip --include files,unlisted`，**只拦「写完没接线的文件」与「import 了没声明的依赖」**——这两类修复方向唯一（接线或删除），不会长期挂着。未使用依赖与多余 `export` 进**报告**（`make deadcode`，CI 里 `continue-on-error`），因为删依赖/改导出面需要人裁决，直接拦会把 PR 常红，最终逼人加 ignore 掩盖。
+- **现存告警（11 项，均为「已接线但不该导出 / 该不该留待定」，**没有一项是死文件**）**：
+
+  | 类别 | 项 | 位置 | 判断 |
+  |---|---|---|---|
+  | 未使用依赖 | `@tauri-apps/plugin-autostart` | `package.json` | **待裁决**：前端 0 import；自启能力走自写 IPC（`settings.rs` 的 `apply_autostart_preference`），capabilities 里的 `autostart:allow-*` 来自 Rust crate 而非 npm 包。删前需确认不打算用插件 JS API |
+  | 未使用依赖 | `@tauri-apps/plugin-updater` | `package.json` | **待裁决**：同上，更新检查走 `ipc/update.rs` 自写命令 |
+  | 多余 `export` | `SECTION_LABELS` | `src/panels/settings/SectionNav.tsx:5` | 只在本文件用（第 75 行），`export` 多余；不是死代码 |
+  | 多余导出类型 | `Matcher` | `src/clip-popover/clip-search.ts:32` | 本文件内用（41 / 112 / 148 行） |
+  | 多余导出类型 | `ActionBarVariant` / `ActionBarAlign` | `src/components/ActionBar.tsx:5,8` | 本文件内用 |
+  | 多余导出类型 | `PosDefinition` / `PasteOutcome` | `src/ipc/ipc-client.ts:41,512` | 本文件内用（33/34 行、516 行） |
+  | 多余导出类型 | `ClipboardSub` / `TranslateSub` / `SettingsSub` | `src/main-window/nav.ts:10-12` | 本文件内用 |
+
+  前端**零**「零引用导出」，说明 `tsc --noUnusedLocals` + 早期整理已经把「写了没人用」的前端符号清干净了；剩下的是 `export` 关键字冗余，降噪手段是 `ignoreExportsUsedInFile`，但**默认不开**——不开才能长期看见这 9 项，开了等于把它们永久藏起来。
+
+- **后端 · 为什么不是 cargo-udeps**：`cargo-udeps` 要 nightly 工具链，且它查的是「Cargo.toml 里未被使用的 crate」；本项目最典型的事故形态是**模块/函数写好了、`pub fn` 也在、但生产路径零调用点**（`portable.rs`、`tiered_cleanup`、翻译 `cache/retry/cancel` 全是这个形态）。`rustc` 的 `dead_code` 也看不见：`pub` 条目在 lib crate 里天然对外可见，只有 `pub(crate)`/私有才会被报。
+  所以落地为 `scripts/rust-dead-code-inventory.mjs`（人工清单口径，只读、恒 0 退出、CI 只报告）：扫 `src-tauri/src/**` 的 `pub` 声明，按三个引用面（**其它生产文件** / 同文件内 / `src-tauri/tests/**`）计数并分类，**先剔除注释与字符串字面量**再计数（否则「注释里提到过它」会把孤儿伪装成接线），并排除 `#[tauri::command]`（由前端按名字字符串调用，代码里没有标识符引用）。
+- **脚本可信度用两条已知 ground truth 校准**（不是自证）：
+  - `db::open_or_recover` —— P4-7 已登记「生产 0 调用点，只有 4 处测试调用」，脚本报「仅测试引用 / 4」。
+  - `db::top_id` —— P4-1 子项已登记「生产无调用点，仅 tests/clipboard.rs 两处」，脚本报「仅测试引用 / 4 处引用」。
+- **现存候选（190 项；本次扫描为 2026-10-25 快照，工作树含他人未提交改动）**：零引用 **1**、仅测试引用 **17**、仅本文件引用 172（参考项，`--all` 才逐条列出）、`#[allow(dead_code)]` 0 处。
+
+  | 分类 | 项 | 位置（测试引用数） |
+  |---|---|---|
+  | **零引用** | `map_deepl_http_status` | `translate/providers.rs:2263`（0 / 0）——文档注释写着「供框架层在拿到 HTTP 状态码后调用」，实际**全仓无人调用**，DeepL 的状态码归一走的仍是响应体文案。这是本次唯一一个真孤儿 |
+  | 仅测试引用 | `db::open_or_recover` `db::classify_failure` `db::recovery_action` `db::apply_recovery_action` `db::transient_keychain_error` | `db.rs:238 / 157 / 173 / 188 / 121`（4 / 5 / 4 / 2 / 2）——P4-7 已登记的「恢复策略与生产 `reset_and_reopen` 判据分裂」整体都在这一类 |
+  | 仅测试引用 | `db::top_id` `db::list_ordered` | `db.rs:746 / 542`（4 / 2）——P4-1 子项已登记 |
+  | 仅测试引用 | `clipboard::poll_once` `clipboard::snapshot_to_clips_for_test` | `clipboard.rs:312 / 267`（11 / 6）——生产只走 `poll_once_with_policy`，而 `clipboard.rs` 模块头注释仍写「实际运行时由后台线程循环调用 `poll_once`」，**注释与事实不一致** |
+  | 仅测试引用 | `ipc::settings::set_hotkey_impl` | `ipc/settings.rs:134`（7）——`set_hotkey` 命令实际调 `set_hotkey_runtime_impl`；这个 impl 被 7 条测试养着，**测试测的是一条生产不走的路径** |
+  | 仅测试引用 | `translate::history::translate_clip_item` | `translate/history.rs:137`（2）——注释称其为「唯一的写入口」，但生产没有调用点 |
+  | 仅测试引用 | `translate::providers::on_quota_or_failure` | `providers.rs:2410`（6）——配额/失败后的 `UserPrompt` 决策函数，生产零调用 |
+  | 仅测试引用 | `image::ingest_image` `image::is_degraded` | `image.rs:234 / 375`（3 / 2）——生产走 `ingest_image_with_policy` |
+  | 仅测试引用 | `onboarding::onboarding_action` `onboarding::paste_capability` `paste::focus_restore_sequence` | `onboarding.rs:72 / 84`、`paste.rs:95`（3 / 3 / 2）——纯判定函数，生产未接 |
+
+- **处置方式（明确写下，避免下一轮误删）**：本次**不删除任何代码**。逐项判断原则沿用 roadmap Q4 的「逐项接线，不搞一刀切」，且这些条目的共同特征是「语义仍需保留、只是缺接线」——
+  - `map_deepl_http_status`：应**接线**（DeepL 的 456 配额只有状态码能分辨），或明确删除并同步删注释；**不由执行者裁决**，交 lead。
+  - `db::*` 六项：与 P4-7 登记的「判据分裂」是同一件事，应随启动恢复路径那次改动一起处理（接线或统一删除），单独删会丢掉唯一的测试覆盖。
+  - `poll_once` / `snapshot_to_clips_for_test` / `ingest_image` / `is_degraded`：**保留**——它们是契约测试的锚点（「无策略版必须保持同样基线推进语义」），删了等于自废护栏；但 `clipboard.rs` 模块头那句「运行时调用 `poll_once`」要改。
+  - `set_hotkey_impl`：**保留待接线**——要么让命令回到它（并删 `set_hotkey_runtime_impl`），要么删它并把 7 条测试改指向运行时路径；两种都要 lead 裁决，因为涉及热键行为的验收口径。
+  - `translate_clip_item` / `on_quota_or_failure` / `onboarding::*` / `focus_restore_sequence`：属「写了没接」的产品能力，**保留**，纳入对应功能项接线，不在本项删除。
+- **未验证 / 已知盲区**：
+  - **未在 CI 实跑**：`deadcode` job 与 `verify` job 一样，只过了 actionlint，没有真跑过。
+  - knip 的 `project` 只含 `ts/tsx`，**不覆盖 CSS**（未引用的 `.css` 不会被报）；`.html` 只作入口不作分析对象。
+  - 后端清单是**词法级启发式**，不是语义分析：宏生成的调用点、`Box<dyn Trait>` 的动态派发、trait 默认方法体内的调用都可能漏计；同名条目在多文件重复声明时计数会互相加成。它的定位是「给出候选 + 让人去看语义」，**不能当删除依据直接用**。
+

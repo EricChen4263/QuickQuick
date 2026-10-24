@@ -1,0 +1,9 @@
+{
+  "$schema": "https://unpkg.com/knip@6/schema.json",
+  "entry": [
+    "index.html",
+    "src/clip-popover/index.html",
+    "src/trans-popover/index.html"
+  ],
+  "project": ["src/**/*.{ts,tsx}"]
+}

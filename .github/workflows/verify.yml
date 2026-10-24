@@ -1,0 +1,97 @@
+name: verify
+
+# PR / 主干 push 的验证门禁。
+#
+# 与 release.yml 的分工：release.yml 只在 v* tag 上「发布」，不跑验证；
+# 本工作流负责「验证」，两者互不引用，改发布逻辑不需要动这里。
+#
+# 平台选择：只跑 macOS（与发布矩阵里的 macos-latest 一致）。
+# Windows 未纳入矩阵——后端的 Windows 分支从未编译验证过（见 work items 里
+# P1-1/P1-2/P1-3/P1-5/P1-7 的「Windows 全路径未编译验证」），
+# 现在把 windows-latest 挂上会立刻红，而修它必须改业务代码；等 Windows 分支真跑通过再扩矩阵。
+#
+# 不需要生成 ECDICT 词库：bundle.resources 的 glob 取不到文件只是空映射，
+# 实测在 resources/ecdict.db 缺失（甚至 resources/ 为空目录）时 cargo test 仍可编过，
+# 故不复制 release.yml 的生成步骤。
+# 真正的编译前置是前端产物 dist/——tauri::generate_context! 要求 frontendDist 目录存在，
+# 干净克隆没有它，由 Makefile 的 `dist` 前置目标在缺失时自动构建，这里不单开一步。
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: verify-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# 只读：验证不需要写仓库。release.yml 的发布 job 另需 contents: write，两者权限互不牵连。
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: make verify（macOS）
+    runs-on: macos-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11        # 与 release.yml / 本地一致：allowBuilds 键为 pnpm 11 专有
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22        # pnpm 11 要求 Node ≥22.13
+          cache: pnpm
+
+      # rustfmt 与 clippy 必须在 rustup 侧装上，否则 make verify 的 [2/5][3/5] 会在 CI 上缺命令。
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: 安装前端依赖
+        run: pnpm install --frozen-lockfile
+
+      - name: make verify（tsc + fmt --check + clippy -D warnings + vitest + cargo test）
+        run: make verify
+
+  deadcode:
+    name: 死代码（knip + 后端人工清单）
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: 安装前端依赖
+        run: pnpm install --frozen-lockfile
+
+      # 阻塞项只放「写完没接线的文件」与「import 了没声明的依赖」。
+      # 这两类一旦出现就是真事故，且修复方向唯一（接线或删除），不会长期挂着。
+      - name: 死代码门禁（未接线文件 + 未声明依赖）
+        run: pnpm exec knip --include files,unlisted
+
+      # 全量报告不拦截：现存告警（未使用依赖 / 多余的 export）需要人裁决，
+      # 不能让它们把 PR 常红；清单与处置方式见 docs/design/v04-work-items.md 的 P6-3。
+      - name: 死代码全量报告（不拦截）
+        continue-on-error: true
+        run: pnpm exec knip
+
+      - name: 后端零生产引用候选（不拦截）
+        continue-on-error: true
+        run: node scripts/rust-dead-code-inventory.mjs

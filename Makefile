@@ -8,7 +8,7 @@ SHELL := /usr/bin/env bash
 # Universal mac 构建需要两个 darwin target
 MAC_UNIVERSAL_TARGET := universal-apple-darwin
 
-.PHONY: help doctor dev fmt check test test-js test-rs verify build bump clean
+.PHONY: help doctor dev fmt check test test-js test-rs verify deadcode deadcode-gate build bump clean
 
 help:
 	@echo "QuickQuick make 目标："
@@ -18,6 +18,9 @@ help:
 	@echo "  make check               极速体检：tsc 类型 + cargo check（不跑不打包）"
 	@echo "  make test                全测并行：vitest + cargo test"
 	@echo "  make verify              提交门禁：类型 + fmt + clippy + 全测（CI 复用）"
+	@echo "  make dist                构建前端产物（dist/，Rust 编译前置；缺失时上面几个目标自动触发）"
+	@echo "  make deadcode            死代码报告：knip 全量 + 后端零生产引用清单（不拦截）"
+	@echo "  make deadcode-gate       死代码门禁：未接线文件 + 未声明依赖（CI 拦截项）"
 	@echo "  make build               本地出 Universal mac .dmg/.app"
 	@echo "  make bump VERSION=x.y.z  同步三处版本号（package.json/tauri.conf.json/Cargo.toml）"
 	@echo "  make clean               清构建产物（dist + cargo target）"
@@ -45,7 +48,14 @@ fmt:
 	cd src-tauri && cargo fmt --all
 	@echo "Rust 代码已格式化（make verify 的 fmt 门禁随之转绿）。"
 
-check:
+# tauri::generate_context! 是编译期宏，它要求 tauri.conf.json 的 frontendDist（"../dist"）
+# 目录存在，否则 proc macro 直接 panic——干净克隆里没有 dist/（已 gitignore），
+# 于是 clippy / cargo test / cargo check 都会以「proc macro panicked」失败。
+# 这里把前端产物挂成所有「要编译 Rust」目标的顺序前置：dist 不存在才构建，已存在（本地开发常态）不重跑。
+dist:
+	pnpm exec vite build
+
+check: dist
 	@echo "== 类型检查 (tsc) =="
 	pnpm exec tsc -b
 	@echo "== Rust 编译检查 (cargo check) =="
@@ -54,11 +64,11 @@ check:
 test-js:
 	pnpm test
 
-test-rs:
+test-rs: dist
 	cd src-tauri && cargo test
 
 # 并行跑前端与 Rust 测试，任一失败则整体失败
-test:
+test: dist
 	@echo "== 并行全测：vitest + cargo test =="
 	@set -uo pipefail; \
 	pnpm test & js=$$!; \
@@ -68,8 +78,9 @@ test:
 	wait $$rs || fail=1; \
 	[ "$$fail" = 0 ] && echo "全测通过。" || { echo "有测试失败（见上）。"; exit 1; }
 
-# 提交前门禁：与 CI release 工作流复用同一条标准
-verify:
+# 提交前门禁：CI 的 verify 工作流（.github/workflows/verify.yml）直接调这个目标，
+# 与发布工作流分离——release.yml 只在 v* tag 上打包发布，不跑验证。
+verify: dist
 	@echo "== [1/5] 前端类型 (tsc) =="
 	pnpm exec tsc -b
 	@echo "== [2/5] Rust 格式 (cargo fmt --check) =="
@@ -81,6 +92,22 @@ verify:
 	@echo "== [5/5] Rust 测试 (cargo test) =="
 	cd src-tauri && cargo test
 	@echo "verify 全过，可提交/发布。"
+
+# 死代码报告：全量列出候选，永不失败（供人看，不拦 PR）。
+# 前端用 knip，后端用 scripts/rust-dead-code-inventory.mjs（cargo-udeps 要 nightly，
+# 且只查未使用的 crate，查不到本项目最常见的「模块写好了但生产零调用点」）。
+deadcode:
+	@echo "== 前端死代码全量报告（knip）=="
+	pnpm exec knip || true
+	@echo "== 后端零生产引用候选（pub 条目人工清单）=="
+	node scripts/rust-dead-code-inventory.mjs
+
+# 死代码门禁：只保留修复方向唯一的两类——写完没接线的文件、import 了没声明的依赖。
+# 未使用依赖 / 多余的 export 不进这里：它们需要人裁决，见 docs/design/v04-work-items.md 的 P6-3。
+deadcode-gate:
+	@echo "== 前端死代码门禁（未接线文件 + 未声明依赖）=="
+	pnpm exec knip --include files,unlisted
+	@echo "前端死代码门禁通过。"
 
 build:
 	@echo "== 出 Universal mac 安装包（首次需 rustup target add x86_64-apple-darwin）=="
