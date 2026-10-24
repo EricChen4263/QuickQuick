@@ -9,7 +9,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { act, render, renderHook, screen, waitFor } from "@testing-library/react";
 import type { ReactElement } from "react";
-import { readCachedClipThumbnail, resetClipThumbnailCacheForTest } from "./clip-thumbnails";
+import { resetClipThumbnailCacheForTest, trySettledClipThumbnail } from "./clip-thumbnails";
 import { useClipThumbnail } from "./useClipThumbnail";
 
 vi.mock("../../ipc/ipc-client", () => ({
@@ -41,7 +41,7 @@ describe("useClipThumbnail", () => {
     expect(mockGetClipThumbnail).toHaveBeenCalledWith("img-1");
   });
 
-  it("卸载后重新挂载同一 imageId 命中缓存，不再调 IPC", async () => {
+  it("卸载后重新挂载同一 imageId 命中缓存：不调 IPC 且首次渲染就有值", async () => {
     mockGetClipThumbnail.mockResolvedValue(THUMB);
 
     const first = renderHook(() => useClipThumbnail("img-1"));
@@ -52,7 +52,10 @@ describe("useClipThumbnail", () => {
 
     const second = renderHook(() => useClipThumbnail("img-1"));
 
-    // 缓存命中时首次渲染直接是 data URL，不会先闪一下占位
+    // 下面两条断言分别兜住缓存读取的两个调用点，任一处失效都会单独变红：
+    // 1) 渲染期读缓存失效 → 首帧只会是 null（这一帧还没等微任务），这条先红；
+    // 2) loadClipThumbnail 的缓存短路失效 → 会重新发一次 IPC，计数变 2，这条红。
+    // （旧实现把值同时存进 state，两处读取互相兜底，单独删一处时测试仍绿。）
     expect(second.result.current).toBe(THUMB);
     expect(mockGetClipThumbnail).toHaveBeenCalledTimes(1);
   });
@@ -90,7 +93,7 @@ describe("useClipThumbnail", () => {
 
     const first = renderHook(() => useClipThumbnail("img-1"));
     await waitFor(() => {
-      expect(readCachedClipThumbnail("img-1")).toBeNull();
+      expect(trySettledClipThumbnail("img-1")).toBeNull();
     });
     expect(first.result.current).toBeNull();
     first.unmount();

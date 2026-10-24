@@ -25,12 +25,19 @@ const settled = new Map<string, string | null>();
 const inflight = new Map<string, Promise<string | null>>();
 
 /**
- * 同步读缓存。
+ * 缓存读取的**唯一入口**：判断「这条 id 有没有已确定的结果」一律走这里，
+ * 别处不得直接摸 `settled`。
+ *
+ * 只有两个合法调用点，各有独立断言兜住：
+ * - `useClipThumbnail` 在渲染期读一次，决定这一帧直接显示什么（对应「缓存命中时
+ *   重挂载首次渲染就是 data URL」的同步断言）；
+ * - `loadClipThumbnail` 读一次，决定要不要真的发 IPC（对应「缓存命中不再调 IPC」的计数断言）。
+ * 任一处失效都会让对应断言变红，不会再出现「一处被删、另一处悄悄兜住」。
  *
  * @param imageId - clip_images 行 ID
  * @returns 已确定的 data URL / null；从未拉取过时返回 undefined（与「确定无图」区分）
  */
-export function readCachedClipThumbnail(imageId: string): string | null | undefined {
+export function trySettledClipThumbnail(imageId: string): string | null | undefined {
   return settled.get(imageId);
 }
 
@@ -43,7 +50,7 @@ export function readCachedClipThumbnail(imageId: string): string | null | undefi
  * @returns 缩略图 data URL 或 null
  */
 export async function loadClipThumbnail(imageId: string): Promise<string | null> {
-  const cached = settled.get(imageId);
+  const cached = trySettledClipThumbnail(imageId);
   if (cached !== undefined) return cached;
 
   const pending = inflight.get(imageId);

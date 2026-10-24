@@ -2021,6 +2021,35 @@ mod tests {
             flag_plan, after,
             "只取缩略图标志的列表查询必须与 BLOB 变体走完全相同的索引计划"
         );
+
+        // 计划串相同只证明「索引用法」一致，证明不了 WHERE/JOIN 的语义还在：
+        // 两个变体由同一宏展开，删掉软删过滤或空缩略图判据时计划串逐字不变
+        // （变异实证：去掉 JOIN 的 `cimg.is_deleted = 0` 后上面这条 assert_eq 依然成立）。
+        // 所以对 SQL 语义本身加字面锚，条件被删时必须红。
+        for (sql, needle, why) in [
+            (
+                LIST_ITEMS_WITH_THUMBNAIL_FLAG_SQL,
+                "cimg.is_deleted = 0",
+                "LEFT JOIN 必须排除已软删的图片行，否则清理掉的图会被重新 JOIN 回列表，缩略图与原图都会指向死行",
+            ),
+            (
+                LIST_ITEMS_WITH_THUMBNAIL_FLAG_SQL,
+                "length(cimg.thumbnail) > 0",
+                "hasThumbnail 必须要求缩略图非空，否则前端会为永远取不到图的条目反复发请求",
+            ),
+            (
+                LIST_ITEMS_WITH_THUMBNAIL_FLAG_SQL,
+                "ci.is_deleted = 0",
+                "列表必须排除已软删的父条目，否则已删除条目会重新出现在剪贴板面板里",
+            ),
+            (
+                LIST_ITEMS_WITH_IMAGES_SQL,
+                "cimg.is_deleted = 0",
+                "契约测试口径的 BLOB 变体同样必须排除已软删的图片行",
+            ),
+        ] {
+            assert!(sql.contains(needle), "{why}（SQL 中缺少 `{needle}`）");
+        }
     }
 
     /// 文本去重查询（`ingest` 命中判定）必须按 text_hash 定位，不能扫全部未软删行。
