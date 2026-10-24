@@ -696,6 +696,8 @@ describe("clipboard-page: 主窗键盘流", () => {
       expect(mockCopyClipToClipboard).toHaveBeenCalledWith("item-1");
     });
     expect(mockPasteToFront).not.toHaveBeenCalled();
+    // 复制不经过 pasteToFront，因此不该出现 write_back_only（辅助功能降级）横幅
+    expect(screen.queryByText(/已复制到剪贴板/)).not.toBeInTheDocument();
   });
 
   it("⌥Enter 复制失败时显示操作错误提示（不静默吞掉）", async () => {

@@ -527,6 +527,26 @@ describe("ClipPopoverApp 数字直达（P2-3）", () => {
     expect(mockPasteToFront).not.toHaveBeenCalled();
   });
 
+  it("组词期间的按键同样取消待取用（取消必须在输入法防御之前）", async () => {
+    // Arrange：组词中按键会先在 isImeComposing 处 return，
+    // 若把「非数字键取消」挪到那个 guard 之后，取消就永远走不到，用户按 2 后开始打拼音仍会被粘。
+    mockListClipItems.mockResolvedValue(TEN_ITEMS);
+    render(<ClipPopoverApp />);
+    await flushAsync();
+    const input = screen.getByRole("searchbox");
+
+    // Act
+    fireEvent.keyDown(input, { key: "2" });
+    fireEvent.keyDown(input, { key: "ArrowDown", isComposing: true });
+    act(() => {
+      vi.advanceTimersByTime(200);
+    });
+    await flushAsync();
+
+    // Assert
+    expect(mockPasteToFront).not.toHaveBeenCalled();
+  });
+
   it("50ms 内按 ArrowDown 导航走：不再粘贴已导航走的条目", async () => {
     // Arrange
     mockListClipItems.mockResolvedValue(TEN_ITEMS);
