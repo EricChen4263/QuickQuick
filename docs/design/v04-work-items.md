@@ -180,6 +180,13 @@
 ### P3-7 · 多 pasteboard item 合并
 ### P3-8 · 去重精度提升（集合包含判定 + 复制次数累加）
 ### P3-9 · OCR（图片可被文字搜索命中，Swift helper + IPC）
+- **状态**：阶段 A done（独立 helper 原型已验证，**未接入 app**）；阶段 B（IPC、入库回填 title、打包）未开始，依赖 P4-5a。
+- **结果**：`tools/ocr-helper/` 提供可独立复跑的 CLI：ImageIO 读图 + `VNRecognizeTextRequest`（`.accurate`，`zh-Hans/zh-Hant/en-US`，`usesLanguageCorrection=true`），stdout 固定键序单行 JSON，退出码 2/3/4 区分参数 / 读图 / 识别失败，HEIC 明确拒绝。配自造 CoreGraphics/CoreText 夹具（真值即渲染输入）、`verify.sh`（14 项契约校验，含 PNG/JPEG/TIFF 真转验证）与 `bench.sh`。commits `90c3e25`（原型）、`1dc8704`（活动卡 hash）。`src/`、`src-tauri/`、`Makefile`、`Cargo.toml`、`tauri.conf.json`、`package.json` 零改动。
+- **`box` 坐标系（已定）**：保留 Vision 原生归一化、左下原点、y 向上，helper 内不翻转；落库或渲染时按 `topY = 1 - (minY + height)` 换算。
+- **质量（Apple M4 Pro / macOS 27.0.1，合成白底黑字夹具，口径偏严，不代表真实截图）**：行级完全命中 47/62（纯英文 100%、纯简体 75%、混排 75%、1080p 密集 30 行 77%）；字符准确率 96.4%–100%（密集图 1254 字符错 9）。错例全为整行错 1 字，无漏行、无串行；h↔n 最高频且仅 22–28px 出现；唯一大面积错误为全角括号 `(a) [b] {c}` → `（a） ［b］icr`。
+- **耗时**：1920×1080 中位 409ms（7 次，区间 397–419）；3840×2160 中位 426ms（区间 377–602）；小图约 250ms，即每次调用有约 250ms 固定成本，进程 spawn 仅约 10ms。阶段 A 据此采用进程隔离，常驻进程仅在批量导入场景出现后再评估。
+- **阶段 B 必须带入的约束**：① 首次识别需 ANE 编译约 17–25s，且缓存按**可执行文件名**命名 → helper 名字必须固定，首次调用必须异步并给状态提示；② `confidence` 在本机只出现 0.30 / 0.50 / 1.00 三档，正确行也可能是 0.30，**不可做阈值过滤**；③ 语言顺序是硬性前提：`en-US` 置前会毁掉中文，中文必须排在英文前；④ `.accurate` 需可写 HOME，不可写时抛出无语义的通用错误（易误判为图坏），`.fast` 反而正常；⑤ OCR 文本的匹配语义（精确 vs 模糊）需在阶段 B 决定，否则全角括号与 h↔n 单字错误会吃掉「搜图」价值。
+- **未验证**：多语言回退（本机支持 33 种，仅测三语言）；旋转 / 竖排（`cgImage` 路径不处理 EXIF 方向）；10–14px 极小字号；真实截图（深色 / 渐变 / Retina）；大图内存与超时；多 helper 并发下的 ANE 争用；PDF / 多帧 TIFF；Windows（不适用）。
 
 ---
 
@@ -227,7 +234,7 @@
 - **手动清理改成同一口径**：`cleanup_history_impl(conn, keep_count)` 不再读已删除的 `KEEP_RECENT_COUNT`，上限由命令层从设置读取。手动与自动各持一个数字，迟早漂成两套口径——这本来就是「硬编码 500」的形态。
 - **不产生迁移步骤（P4-7 约束下有意为之）**：本项**没有**新增 DB 列 / 索引 / 表——上限是纯配置，落在 `settings.json`（与 `max_image_bytes` 同源），淘汰复用既有的 `is_deleted` / `is_favorite` / `last_modified_utc` 与 v1 已有索引。因此 `CURRENT_SCHEMA_VERSION` 不动，`MIGRATIONS` 不追加，也没有任何「探测列是否存在」的 DDL。
 - **非法值三道防线**：前端输入拦截（`^\d+$` + 1..999，**不做「悄悄取整」**：`2.5` 直接拒收而不是变成 2）→ 命令层拒收且不落盘 → 读侧 `AppSettings::effective_max_history_items()` 把手工改坏的 0 / 10000 收敛回边界（0 收敛到 1，而不是「每次复制清空历史」）。
-- **验收**：`cargo test` **480 passed**（lib）＋全部集成套件 0 failed；`cargo clippy --all-targets -- -D warnings` 干净；`cargo fmt --all --check` 干净；`pnpm exec tsc -b` 干净；`pnpm test` **768 passed / 74 files**。
+- **验收**：`cargo test` **459 passed**（lib）；全部集成套件合计 **745 passed**，0 failed（`cargo test --tests`，取数于 60846c1 隔离 worktree）；`cargo clippy --all-targets -- -D warnings` 干净；`cargo fmt --all --check` 干净；`pnpm exec tsc -b` 干净；`pnpm test` **766 passed / 74 files**（60846c1；7df0e60 时为 764 passed）。（自检阶段曾误写为 480 / 768，经独立复审更正。）。
 - **可失败性（6 处变异全部打红）**：① 摘掉入库路径的淘汰触发（`if false &&`）→ 3 红；② 候选 SQL 去掉 `is_favorite = 0` → 3 红（含列表索引计划测试）；③ `MAX_HISTORY_ITEMS` 改 1000 → 3 红；④ `set_max_history_items_impl` 跳过立即淘汰 → 1 红；⑤ `counts_as_new_row` 退化成「非空即真」→ 2 红；⑥ 前端非法值不回滚输入框 → 4 红。
 - **未验证**：真机（打包 GUI）改上限的即时手感与 `clipboard-changed` → 列表刷新联动（headless 只验到事件「被发送」的调用点存在，没有真机订阅方实跑）；加密大库（数万条）首次收敛的耗时（`cleanup_keep_recent` 是逐行 UPDATE，超出部分很多时是一批写事务）；Windows。
 ### P4-5 · 搜索升级（预计算 title + 4 模式 + 多词 AND + 命中高亮）
@@ -286,6 +293,15 @@
 - **未在 CI 实跑（如实标注）**：本机无 GitHub runner，`verify.yml` 一次都没在真实 Actions 上跑过。已用 actionlint 保证「语法 / 事件 / runner 标签 / 表达式 / shell」层面成立，但**首次真跑仍可能暴露镜像差异**（例如 rust-cache 键、pnpm store 行为、macOS 镜像的 make 版本）。第一次 PR 请当作「验证 workflow 本身」的复盘对象，红了先看是不是镜像差异而不是代码。
 
 ### P6-2 · 覆盖率基线
+- **状态**：done（前端 + 后端基线已实跑；**不设任何阈值**；`make coverage` 不参与 `make verify`；CI 工作流未在 GitHub 实跑，见未验证项）。commits `04a9d0e`（接线）、`4fcb261`（活动卡）。
+- **做什么**：前端用 vitest v8 provider，`@vitest/coverage-v8` 钉精确版本 `2.1.9`（与 lockfile 中 vitest 解析版本一致）；脚本 `pnpm test:coverage`；配置在 `vite.config.ts` 的 `test.coverage`，统计 `src/**/*.{ts,tsx}`，排除测试文件与 `*.d.ts`，并**显式设置 `reportOnFailure: true`**（默认 false：测试失败时不产出任何报告且不报错，极易误判为 provider 未装上）。后端用 `cargo-llvm-cov`（前置 `llvm-tools-preview` 与 `cargo-llvm-cov`，Makefile 缺依赖时给出安装命令并退出 1）。Makefile 新增 `coverage` / `coverage-js` / `coverage-rs`；`verify` / `dist` / `check` / `test` / `test-rs` 的既有接线零改动。
+- **CI**：新增 `.github/workflows/coverage.yml`，**仅 `workflow_dispatch`**，报告作为 artifact 上传；`verify.yml` 零改动。不挂进每个 PR：后端插桩全量重编（`target/llvm-cov-target` 约 715MB），比 `make verify` 慢一个量级，且此刻没有阈值可拦。
+- **基线（取数 commit `d057ae2`，干净 worktree）**：
+  - 前端（74 文件 / 768 测试全绿）：lines **91.32%**（4908/5374）、branches **90.72%**（1301/1434）、functions **87.83%**（325/370）。洼地是形态而非测试少：`src/ipc` 48.48%（全量 Tauri 命令薄封装，测试只覆盖 UI 实际走到的命令）、三个 `main.tsx` 0%、`panels/translate/browser-api.ts` 18.18%（浏览器兜底路径在 jsdom 中无法触发）。
+  - 后端（35 个测试二进制 / 771 测试全绿）：lines **85.44%**（12958/15166）、regions 84.98%、functions 79.40%；**Rust 侧不产出分支覆盖（branches 0/0），两端分支覆盖不可比**。洼地是必须真窗口 / 系统事件才能跑到的路径：`popover.rs` 14.29%、`lib.rs` 19.84%、`ipc/update.rs` 23.86%、`macos_paste.rs` 48.91%、`window_pos.rs` 57.32%。反向证据：`tray.rs` 因 P5-1 补了菜单测试，从 19.74% 抬到 58.19%，基线对「补测试」敏感。
+- **两个工具层面的坑（已实测，写进 Makefile）**：① `cargo llvm-cov` 不能同时给 `--html` 与 `--lcov`，需先跑一次测试，再用 `cargo llvm-cov report` 复用缓存出各报告；② macOS 自带的 Apple LLVM 21 的 `llvm-profdata` 只认 raw profile v10，rustc 1.99.1 产出 v11，合并直接失败，必须用 rustup 的 `llvm-tools-preview`。
+- **未验证 / 未闭环**：① `coverage.yml` 未在真实 GitHub Actions 跑过（actionlint 1.7.7 通过），`taiki-e/install-action` 与 `rust-cache` 面对约 715MB 目录的行为未验证；② 脏工作树首跑出现 1 例 `clipboard-page.test.tsx` 富文本断言失败，单文件复跑与后续全量均绿，未复现、未定位，列为观察项；③ 基线是快照，trunk 前进后需按活动卡取数方式在干净 worktree 重跑，不可直接引用旧数字比较；④ 本机后端工具链是 `/tmp` 临时副本（沙箱限制），仓库侧硬性前提仅为 `llvm-tools-preview` 与 `cargo-llvm-cov`。
+- **明确未做**：不设阈值、不接第三方覆盖率服务、不挂进 `make verify`。
 ### P6-3 · 死代码检测（knip / cargo-udeps）
 - **状态**：done（工具接入 + 基线清单 + 门禁分流；告警本身**零删除**，待裁决项见下）
 - **前端 · knip**：`knip.json` 只钉三件事——三个 HTML 入口（`index.html` / `src/clip-popover/index.html` / `src/trans-popover/index.html`，与 `vite.config.ts` 的 `rollupOptions.input` 对齐）、`project: src/**/*.{ts,tsx}`、默认忽略。`knip` + `knip.json` 的版本随 `package.json` 的 devDependencies 走（当前 knip 6.42.1）。
