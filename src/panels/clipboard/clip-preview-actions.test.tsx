@@ -7,12 +7,14 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { ClipPreview } from "./ClipPreview";
+import { resetClipThumbnailCacheForTest } from "./clip-thumbnails";
 
 vi.mock("../../ipc/ipc-client", () => ({
   listClipItems: vi.fn(),
   deleteClipItem: vi.fn(),
   toggleFavoriteClip: vi.fn(),
   getClipImageOriginal: vi.fn(),
+  getClipThumbnail: vi.fn(),
   copyClipToClipboard: vi.fn().mockResolvedValue(undefined),
 }));
 
@@ -21,10 +23,11 @@ vi.mock("../../panels/translate/browser-api", () => ({
 }));
 
 import { writeToClipboard } from "../../panels/translate/browser-api";
-import { getClipImageOriginal, copyClipToClipboard } from "../../ipc/ipc-client";
+import { getClipImageOriginal, getClipThumbnail, copyClipToClipboard } from "../../ipc/ipc-client";
 
 const mockWriteToClipboard = vi.mocked(writeToClipboard);
 const mockGetClipImageOriginal = vi.mocked(getClipImageOriginal);
+const mockGetClipThumbnail = vi.mocked(getClipThumbnail);
 const mockCopyClipToClipboard = vi.mocked(copyClipToClipboard);
 
 const TEXT_ITEM = {
@@ -32,6 +35,7 @@ const TEXT_ITEM = {
   content: "Hello World",
   kind: "text" as const,
   isFavorite: false,
+  hasThumbnail: false,
   lastModifiedUtc: 1000,
 };
 
@@ -40,6 +44,7 @@ const FAV_ITEM = {
   content: "Favorite text",
   kind: "text" as const,
   isFavorite: true,
+  hasThumbnail: false,
   lastModifiedUtc: 2000,
 };
 
@@ -48,15 +53,17 @@ const IMAGE_ITEM = {
   content: "[图片] 200x300",
   kind: "image" as const,
   isFavorite: false,
+  hasThumbnail: true,
   lastModifiedUtc: 3000,
   imageId: "uuid-img-1",
-  thumbnailDataUrl: "data:image/webp;base64,THUMB",
 };
 
 describe("ClipPreview 操作按钮", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    resetClipThumbnailCacheForTest();
     mockGetClipImageOriginal.mockResolvedValue(null);
+    mockGetClipThumbnail.mockResolvedValue(null);
     mockWriteToClipboard.mockResolvedValue(undefined);
     mockCopyClipToClipboard.mockResolvedValue(undefined);
   });

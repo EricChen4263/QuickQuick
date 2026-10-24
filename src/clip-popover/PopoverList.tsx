@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import type { ClipItem } from "../ipc/ipc-client";
 import { KindIcon } from "../components/KindIcon";
+import { useClipItemThumbnail } from "../panels/clipboard/useClipThumbnail";
 import type { ClipGroups } from "./grouping";
 
 interface PopoverListProps {
@@ -15,6 +16,21 @@ const SUMMARY_MAX = 50;
 function truncate(text: string): string {
   if (text.length <= SUMMARY_MAX) return text;
   return text.slice(0, SUMMARY_MAX) + "…";
+}
+
+/** 图片行的缩略图：按需拉取，未就绪或取不到时保持既有 `[图片]` 占位 */
+function PopoverRowImage({ item }: { item: ClipItem }) {
+  const thumbnailUrl = useClipItemThumbnail(item);
+  if (thumbnailUrl === null) {
+    return <div className="popover-row-text">[图片]</div>;
+  }
+  return (
+    <img
+      src={thumbnailUrl}
+      alt="缩略图"
+      className="popover-row-thumb"
+    />
+  );
 }
 
 /** 单行条目：类型图标 + 内容摘要/缩略图 + 收藏星标 */
@@ -38,15 +54,11 @@ function PopoverRow({
         <KindIcon kind={item.kind} />
       </div>
       <div className="popover-row-main">
-        {item.kind === "image" && item.thumbnailDataUrl ? (
-          <img
-            src={item.thumbnailDataUrl}
-            alt="缩略图"
-            className="popover-row-thumb"
-          />
+        {item.kind === "image" ? (
+          <PopoverRowImage item={item} />
         ) : (
           <div className={item.kind === "richtext" ? "popover-row-text code" : "popover-row-text"}>
-            {item.kind === "image" ? "[图片]" : truncate(item.content)}
+            {truncate(item.content)}
           </div>
         )}
       </div>

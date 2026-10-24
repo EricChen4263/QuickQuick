@@ -12,6 +12,7 @@ function makeItem(): ClipItem {
     content: "first item",
     kind: "text",
     isFavorite: false,
+    hasThumbnail: false,
     lastModifiedUtc: new Date("2026-06-02T10:00:00").getTime(),
   };
 }

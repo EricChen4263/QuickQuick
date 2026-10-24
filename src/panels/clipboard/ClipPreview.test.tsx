@@ -12,6 +12,7 @@ function makeItem(overrides: Partial<ClipItem>): ClipItem {
     content: "fallback content",
     kind: "text",
     isFavorite: false,
+    hasThumbnail: false,
     lastModifiedUtc: 1_700_000_000_000,
     ...overrides,
   };

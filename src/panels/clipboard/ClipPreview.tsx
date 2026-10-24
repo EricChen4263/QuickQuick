@@ -10,6 +10,7 @@ import EmptyState from "../../components/EmptyState";
 import { ActionBar } from "../../components/ActionBar";
 import { sanitizeRichHtml } from "./sanitize-html";
 import { handleRichLinkClick } from "./rich-link";
+import { useClipThumbnail } from "./useClipThumbnail";
 
 interface ClipPreviewProps {
   item: ClipItem | null;
@@ -24,7 +25,7 @@ interface ClipPreviewProps {
 
 interface ImagePreviewProps {
   imageId: string;
-  thumbnailDataUrl?: string;
+  hasThumbnail: boolean;
 }
 
 /** 格式化 UTC 时间戳为本地可读字符串 */
@@ -45,11 +46,14 @@ const KIND_LABEL: Record<ClipItem["kind"], string> = {
 };
 
 /**
- * 图片预览子组件：先显示缩略图占位，异步加载原图后切换为原图。
+ * 图片预览子组件：原图优先、缩略图回落。
+ * 缩略图按需拉取（模块级缓存），原图异步到达后覆盖缩略图；
+ * 两者都还没就绪时显示 `[图片]` 占位，避免图片到达时布局跳动。
  * effect 内局部 cancelled 闭包防止切换条目时产生 stale 更新。
  */
-function ImagePreview({ imageId, thumbnailDataUrl }: ImagePreviewProps) {
+function ImagePreview({ imageId, hasThumbnail }: ImagePreviewProps) {
   const [originalDataUrl, setOriginalDataUrl] = useState<string | null>(null);
+  const thumbnailUrl = useClipThumbnail(hasThumbnail ? imageId : null);
 
   useEffect(() => {
     const cancelled = { current: false };
@@ -70,10 +74,10 @@ function ImagePreview({ imageId, thumbnailDataUrl }: ImagePreviewProps) {
     };
   }, [imageId]);
 
-  const displayUrl = originalDataUrl ?? thumbnailDataUrl ?? null;
+  const displayUrl = originalDataUrl ?? thumbnailUrl;
 
   if (displayUrl === null) {
-    return null;
+    return <div className="preview-img-placeholder">[图片]</div>;
   }
 
   return (
@@ -257,7 +261,7 @@ export function ClipPreview({
               <span>{formatTimestamp(item.lastModifiedUtc)}</span>
             </div>
             {item.kind === "image" && item.imageId !== undefined ? (
-              <ImagePreview imageId={item.imageId} thumbnailDataUrl={item.thumbnailDataUrl} />
+              <ImagePreview imageId={item.imageId} hasThumbnail={item.hasThumbnail} />
             ) : (
               <PreviewContent item={item} />
             )}

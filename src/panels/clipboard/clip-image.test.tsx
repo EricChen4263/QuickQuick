@@ -10,23 +10,28 @@ import type { HistoryFilter } from "../history/filter";
 import type { HistoryItem } from "../history/search";
 import { ClipItemRow } from "./ClipItemRow";
 import { ClipPreview } from "./ClipPreview";
+import { resetClipThumbnailCacheForTest } from "./clip-thumbnails";
 
-// Mock ipc-client，需要 getClipImageOriginal + 里程碑3新增函数
+// Mock ipc-client：缩略图与原图都是「渲染时按 id 拉取」，测试靠计数验证拉取次数
 vi.mock("../../ipc/ipc-client", () => ({
   listClipItems: vi.fn(),
   deleteClipItem: vi.fn(),
   toggleFavoriteClip: vi.fn(),
   getClipImageOriginal: vi.fn(),
+  getClipThumbnail: vi.fn(),
   pasteToFront: vi.fn(),
   openAccessibilitySettings: vi.fn(),
 }));
 
-import { getClipImageOriginal } from "../../ipc/ipc-client";
+import { getClipImageOriginal, getClipThumbnail } from "../../ipc/ipc-client";
 
 const mockGetClipImageOriginal = vi.mocked(getClipImageOriginal);
+const mockGetClipThumbnail = vi.mocked(getClipThumbnail);
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // 缩略图缓存是模块级的，用例之间必须清空，否则「是否发起拉取」的断言会互相污染
+  resetClipThumbnailCacheForTest();
 });
 
 describe("filterByType image", () => {
@@ -66,12 +71,19 @@ describe("ClipItemRow image rendering", () => {
     content: "[图片] 200x300",
     kind: "image" as const,
     isFavorite: false,
+    hasThumbnail: false,
     lastModifiedUtc: 1000,
   };
 
-  it("图片项有 thumbnailDataUrl 时渲染 <img> 且 src 等于 thumbnailDataUrl", () => {
-    const thumbnailDataUrl = "data:image/webp;base64,ABC123";
-    const item = { ...baseItem, thumbnailDataUrl };
+  it("图片项带缩略图标志时按需拉取并渲染 <img>（占位 → 加载完成）", async () => {
+    const thumbnailUrl = "data:image/webp;base64,ABC123";
+    // 手动控制的 deferred：先断言占位，再让图到位，避免「渲染即完成」掩盖占位逻辑
+    let resolveThumbnail!: (url: string | null) => void;
+    const pending = new Promise<string | null>((resolve) => {
+      resolveThumbnail = resolve;
+    });
+    mockGetClipThumbnail.mockReturnValue(pending);
+    const item = { ...baseItem, hasThumbnail: true, imageId: "uuid-thumb-1" };
 
     render(
       <ClipItemRow
@@ -82,12 +94,27 @@ describe("ClipItemRow image rendering", () => {
       />
     );
 
-    const img = screen.getByRole("img", { name: "图片缩略图" });
-    expect(img).toBeInTheDocument();
-    expect(img).toHaveAttribute("src", thumbnailDataUrl);
+    // 拉取未完成：保持既有占位文案，不能是空白
+    expect(screen.getByText("[图片]")).toBeInTheDocument();
+    expect(screen.queryByRole("img")).not.toBeInTheDocument();
+
+    await act(async () => {
+      resolveThumbnail(thumbnailUrl);
+      await pending;
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByText("[图片]")).not.toBeInTheDocument();
+      expect(screen.getByRole("img", { name: "图片缩略图" })).toHaveAttribute(
+        "src",
+        thumbnailUrl
+      );
+    });
+    expect(mockGetClipThumbnail).toHaveBeenCalledTimes(1);
+    expect(mockGetClipThumbnail).toHaveBeenCalledWith("uuid-thumb-1");
   });
 
-  it("图片项无 thumbnailDataUrl 时渲染 '[图片]' 占位文字", () => {
+  it("图片项没有缩略图标志时渲染 '[图片]' 占位文字且不发起取图请求", () => {
     render(
       <ClipItemRow
         item={baseItem}
@@ -99,6 +126,7 @@ describe("ClipItemRow image rendering", () => {
 
     expect(screen.getByText("[图片]")).toBeInTheDocument();
     expect(screen.queryByRole("img")).not.toBeInTheDocument();
+    expect(mockGetClipThumbnail).not.toHaveBeenCalled();
   });
 
   it("图片项渲染收藏按钮（StarButton）", () => {
@@ -120,6 +148,7 @@ describe("ClipItemRow image rendering", () => {
       content: "Hello World",
       kind: "text" as const,
       isFavorite: false,
+      hasThumbnail: false,
       lastModifiedUtc: 1000,
     };
 
@@ -138,44 +167,66 @@ describe("ClipItemRow image rendering", () => {
 });
 
 describe("ClipPreview image item (ImagePreview)", () => {
+  const THUMB_URL = "data:image/webp;base64,THUMB123";
+
   const imageItem = {
     id: "img-item-1",
     content: "[图片] 200x300",
     kind: "image" as const,
     isFavorite: false,
+    hasThumbnail: true,
     lastModifiedUtc: 1000,
     imageId: "uuid-image-1",
-    thumbnailDataUrl: "data:image/webp;base64,THUMB123",
   };
 
-  it("加载中先显示缩略图，成功后显示原图 img", async () => {
+  it("原图未到前先显示缩略图，原图到达后切换为原图（原图优先、缩略图回落）", async () => {
     const originalDataUrl = "data:image/png;base64,ORIGINAL456";
-    mockGetClipImageOriginal.mockResolvedValue(originalDataUrl);
+    mockGetClipThumbnail.mockResolvedValue(THUMB_URL);
+    let resolveOriginal!: (url: string | null) => void;
+    const pendingOriginal = new Promise<string | null>((resolve) => {
+      resolveOriginal = resolve;
+    });
+    mockGetClipImageOriginal.mockReturnValue(pendingOriginal);
 
     render(<ClipPreview item={imageItem} onToggleFavorite={vi.fn()} onDelete={vi.fn()} onCopy={vi.fn()} onPasteToFront={vi.fn()} onTranslate={vi.fn()} />);
 
-    // 原图尚未加载完成时，应先以缩略图作为回退显示
-    expect(screen.getByRole("img")).toHaveAttribute("src", imageItem.thumbnailDataUrl);
-
-    // 原图加载完成后应显示原图 img
+    // 原图尚未到达：先以缩略图作为回退显示
     await waitFor(() => {
-      const images = screen.getAllByRole("img");
-      const originalImg = images.find((img) =>
-        img.getAttribute("src") === originalDataUrl
-      );
-      expect(originalImg).toBeDefined();
+      expect(screen.getByRole("img")).toHaveAttribute("src", THUMB_URL);
+    });
+
+    // 原图到达后应覆盖缩略图
+    await act(async () => {
+      resolveOriginal(originalDataUrl);
+      await pendingOriginal;
+    });
+
+    await waitFor(() => {
+      expect(screen.getByRole("img")).toHaveAttribute("src", originalDataUrl);
     });
   });
 
-  it("getClipImageOriginal 返回 null 时显示缩略图回退", async () => {
+  it("getClipImageOriginal 返回 null 时回落到缩略图", async () => {
+    mockGetClipThumbnail.mockResolvedValue(THUMB_URL);
     mockGetClipImageOriginal.mockResolvedValue(null);
 
     render(<ClipPreview item={imageItem} onToggleFavorite={vi.fn()} onDelete={vi.fn()} onCopy={vi.fn()} onPasteToFront={vi.fn()} onTranslate={vi.fn()} />);
 
     await waitFor(() => {
-      const img = screen.getByRole("img");
-      expect(img).toHaveAttribute("src", imageItem.thumbnailDataUrl);
+      expect(screen.getByRole("img")).toHaveAttribute("src", THUMB_URL);
     });
+  });
+
+  it("原图与缩略图都取不到时显示 [图片] 占位，不渲染 img", async () => {
+    mockGetClipThumbnail.mockResolvedValue(null);
+    mockGetClipImageOriginal.mockResolvedValue(null);
+
+    render(<ClipPreview item={imageItem} onToggleFavorite={vi.fn()} onDelete={vi.fn()} onCopy={vi.fn()} onPasteToFront={vi.fn()} onTranslate={vi.fn()} />);
+
+    await waitFor(() => {
+      expect(screen.getByText("[图片]")).toBeInTheDocument();
+    });
+    expect(screen.queryByRole("img")).not.toBeInTheDocument();
   });
 
   it("文本项显示 <p> 文本内容不渲染 img", () => {
@@ -184,6 +235,7 @@ describe("ClipPreview image item (ImagePreview)", () => {
       content: "Hello text content",
       kind: "text" as const,
       isFavorite: false,
+      hasThumbnail: false,
       lastModifiedUtc: 1000,
     };
 
@@ -194,23 +246,24 @@ describe("ClipPreview image item (ImagePreview)", () => {
   });
 
   it("快速切换 imageId 时旧请求迟到 resolve 不覆盖新结果（stale 防护）", async () => {
+    mockGetClipThumbnail.mockResolvedValue("data:image/webp;base64,THUMB_STALE");
     const imageItem1 = {
       id: "img-item-1",
       content: "[图片] 200x300",
       kind: "image" as const,
       isFavorite: false,
+      hasThumbnail: true,
       lastModifiedUtc: 1000,
       imageId: "uuid-image-1",
-      thumbnailDataUrl: "data:image/webp;base64,THUMB1",
     };
     const imageItem2 = {
       id: "img-item-2",
       content: "[图片] 400x500",
       kind: "image" as const,
       isFavorite: false,
+      hasThumbnail: true,
       lastModifiedUtc: 2000,
       imageId: "uuid-image-2",
-      thumbnailDataUrl: "data:image/webp;base64,THUMB2",
     };
 
     const originalUrl1 = "data:image/png;base64,ORIGINAL_1";

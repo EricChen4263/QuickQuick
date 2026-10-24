@@ -9,6 +9,7 @@ import { fireEvent, render } from "@testing-library/react";
 import { ClipPreview } from "./ClipPreview";
 
 vi.mock("../../ipc/ipc-client", () => ({
+  getClipThumbnail: vi.fn().mockResolvedValue(null),
   getClipImageOriginal: vi.fn().mockResolvedValue(null),
   copyClipToClipboard: vi.fn().mockResolvedValue(undefined),
 }));
@@ -26,6 +27,7 @@ const RICH_ITEM = {
   content: "link text",
   kind: "richtext" as const,
   isFavorite: false,
+  hasThumbnail: false,
   lastModifiedUtc: 1000,
   htmlContent: `<p><a href="https://x.com">x.com</a> and <b id="b">bold</b></p>`,
 };

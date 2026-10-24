@@ -10,6 +10,7 @@ vi.mock("@tauri-apps/api/event", () => ({
 
 // Mock IPC：渲染测试环境无 Tauri 运行时
 vi.mock("../../ipc/ipc-client", () => ({
+  getClipThumbnail: vi.fn().mockResolvedValue(null),
   listClipItems: vi.fn(),
   deleteClipItem: vi.fn(),
   toggleFavoriteClip: vi.fn(),
@@ -46,6 +47,7 @@ const MOCK_ITEMS: ClipItem[] = [
     content: "Hello World",
     kind: "text",
     isFavorite: false,
+    hasThumbnail: false,
     lastModifiedUtc: 1000,
   },
   {
@@ -53,6 +55,7 @@ const MOCK_ITEMS: ClipItem[] = [
     content: "富文本内容示例",
     kind: "richtext",
     isFavorite: true,
+    hasThumbnail: false,
     lastModifiedUtc: 2000,
   },
   {
@@ -60,6 +63,7 @@ const MOCK_ITEMS: ClipItem[] = [
     content: "Another text item",
     kind: "text",
     isFavorite: false,
+    hasThumbnail: false,
     lastModifiedUtc: 3000,
   },
 ];

@@ -7,6 +7,7 @@
 
 import type { ClipItem } from "../../ipc/ipc-client";
 import { KindIcon } from "../../components/KindIcon";
+import { useClipItemThumbnail } from "./useClipThumbnail";
 
 /** 内容摘要最大字符数 */
 const SUMMARY_MAX_LENGTH = 60;
@@ -28,18 +29,19 @@ function truncateSummary(text: string): string {
   return text.slice(0, SUMMARY_MAX_LENGTH) + "…";
 }
 
-/** 图片内容区：有缩略图则显示 img，否则显示占位文字 */
+/** 图片内容区：缩略图按需拉取；未就绪或取不到时保持既有 `[图片]` 占位，不留空白跳动 */
 function ImageContent({ item }: { item: ClipItem }) {
-  if (item.thumbnailDataUrl) {
-    return (
-      <img
-        src={item.thumbnailDataUrl}
-        alt="图片缩略图"
-        className="clip-thumb"
-      />
-    );
+  const thumbnailUrl = useClipItemThumbnail(item);
+  if (thumbnailUrl === null) {
+    return <span>[图片]</span>;
   }
-  return <span>[图片]</span>;
+  return (
+    <img
+      src={thumbnailUrl}
+      alt="图片缩略图"
+      className="clip-thumb"
+    />
+  );
 }
 
 /** 收藏星标按钮：所有类型（含图片）均显示 */

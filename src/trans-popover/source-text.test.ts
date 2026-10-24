@@ -8,6 +8,7 @@ function makeTextItem(content: string): ClipItem {
     content,
     kind: "text",
     isFavorite: false,
+    hasThumbnail: false,
     lastModifiedUtc: 1000,
   };
 }
@@ -18,8 +19,8 @@ function makeImageItem(content = ""): ClipItem {
     content,
     kind: "image",
     isFavorite: false,
+    hasThumbnail: true,
     lastModifiedUtc: 2000,
-    thumbnailDataUrl: "data:image/webp;base64,abc",
     imageId: "img-id-1",
   };
 }
@@ -30,6 +31,7 @@ function makeRichtextItem(content: string): ClipItem {
     content,
     kind: "richtext",
     isFavorite: false,
+    hasThumbnail: false,
     lastModifiedUtc: 3000,
   };
 }

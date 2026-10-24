@@ -274,6 +274,18 @@
   object-fit: contain;
 }
 
+/* 图片预览占位：缩略图按需拉取，就绪前保持占位高度，避免图片到达时布局跳动 */
+.preview-img-placeholder {
+  min-height: 120px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--r);
+  border: 1px dashed color-mix(in oklch, var(--border) 72%, transparent);
+  color: var(--muted);
+  font-size: 13px;
+}
+
 /* 底部操作栏：复用公共 ActionBar(surface)，仅保留响应式裁剪安全属性 */
 .preview-actions {
   min-width: 0;

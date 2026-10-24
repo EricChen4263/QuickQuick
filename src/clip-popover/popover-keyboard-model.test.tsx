@@ -8,6 +8,7 @@ vi.mock("@tauri-apps/api/event", () => ({
 }));
 
 vi.mock("../ipc/ipc-client", () => ({
+  getClipThumbnail: vi.fn().mockResolvedValue(null),
   listClipItems: vi.fn(),
   pasteToFront: vi.fn(),
   hideAndReturnFocus: vi.fn(),
@@ -32,10 +33,10 @@ const mockHideAndReturnFocus = vi.mocked(hideAndReturnFocus);
 
 /** 四条目列表：顺序即收藏 → 今天 → 更早的扁平顺序（都落在同一组，保持入参顺序） */
 const ITEMS = [
-  { id: "id1", content: "first item", kind: "text" as const, isFavorite: false, lastModifiedUtc: Date.now() },
-  { id: "id2", content: "second item", kind: "text" as const, isFavorite: false, lastModifiedUtc: Date.now() },
-  { id: "id3", content: "third item", kind: "text" as const, isFavorite: false, lastModifiedUtc: Date.now() },
-  { id: "id4", content: "fourth item", kind: "text" as const, isFavorite: false, lastModifiedUtc: Date.now() },
+  { id: "id1", content: "first item", kind: "text" as const, isFavorite: false, hasThumbnail: false, lastModifiedUtc: Date.now() },
+  { id: "id2", content: "second item", kind: "text" as const, isFavorite: false, hasThumbnail: false, lastModifiedUtc: Date.now() },
+  { id: "id3", content: "third item", kind: "text" as const, isFavorite: false, hasThumbnail: false, lastModifiedUtc: Date.now() },
+  { id: "id4", content: "fourth item", kind: "text" as const, isFavorite: false, hasThumbnail: false, lastModifiedUtc: Date.now() },
 ];
 
 beforeEach(() => {

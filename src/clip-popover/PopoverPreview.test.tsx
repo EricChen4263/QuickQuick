@@ -1,8 +1,23 @@
-import { describe, it, expect } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import { render, screen, waitFor } from "@testing-library/react";
 import { PopoverPreview } from "./PopoverPreview";
 import { PREVIEW_WAITING_TEXT, type PreviewState } from "./preview-state";
 import type { ClipItem } from "../ipc/ipc-client";
+import { resetClipThumbnailCacheForTest } from "../panels/clipboard/clip-thumbnails";
+
+// 缩略图字节不随列表下发，图片行渲染时才按 imageId 拉取，故这里要 mock 取图通道
+vi.mock("../ipc/ipc-client", () => ({
+  getClipThumbnail: vi.fn(),
+}));
+
+import { getClipThumbnail } from "../ipc/ipc-client";
+
+const mockGetClipThumbnail = vi.mocked(getClipThumbnail);
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  resetClipThumbnailCacheForTest();
+});
 
 function makeTextItem(overrides: Partial<ClipItem> = {}): ClipItem {
   return {
@@ -10,6 +25,7 @@ function makeTextItem(overrides: Partial<ClipItem> = {}): ClipItem {
     content: "hello preview",
     kind: "text",
     isFavorite: false,
+    hasThumbnail: false,
     lastModifiedUtc: new Date("2026-06-02T10:00:00").getTime(),
     ...overrides,
   };
@@ -46,27 +62,42 @@ describe("PopoverPreview 渲染", () => {
     expect(screen.getByText("hello preview")).toBeDefined();
   });
 
-  it("图片条目有 thumbnailDataUrl 时渲染 img 元素，src 与 thumbnailDataUrl 一致", () => {
+  it("图片条目带缩略图标志时按需拉取并渲染 img，src 与拉取结果一致", async () => {
+    const thumbnail = "data:image/webp;base64,xxx";
+    mockGetClipThumbnail.mockResolvedValue(thumbnail);
     const item = makeTextItem({
       id: "img-1",
       content: "",
       kind: "image",
-      thumbnailDataUrl: "data:image/webp;base64,xxx",
+      hasThumbnail: true,
+      imageId: "img-id-1",
     });
 
     renderItem(item);
 
-    const img = screen.getByRole("img", { name: "图片预览" });
-    expect(img).toBeDefined();
-    expect((img as HTMLImageElement).src).toContain("data:image/webp;base64,xxx");
+    // 拉取未完成前是占位，不当空白处理
+    expect(screen.getByText("[图片]")).toBeDefined();
+    await waitFor(() => {
+      expect(screen.getByRole("img", { name: "图片预览" })).toHaveAttribute(
+        "src",
+        thumbnail
+      );
+    });
+    expect(mockGetClipThumbnail).toHaveBeenCalledWith("img-id-1");
   });
 
-  it("图片条目无 thumbnailDataUrl 时渲染占位文字「[图片]」", () => {
-    const item = makeTextItem({ id: "img-2", content: "", kind: "image" });
+  it("图片条目没有缩略图标志时渲染占位文字「[图片]」且不发起取图请求", () => {
+    const item = makeTextItem({
+      id: "img-2",
+      content: "",
+      kind: "image",
+      hasThumbnail: false,
+    });
 
     renderItem(item);
 
     expect(screen.getByText("[图片]")).toBeDefined();
+    expect(mockGetClipThumbnail).not.toHaveBeenCalled();
   });
 
   it("收藏条目渲染「已收藏」badge", () => {

@@ -9,6 +9,7 @@ vi.mock("@tauri-apps/api/event", () => ({
 }));
 
 vi.mock("../ipc/ipc-client", () => ({
+  getClipThumbnail: vi.fn().mockResolvedValue(null),
   listClipItems: vi.fn(),
   pasteToFront: vi.fn(),
   hideAndReturnFocus: vi.fn(),
@@ -46,11 +47,11 @@ function rowByText(text: string): HTMLElement {
 }
 
 const INITIAL_ITEMS = [
-  { id: "id1", content: "first item", kind: "text" as const, isFavorite: false, lastModifiedUtc: Date.now() },
+  { id: "id1", content: "first item", kind: "text" as const, isFavorite: false, hasThumbnail: false, lastModifiedUtc: Date.now() },
 ];
 
 const AFTER_CHANGE_ITEMS = [
-  { id: "id2", content: "brand new item", kind: "text" as const, isFavorite: false, lastModifiedUtc: Date.now() },
+  { id: "id2", content: "brand new item", kind: "text" as const, isFavorite: false, hasThumbnail: false, lastModifiedUtc: Date.now() },
   ...INITIAL_ITEMS,
 ];
 
@@ -187,7 +188,7 @@ describe("ClipPopoverApp 订阅 clipboard-changed 自动刷新", () => {
     mockListClipItems
       .mockResolvedValueOnce([])
       .mockResolvedValue([
-        { id: "new1", content: "fresh capture", kind: "text" as const, isFavorite: false, lastModifiedUtc: Date.now() },
+        { id: "new1", content: "fresh capture", kind: "text" as const, isFavorite: false, hasThumbnail: false, lastModifiedUtc: Date.now() },
       ]);
 
     render(<ClipPopoverApp />);

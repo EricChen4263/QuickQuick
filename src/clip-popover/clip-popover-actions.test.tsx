@@ -3,6 +3,7 @@ import { render, screen, fireEvent, waitFor, act } from "@testing-library/react"
 import ClipPopoverApp from "./ClipPopoverApp";
 
 vi.mock("../ipc/ipc-client", () => ({
+  getClipThumbnail: vi.fn().mockResolvedValue(null),
   listClipItems: vi.fn(),
   pasteToFront: vi.fn(),
   hideAndReturnFocus: vi.fn(),
@@ -56,16 +57,17 @@ async function flushMicrotasks(): Promise<void> {
 }
 
 const ITEMS = [
-  { id: "id1", content: "first item", kind: "text" as const, isFavorite: false, lastModifiedUtc: Date.now() },
-  { id: "id2", content: "second item", kind: "text" as const, isFavorite: false, lastModifiedUtc: Date.now() },
-  { id: "id3", content: "third item", kind: "text" as const, isFavorite: false, lastModifiedUtc: Date.now() },
+  { id: "id1", content: "first item", kind: "text" as const, isFavorite: false, hasThumbnail: false, lastModifiedUtc: Date.now() },
+  { id: "id2", content: "second item", kind: "text" as const, isFavorite: false, hasThumbnail: false, lastModifiedUtc: Date.now() },
+  { id: "id3", content: "third item", kind: "text" as const, isFavorite: false, hasThumbnail: false, lastModifiedUtc: Date.now() },
   {
     id: "id-img",
     content: "",
     kind: "image" as const,
     isFavorite: false,
+    hasThumbnail: true,
     lastModifiedUtc: Date.now(),
-    thumbnailDataUrl: "data:image/png;base64,abc",
+    imageId: "img-id-1",
   },
 ];
 
@@ -293,6 +295,7 @@ describe("ClipPopoverApp 数字直达（P2-3）", () => {
     content: `item ${i + 1}`,
     kind: "text" as const,
     isFavorite: false,
+    hasThumbnail: false,
     lastModifiedUtc: Date.now(),
   }));
 

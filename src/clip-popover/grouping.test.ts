@@ -10,6 +10,7 @@ function makeItem(
     content: "test",
     kind: "text",
     isFavorite: false,
+    hasThumbnail: false,
     lastModifiedUtc: 1000,
     ...overrides,
   };

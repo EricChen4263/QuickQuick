@@ -8,8 +8,13 @@ export interface ClipItem {
   kind: "text" | "richtext" | "image";
   isFavorite: boolean;
   lastModifiedUtc: number;
-  /** 图片项的缩略图 data URL（data:image/webp;base64,...），文本项无此字段。 */
-  thumbnailDataUrl?: string;
+  /**
+   * 图片项是否带缩略图；文本项为 false。
+   *
+   * 缩略图字节不随列表传输（列表每次刷新都会重传一遍 base64），
+   * 前端凭这个标志按需调 `getClipThumbnail`。
+   */
+  hasThumbnail: boolean;
   /** 图片项的原图 ID，用于调 getClipImageOriginal；文本项无此字段。 */
   imageId?: string;
   /** 富文本项的 HTML 串；纯文本项与图片项无此字段。 */
@@ -317,6 +322,23 @@ export async function copyClipToClipboard(id: string): Promise<void> {
 export async function getClipImageOriginal(imageId: string): Promise<string | null> {
   try {
     return await invoke<string | null>("get_clip_image_original", { imageId });
+  } catch (err) {
+    throw toError(err);
+  }
+}
+
+/**
+ * 获取图片剪贴板条目的缩略图（WebP）data URL。
+ *
+ * 列表 payload 不带缩略图字节，前端渲染图片行时按 imageId 单独拉取。
+ * 图片行不存在 / 已软删 / 缩略图为空时返回 null（前端保持占位，不当错误处理）。
+ *
+ * @param imageId - clip_images 行的 ID
+ * @returns 缩略图 data URL（data:image/webp;base64,...）或 null
+ */
+export async function getClipThumbnail(imageId: string): Promise<string | null> {
+  try {
+    return await invoke<string | null>("get_clip_thumbnail", { imageId });
   } catch (err) {
     throw toError(err);
   }

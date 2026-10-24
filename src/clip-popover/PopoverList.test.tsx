@@ -14,6 +14,7 @@ function makeItem(id: string, overrides: Partial<ClipItem> = {}): ClipItem {
     content: `content-${id}`,
     kind: "text",
     isFavorite: false,
+    hasThumbnail: false,
     lastModifiedUtc: 1000,
     ...overrides,
   };

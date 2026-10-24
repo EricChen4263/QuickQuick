@@ -1,6 +1,7 @@
 import type { ClipItem } from "../ipc/ipc-client";
 import { sanitizeRichHtml } from "../panels/clipboard/sanitize-html";
 import { handleRichLinkClick } from "../panels/clipboard/rich-link";
+import { useClipItemThumbnail } from "../panels/clipboard/useClipThumbnail";
 import { PREVIEW_WAITING_TEXT, type PreviewState } from "./preview-state";
 
 interface PopoverPreviewProps {
@@ -42,18 +43,19 @@ function TextContent({ item }: { item: ClipItem }) {
   return <div className="popover-preview-content">{item.content}</div>;
 }
 
-/** 图片内容区：优先用 thumbnailDataUrl，无则占位文字 */
+/** 图片内容区：缩略图按需拉取，未就绪或取不到时保持既有 `[图片]` 占位 */
 function ImageContent({ item }: { item: ClipItem }) {
-  if (item.thumbnailDataUrl) {
-    return (
-      <img
-        src={item.thumbnailDataUrl}
-        alt="图片预览"
-        className="popover-preview-img"
-      />
-    );
+  const thumbnailUrl = useClipItemThumbnail(item);
+  if (thumbnailUrl === null) {
+    return <div className="popover-preview-img-placeholder">[图片]</div>;
   }
-  return <div className="popover-preview-img-placeholder">[图片]</div>;
+  return (
+    <img
+      src={thumbnailUrl}
+      alt="图片预览"
+      className="popover-preview-img"
+    />
+  );
 }
 
 /**

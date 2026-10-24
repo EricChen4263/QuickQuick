@@ -54,6 +54,7 @@ describe("listClipItems", () => {
         content: "hello",
         kind: "text",
         isFavorite: false,
+        hasThumbnail: false,
         lastModifiedUtc: 1000,
       },
     ];
