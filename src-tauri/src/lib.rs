@@ -203,6 +203,7 @@ pub fn run() {
             ipc::system::cleanup_history,
             tray::clear_unpinned_history,
             ipc::system::open_accessibility_settings,
+            onboarding::get_onboarding_status,
             ipc::system::paste_to_front,
             ipc::system::copy_clip_to_clipboard,
             ipc::system::hide_and_return_focus,

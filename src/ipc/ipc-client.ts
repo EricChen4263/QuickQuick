@@ -594,6 +594,33 @@ export async function openAccessibilitySettings(): Promise<void> {
 }
 
 /**
+ * 首次引导所需的辅助功能授权状态，与 Rust `OnboardingStatusDto` 对齐。
+ *
+ * 两个字段来自同一次探针判定，不要在调用方各自再判一遍授权：
+ * `action` 决定向导是否还该请求授权，`capability` 决定粘贴会不会降级。
+ */
+export interface OnboardingStatus {
+  /** `"proceed"`（已授权）或 `"show_accessibility_card"`（未授权） */
+  action: "proceed" | "show_accessibility_card";
+  /** `"full_paste"`（可模拟 ⌘V）或 `"write_back_only"`（仅写回剪贴板） */
+  capability: PasteOutcome;
+}
+
+/**
+ * 读取辅助功能授权状态（纯只读，无副作用）。
+ *
+ * 判定身份是可执行文件：开发构建与打包构建是两份不同的可执行文件，
+ * TCC 授权互不复用，真机确认必须分别做。
+ */
+export async function getOnboardingStatus(): Promise<OnboardingStatus> {
+  try {
+    return await invoke<OnboardingStatus>("get_onboarding_status");
+  } catch (err) {
+    throw toError(err);
+  }
+}
+
+/**
  * 将指定条目写回系统剪贴板（降级实现）。
  *
  * @param id - 剪贴板条目 ID

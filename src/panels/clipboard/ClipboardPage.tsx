@@ -17,6 +17,10 @@ import {
   pasteToFront,
   copyClipToClipboard,
   openAccessibilitySettings,
+  getHotkeys,
+  getLaunchOnLogin,
+  getOnboardingStatus,
+  setLaunchOnLogin,
   type ClipItem,
 } from "../../ipc/ipc-client";
 import type { HistoryItem } from "../history/search";
@@ -48,12 +52,37 @@ import {
 import { ClipItemRow } from "./ClipItemRow";
 import { ClipPreview } from "./ClipPreview";
 import { ClipSearchBar } from "./ClipSearchBar";
-import { OnboardCard } from "./OnboardCard";
+import {
+  OnboardCard,
+  advanceGuide,
+  createGuideState,
+  finishGuide,
+  formatAccelerator,
+  isGuideVisible,
+  observeAccessibilityTrust,
+  skipGuideStep,
+  type GuideState,
+} from "./OnboardCard";
 import EmptyState from "../../components/EmptyState";
 import "./clipboard.css";
 
-/** localStorage key：用户已关闭引导卡片 */
-const ONBOARD_DISMISSED_KEY = "qq-onboard-dismissed";
+/** localStorage key：首次引导已结束（走完或关闭），此后不再出现 */
+const ONBOARD_FINISHED_KEY = "qq-onboard-finished";
+
+/**
+ * 旧版单卡片引导的关闭标记。
+ *
+ * 命中即视为「已完成」：已经关过旧引导的用户不该被新版向导再问一遍。
+ */
+const ONBOARD_LEGACY_DISMISSED_KEY = "qq-onboard-dismissed";
+
+/** 读取引导是否已结束（含旧版关闭标记的兼容）。 */
+function readGuideFinished(): boolean {
+  return (
+    localStorage.getItem(ONBOARD_FINISHED_KEY) === "true" ||
+    localStorage.getItem(ONBOARD_LEGACY_DISMISSED_KEY) === "true"
+  );
+}
 
 /** 将 IPC ClipItem 适配为纯逻辑 HistoryItem（文本口径与搜索/高亮一致） */
 function toHistoryItem(clip: ClipItem): HistoryItem {
@@ -87,9 +116,13 @@ function ClipboardPage({ onTranslateItem }: ClipboardPageProps) {
   const [searchQuery, setSearchQuery] = useState("");
   const [typeFilter, setTypeFilter] = useState<HistoryFilter>("all");
   const [highlightIndex, setHighlightIndex] = useState(0);
-  const [onboardDismissed, setOnboardDismissed] = useState(
-    () => localStorage.getItem(ONBOARD_DISMISSED_KEY) === "true",
-  );
+  // 首次引导向导：状态机在当前步骤，guideFinished 是持久化后的终态开关
+  const [guide, setGuide] = useState<GuideState>(() => createGuideState(false));
+  const [guideFinished, setGuideFinished] = useState(readGuideFinished);
+  // 自启偏好：后端 AutostartConfig::default() 就是「开」，读不到时保持这个默认
+  const [launchOnLogin, setLaunchOnLoginPreference] = useState(true);
+  // 历史面板热键的展示文本，读不到配置时用默认热键
+  const [hotkeyLabel, setHotkeyLabel] = useState(() => formatAccelerator(""));
   const [pasteMsg, setPasteMsg] = useState<string | null>(null);
   // 列表渲染窗口大小（不是「已加载条数」）：只决定 DOM 里渲染多少行
   const [renderCount, setRenderCount] = useState(RENDER_BLOCK_SIZE);
@@ -158,6 +191,69 @@ function ClipboardPage({ onTranslateItem }: ClipboardPageProps) {
       unlisten?.();
     };
   }, [loadItems]);
+
+  /**
+   * 辅助功能授权观测：挂载时读一次，窗口重新获得焦点时再读一次。
+   *
+   * 后者是「授权后自动恢复」的关键：用户从系统设置点完「允许」回到面板，
+   * 焦点事件触发的这次读取会把授权翻成已授权，向导随即收起授权步骤。
+   * 读取失败按未授权处理：向导照常请求授权，粘贴也仍会走降级分支，不误导用户。
+   */
+  useEffect(() => {
+    const cancelled = { current: false };
+    const refreshTrust = async (): Promise<void> => {
+      try {
+        const status = await getOnboardingStatus();
+        if (cancelled.current) return;
+        setGuide((prev) => observeAccessibilityTrust(prev, status.action === "proceed"));
+      } catch {
+        /* 读不到授权状态时保持当前观测值，不把「未知」当成「已授权」 */
+      }
+    };
+    void refreshTrust();
+    const onWindowFocus = (): void => {
+      void refreshTrust();
+    };
+    window.addEventListener("focus", onWindowFocus);
+    return () => {
+      cancelled.current = true;
+      window.removeEventListener("focus", onWindowFocus);
+    };
+  }, []);
+
+  /**
+   * 自启确认步骤的数据：读当前 autostart 偏好与历史面板热键。
+   *
+   * 两个都只在向导里用，读失败不阻断面板：自启保持后端默认的「开」，
+   * 热键退回默认 ⌘⇧C 展示（真实绑定仍由后端热键注册决定，失败不改变它）。
+   */
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const enabled = await getLaunchOnLogin();
+        if (!cancelled) setLaunchOnLoginPreference(enabled);
+      } catch {
+        /* 保持默认开，与后端 AutostartConfig::default() 一致 */
+      }
+      try {
+        const hotkeys = await getHotkeys();
+        if (!cancelled) setHotkeyLabel(formatAccelerator(hotkeys.history));
+      } catch {
+        /* 保持默认热键展示 */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // 向导走到终态（完成 / 关闭）即落盘：此后不再出现，重开面板也不会复活。
+  useEffect(() => {
+    if (isGuideVisible(guide)) return;
+    localStorage.setItem(ONBOARD_FINISHED_KEY, "true");
+    setGuideFinished(true);
+  }, [guide]);
 
   // 搜索框值即时更新，过滤用值防抖提交：200ms 内的连续击键不触发重新搜索。
   // 输入框仍是受控的即时值，打字与输入法组词反馈不受延迟影响。
@@ -328,9 +424,27 @@ function ClipboardPage({ onTranslateItem }: ClipboardPageProps) {
     }
   }
 
-  function handleDismissOnboard() {
-    localStorage.setItem(ONBOARD_DISMISSED_KEY, "true");
-    setOnboardDismissed(true);
+  /** 向导「下一步 / 完成」：推进状态机；落到终态时由持久化 effect 落盘。 */
+  function handleGuideAdvance(): void {
+    setGuide((prev) => advanceGuide(prev));
+  }
+
+  /** 向导「跳过 / 稍后」：跳过当前步骤（欢迎页跳过是空操作，由状态机守卫）。 */
+  function handleGuideSkip(): void {
+    setGuide((prev) => skipGuideStep(prev));
+  }
+
+  /** 关闭 ×：结束整个向导，此后不再出现。 */
+  function handleGuideDismiss(): void {
+    setGuide((prev) => finishGuide(prev));
+  }
+
+  /** 自启确认步骤切换：先更新界面，写盘失败要如实提示，不假装已生效。 */
+  function handleLaunchOnLoginChange(enabled: boolean): void {
+    setLaunchOnLoginPreference(enabled);
+    void setLaunchOnLogin(enabled).catch(() => {
+      setOpError("保存开机自启设置失败，请稍后重试");
+    });
   }
 
   async function handlePasteToFront(item: ClipItem): Promise<void> {
@@ -393,10 +507,16 @@ function ClipboardPage({ onTranslateItem }: ClipboardPageProps) {
           onTypeFilterChange={(f) => { setTypeFilter(f); setHighlightIndex(0); }}
           onKeyDown={handleKeyDown}
         />
-        {!onboardDismissed && (
+        {!guideFinished && isGuideVisible(guide) && (
           <OnboardCard
-            onDismiss={handleDismissOnboard}
+            state={guide}
+            launchOnLogin={launchOnLogin}
+            hotkeyLabel={hotkeyLabel}
+            onAdvance={handleGuideAdvance}
+            onSkip={handleGuideSkip}
+            onDismiss={handleGuideDismiss}
             onOpenSystemSettings={() => { void handleOpenSystemSettings(); }}
+            onLaunchOnLoginChange={handleLaunchOnLoginChange}
           />
         )}
         <div

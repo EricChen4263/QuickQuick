@@ -6,8 +6,9 @@
 
 use quickquick_lib::clipboard::CapturedItem;
 use quickquick_lib::onboarding::{
-    onboarding_action, paste_capability, perform_paste_or_degrade, AccessibilityProbe,
-    OnboardingAction, PasteCapability, ACCESSIBILITY_DEEPLINK,
+    advance, finish, observe_trust, onboarding_action, onboarding_status, paste_capability,
+    perform_paste_or_degrade, skip_step, AccessibilityProbe, OnboardingAction, OnboardingState,
+    OnboardingStep, PasteCapability, ACCESSIBILITY_DEEPLINK,
 };
 use quickquick_lib::paste::PasteBackend;
 
@@ -216,4 +217,202 @@ fn accessibility_onboarding_degrade_trusted_perform_calls_send_paste() {
         backend.send_paste_call_count, 1,
         "已授权完整粘贴应调用 send_paste"
     );
+}
+
+// ---------------------------------------------------------------------------
+// 首次引导向导状态机（P5-4）
+// ---------------------------------------------------------------------------
+
+/// 首次进入向导停在欢迎页，并记录当前授权观测值。
+#[test]
+fn onboarding_guide_starts_at_welcome_with_trust_observation() {
+    // Arrange & Act
+    let untrusted_state = OnboardingState::new(false);
+    let trusted_state = OnboardingState::new(true);
+
+    // Assert：未授权与已授权都从欢迎页开始（授权步骤在前进时才可能被跳过）
+    assert_eq!(untrusted_state.step(), OnboardingStep::Welcome);
+    assert_eq!(trusted_state.step(), OnboardingStep::Welcome);
+    assert!(!untrusted_state.accessibility_trusted());
+    assert!(trusted_state.accessibility_trusted());
+    assert!(untrusted_state.is_visible(), "欢迎页必须渲染");
+}
+
+/// 未授权时四步顺序推进：欢迎 → 热键 → 授权 → 自启 → 完成，终态不再出现。
+#[test]
+fn onboarding_guide_advance_walks_four_steps_in_order_when_untrusted() {
+    // Arrange
+    let mut state = OnboardingState::new(false);
+
+    // Act & Assert：逐步前进，每一步都钉住具体步骤码
+    state = advance(state);
+    assert_eq!(state.step(), OnboardingStep::HotkeyIntro);
+    state = advance(state);
+    assert_eq!(state.step(), OnboardingStep::AccessibilityAuth);
+    state = advance(state);
+    assert_eq!(state.step(), OnboardingStep::AutostartConfirm);
+
+    // Act：最后一步前进 → 终态
+    state = advance(state);
+
+    // Assert：完成后引导不再渲染
+    assert_eq!(state.step(), OnboardingStep::Done);
+    assert!(!state.is_visible(), "走到终态后引导不应再渲染");
+}
+
+/// 已授权时前进跳过授权步骤（授权过的用户不该再看一遍授权请求）。
+#[test]
+fn onboarding_guide_advance_skips_accessibility_step_when_trusted() {
+    // Arrange
+    let mut state = OnboardingState::new(true);
+
+    // Act：欢迎 → 热键
+    state = advance(state);
+    assert_eq!(state.step(), OnboardingStep::HotkeyIntro);
+
+    // Act：热键 →（跳过授权）→ 自启确认
+    state = advance(state);
+
+    // Assert：直接落在自启确认，授权步骤被跳过
+    assert_eq!(
+        state.step(),
+        OnboardingStep::AutostartConfirm,
+        "已授权时前进必须跳过辅助功能授权步骤"
+    );
+    assert!(state.accessibility_trusted());
+}
+
+/// 授权后自动收起：停在授权步骤时观测到授权变为真，该步骤立即收起并前进到自启确认。
+///
+/// 这条钉住「授权完成后引导自动恢复」的核心分支——删掉 observe_trust 里的自动前进，
+/// 本测试必须变红。
+#[test]
+fn onboarding_guide_observe_trust_collapses_accessibility_step() {
+    // Arrange：未授权，走到授权步骤
+    let mut state = OnboardingState::new(false);
+    state = advance(state);
+    state = advance(state);
+    assert_eq!(state.step(), OnboardingStep::AccessibilityAuth);
+
+    // Act：授权状态从未授权变为已授权
+    let collapsed = observe_trust(state, true);
+
+    // Assert：授权步骤已收起，直接到达自启确认；授权观测值同步更新
+    assert_eq!(
+        collapsed.step(),
+        OnboardingStep::AutostartConfirm,
+        "授权变为真后，授权步骤必须自动收起并前进"
+    );
+    assert!(collapsed.accessibility_trusted(), "授权观测值必须同步更新");
+    assert!(collapsed.is_visible(), "自动收起的是授权步骤，不是整个向导");
+}
+
+/// 授权观测的负向对照：仍是未授权时不得前进（否则「授权后收起」无从与前进一步区分）。
+#[test]
+fn onboarding_guide_observe_untrusted_keeps_accessibility_step() {
+    // Arrange
+    let mut state = OnboardingState::new(false);
+    state = advance(state);
+    state = advance(state);
+
+    // Act：重复观测到未授权
+    let observed = observe_trust(state, false);
+
+    // Assert：仍停在授权步骤
+    assert_eq!(observed.step(), OnboardingStep::AccessibilityAuth);
+    assert!(!observed.accessibility_trusted());
+}
+
+/// 授权观测发生在更早步骤时，后续前进同样跳过授权步骤（不是只有「当场收起」一种路径）。
+#[test]
+fn onboarding_guide_trust_observed_on_welcome_is_honored_by_later_advance() {
+    // Arrange：停在欢迎页，此时观测到授权为真
+    let state = observe_trust(OnboardingState::new(false), true);
+    assert_eq!(state.step(), OnboardingStep::Welcome);
+
+    // Act：欢迎 → 热键 → 下一步
+    let at_hotkey = advance(state);
+    assert_eq!(at_hotkey.step(), OnboardingStep::HotkeyIntro);
+    let next = advance(at_hotkey);
+
+    // Assert：跳过授权步骤
+    assert_eq!(next.step(), OnboardingStep::AutostartConfirm);
+}
+
+/// 跳过：欢迎页不可跳过（不能一进来就把向导跳没），中间步骤与前进同路径。
+#[test]
+fn onboarding_guide_skip_step_guards_welcome_and_walks_the_rest() {
+    // Arrange：欢迎页
+    let at_welcome = OnboardingState::new(false);
+
+    // Act & Assert：欢迎页跳过是空操作
+    assert_eq!(
+        skip_step(at_welcome),
+        at_welcome,
+        "欢迎页不应被跳过（返回原状态）"
+    );
+
+    // Act：热键页跳过 → 授权页；授权页跳过 → 自启确认
+    let at_hotkey = advance(at_welcome);
+    assert_eq!(
+        skip_step(at_hotkey).step(),
+        OnboardingStep::AccessibilityAuth
+    );
+    let at_accessibility = skip_step(at_hotkey);
+    assert_eq!(
+        skip_step(at_accessibility).step(),
+        OnboardingStep::AutostartConfirm,
+        "授权步骤「稍后」应前进到自启确认"
+    );
+}
+
+/// 结束（完成 / 关闭）后引导不再出现，且终态是吸收态。
+#[test]
+fn onboarding_guide_finish_is_terminal_and_invisible() {
+    // Arrange
+    let mut state = OnboardingState::new(false);
+    state = advance(state);
+
+    // Act
+    let finished = finish(state);
+
+    // Assert：终态不再渲染，继续前进也不会复活
+    assert_eq!(finished.step(), OnboardingStep::Done);
+    assert!(!finished.is_visible(), "结束后引导不应再渲染");
+    assert_eq!(
+        advance(finished),
+        finished,
+        "终态下继续前进必须保持终态（此后不再出现）"
+    );
+    assert_eq!(skip_step(finished), finished, "终态跳过同样是空操作");
+}
+
+/// 步骤码是跨语言契约：前端 `GuideStep` 用的就是这几个字面量。
+#[test]
+fn onboarding_guide_step_codes_are_frontend_contract() {
+    assert_eq!(OnboardingStep::Welcome.code(), "welcome");
+    assert_eq!(OnboardingStep::HotkeyIntro.code(), "hotkey");
+    assert_eq!(OnboardingStep::AccessibilityAuth.code(), "accessibility");
+    assert_eq!(OnboardingStep::AutostartConfirm.code(), "autostart");
+    assert_eq!(OnboardingStep::Done.code(), "done");
+}
+
+/// 引导状态 DTO 的字段取值是前端契约，字符串必须逐字对齐 ipc-client.ts。
+#[test]
+fn onboarding_status_dto_codes_are_frontend_contract() {
+    // Arrange：两种探针（已授权 / 未授权）
+    let trusted_probe = FakeAccessibilityProbe::trusted();
+    let untrusted_probe = FakeAccessibilityProbe::untrusted();
+
+    // Act
+    let trusted_status = onboarding_status(&trusted_probe);
+    let untrusted_status = onboarding_status(&untrusted_probe);
+
+    // Assert：已授权 → 直接进行 + 完整粘贴
+    assert_eq!(trusted_status.action, "proceed");
+    assert_eq!(trusted_status.capability, "full_paste");
+
+    // Assert：未授权 → 展示授权卡片 + 仅写回
+    assert_eq!(untrusted_status.action, "show_accessibility_card");
+    assert_eq!(untrusted_status.capability, "write_back_only");
 }

@@ -439,3 +439,56 @@
   width: 16px;
   height: 16px;
 }
+
+/* 向导步骤指示：四个进度点 + 「第 N / 4 步」 */
+.onboard-steps {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-bottom: 6px;
+}
+
+.onboard-steps i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: color-mix(in oklch, var(--accent) 28%, transparent);
+}
+
+.onboard-steps i.on {
+  background: var(--accent);
+}
+
+.onboard-meta {
+  margin-left: 4px;
+  color: var(--muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 热键展示：与正文区分，避免「⌘⇧C」被读成普通文字 */
+.onboard kbd {
+  font-family: var(--mono);
+  font-size: 12px;
+  padding: 1px 5px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--surface-2);
+  color: var(--fg);
+}
+
+/* 自启确认：复选框与文案同一行，整体可点 */
+.onboard-check {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 10px;
+  color: var(--fg);
+  font-size: 12.5px;
+  cursor: pointer;
+}
+
+.onboard-check input {
+  accent-color: var(--accent);
+  cursor: pointer;
+}
