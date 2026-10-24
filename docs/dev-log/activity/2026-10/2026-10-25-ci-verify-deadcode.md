@@ -140,6 +140,107 @@ actionlint 1.7.12（+ shellcheck 0.11.0）
 
 > 干净树与工作树的测试数不同（751/718 vs 753/739），是因为工作树里还有别人未提交的新代码与新测试。**结论要引用干净树那组**——那是 HEAD + 本 item 改动，也是 CI 会看到的形态。
 
+## 复审跟进（task-9）：dist 陈旧产物与 concurrency 收窄
+
+独立复审给 42f2cf3 / d0484dc 的结论是非 BLOCK，但挑出一条**真会静默出错**的问题：`dist` 目标既没有前置依赖、又不是 `.PHONY`，所以只要 `dist/` 目录存在，make 就永远认为它 up to date。复审给的复现命令与本地实测输出：
+
+```
+$ make -n -W dist dist
+make: `dist' is up to date.
+```
+
+后果不是慢，是**错**：本机 `dist/` 停在 10-24 02:22，而前端之后改了十几轮。`make verify` 会拿这份陈旧产物去喂 `tauri::generate_context!`，表现为「改了前端代码，测试里跑的还是旧 bundle」，全程零告警。
+
+### 方案评估：选 (a) `.PHONY: dist`
+
+- **(a) 每次都重建**：先量代价——`vite build` 本体 418–825ms，含 `pnpm exec` 启动的墙钟是 **1.95s / 1.21s**（`/usr/bin/time -p` 两次）。落在「≤3s 可接受」的判据内，而 `make verify` 整体是分钟级，这 1s 无感。
+- **(b) stamp 文件记输入指纹**：要让它能用，必须逐文件枚举全部前端输入（`src/**`、三个 `index.html`、`vite.config.ts`、`package.json`…）。关键坑正是复审点出来的：**目录 mtime 不可靠**（改写目录内文件不会更新目录 mtime），所以不能拿 `dist/` 目录当依赖，也不能拿 `src/` 目录当依赖，只能列文件集合。少列一类输入就原样复现本次缺陷，且同样难发现。
+- 结论：为省 ~1s 引入一套需要单独维护正确性的指纹机制，性价比不成立。选 (a)，并把「为什么不能用 up-to-date 语义」写进 Makefile 注释，防止下一个人把它"优化"回去。
+
+### 场景 A：改了前端源文件（`dist/` 存在）
+
+```
+# 基线
+dist/assets/main-C2hHwCTl.css   sha256 eacf1832…
+
+# 往前端源码追加一条会进产物的规则（临时，测完复原）
+$ printf '\n.qq-dist-staleness-probe { color: #010203; }\n' >> src/theme/theme.css
+$ sha256sum src/theme/theme.css
+534dcd96…            （与备份不再相同）
+
+# 旧 Makefile 在这里会「Nothing to be done」；现在：
+$ make dist
+dist/assets/main-h4hZd_G_.css   26.77 kB
+✓ built in 462ms
+
+$ grep -o "qq-dist-staleness-probe{[^}]*}" dist/assets/main-*.css
+qq-dist-staleness-probe{color:#010203}          ← 改动真的进了产物
+
+$ sha256sum dist/assets/main-*.css
+62a8a5e8…            （文件名从 main-C2hHwCTl.css 变成 main-h4hZd_G_.css，内容 sha 也变了）
+
+# 复原源码（cp 备份，不用 git checkout）
+$ cp /tmp/qq-verify/theme.css.bak src/theme/theme.css
+$ sha256sum src/theme/theme.css /tmp/qq-verify/theme.css.bak
+ea169721…  ea169721…                            ← 逐字节一致
+$ git status --short src/theme/theme.css
+（空，干净）
+
+# 复原后重建，产物回到基线，往返闭合
+$ make dist && sha256sum dist/assets/main-*.css
+✓ built in 421ms
+eacf1832…  dist/assets/main-C2hHwCTl.css
+```
+
+### 场景 B：删掉 `dist/`
+
+```
+$ rm -rf dist && ls -d dist
+（不存在）
+$ make -n dist
+pnpm exec vite build
+$ make dist
+✓ built in 419ms
+$ ls dist
+assets  index.html  src
+```
+
+### 计划没变（除 dist 这一行）
+
+用 HEAD 版 Makefile 生成「改前」计划，与「改后」计划逐行 diff：
+
+```
+# make -n verify
++pnpm exec vite build
+ echo "== [1/5] 前端类型 (tsc) =="
+ pnpm exec tsc -b
+ ...（其后逐行相同）
+
+# make -n check
++pnpm exec vite build
+ echo "== 类型检查 (tsc) =="
+ pnpm exec tsc -b
+ ...（其后逐行相同）
+```
+
+`verify` / `check` / `test` / `test-rs` / `coverage-rs` 的 recipe 一个字都没动，只是共享的 `dist` 前置从「存在即跳过」变成「每次重建」。
+
+### concurrency 收窄
+
+```yaml
+concurrency:
+  group: verify-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+```
+
+只取消 PR 的上一次运行：PR 连推时旧的那次已无意义；而 push 到 `main` 若也取消防抖，连推/连合并会把上一次主干验证掐掉——「主干每一次提交都验证过」正是这条门禁的价值所在。
+
+`actionlint 1.7.12`（含 `shellcheck 0.11.0`）对 `verify.yml` 复跑 **0 报错**；`release.yml` 与 `coverage.yml` 未改动、未触碰。
+
+### 一处不要误读的输出
+
+`make -n -W dist dist` 现在打印 `make: Nothing to be done for 'dist'.` 而不是先前的 ``make: `dist' is up to date.``。这不是"又变回跳过"——`-W` 作用在目标自身时 make 会把它标记成已更新、不再展开 recipe。判断是否每次都重建要看 `make -n dist`（恒输出 `pnpm exec vite build`）与场景 A 的实测哈希变化。
+
 ## 未闭环
 
 - **两个 job 都没有在真实 GitHub Actions 上跑过**。actionlint 只能保证语法/事件/runner 标签/表达式/shell 层面成立，镜像差异（rust-cache 键、pnpm 11 的 store 行为、镜像里的 make 版本）只能首次真跑才知道。第一条 PR 请当「验证 workflow 本身」的复盘对象。

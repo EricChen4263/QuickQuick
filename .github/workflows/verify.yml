@@ -24,7 +24,10 @@ on:
 
 concurrency:
   group: verify-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  # 只取消 PR 的上一次运行：PR 连推时旧的那次已无意义。
+  # push 到 main 不取消——连推/连合并时若掐掉上一次，主干就缺了那一次的验证结论，
+  # 而「主干每一次提交都验证过」正是这条门禁的价值。
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 # 只读：验证不需要写仓库。release.yml 的发布 job 另需 contents: write，两者权限互不牵连。
 permissions:

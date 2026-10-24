@@ -8,7 +8,7 @@ SHELL := /usr/bin/env bash
 # Universal mac 构建需要两个 darwin target
 MAC_UNIVERSAL_TARGET := universal-apple-darwin
 
-.PHONY: help doctor dev fmt check test test-js test-rs verify deadcode deadcode-gate coverage coverage-js coverage-rs build bump clean
+.PHONY: help doctor dev fmt dist check test test-js test-rs verify deadcode deadcode-gate coverage coverage-js coverage-rs build bump clean
 
 help:
 	@echo "QuickQuick make 目标："
@@ -18,7 +18,7 @@ help:
 	@echo "  make check               极速体检：tsc 类型 + cargo check（不跑不打包）"
 	@echo "  make test                全测并行：vitest + cargo test"
 	@echo "  make verify              提交门禁：类型 + fmt + clippy + 全测（CI 复用）"
-	@echo "  make dist                构建前端产物（dist/，Rust 编译前置；缺失时上面几个目标自动触发）"
+	@echo "  make dist                构建前端产物（dist/，Rust 编译前置；上面几个目标每次都会先跑它）"
 	@echo "  make deadcode            死代码报告：knip 全量 + 后端零生产引用清单（不拦截）"
 	@echo "  make deadcode-gate       死代码门禁：未接线文件 + 未声明依赖（CI 拦截项）"
 	@echo "  make coverage            覆盖率基线：前端 vitest v8 + 后端 cargo-llvm-cov（只报告，不设阈值）"
@@ -52,7 +52,14 @@ fmt:
 # tauri::generate_context! 是编译期宏，它要求 tauri.conf.json 的 frontendDist（"../dist"）
 # 目录存在，否则 proc macro 直接 panic——干净克隆里没有 dist/（已 gitignore），
 # 于是 clippy / cargo test / cargo check 都会以「proc macro panicked」失败。
-# 这里把前端产物挂成所有「要编译 Rust」目标的顺序前置：dist 不存在才构建，已存在（本地开发常态）不重跑。
+# 这里把前端产物挂成所有「要编译 Rust」目标的顺序前置。
+#
+# 为什么声明成 .PHONY（每次都重建，而不是「dist 存在就跳过」）：
+# 目录的时间戳不可靠（改写目录内文件不会更新目录 mtime），拿 dist/ 当依赖会出现
+# 「改了 src 但 make 认为 dist 是 up to date」——陈旧产物被打进 generate_context!，
+# 表现为「改了前端代码，测试里却是旧 bundle」，且完全静默。
+# 每次实测重建代价：vite build 本体 0.46–0.83s，含 pnpm exec 启动约 1.2–2.0s，
+# 相对 verify 整体的分钟级耗时可以忽略，不值得为省这 1s 引入指纹文件/stamp 的正确性维护面。
 dist:
 	pnpm exec vite build
 
