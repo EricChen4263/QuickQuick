@@ -1904,24 +1904,28 @@ mod tests {
 
         // Assert
         assert!(
-            before.contains("TEMP B-TREE"),
-            "基线（无索引）本该需要临时排序，若这里不成立说明对比前提失效，实际计划:\n{before}"
+            before.contains("SCAN ci") && before.contains("TEMP B-TREE"),
+            "基线（无索引）本该全表扫 + 临时排序，若这里不成立说明对比前提失效，实际计划:\n{before}"
         );
         assert!(
             !after.contains("TEMP B-TREE"),
             "建索引后 ORDER BY 必须完全由索引满足，否则条目一多就要把整表取回来排序，实际计划:\n{after}"
         );
         assert!(
-            !after.contains("SCAN clip_items"),
-            "列表查询不应再全表扫 clip_items，实际计划:\n{after}"
+            !after.contains("SCAN ci"),
+            "列表查询不应再全表扫 clip_items（FROM 里别名是 ci，计划里扫表写作 `SCAN ci`，写成 `SCAN clip_items` 会变成恒真假绿），实际计划:\n{after}"
         );
         assert!(
-            after.contains("idx_clip_items_live_favorite_modified"),
+            after.contains("idx_clip_items_live_favorite_modified (is_deleted=?)"),
             "列表查询应走 is_deleted 过滤 + is_favorite/last_modified_utc 排序的复合索引，实际计划:\n{after}"
         );
         assert!(
-            after.contains("idx_clip_images_clip_item_id"),
+            after.contains("idx_clip_images_clip_item_id (clip_item_id=?)"),
             "关联图片的 LEFT JOIN 必须按 clip_item_id 走索引，否则每个条目都要扫一遍图片表，实际计划:\n{after}"
+        );
+        assert!(
+            !after.contains("AUTOMATIC"),
+            "关联图片的 LEFT JOIN 不应再依赖查询期为本次查询临时建的自动索引（那等于每次开列表都重建一遍索引），实际计划:\n{after}"
         );
     }
 
@@ -1941,9 +1945,16 @@ mod tests {
             before.contains("SCAN clip_items"),
             "基线（无索引）本该全表扫，若这里不成立说明对比前提失效，实际计划:\n{before}"
         );
+        // 钉死「约束串首列是 text_hash」：只建单列 (text_hash) 或把列序写成
+        // (is_deleted, text_hash) 时，本断言会红——前者会让规划器在无统计的库上改走
+        // is_deleted 前缀索引（见下一条断言），后者已偏离「让哈希等值落在最左前缀」的设计。
         assert!(
-            after.contains("idx_clip_items_text_hash"),
-            "文本去重必须走 text_hash 索引，否则每次复制都要扫全部未软删条目，实际计划:\n{after}"
+            after.contains("idx_clip_items_text_hash (text_hash=? AND is_deleted=?)"),
+            "文本去重必须按 (text_hash, is_deleted) 的两列前缀定位，否则每次复制都要扫全部未软删条目，实际计划:\n{after}"
+        );
+        assert!(
+            !after.contains("idx_clip_items_live_favorite_modified"),
+            "文本去重不得退化成用 is_deleted 前缀索引遍历全部未软删行——这正是只建单列 (text_hash) 时发生的退化，实际计划:\n{after}"
         );
         assert!(
             !after.contains("SCAN clip_items"),
@@ -1976,8 +1987,12 @@ mod tests {
             "基线（无索引）本该全表扫图片表，若这里不成立说明对比前提失效，实际计划:\n{before}"
         );
         assert!(
-            after.contains("idx_clip_images_image_hash"),
-            "图片去重必须走 image_hash 索引，否则每次复制图片都要扫全部图片行，实际计划:\n{after}"
+            after.contains("idx_clip_images_image_hash (image_hash=? AND is_deleted=?)"),
+            "图片去重必须按 (image_hash, is_deleted) 的两列前缀定位，否则每次复制图片都要扫全部图片行，实际计划:\n{after}"
+        );
+        assert!(
+            !after.contains("idx_clip_images_live_favorite_created"),
+            "图片去重不得退化成用 is_deleted 前缀索引遍历全部图片行——这正是只建单列 (image_hash) 时会发生的退化，实际计划:\n{after}"
         );
         assert!(
             !after.contains("SCAN clip_images"),
