@@ -217,6 +217,12 @@ fn current_utc_ms() -> i64 {
 mod tests {
     use super::*;
 
+    use std::ffi::c_void;
+    use std::os::raw::{c_char, c_int};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use rusqlite::ffi;
+
     /// 建一张与 `db.rs` 中 `translate_history` 列名一致的内存库，隔离被测函数。
     fn setup_history_db() -> Connection {
         let conn = Connection::open_in_memory().expect("内存 DB 打开失败");
@@ -269,6 +275,48 @@ mod tests {
             |row| row.get(0),
         )
         .expect("按 id 计数应成功")
+    }
+
+    /// SQLite authorizer 回调：统计被 prepare 的 `DELETE` 语句条数。
+    ///
+    /// 事件的载体是 `user_data`（指向本测试栈上的 `AtomicUsize`），避免用进程级静态量
+    /// 与并行执行的其它测试互相污染。
+    ///
+    /// # Safety
+    /// `user_data` 必须是 [`count_prepared_deletes`] 传入的、在连接使用期内一直有效的
+    /// `&AtomicUsize` 指针；本回调只做原子自增，不解引用其它内存。
+    unsafe extern "C" fn count_delete_action(
+        user_data: *mut c_void,
+        action: c_int,
+        _arg1: *const c_char,
+        _arg2: *const c_char,
+        _db_name: *const c_char,
+        _trigger: *const c_char,
+    ) -> c_int {
+        if action == ffi::SQLITE_DELETE {
+            // SAFETY：见函数文档——指针由调用方保证指向一个存活中的 AtomicUsize。
+            let counter = unsafe { &*(user_data as *const AtomicUsize) };
+            counter.fetch_add(1, Ordering::SeqCst);
+        }
+        ffi::SQLITE_OK
+    }
+
+    /// 在连接上挂 authorizer，把「被 prepare 的 DELETE 语句数」累计进 `counter`。
+    ///
+    /// 为什么要下沉到 authorizer：未超限时那条清理 `DELETE` 即使被执行也是删 0 行——
+    /// 按行触发的 `BEFORE/AFTER DELETE` 触发器不会响，`changes()` 同样是 0，
+    /// SQL 层面留不下任何痕迹。只有 authorizer 在**语句 prepare 阶段**被调用，
+    /// 才能证明「这条 DELETE 到底有没有被执行」，从而钉住「未超限时短路」的设计意图。
+    ///
+    /// 调用方必须让 `counter` 比 `conn` 先声明（Rust 逆序析构 → 连接先析构），
+    /// 这样回调期间指针始终有效。
+    fn count_prepared_deletes(conn: &Connection, counter: &AtomicUsize) {
+        let user_data = (counter as *const AtomicUsize).cast_mut().cast::<c_void>();
+        // SAFETY：counter 的生命期覆盖连接的使用期（见调用方声明顺序），
+        // 且回调只对它做原子自增。
+        unsafe {
+            ffi::sqlite3_set_authorizer(conn.handle(), Some(count_delete_action), user_data);
+        }
     }
 
     #[test]
@@ -350,6 +398,49 @@ mod tests {
         assert_eq!(count_by_id(&conn, &new_id), 1, "新写入的行必须保留");
         let rows = list_translate_history(&conn).expect("查历史应成功");
         assert_eq!(rows[0].id, new_id, "最新一条应是刚写入的那条");
+    }
+
+    #[test]
+    fn add_translate_history_skips_cleanup_delete_while_at_or_under_retention() {
+        // Arrange：先放 499 条，再挂 authorizer 计数器统计「被 prepare 的 DELETE 语句数」。
+        // counter 必须先于 conn 声明：Rust 逆序析构保证连接先析构，回调期间指针有效。
+        let delete_prepares = AtomicUsize::new(0);
+        let conn = setup_history_db();
+        let total = TRANSLATE_HISTORY_RETENTION as usize - 1;
+        insert_many(&conn, total, |i| 1_000 + i as i64);
+        count_prepared_deletes(&conn, &delete_prepares);
+
+        // Act 1：写入后总数恰好等于保留上限（未超限），不应付出清理 DELETE 的代价
+        add_translate_history(&conn, "at limit", "恰好到上限", "en", "zh", "lingva")
+            .expect("写入历史应成功");
+
+        // Assert 1：一次 DELETE 都没有被 prepare，且总数停在保留上限
+        assert_eq!(
+            delete_prepares.load(Ordering::SeqCst),
+            0,
+            "未超限时不应执行清理 DELETE（短路必须保留）"
+        );
+        assert_eq!(
+            translate_history_count(&conn).expect("计数应成功"),
+            TRANSLATE_HISTORY_RETENTION,
+            "恰好等于保留上限时不应删任何行"
+        );
+
+        // Act 2（正向对照）：再写一条即超限，清理必须真的执行
+        add_translate_history(&conn, "over limit", "超出上限", "en", "zh", "lingva")
+            .expect("写入历史应成功");
+
+        // Assert 2：authorizer 确实观测得到 DELETE——否则 Assert 1 的 0 可能是「传感器坏了」的假绿
+        assert_eq!(
+            delete_prepares.load(Ordering::SeqCst),
+            1,
+            "超限后应执行且只执行一次清理 DELETE"
+        );
+        assert_eq!(
+            translate_history_count(&conn).expect("计数应成功"),
+            TRANSLATE_HISTORY_RETENTION,
+            "超限后总数应收回保留上限"
+        );
     }
 
     #[test]
