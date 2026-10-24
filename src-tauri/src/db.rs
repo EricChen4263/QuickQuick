@@ -78,9 +78,11 @@ pub enum DbError {
     /// 独立成变体而不复用 [`DbError::Sqlite`]，是为了让 [`open_or_recover`] 不去备份它：
     /// 那里把 `Sqlite` 当「库已损坏」，改名前会带走一个完全可用（只是比本程序新）的库。
     /// 版本超前不是损坏，库文件一个字节都不该动。
-    #[error(
-        "数据库 schema 版本为 {found}，高于本程序支持的 {supported}；请更新 QuickQuick 后再打开"
-    )]
+    ///
+    /// `Display` 文案就是启动期用户与日志能看到的唯一解释，必须点明真实原因（库比程序新、
+    /// 要更新应用），**不得**退化成解密失败那类话术（「请检查钥匙串授权」），也不得出现
+    /// `not a database` 之类会被一次性重置误判的标记。
+    #[error("数据库由更新版本的 QuickQuick 创建（v{found} > v{supported}），请更新应用后再试")]
     SchemaTooNew {
         /// 库里 `PRAGMA user_version` 的实际值
         found: i32,
@@ -93,12 +95,14 @@ pub enum DbError {
     /// 同样不复用 [`DbError::Sqlite`]：迁移失败是「本程序的迁移代码/环境出了问题」，
     /// 不是库损坏，不能触发备份重建。
     ///
+    /// `Display` 文案即用户可见原因，三段信息都不能少：哪个版本升到哪个版本失败、
+    /// 底层原因（透传）、以及「原库未被修改」——最后这句与事务回滚的事实对齐，
+    /// 用户不必担心一次升级失败把历史改坏。
+    ///
     /// 文本约束：**本变体自身的文案**不得包含 `not a database` 一类可重置标记，否则启动期
     /// 的一次性重置会把库备份走并重建空库（丢用户历史）。`reason` 是底层错误的透传文本，
     /// 若它真的报 `file is not a database`，说明库确实不是可用数据库，走重置才是对的。
-    #[error(
-        "数据库 schema 迁移到版本 {to_version} 失败（已回滚，库仍为版本 {from_version}）：{reason}"
-    )]
+    #[error("数据库升级失败（{from_version}→{to_version}）：{reason}。原库未被修改，请联系支持")]
     MigrationFailed {
         /// 失败的迁移步骤目标版本
         to_version: i32,
@@ -2569,6 +2573,69 @@ mod tests {
         assert!(
             !table_exists(&short, "migration_probe"),
             "已经执行过的步骤也必须随事务回滚掉"
+        );
+    }
+
+    /// 启动期两类 schema 错误的用户可见文案：必须各自说清真实原因，
+    /// 且**不得**退化成解密失败话术（「请检查钥匙串授权」）。
+    ///
+    /// 启动期 `eprintln` 与传回前端的字符串都是这条 `Display` 的产物，文案说错就等于
+    /// 把用户往「钥匙串/重启」的死路上引；这条用例把它钉死。
+    #[test]
+    fn schema_errors_explain_their_own_cause() {
+        // 版本超前：说清「库比程序新」，并给出两个版本号
+        let too_new = DbError::SchemaTooNew {
+            found: CURRENT_SCHEMA_VERSION + 2,
+            supported: CURRENT_SCHEMA_VERSION,
+        };
+        let too_new_msg = too_new.to_string();
+        assert!(
+            too_new_msg.contains("更新版本的 QuickQuick"),
+            "版本超前应点明是库比程序新，实际: {too_new_msg}"
+        );
+        assert!(
+            too_new_msg.contains(&format!(
+                "v{} > v{}",
+                CURRENT_SCHEMA_VERSION + 2,
+                CURRENT_SCHEMA_VERSION
+            )),
+            "版本超前应带上库里版本与支持版本，实际: {too_new_msg}"
+        );
+        assert!(
+            too_new_msg.contains("请更新应用"),
+            "版本超前的正确出口是更新应用，实际: {too_new_msg}"
+        );
+        assert!(
+            !too_new_msg.contains("钥匙串"),
+            "版本超前不得复用解密失败话术（会误导用户去查钥匙串），实际: {too_new_msg}"
+        );
+
+        // 迁移失败：说清 from→to、透出底层原因、并告知原库未改
+        let migrated = DbError::MigrationFailed {
+            to_version: 2,
+            from_version: 1,
+            reason: "no such column: title".to_string(),
+        };
+        let migrated_msg = migrated.to_string();
+        assert!(
+            migrated_msg.contains("数据库升级失败"),
+            "迁移失败应点明是升级失败，实际: {migrated_msg}"
+        );
+        assert!(
+            migrated_msg.contains("1→2"),
+            "迁移失败应带上 from→to 版本，实际: {migrated_msg}"
+        );
+        assert!(
+            migrated_msg.contains("no such column: title"),
+            "迁移失败应透出底层原因，实际: {migrated_msg}"
+        );
+        assert!(
+            migrated_msg.contains("原库未被修改"),
+            "迁移失败应告知数据未被改动（与事务回滚一致），实际: {migrated_msg}"
+        );
+        assert!(
+            !migrated_msg.contains("钥匙串"),
+            "迁移失败不得复用解密失败话术，实际: {migrated_msg}"
         );
     }
 

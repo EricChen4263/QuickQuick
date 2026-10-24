@@ -300,6 +300,8 @@ fn open_db_with_reset(dir: &std::path::Path) -> Option<rusqlite::Connection> {
             reset_and_reopen(dir, &db_path)
         }
         Err(e) => {
+            // 启动期唯一能写清病因的地方，必须保留 `DbError` 的完整文案：
+            // 版本超前会带上库内版本与支持版本，迁移失败会带上 from→to 与底层原因。
             eprintln!("[QuickQuick] 数据库打开失败，IPC 命令将返回错误而非崩溃: {e}");
             None
         }
@@ -307,6 +309,14 @@ fn open_db_with_reset(dir: &std::path::Path) -> Option<rusqlite::Connection> {
 }
 
 /// 判断开库错误是否属于「需一次性重置」（密钥解密失败 / 库非数据库格式）。
+///
+/// 只认**解密失败与文件格式非法**这两类标记：它们意味着旧库确实解不开，
+/// 重置（备份后重建空库）是唯一出路。
+///
+/// 反向约束：schema 版本超前（`db::DbError::SchemaTooNew`）与 schema 迁移失败
+/// （`db::DbError::MigrationFailed`）都**不是**损坏，库文件完好，绝不能被判成需重置——
+/// 那样会把用户可用的库备份走并重建空库。它们的文案因此也不含这里的任何标记
+/// （见 `resettable_open_error_excludes_schema_errors` 用例）。
 fn is_resettable_open_error(err: &str) -> bool {
     err.contains("密钥解密失败")
         || err.contains("file is not a database")
@@ -1097,5 +1107,47 @@ mod tests {
 
         // Assert
         assert!(result, "混合 Inserted+Bumped 时应触发通知");
+    }
+
+    /// schema 类开库错误（版本超前 / 升级失败）绝不能被判成「需一次性重置」。
+    ///
+    /// 判成重置的后果是把用户完好的库备份走、重建空库——数据直接消失。这里直接喂
+    /// `db::DbError` 的真实文案（不是手抄的字符串），所以文案一改这条就跟着变。
+    /// 末尾两条正向对照不可省：若 `is_resettable_open_error` 退化成恒假，
+    /// 上面的断言会全部空转。
+    #[test]
+    fn resettable_open_error_excludes_schema_errors() {
+        // Arrange：两类 schema 错误 + 两类真正的可重置错误
+        let too_new = db::DbError::SchemaTooNew {
+            found: 2,
+            supported: 1,
+        }
+        .to_string();
+        let migration_failed = db::DbError::MigrationFailed {
+            to_version: 2,
+            from_version: 1,
+            reason: "no such column: title".to_string(),
+        }
+        .to_string();
+
+        // Assert：schema 错误一律不重置
+        assert!(
+            !is_resettable_open_error(&too_new),
+            "版本超前不是损坏，不该触发一次性重置（会备份并重建空库）: {too_new}"
+        );
+        assert!(
+            !is_resettable_open_error(&migration_failed),
+            "迁移失败不是损坏，不该触发一次性重置（会备份并重建空库）: {migration_failed}"
+        );
+
+        // Assert：正向对照——真正的解密失败/非数据库文件仍必须命中
+        assert!(
+            is_resettable_open_error("密钥解密失败：主密钥无法解开"),
+            "解密失败必须仍走一次性重置，否则用户永远打不开库"
+        );
+        assert!(
+            is_resettable_open_error("file is not a database"),
+            "非数据库文件必须仍走一次性重置，否则用户永远打不开库"
+        );
     }
 }

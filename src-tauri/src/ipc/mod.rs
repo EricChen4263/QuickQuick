@@ -39,15 +39,21 @@ pub struct EcdictDbState(pub std::sync::Arc<crate::translate::ecdict_db::EcdictD
 ///
 /// # Errors
 /// - Mutex 中毒（极罕见）：返回锁错误描述
-/// - 连接为 None（开库失败）：返回"数据库不可用，请检查钥匙串授权或重启应用"
+/// - 连接为 None（启动期开库失败）：返回不带病因猜测的「数据库不可用」提示
 /// - 闭包自身失败：透传闭包返回的 `Err`
+///
+/// 注意 None 的可能病因不止一个（钥匙串被拒 / 库由更新版本创建 / 版本升级失败），
+/// 而 `AppDb` 只存 `Option<Connection>`、不携带开库失败原因，所以这里**不能**替用户
+/// 指定某一种病因（尤其不能再说是钥匙串问题——那只解释其中一种）。具体原因由启动期
+/// 那条诊断日志（含 `db::DbError` 的完整文案）给出。
 pub fn with_db<T>(
     db: &AppDb,
     f: impl FnOnce(&rusqlite::Connection) -> Result<T, String>,
 ) -> Result<T, String> {
     let guard = db.0.lock().map_err(|e| format!("锁获取失败: {e}"))?;
-    let conn = guard
-        .as_ref()
-        .ok_or_else(|| "数据库不可用，请检查钥匙串授权或重启应用".to_string())?;
+    let conn = guard.as_ref().ok_or_else(|| {
+        "数据库不可用：本次启动未能打开本机数据库（原因见启动诊断日志）。请确认应用已是最新版本并重启；若仍然失败，请联系支持并提供日志。"
+            .to_string()
+    })?;
     f(conn)
 }
