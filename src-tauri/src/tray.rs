@@ -591,18 +591,38 @@ fn open_settings(app: &tauri::AppHandle) {
     show_and_focus_window(app);
 }
 
-/// 请求清空未固定：前置主窗口，再由前端弹二次确认。
+/// 执行「清空未固定」请求的编排：**先**前置窗口，**再**广播确认请求。
 ///
-/// 这里**不删任何数据**——托盘只发请求。删除是不可撤销操作，确认框必须由用户
-/// 看得见的窗口承载；前端在用户点「确定」后才 invoke [`clear_unpinned_history`]。
-/// 顺序是先显示窗口再广播：确认框是模态，窗口还隐藏时弹出来用户根本看不到。
-fn request_clear_unpinned(app: &tauri::AppHandle) {
-    show_and_focus_window(app);
-    if let Err(e) = app.emit(CLEAR_UNPINNED_REQUEST_EVENT, ()) {
+/// 为什么把这段顺序单独成函数并接收两个闭包：顺序本身就是正确性条件，不是实现细节。
+/// 交换两行、或删掉前置窗口，行为会立刻退化成「确认框弹在隐藏窗口里」——用户看不到、
+/// 以为点了没反应，而其它测试全都照旧绿。接收闭包是为了让单测注入 fake 记录**真实**
+/// 调用顺序，而不是断言注释里写的顺序。
+fn run_clear_unpinned_request(
+    show_window: impl FnOnce(),
+    emit_request: impl FnOnce() -> Result<(), String>,
+) {
+    // 顺序关键：确认框是模态，窗口还隐藏时它弹出来用户根本看不到。
+    show_window();
+    if let Err(e) = emit_request() {
         // 事件发不出去时用户会看到窗口被唤起却没弹确认框，属于「点了没反应」，
         // 故必须留痕以便定位；用户可重试或改用设置页清理。
         eprintln!("[QuickQuick] 托盘：广播清空未固定请求失败: {e}");
     }
+}
+
+/// 请求清空未固定：前置主窗口，再由前端弹二次确认。
+///
+/// 这里**不删任何数据**——托盘只发请求。删除是不可撤销操作，确认框必须由用户
+/// 看得见的窗口承载；前端在用户点「确定」后才 invoke [`clear_unpinned_history`]。
+/// 编排顺序（先显示窗口、再广播）由 [`run_clear_unpinned_request`] 独占，本函数只接线。
+fn request_clear_unpinned(app: &tauri::AppHandle) {
+    run_clear_unpinned_request(
+        || show_and_focus_window(app),
+        || {
+            app.emit(CLEAR_UNPINNED_REQUEST_EVENT, ())
+                .map_err(|e| e.to_string())
+        },
+    );
 }
 
 /// 清空未固定的纯实现（命令层与单测共用同一入口）。
@@ -689,10 +709,10 @@ mod tests {
 
     use super::{
         can_start_update_check, clear_unpinned_impl, menu_entries, next_status, pause_item_text,
-        tooltip_text, update_item_enabled, update_item_label, version_label, MenuEntry,
-        UpdateEvent, UpdateStatus, CLEAR_UNPINNED_REQUEST_EVENT, MENU_ID_CHECK_UPDATE,
-        MENU_ID_CLEAR_UNPINNED, MENU_ID_OPEN_SETTINGS, MENU_ID_PAUSE, MENU_ID_QUIT, MENU_ID_SHOW,
-        MENU_ID_VERSION, ROUTE_EVENT, ROUTE_SETTINGS, TOOLTIP_IDLE,
+        run_clear_unpinned_request, tooltip_text, update_item_enabled, update_item_label,
+        version_label, MenuEntry, UpdateEvent, UpdateStatus, CLEAR_UNPINNED_REQUEST_EVENT,
+        MENU_ID_CHECK_UPDATE, MENU_ID_CLEAR_UNPINNED, MENU_ID_OPEN_SETTINGS, MENU_ID_PAUSE,
+        MENU_ID_QUIT, MENU_ID_SHOW, MENU_ID_VERSION, ROUTE_EVENT, ROUTE_SETTINGS, TOOLTIP_IDLE,
     };
 
     /// 把菜单条目压成 `(id, 文案, 启用位)` 便于断言顺序与文案；分隔线 id 为 `None`。
@@ -1060,6 +1080,58 @@ mod tests {
     fn clear_unpinned_request_event_matches_frontend_contract() {
         // Arrange & Act & Assert
         assert_eq!(CLEAR_UNPINNED_REQUEST_EVENT, "tray-clear-unpinned-request");
+    }
+
+    // ===== 清空未固定：请求编排顺序（先 show 再 emit）=====
+
+    /// 用两个 fake 闭包把调用顺序记进同一个日志，断言「先 show 再 emit」。
+    ///
+    /// 这条测试锚的是**编排顺序本身**。交换 `run_clear_unpinned_request` 里两行的顺序，
+    /// 或删掉 `show_window()` 那一行，序列断言都会变红——这正是先前缺失的护栏：
+    /// 顺序写反只会让确认框弹在隐藏窗口里，功能「看起来没报错」，其它测试全绿。
+    #[test]
+    fn clear_unpinned_request_shows_window_before_emitting() {
+        // Arrange
+        let log = std::rc::Rc::new(std::cell::RefCell::new(Vec::<&'static str>::new()));
+
+        // Act
+        let show_log = std::rc::Rc::clone(&log);
+        let emit_log = std::rc::Rc::clone(&log);
+        run_clear_unpinned_request(
+            move || show_log.borrow_mut().push("show"),
+            move || {
+                emit_log.borrow_mut().push("emit");
+                Ok(())
+            },
+        );
+
+        // Assert：顺序即契约，且两个动作各发生一次
+        let recorded = log.borrow().clone();
+        assert_eq!(recorded, vec!["show", "emit"]);
+    }
+
+    /// emit 失败时窗口仍必须已经前置：用户至少看到窗口被唤起，而不是「点了没反应」。
+    ///
+    /// 防的是「先 emit，失败就提前 return，于是 show 根本没跑」这类改写。
+    #[test]
+    fn clear_unpinned_request_shows_window_first_even_when_emit_fails() {
+        // Arrange
+        let log = std::rc::Rc::new(std::cell::RefCell::new(Vec::<&'static str>::new()));
+
+        // Act
+        let show_log = std::rc::Rc::clone(&log);
+        let emit_log = std::rc::Rc::clone(&log);
+        run_clear_unpinned_request(
+            move || show_log.borrow_mut().push("show"),
+            move || {
+                emit_log.borrow_mut().push("emit");
+                Err("广播失败".to_string())
+            },
+        );
+
+        // Assert：失败只留痕，不改变「先 show」这一顺序
+        let recorded = log.borrow().clone();
+        assert_eq!(recorded, vec!["show", "emit"]);
     }
 
     // ===== 清空未固定：真库行为锚定 =====

@@ -28,6 +28,8 @@ import {
   importBackup,
   revealBackupInFinder,
   getStorageStats,
+  cleanupHistory,
+  clearUnpinnedHistory,
 } from "./ipc-client";
 import type {
   ClipItem,
@@ -480,5 +482,61 @@ describe("getStorageStats", () => {
     const err = await getStorageStats().catch((e: unknown) => e);
     expect(err).toBeInstanceOf(Error);
     expect((err as Error).message).toContain("存储统计不可用");
+  });
+});
+
+describe("cleanupHistory", () => {
+  it("使用正确命令名调用 invoke，并透传软删与物理删除两个计数", async () => {
+    // 两个计数故意取不同值：取错字段（用 purged 冒充 softDeleted）必须被抓住
+    mockInvoke.mockResolvedValueOnce({ softDeleted: 7, purged: 9 });
+
+    const result = await cleanupHistory();
+
+    expect(mockInvoke).toHaveBeenCalledWith("cleanup_history");
+    expect(result.softDeleted).toBe(7);
+    expect(result.purged).toBe(9);
+  });
+
+  it("invoke reject 字符串时重抛为含原始消息的 Error", async () => {
+    mockInvoke.mockRejectedValueOnce("数据库不可用");
+
+    const err = await cleanupHistory().catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).message).toContain("数据库不可用");
+  });
+});
+
+describe("clearUnpinnedHistory", () => {
+  // 命令名是这条链路的跨语言契约：写错会静默落到「点了没反应」。
+  // 与 cleanupHistory 必须指向**两个不同**命令——前者按上限裁剪，后者上限为 0。
+  it("使用正确命令名调用 invoke，并透传软删与物理删除两个计数", async () => {
+    mockInvoke.mockResolvedValueOnce({ softDeleted: 3, purged: 5 });
+
+    const result = await clearUnpinnedHistory();
+
+    expect(mockInvoke).toHaveBeenCalledWith("clear_unpinned_history");
+    expect(result.softDeleted).toBe(3);
+    expect(result.purged).toBe(5);
+  });
+
+  it("与 cleanupHistory 指向不同命令，不会互相顶替", async () => {
+    mockInvoke.mockResolvedValueOnce({ softDeleted: 0, purged: 0 });
+    mockInvoke.mockResolvedValueOnce({ softDeleted: 0, purged: 0 });
+
+    await cleanupHistory();
+    await clearUnpinnedHistory();
+
+    expect(mockInvoke.mock.calls.map(([command]) => command)).toEqual([
+      "cleanup_history",
+      "clear_unpinned_history",
+    ]);
+  });
+
+  it("invoke reject 字符串时重抛为含原始消息的 Error", async () => {
+    mockInvoke.mockRejectedValueOnce("清空失败：数据库被锁");
+
+    const err = await clearUnpinnedHistory().catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).message).toContain("清空失败：数据库被锁");
   });
 });
