@@ -51,6 +51,18 @@ function buildTaggedItems(count: number, tagged: number): ClipItem[] {
   }));
 }
 
+/**
+ * 造条目，让「甲组」与「乙组」两个搜索词各命中 hitCount 条。
+ * 两个结果集命中条数相同、内容不同，用来钉住「重置判定看的是过滤条件本身，而不是命中条数」。
+ */
+function buildEqualHitItems(count: number, hitCount: number): ClipItem[] {
+  return buildItems(count).map((item, index) => {
+    if (index < hitCount) return { ...item, content: `甲组-条目${index + 1}` };
+    if (index < hitCount * 2) return { ...item, content: `乙组-条目${index + 1}` };
+    return item;
+  });
+}
+
 /** 覆盖元素的滚动几何：jsdom 默认全部为 0，无法表达「已滚到底部」 */
 function stubScrollMetrics(
   element: HTMLElement,
@@ -179,6 +191,37 @@ describe("clipboard-page 列表增量渲染", () => {
     await waitFor(() => {
       expect(getRenderedRows()).toHaveLength(RENDER_BLOCK_SIZE);
     });
+  });
+
+  it("命中条数相同的两个搜索词之间切换时窗口仍重置回首块", async () => {
+    // Arrange：全量 250 条，先滚到 200 行
+    await renderWithItems(buildEqualHitItems(250, 120));
+    const listBox = getListBox();
+    stubScrollMetrics(listBox, NEAR_BOTTOM_METRICS);
+    fireEvent.scroll(listBox);
+    await waitFor(() => {
+      expect(getRenderedRows()).toHaveLength(RENDER_BLOCK_SIZE * 2);
+    });
+
+    // Act 1：搜「甲组」（命中 120 条）→ 窗口重置回一块，再滚满 120 行
+    fireEvent.change(screen.getByRole("searchbox"), { target: { value: "甲组" } });
+    await waitFor(() => {
+      expect(getRenderedRows()).toHaveLength(RENDER_BLOCK_SIZE);
+    });
+    fireEvent.scroll(listBox);
+    await waitFor(() => {
+      expect(getRenderedRows()).toHaveLength(120);
+    });
+
+    // Act 2：切到「乙组」——命中条数同样是 120，只有结果集内容变了
+    fireEvent.change(screen.getByRole("searchbox"), { target: { value: "乙组" } });
+
+    // Assert：窗口必须回到首块；若重置判定退化成「比对命中条数」就不会重置，会留下 120 行
+    await waitFor(() => {
+      expect(getRenderedRows()).toHaveLength(RENDER_BLOCK_SIZE);
+    });
+    // 顺带确认切换后的结果集确实换了（第一条是索引 120 的乙组条目）
+    expect(getRenderedRows()[0]).toHaveTextContent("乙组-条目121");
   });
 
   it("选中项在窗口外很远时输入搜索把列表缩短，高亮回落到第一条且不崩", async () => {
