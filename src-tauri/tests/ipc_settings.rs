@@ -63,6 +63,23 @@ impl RuntimeHotkeyRegistrar for RecordingRuntimeRegistrar {
     }
 }
 
+/// fake runtime registrar：注册一律返回「热键已被占用」的中文文案，模拟 OS 占用冲突。
+struct OccupiedConflictRegistrar;
+
+impl RuntimeHotkeyRegistrar for OccupiedConflictRegistrar {
+    fn register_action_shortcut(
+        &self,
+        _action: HotkeyAction,
+        _accelerator: &str,
+    ) -> Result<(), String> {
+        Err("热键已被占用，无法绑定".to_string())
+    }
+
+    fn unregister(&self, _accelerator: &str) -> Result<(), String> {
+        Ok(())
+    }
+}
+
 /// 生成唯一临时文件路径（不预创建文件，load_or_default 能处理不存在的情形）
 fn tmp_hotkey_path() -> PathBuf {
     std::env::temp_dir().join(format!("quickquick_test_hotkey_{}.json", uuid_suffix()))
@@ -188,12 +205,9 @@ fn ipc_settings_set_translate_hotkey_runtime_then_get_returns_new_value() {
 
 /// V4-F1-A03：改键到已被占用的键 → 运行时注册失败原样上抛，配置不变、旧键不注销
 ///
-/// 文案边界（勿静默改文案）：旧的死路径 `HotkeyConfig::rebind` 返回
-/// `HotkeyError::AlreadyInUse`（"热键已被占用，无法绑定"）；生产路径的错误串由
-/// `TauriRuntimeHotkeyRegistrar::register_action_shortcut` 包成
-/// "热键运行时注册失败: ..."（底层 global-hotkey 给的是英文 "HotKey already registered"）。
-/// 两者措辞不同，故本用例只锁定「失败时原样上抛错误、配置不变、旧键不注销」，
-/// 不锁定具体措辞——锁定措辞需要先就文案统一做出决定。
+/// 文案分工（勿静默改文案）：已占用类的**中文措辞**由 `ipc::settings::map_runtime_register_error`
+/// 负责，逐字锁定在 `ipc_settings_map_runtime_register_error_*` 单元测试里；本用例只锁
+/// 「注册失败的错误被原样上抛、不吞不改写」——这两层各管一段，避免措辞一改就要改一堆集成用例。
 #[test]
 fn ipc_settings_hotkey_conflict_rejected_runtime() {
     let hotkey_path = tmp_hotkey_path();
@@ -237,6 +251,26 @@ fn ipc_settings_hotkey_conflict_rejected_runtime() {
         runtime.events(),
         vec!["register:Translate:CmdOrCtrl+Shift+X".to_string()],
         "注册失败时不应注销旧热键"
+    );
+}
+
+/// 冲突文案的落点：注册器给出的中文「已被占用」必须**一字不改**地到达命令层返回值
+/// （前端 `HotkeyPanel` 把它原样放进 `role="alert"`，中间任何一层加前缀都会破坏验收口径）。
+#[test]
+fn ipc_settings_runtime_conflict_message_reaches_caller_verbatim() {
+    let hotkey_path = tmp_hotkey_path();
+
+    let result = set_hotkey_runtime_impl(
+        HotkeyAction::History,
+        "CmdOrCtrl+Shift+H",
+        &hotkey_path,
+        &OccupiedConflictRegistrar,
+    );
+
+    assert_eq!(
+        result.unwrap_err(),
+        "热键已被占用，无法绑定",
+        "中文冲突文案应原样透传到调用方"
     );
 }
 

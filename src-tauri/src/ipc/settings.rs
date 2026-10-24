@@ -38,7 +38,7 @@ use tauri::{AppHandle, Emitter, Manager, State};
 use std::collections::HashMap;
 
 use crate::autostart::AutostartConfig;
-use crate::hotkey::{HotkeyAction, HotkeyConfig};
+use crate::hotkey::{HotkeyAction, HotkeyConfig, HotkeyError};
 use crate::ipc::translate::resolve_provider_or_fallback;
 use crate::settings::{AppSettings, MAX_HISTORY_ITEMS, MIN_HISTORY_ITEMS};
 use crate::translate::credential::{
@@ -377,6 +377,41 @@ pub(crate) fn resolve_config_dir(app: &AppHandle) -> Result<std::path::PathBuf, 
     Ok(dir)
 }
 
+/// 判断底层注册错误是否属于「热键已被占用」这一类。
+///
+/// 判据用两条**上游常量级**的英文前缀，均不随系统语言变化：
+/// - `HotKey already registered`：底层注册器对「同一个键已被注册」给出的固定前缀
+///   （Linux / Windows 的重复注册，以及 macOS 媒体键重复注册）。
+/// - `RegisterEventHotKey failed for`：macOS 上 Carbon 注册接口返回非 `noErr`。
+///   组合键被其它应用占用时 Carbon 返回 `eventHotKeyExistsErr`，即本项目最常遇到的
+///   「被别的 App 抢走了」场景。
+fn is_hotkey_conflict_error(error: &str) -> bool {
+    const CONFLICT_SIGNATURES: [&str; 2] = [
+        "HotKey already registered",
+        "RegisterEventHotKey failed for",
+    ];
+    CONFLICT_SIGNATURES
+        .iter()
+        .any(|signature| error.contains(signature))
+}
+
+/// 把运行时注册失败的底层错误映射成**用户可见**文案。
+///
+/// 为什么只能按文案识别冲突：全局快捷键插件在错误边界就把底层的结构化错误折叠成
+/// `GlobalHotkey(String)`（其 Display 即原文），到调用侧时「已被注册」与「注册动作本身
+/// 失败」的区分已经丢了，只剩文本可判。
+///
+/// 冲突命中时返回 `HotkeyError::AlreadyInUse` 的中文文案（中文 UI 不应漏出英文原文）；
+/// 其它错误保持原映射不变，英文原文仍随返回串带给用户。
+fn map_runtime_register_error(error: &str) -> String {
+    if is_hotkey_conflict_error(error) {
+        // 英文原文被替换掉了，必须留痕：否则现场无法分辨是「被别的 App 占用」还是别的注册失败。
+        eprintln!("[QuickQuick] 热键注册被占用，已折叠为中文文案。原始错误: {error}");
+        return HotkeyError::AlreadyInUse.to_string();
+    }
+    format!("热键运行时注册失败: {error}")
+}
+
 /// Tauri 运行时热键注册器：通过 global shortcut API 注册热键并绑定回调。
 struct TauriRuntimeHotkeyRegistrar<'a> {
     app: &'a AppHandle,
@@ -389,7 +424,7 @@ impl RuntimeHotkeyRegistrar for TauriRuntimeHotkeyRegistrar<'_> {
         accelerator: &str,
     ) -> Result<(), String> {
         crate::register_action_shortcut(self.app, action, accelerator)
-            .map_err(|e| format!("热键运行时注册失败: {e}"))
+            .map_err(|e| map_runtime_register_error(&e.to_string()))
     }
 
     fn unregister(&self, accelerator: &str) -> Result<(), String> {
@@ -1777,5 +1812,50 @@ mod tests {
         assert_eq!(restored.excluded_apps, vec!["1Password".to_string()]);
         assert_eq!(restored.selected_provider, "deepl");
         assert_eq!(restored.max_history_items, 77);
+    }
+
+    /// 运行时注册失败映射：底层 `AlreadyRegistered`（X11 / Windows 重复注册形态）
+    /// 必须折叠成中文文案，英文原文不得漏进用户可见字符串。
+    ///
+    /// 文案逐字锁定（不比对 `HotkeyError::AlreadyInUse.to_string()`）：这是用户可见契约，
+    /// 改它需要产品决定，不能让改错误枚举 Display 的人悄悄把 UI 文案也改掉。
+    #[test]
+    fn ipc_settings_map_runtime_register_error_already_registered_is_chinese() {
+        let mapped = map_runtime_register_error(
+            "HotKey already registered: HotKey { id: 1, mods: SUPER | SHIFT, key: KeyC }",
+        );
+
+        assert_eq!(
+            mapped, "热键已被占用，无法绑定",
+            "已占用类错误应折叠为中文文案"
+        );
+        assert!(
+            !mapped.contains("already registered"),
+            "中文文案不应把英文原文漏给用户，实际: {mapped}"
+        );
+    }
+
+    /// 运行时注册失败映射：macOS `RegisterEventHotKey` 失败（其它 App 占用该组合键）
+    /// 同样属于「已被占用」，文案必须与 `AlreadyRegistered` 一致。
+    #[test]
+    fn ipc_settings_map_runtime_register_error_macos_carbon_conflict_is_chinese() {
+        let mapped = map_runtime_register_error("RegisterEventHotKey failed for CmdOrCtrl+Shift+C");
+
+        assert_eq!(
+            mapped, "热键已被占用，无法绑定",
+            "macOS Carbon 注册失败应归入已占用类"
+        );
+    }
+
+    /// 运行时注册失败映射：**正向对照**——非占用类错误保持原映射（前缀 + 英文原文），
+    /// 证明上一条的中文文案不是「所有错误都被改成中文」。
+    #[test]
+    fn ipc_settings_map_runtime_register_error_other_errors_keep_original_mapping() {
+        let mapped = map_runtime_register_error("Unknown scancode for F99");
+
+        assert_eq!(
+            mapped, "热键运行时注册失败: Unknown scancode for F99",
+            "非占用类错误应保持原映射（含英文原文）"
+        );
     }
 }
