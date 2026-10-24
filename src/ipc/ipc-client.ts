@@ -207,6 +207,49 @@ export async function setExcludeList(list: string[]): Promise<void> {
   }
 }
 
+/**
+ * 应用名单模式：blacklist（名单内不记录）/ whitelist（只记录名单内）。
+ *
+ * 与 Rust 侧 `privacy::ExcludeMode` 的 serde 小写表示保持一致，改动需两端同步。
+ */
+export type ExcludeMode = "blacklist" | "whitelist";
+
+/** 读取应用名单模式。 */
+export async function getExcludeMode(): Promise<ExcludeMode> {
+  try {
+    return await invoke<ExcludeMode>("get_exclude_mode");
+  } catch (err) {
+    throw toError(err);
+  }
+}
+
+/** 切换应用名单模式（保留已填的应用条目与内容正则）。 */
+export async function setExcludeMode(mode: ExcludeMode): Promise<void> {
+  try {
+    await invoke<void>("set_exclude_mode", { mode });
+  } catch (err) {
+    throw toError(err);
+  }
+}
+
+/** 读取内容忽略正则原文（编译失败的那条也会原样返回，便于用户修正）。 */
+export async function getIgnoreRegexes(): Promise<string[]> {
+  try {
+    return await invoke<string[]>("get_ignore_regexes");
+  } catch (err) {
+    throw toError(err);
+  }
+}
+
+/** 写入内容忽略正则（整体覆盖）。 */
+export async function setIgnoreRegexes(patterns: string[]): Promise<void> {
+  try {
+    await invoke<void>("set_ignore_regexes", { patterns });
+  } catch (err) {
+    throw toError(err);
+  }
+}
+
 /** 返回所有可用翻译 Provider 列表。 */
 export async function getTranslateProviders(): Promise<Provider[]> {
   try {

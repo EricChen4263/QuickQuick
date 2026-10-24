@@ -14,6 +14,10 @@ vi.mock("../../ipc/ipc-client", () => ({
   setHotkey: vi.fn(),
   getExcludeList: vi.fn(),
   setExcludeList: vi.fn(),
+  getExcludeMode: vi.fn(),
+  setExcludeMode: vi.fn(),
+  getIgnoreRegexes: vi.fn(),
+  setIgnoreRegexes: vi.fn(),
   getTranslateProviders: vi.fn(),
   getSelectedProvider: vi.fn(),
   setSelectedProvider: vi.fn(),
@@ -42,6 +46,10 @@ import {
   setHotkey,
   getExcludeList,
   setExcludeList,
+  getExcludeMode,
+  setExcludeMode,
+  getIgnoreRegexes,
+  setIgnoreRegexes,
   getTranslateProviders,
   getSelectedProvider,
   setSelectedProvider,
@@ -66,6 +74,10 @@ const mockGetHotkeys = vi.mocked(getHotkeys);
 const mockSetHotkey = vi.mocked(setHotkey);
 const mockGetExcludeList = vi.mocked(getExcludeList);
 const mockSetExcludeList = vi.mocked(setExcludeList);
+const mockGetExcludeMode = vi.mocked(getExcludeMode);
+const mockSetExcludeMode = vi.mocked(setExcludeMode);
+const mockGetIgnoreRegexes = vi.mocked(getIgnoreRegexes);
+const mockSetIgnoreRegexes = vi.mocked(setIgnoreRegexes);
 const mockGetTranslateProviders = vi.mocked(getTranslateProviders);
 const mockGetSelectedProvider = vi.mocked(getSelectedProvider);
 const mockSetSelectedProvider = vi.mocked(setSelectedProvider);
@@ -94,6 +106,7 @@ const MOCK_PROVIDERS = [
   { id: "deepl", name: "DeepL", needsKey: true, needsConfig: true, isUnofficial: false },
 ];
 const MOCK_EXCLUDE_LIST = ["Xcode", "Terminal"];
+const MOCK_IGNORE_REGEXES = ["^\\d{16}$"];
 
 describe("settings-page", () => {
   beforeEach(() => {
@@ -103,6 +116,10 @@ describe("settings-page", () => {
     mockSetHotkey.mockResolvedValue(undefined);
     mockGetExcludeList.mockResolvedValue(MOCK_EXCLUDE_LIST);
     mockSetExcludeList.mockResolvedValue(undefined);
+    mockGetExcludeMode.mockResolvedValue("blacklist");
+    mockSetExcludeMode.mockResolvedValue(undefined);
+    mockGetIgnoreRegexes.mockResolvedValue(MOCK_IGNORE_REGEXES);
+    mockSetIgnoreRegexes.mockResolvedValue(undefined);
     mockGetTranslateProviders.mockResolvedValue(MOCK_PROVIDERS);
     mockGetSelectedProvider.mockResolvedValue("google");
     mockSetSelectedProvider.mockResolvedValue(undefined);
@@ -286,7 +303,7 @@ describe("settings-page", () => {
     // Act：输入新 App 名称并添加
     const addInput = screen.getByPlaceholderText(/应用名称/);
     await user.type(addInput, "Safari");
-    await user.click(screen.getByRole("button", { name: "添加" }));
+    await user.click(screen.getByRole("button", { name: "添加应用" }));
 
     // Assert：列表出现 Safari，setExcludeList 被调用且含 Safari
     await waitFor(() => {
@@ -635,6 +652,110 @@ describe("settings-page", () => {
     await waitFor(() => {
       expect(mockSetSkipSensitive).toHaveBeenCalledWith(false);
     });
+  });
+
+  it("settings-page: 隐私面板——mount 时读取名单模式与内容正则", async () => {
+    const user = userEvent.setup();
+    render(<SettingsPage />);
+
+    const nav = screen.getByRole("navigation", { name: "设置子项" });
+    await user.click(within(nav).getByRole("button", { name: "隐私" }));
+
+    await waitFor(() => {
+      expect(mockGetExcludeMode).toHaveBeenCalledTimes(1);
+      expect(mockGetIgnoreRegexes).toHaveBeenCalledTimes(1);
+    });
+    // 读到的正则原文渲染成 chip（含反斜杠，验证不是被吞成空串）
+    expect(await screen.findByText("^\\d{16}$")).toBeInTheDocument();
+  });
+
+  it("settings-page: 隐私面板——黑名单为默认选中态，说明文案写清方向", async () => {
+    const user = userEvent.setup();
+    render(<SettingsPage />);
+
+    const nav = screen.getByRole("navigation", { name: "设置子项" });
+    await user.click(within(nav).getByRole("button", { name: "隐私" }));
+
+    await waitFor(() => {
+      expect(mockGetExcludeMode).toHaveBeenCalled();
+    });
+
+    expect(screen.getByRole("radio", { name: "黑名单" })).toHaveAttribute("aria-checked", "true");
+    expect(screen.getByRole("radio", { name: "白名单" })).toHaveAttribute("aria-checked", "false");
+    expect(screen.getByText("黑名单：名单内应用的内容不记录")).toBeInTheDocument();
+  });
+
+  it("settings-page: 隐私面板——切到白名单调用 setExcludeMode 且保留已填应用名", async () => {
+    // Arrange
+    const user = userEvent.setup();
+    render(<SettingsPage />);
+
+    const nav = screen.getByRole("navigation", { name: "设置子项" });
+    await user.click(within(nav).getByRole("button", { name: "隐私" }));
+
+    await waitFor(() => {
+      expect(screen.getByText("Xcode")).toBeInTheDocument();
+    });
+
+    // Act
+    await user.click(screen.getByRole("radio", { name: "白名单" }));
+
+    // Assert：只切方向，条目一个都不能丢
+    await waitFor(() => {
+      expect(mockSetExcludeMode).toHaveBeenCalledWith("whitelist");
+    });
+    expect(screen.getByText("Xcode")).toBeInTheDocument();
+    expect(screen.getByText("Terminal")).toBeInTheDocument();
+    // 说明文案跟着方向变（白名单语义与黑名单相反）
+    expect(screen.getByText("白名单：只记录名单内应用的内容")).toBeInTheDocument();
+    expect(
+      screen.queryByText("黑名单：名单内应用的内容不记录")
+    ).not.toBeInTheDocument();
+  });
+
+  it("settings-page: 隐私面板——添加内容正则调用 setIgnoreRegexes 并渲染 chip", async () => {
+    // Arrange
+    const user = userEvent.setup();
+    render(<SettingsPage />);
+
+    const nav = screen.getByRole("navigation", { name: "设置子项" });
+    await user.click(within(nav).getByRole("button", { name: "隐私" }));
+
+    await waitFor(() => {
+      expect(mockGetIgnoreRegexes).toHaveBeenCalled();
+    });
+
+    // Act：在正则输入框里加一条
+    await user.type(screen.getByPlaceholderText(/正则，如/), "^secret-");
+    await user.click(screen.getByRole("button", { name: "添加正则" }));
+
+    // Assert：整体覆盖写入（既有那条 + 新增那条），并渲染成 chip
+    await waitFor(() => {
+      expect(mockSetIgnoreRegexes).toHaveBeenCalledWith(["^\\d{16}$", "^secret-"]);
+    });
+    expect(screen.getByText("^secret-")).toBeInTheDocument();
+  });
+
+  it("settings-page: 隐私面板——删除内容正则调用 setIgnoreRegexes 并移除 chip", async () => {
+    // Arrange
+    const user = userEvent.setup();
+    render(<SettingsPage />);
+
+    const nav = screen.getByRole("navigation", { name: "设置子项" });
+    await user.click(within(nav).getByRole("button", { name: "隐私" }));
+
+    await waitFor(() => {
+      expect(screen.getByText("^\\d{16}$")).toBeInTheDocument();
+    });
+
+    // Act
+    await user.click(screen.getByRole("button", { name: "删除正则 ^\\d{16}$" }));
+
+    // Assert
+    await waitFor(() => {
+      expect(mockSetIgnoreRegexes).toHaveBeenCalledWith([]);
+    });
+    expect(screen.queryByText("^\\d{16}$")).not.toBeInTheDocument();
   });
 
   it("settings-page: 存储面板——mount 时调用 getStorageStats 并显示条目数", async () => {

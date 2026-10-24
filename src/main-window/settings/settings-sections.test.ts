@@ -1,5 +1,11 @@
 import { describe, it, expect } from "vitest";
-import { settingsSections, addExcludedApp, removeExcludedApp } from "./sections";
+import {
+  settingsSections,
+  addExcludedApp,
+  removeExcludedApp,
+  addIgnorePattern,
+  removeIgnorePattern,
+} from "./sections";
 
 describe("V3-F3-A10 设置子项栏", () => {
   describe("settingsSections — 六项纵向", () => {
@@ -96,6 +102,43 @@ describe("V3-F3-A10 设置子项栏", () => {
       const result = removeExcludedApp(list, "Safari");
 
       expect(result).toEqual([]);
+    });
+  });
+
+  describe("addIgnorePattern / removeIgnorePattern — 内容忽略正则管理", () => {
+    it("追加一条正则，返回含该项的新列表且不改原数组", () => {
+      const list = ["^\\d{16}$"];
+
+      const result = addIgnorePattern(list, "^secret-");
+
+      expect(result).toEqual(["^\\d{16}$", "^secret-"]);
+      expect(list).toEqual(["^\\d{16}$"]);
+    });
+
+    it("重复添加同一正则去重", () => {
+      const list = ["^secret-"];
+
+      const result = addIgnorePattern(list, "^secret-");
+
+      expect(result).toEqual(["^secret-"]);
+      expect(result).not.toBe(list);
+    });
+
+    it("移除存在的正则，返回不含该项的新列表", () => {
+      const list = ["^secret-", "^\\d{16}$"];
+
+      const result = removeIgnorePattern(list, "^secret-");
+
+      expect(result).toEqual(["^\\d{16}$"]);
+    });
+
+    it("移除不存在的正则，内容不变但返回新数组", () => {
+      const list = ["^secret-"];
+
+      const result = removeIgnorePattern(list, "^nothing-");
+
+      expect(result).toEqual(["^secret-"]);
+      expect(result).not.toBe(list);
     });
   });
 });

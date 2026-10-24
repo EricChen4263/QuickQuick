@@ -17,6 +17,10 @@ import {
   setHotkey,
   getExcludeList,
   setExcludeList,
+  getExcludeMode,
+  setExcludeMode,
+  getIgnoreRegexes,
+  setIgnoreRegexes,
   getTranslateProviders,
   getSelectedProvider,
   setSelectedProvider,
@@ -261,6 +265,77 @@ describe("setExcludeList", () => {
     expect(mockInvoke).toHaveBeenCalledWith("set_exclude_list", {
       list: ["com.example.app"],
     });
+  });
+});
+
+describe("getExcludeMode", () => {
+  it("使用正确命令名调用 invoke 并透传模式字符串", async () => {
+    mockInvoke.mockResolvedValueOnce("whitelist");
+
+    const result = await getExcludeMode();
+
+    expect(mockInvoke).toHaveBeenCalledWith("get_exclude_mode");
+    expect(result).toBe("whitelist");
+  });
+
+  it("invoke reject 字符串时重抛为含原始消息的 Error", async () => {
+    mockInvoke.mockRejectedValueOnce("读取模式失败");
+
+    await expect(getExcludeMode()).rejects.toThrow("读取模式失败");
+  });
+});
+
+describe("setExcludeMode", () => {
+  it("传入正确命令名与 mode 参数", async () => {
+    mockInvoke.mockResolvedValueOnce(undefined);
+
+    await setExcludeMode("whitelist");
+
+    expect(mockInvoke).toHaveBeenCalledWith("set_exclude_mode", {
+      mode: "whitelist",
+    });
+  });
+
+  it("invoke reject 字符串时重抛为含原始消息的 Error", async () => {
+    mockInvoke.mockRejectedValueOnce("写入模式失败");
+
+    await expect(setExcludeMode("blacklist")).rejects.toThrow("写入模式失败");
+  });
+});
+
+describe("getIgnoreRegexes", () => {
+  it("使用正确命令名调用 invoke 并透传正则原文数组", async () => {
+    const patterns = ["^\\d{16}$", "([unclosed"];
+    mockInvoke.mockResolvedValueOnce(patterns);
+
+    const result = await getIgnoreRegexes();
+
+    expect(mockInvoke).toHaveBeenCalledWith("get_ignore_regexes");
+    expect(result).toEqual(patterns);
+  });
+
+  it("invoke reject 字符串时重抛为含原始消息的 Error", async () => {
+    mockInvoke.mockRejectedValueOnce("读取正则失败");
+
+    await expect(getIgnoreRegexes()).rejects.toThrow("读取正则失败");
+  });
+});
+
+describe("setIgnoreRegexes", () => {
+  it("传入正确命令名与 patterns 参数", async () => {
+    mockInvoke.mockResolvedValueOnce(undefined);
+
+    await setIgnoreRegexes(["^secret-"]);
+
+    expect(mockInvoke).toHaveBeenCalledWith("set_ignore_regexes", {
+      patterns: ["^secret-"],
+    });
+  });
+
+  it("invoke reject 字符串时重抛为含原始消息的 Error", async () => {
+    mockInvoke.mockRejectedValueOnce("写入正则失败");
+
+    await expect(setIgnoreRegexes([])).rejects.toThrow("写入正则失败");
   });
 });
 
