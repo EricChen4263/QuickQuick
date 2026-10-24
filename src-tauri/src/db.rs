@@ -3,6 +3,18 @@
 //! 设计对齐：设计文档§六（失败/恢复语义）、§十（schema 预埋铁律）、§三（去重+置顶刷新）
 //!           §九.2（★ 置顶收藏）、§五（收藏永远豁免清理）
 //!
+//! schema 版本与迁移铁律（改表结构前必读）：
+//! - schema 版本由 `PRAGMA user_version` 承担，目标值见 [`CURRENT_SCHEMA_VERSION`]，
+//!   有序步骤见 `MIGRATIONS`。
+//! - 开库路径（[`ensure_schema`]）只跑「落后于当前版本」的步骤；库版本超前时返回
+//!   [`DbError::SchemaTooNew`]，绝不按老结构继续读写。
+//! - 全部步骤在**单个事务**内执行，任一步失败整笔回滚，库停在迁移前版本。
+//! - **新增列 / 索引 / 表必须新加一个迁移步骤并 bump `CURRENT_SCHEMA_VERSION`**，
+//!   步骤内写无条件 DDL；`create_tables` / `ensure_indexes` 已冻结为版本 1 基线，
+//!   不得再往里加结构，否则会出现「同一 user_version 对应两种表形态」的库。
+//! - **禁止再用「探测列是否存在再 ALTER」的 ad-hoc 迁移**：版本号已经确定了库的形态。
+//!   探测只允许活在版本 1 的历史对齐里（[`reconcile_html_column`]），不要复制该模式。
+//!
 //! 核心函数：
 //! - `open_or_create`       — 打开或新建加密库，并确保 schema 已初始化
 //! - `open_or_recover`      — 带损坏检测的打开：损坏时改名备份，按标志决定是否重建
@@ -18,13 +30,14 @@
 //!
 //! 安全约定：
 //! - 密钥以 raw key 格式传入（`PRAGMA key = "x'<hex>'"`)，不写入日志
-//! - 打开后立即执行 `PRAGMA user_version` 轻量查询触发解密校验
+//! - 打开后立即执行 `PRAGMA user_version` 轻量查询触发解密校验（它同时承担 schema 版本，
+//!   见上方迁移铁律：开库时先读它，再决定要不要跑迁移）
 //! - 永不静默删除数据库文件（设计§六硬约束）
 
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use rusqlite::{Connection, OptionalExtension};
+use rusqlite::{Connection, OptionalExtension, Transaction};
 use thiserror::Error;
 use uuid::Uuid;
 
@@ -59,6 +72,41 @@ pub enum DbError {
     /// 调用方可通过此变体向 db 层传递"瞬时失败"语义，触发 Transient 分级。
     #[error("瞬时钥匙串错误：{0}")]
     TransientKeychain(String),
+
+    /// 数据库 schema 版本高于本程序支持的版本（旧程序打开了新库）
+    ///
+    /// 独立成变体而不复用 [`DbError::Sqlite`]，是为了让 [`open_or_recover`] 不去备份它：
+    /// 那里把 `Sqlite` 当「库已损坏」，改名前会带走一个完全可用（只是比本程序新）的库。
+    /// 版本超前不是损坏，库文件一个字节都不该动。
+    #[error(
+        "数据库 schema 版本为 {found}，高于本程序支持的 {supported}；请更新 QuickQuick 后再打开"
+    )]
+    SchemaTooNew {
+        /// 库里 `PRAGMA user_version` 的实际值
+        found: i32,
+        /// 本程序支持的最高版本（[`CURRENT_SCHEMA_VERSION`]）
+        supported: i32,
+    },
+
+    /// schema 迁移失败（事务已回滚，库停在迁移前的版本）
+    ///
+    /// 同样不复用 [`DbError::Sqlite`]：迁移失败是「本程序的迁移代码/环境出了问题」，
+    /// 不是库损坏，不能触发备份重建。
+    ///
+    /// 文本约束：**本变体自身的文案**不得包含 `not a database` 一类可重置标记，否则启动期
+    /// 的一次性重置会把库备份走并重建空库（丢用户历史）。`reason` 是底层错误的透传文本，
+    /// 若它真的报 `file is not a database`，说明库确实不是可用数据库，走重置才是对的。
+    #[error(
+        "数据库 schema 迁移到版本 {to_version} 失败（已回滚，库仍为版本 {from_version}）：{reason}"
+    )]
+    MigrationFailed {
+        /// 失败的迁移步骤目标版本
+        to_version: i32,
+        /// 迁移前（回滚后）的版本
+        from_version: i32,
+        /// 底层失败原因（保留原始错误文本，便于定位是哪条 DDL 挂了）
+        reason: String,
+    },
 }
 
 impl DbError {
@@ -100,12 +148,16 @@ pub enum RecoveryAction {
 /// - `TransientKeychain`       → `Transient`（钥匙串被拒/锁，库文件完好）
 /// - `Corrupt` / `Sqlite`      → `Permanent`（库损坏或解密失败，需备份恢复）
 /// - `Io` / `Other`            → `Permanent`（保守归类，IO 失败视为需人工介入）
+/// - `SchemaTooNew` / `MigrationFailed` → `Permanent`（需换程序版本或修迁移，绝不重建库）
 pub fn classify_failure(err: &DbError) -> FailureTier {
     match err {
         DbError::TransientKeychain(_) => FailureTier::Transient,
-        DbError::Corrupt { .. } | DbError::Sqlite(_) | DbError::Io(_) | DbError::Other(_) => {
-            FailureTier::Permanent
-        }
+        DbError::Corrupt { .. }
+        | DbError::Sqlite(_)
+        | DbError::Io(_)
+        | DbError::Other(_)
+        | DbError::SchemaTooNew { .. }
+        | DbError::MigrationFailed { .. } => FailureTier::Permanent,
     }
 }
 
@@ -168,6 +220,11 @@ pub fn open_or_create(path: &Path, key: &[u8; 32]) -> Result<Connection, DbError
 ///
 /// # 设计§六硬约束
 /// 永不静默删除或覆盖原文件；备份命名格式：`<原名>.corrupt-<utc_secs>`。
+///
+/// # 非损坏类错误原样上抛
+/// 只把 [`DbError::Sqlite`]（解密/格式失败）当损坏。schema 版本超前
+/// （[`DbError::SchemaTooNew`]）与迁移失败（[`DbError::MigrationFailed`]）都不是损坏：
+/// 库本身完好，备份改名只会把可用数据搬走，故一律原样返回、不动文件。
 ///
 /// # Errors
 /// - `DbError::Corrupt`：损坏且 `allow_rebuild=false`
@@ -1112,32 +1169,164 @@ fn open_with_key(path: &Path, key: &[u8; 32]) -> Result<Connection, DbError> {
     Ok(conn)
 }
 
-/// 初始化 schema（幂等，使用 IF NOT EXISTS）。
+/// 当前 schema 版本，即 `PRAGMA user_version` 的目标值。
+///
+/// 改动表结构（新增列 / 索引 / 表）时必须成对做两件事：向 `MIGRATIONS` 末尾追加一个
+/// `to_version` 为本值 +1 的步骤，并把本常量 +1。两者由
+/// `migration_list_is_contiguous_up_to_current_version` 与
+/// `apply_migrations` 的运行期校验双重钉住——只改一边会立刻在开库时报错。
+pub const CURRENT_SCHEMA_VERSION: i32 = 1;
+
+/// 单个 schema 迁移步骤：把库从 `to_version - 1` 升到 `to_version`。
+struct Migration {
+    /// 目标版本号，必须比上一步大 1（不允许跳号，跳号由 `apply_migrations` 拒绝）。
+    to_version: i32,
+    /// 迁移体。在调用方开启的事务内执行，返回 `Err` 时整笔事务回滚。
+    ///
+    /// 步骤一旦随版本发布就**不可再改写**——库可能早已越过这一步，
+    /// 改了只会让「已升级」和「待升级」的库走向不同形态。
+    apply: fn(&Transaction<'_>) -> Result<(), DbError>,
+}
+
+/// 有序迁移步骤表（生产列表）。
+///
+/// 版本 1 是从「无版本号时代」到「版本化」的过渡步骤，同时承担建表、建索引与形态对齐，
+/// 因此内含一次列存在性探测（见 [`reconcile_html_column`]）。版本 2 起每步只做无条件的
+/// 增量 DDL，不再需要探测。
+const MIGRATIONS: &[Migration] = &[Migration {
+    to_version: 1,
+    apply: baseline_schema_v1,
+}];
+
+/// 初始化 / 升级 schema（幂等）。
+///
+/// 开库后的唯一 schema 入口：读 `PRAGMA user_version`，落后则按 [`MIGRATIONS`] 顺序升到
+/// [`CURRENT_SCHEMA_VERSION`]；已是最新则一步 DDL 都不执行；版本超前（旧程序打开新库）
+/// 直接报 [`DbError::SchemaTooNew`]，绝不按老结构继续读写。
 ///
 /// 预埋字段遵循设计§十铁律：UUID 主键、UTC 时间戳、last_modified、墓碑、图片表拆分。
 ///
-/// I-03（§十预埋）：
-/// - `ensure_schema` 内再次确保 foreign_keys = ON（防止调用方绕过 open_with_key 直连）。
-/// - `clip_images.clip_item_id` 声明外键约束，并设 ON DELETE CASCADE：
-///   GC 物理删除 clip_items 行时，关联图片自动级联清理（设计§五分级清理语义）。
+/// I-03（§十预埋）：外键约束必须在**事务外**开启——`PRAGMA foreign_keys` 在事务内是
+/// 静默 no-op，放进迁移事务里等于没开（open_with_key 已开过一次，这里是防绕过它的兜底）。
 ///
-/// 建表与建索引分两步：表结构由 [`create_tables`] 负责，查询索引由 [`ensure_indexes`]
-/// 负责。两者都幂等，存量库打开时会在原有表上补齐缺失的索引，不改任何列。
+/// # Errors
+/// - `DbError::SchemaTooNew`：库版本高于本程序支持的版本
+/// - `DbError::MigrationFailed`：某步迁移失败（事务已回滚，库停在迁移前版本）
+/// - `DbError::Other`：迁移列表本身不自洽（跳号 / 未与常量同步）
+/// - `DbError::Sqlite`：读版本号、开启事务等底层失败
 fn ensure_schema(conn: &Connection) -> Result<(), DbError> {
-    create_tables(conn)?;
-    // 存量库迁移：CREATE TABLE IF NOT EXISTS 不会给旧表补列，故对已存在的旧 clip_items
-    // 单独做 html_content 列迁移（幂等）。新建库已含该列，迁移检测后直接跳过。
-    migrate_html_column(conn)?;
-    ensure_indexes(conn)?;
+    conn.execute_batch("PRAGMA foreign_keys = ON;")?;
+    apply_migrations(conn, CURRENT_SCHEMA_VERSION, MIGRATIONS)
+}
+
+/// 把库迁移到 `target_version`，只执行尚未应用的步骤。
+///
+/// `migrations` 做成参数而不是直接读 [`MIGRATIONS`]，是为了让测试能注入**自己的**步骤
+/// 列表（含故意失败的步骤）来验证回滚；生产路径只传 [`MIGRATIONS`]。
+///
+/// # 事务性
+/// 全部步骤 + 每一步的版本号写入在同一个事务内完成：任一步失败 → 整笔回滚，
+/// `user_version` 与表结构一起退回迁移前状态，不会留下「表改了但版本没写」的半成品库。
+///
+/// # Errors
+/// - `DbError::SchemaTooNew`：当前版本已高于目标版本（先校验，未动库）
+/// - `DbError::MigrationFailed`：某步或其版本号写入失败（已回滚）
+/// - `DbError::Other`：迁移列表跳号，或最高版本与目标版本不一致
+/// - `DbError::Sqlite`：读版本号 / 开启事务失败
+fn apply_migrations(
+    conn: &Connection,
+    target_version: i32,
+    migrations: &[Migration],
+) -> Result<(), DbError> {
+    let current = read_schema_version(conn)?;
+    if current > target_version {
+        return Err(DbError::SchemaTooNew {
+            found: current,
+            supported: target_version,
+        });
+    }
+    if current == target_version {
+        return Ok(());
+    }
+
+    let tx = conn.unchecked_transaction()?;
+    let mut version = current;
+    for step in migrations {
+        if step.to_version <= version {
+            continue;
+        }
+        if step.to_version != version + 1 {
+            return Err(DbError::Other(format!(
+                "schema 迁移列表跳号：版本 {version} 之后应为 {}，实际出现 {}",
+                version + 1,
+                step.to_version
+            )));
+        }
+        let step_result = (step.apply)(&tx).and_then(|()| {
+            tx.pragma_update(None, "user_version", step.to_version)
+                .map_err(DbError::from)
+        });
+        if let Err(reason) = step_result {
+            // `tx` 在此处 drop → ROLLBACK，库停在 `current`。
+            return Err(DbError::MigrationFailed {
+                to_version: step.to_version,
+                from_version: current,
+                reason: reason.to_string(),
+            });
+        }
+        version = step.to_version;
+    }
+    if version != target_version {
+        return Err(DbError::Other(format!(
+            "schema 迁移列表最高版本是 {version}，低于目标版本 {target_version}；\
+             把 CURRENT_SCHEMA_VERSION 提到 {target_version} 之后必须补上对应版本的迁移步骤"
+        )));
+    }
+    tx.commit().map_err(|e| DbError::MigrationFailed {
+        to_version: target_version,
+        from_version: current,
+        reason: e.to_string(),
+    })?;
     Ok(())
 }
 
-/// 建立全部业务表（幂等，使用 IF NOT EXISTS）。
+/// 读取当前 schema 版本（`PRAGMA user_version`）。
+///
+/// # Errors
+/// `DbError::Sqlite`：PRAGMA 执行失败（未解密 / 连接不可用）
+fn read_schema_version(conn: &Connection) -> Result<i32, DbError> {
+    Ok(conn.query_row("PRAGMA user_version", [], |row| row.get(0))?)
+}
+
+/// 版本 1 基线：建表 + 对齐历史形态 + 建索引。
+///
+/// 为什么建表和建索引都收进这一步、而不是留在每次开库的路径上重跑：
+/// 版本号是「库是什么形态」的唯一真相。若把 `CREATE ... IF NOT EXISTS` 留在开库路径上，
+/// 以后往那两处加一条列 / 索引就会在用户开库时**绕过版本号**生效，同一个
+/// `user_version` 下长出两种表形态，后续迁移步骤的前提就不成立了。收进版本 1 之后，
+/// [`create_tables`] / [`ensure_indexes`] 冻结为「版本 1 快照」，新增结构只能走新步骤。
+///
+/// 代价是表 / 索引被外力删掉后不会再被自动补回。这个代价被刻意接受：自动补回意味着
+/// 「DDL 永远跑在版本号之外」，而这正是要消灭的不确定性；真出现缺表缺索引，
+/// 报错位置（第一条失败的查询）比静默重建更容易定位。
+fn baseline_schema_v1(tx: &Transaction<'_>) -> Result<(), DbError> {
+    create_tables(tx)?;
+    reconcile_html_column(tx)?;
+    ensure_indexes(tx)?;
+    Ok(())
+}
+
+/// 建立版本 1 基线的全部业务表（`IF NOT EXISTS`）。
+///
+/// **已冻结**：这里描述的是版本 1 的表形态，不得再新增列 / 表——新库与老库都由
+/// [`baseline_schema_v1`] 走到同一形态，往这里加东西会让「user_version 相同但表不同」
+/// 的两个库并存。新增结构请追加迁移步骤。
+///
+/// 外键开关不在这里打开：本函数在迁移事务内执行，而 `PRAGMA foreign_keys` 在事务内是
+/// no-op；开关由 [`ensure_schema`] 在事务外统一负责。
 fn create_tables(conn: &Connection) -> Result<(), DbError> {
     conn.execute_batch(
         "
-        PRAGMA foreign_keys = ON;
-
         -- 剪贴板条目表
         CREATE TABLE IF NOT EXISTS clip_items (
             id                TEXT PRIMARY KEY NOT NULL,  -- UUID，永不复用
@@ -1220,12 +1409,16 @@ fn create_tables(conn: &Connection) -> Result<(), DbError> {
     Ok(())
 }
 
-/// 建立查询索引（幂等，`IF NOT EXISTS`；不新增/修改任何列）。
+/// 建立版本 1 基线的查询索引（`IF NOT EXISTS`；不新增/修改任何列）。
 ///
 /// 索引决定列表首屏、去重、分级清理这三类查询是「按索引定位」还是「全表扫 + 临时排序」。
 /// 每条索引的列顺序都由对应查询的 WHERE 等值前缀与 ORDER BY 决定，不是按「多建几个」堆的。
 ///
 /// 命名统一 `idx_<表名>_*` 前缀，便于按前缀枚举与核对。
+///
+/// **已冻结**：这 5 条是版本 1 基线的一部分。新增索引不要写在这里（它在版本 1 的事务内
+/// 只跑一次，写在这里的新索引对已升级的库永远不生效），而要追加一个迁移步骤；新索引在
+/// 自己的步骤里可直接写无 `IF NOT EXISTS` 的 `CREATE INDEX`，形态由版本号保证。
 ///
 /// # Errors
 /// `DbError::Sqlite`：任一 `CREATE INDEX` 执行失败（表不存在、库只读等）
@@ -1282,7 +1475,8 @@ fn ensure_indexes(conn: &Connection) -> Result<(), DbError> {
 
 /// 检测某表是否已含指定列（基于 `PRAGMA table_info`）。
 ///
-/// 用于幂等迁移守卫：SQLite 无 `ADD COLUMN IF NOT EXISTS`，需先查列再决定是否 ALTER。
+/// 仅供版本 1 的历史形态对齐使用（见 [`reconcile_html_column`]）。正常迁移步骤不需要它：
+/// 版本号已经确定了库的形态。SQLite 无 `ADD COLUMN IF NOT EXISTS`，所以有它作为探测手段。
 ///
 /// # Errors
 /// `DbError::Sqlite`：PRAGMA 查询失败
@@ -1299,15 +1493,21 @@ fn has_column(conn: &Connection, table: &str, column: &str) -> Result<bool, DbEr
     Ok(false)
 }
 
-/// 幂等迁移：为存量 `clip_items` 表补 `html_content TEXT` 列。
+/// 版本 1 的对齐步骤：给「无版本号时代」的存量 `clip_items` 补 `html_content TEXT` 列。
 ///
-/// 为何用 table_info 守卫：SQLite 不支持 `ADD COLUMN IF NOT EXISTS`，重复 ALTER 会报
-/// "duplicate column name"。先查列是否存在，缺列才 ALTER，保证多次调用安全（幂等）。
+/// 这里的探测是**整条迁移链上唯一允许的形态探测**。原因：`PRAGMA user_version` 引入之前
+/// 的库共用版本号 0，其中混着三种形态——①全新库（还没有表，由 `create_tables` 直接建成
+/// 版本 1 形态）②无 `html_content` 列的旧库 ③已有 `html_content` 列但版本号仍是 0 的库。
+/// 三种都必须落到版本 1，只能按列是否存在区分。
+///
+/// 版本 2 起不再需要这种守卫（版本号已经说明库处在哪一步），新列直接在步骤里写无条件
+/// `ALTER TABLE ... ADD COLUMN`。**新增列时不要复制这里的 `has_column` 判断。**
+///
 /// 新列默认 NULL，随整库 SQLCipher 加密。
 ///
 /// # Errors
 /// `DbError::Sqlite`：PRAGMA 或 ALTER 执行失败
-fn migrate_html_column(conn: &Connection) -> Result<(), DbError> {
+fn reconcile_html_column(conn: &Connection) -> Result<(), DbError> {
     if has_column(conn, "clip_items", "html_content")? {
         return Ok(());
     }
@@ -1375,6 +1575,8 @@ fn hex_encode(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Mutex, MutexGuard};
 
     /// 构造最小合法 2×2 RGBA PNG（用 image crate 编码，不依赖外部文件）。
     ///
@@ -1757,63 +1959,6 @@ mod tests {
         );
     }
 
-    /// 存量库迁移幂等：手动建不含 html_content 列的旧表，跑迁移后列存在且可写读，
-    /// 再次跑迁移不报错（幂等）。
-    #[test]
-    fn html_column_migration_idempotent_on_existing_db() {
-        // 旧版 clip_items：无 html_content 列
-        let conn = rusqlite::Connection::open_in_memory().expect("内存库开启失败");
-        conn.execute_batch(
-            "CREATE TABLE clip_items (
-                 id                TEXT PRIMARY KEY NOT NULL,
-                 content           TEXT,
-                 kind              TEXT NOT NULL DEFAULT 'text',
-                 created_utc       INTEGER NOT NULL,
-                 last_modified_utc INTEGER NOT NULL,
-                 is_deleted        INTEGER NOT NULL DEFAULT 0,
-                 deleted_at_utc    INTEGER,
-                 text_hash         TEXT,
-                 is_favorite       INTEGER NOT NULL DEFAULT 0
-             );",
-        )
-        .expect("建旧表失败");
-
-        assert!(
-            !has_column(&conn, "clip_items", "html_content").expect("查列失败"),
-            "迁移前不应有 html_content 列"
-        );
-
-        migrate_html_column(&conn).expect("首次迁移不应 Err");
-        assert!(
-            has_column(&conn, "clip_items", "html_content").expect("查列失败"),
-            "迁移后应有 html_content 列"
-        );
-
-        // 列可写读
-        conn.execute(
-            "INSERT INTO clip_items
-                 (id, content, kind, created_utc, last_modified_utc, is_deleted, html_content)
-             VALUES ('x', 'c', 'richtext', 1, 1, 0, '<b>x</b>')",
-            [],
-        )
-        .expect("迁移后应可写 html_content");
-        let read: Option<String> = conn
-            .query_row(
-                "SELECT html_content FROM clip_items WHERE id = 'x'",
-                [],
-                |r| r.get(0),
-            )
-            .expect("应可读 html_content");
-        assert_eq!(read.as_deref(), Some("<b>x</b>"), "读回值应一致");
-
-        // 第二次迁移幂等：不报错、列仍在
-        migrate_html_column(&conn).expect("重复迁移应幂等、不报错");
-        assert!(
-            has_column(&conn, "clip_items", "html_content").expect("查列失败"),
-            "重复迁移后列仍应存在"
-        );
-    }
-
     /// 纯文本去重语义不变：同纯文本（无 html）连续 ingest 两次仍只一行（第二次 Bumped）。
     #[test]
     fn dedup_by_plaintext_unchanged() {
@@ -1879,6 +2024,565 @@ mod tests {
             row.html_content.as_deref(),
             Some("<u>rich later</u>"),
             "补写后 html_content 应为新值"
+        );
+    }
+
+    // ===== schema 版本与迁移 =====
+
+    /// 版本 0 时代（框架化之前）的 `clip_items` DDL：没有 `html_content` 列。
+    ///
+    /// 必须手抄旧 DDL、**不能**复用 `create_tables`：后者是版本 1 形态（已含
+    /// `html_content`），拿它当基线就测不出 `reconcile_html_column` 那一步。
+    const PRE_FRAMEWORK_CLIP_ITEMS_DDL: &str = "CREATE TABLE clip_items (
+                 id                TEXT PRIMARY KEY NOT NULL,
+                 content           TEXT,
+                 kind              TEXT NOT NULL DEFAULT 'text',
+                 created_utc       INTEGER NOT NULL,
+                 last_modified_utc INTEGER NOT NULL,
+                 is_deleted        INTEGER NOT NULL DEFAULT 0,
+                 deleted_at_utc    INTEGER,
+                 text_hash         TEXT,
+                 is_favorite       INTEGER NOT NULL DEFAULT 0
+             );";
+
+    /// 内存版版本 0 旧库（`user_version` 默认 0）。
+    fn make_pre_framework_conn() -> rusqlite::Connection {
+        let conn = rusqlite::Connection::open_in_memory().expect("内存库开启失败");
+        conn.execute_batch(PRE_FRAMEWORK_CLIP_ITEMS_DDL)
+            .expect("建版本 0 旧表失败");
+        conn
+    }
+
+    /// 表是否存在（查 `sqlite_master`）。
+    fn table_exists(conn: &rusqlite::Connection, table: &str) -> bool {
+        conn.query_row(
+            "SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = ?1",
+            rusqlite::params![table],
+            |row| row.get::<_, i64>(0),
+        )
+        .expect("查 sqlite_master 失败")
+            > 0
+    }
+
+    /// 取某表的列名清单（`PRAGMA table_info` 第 1 列）。
+    fn column_names(conn: &rusqlite::Connection, table: &str) -> Vec<String> {
+        let mut stmt = conn
+            .prepare(&format!("PRAGMA table_info({table})"))
+            .expect("PRAGMA table_info 准备失败");
+        stmt.query_map([], |row| row.get::<_, String>(1))
+            .expect("query_map 失败")
+            .filter_map(|r| r.ok())
+            .collect()
+    }
+
+    /// 计数器：只被本模块的迁移用例累加。
+    static MIGRATION_RUNS: AtomicUsize = AtomicUsize::new(0);
+
+    /// 串行化那些共用 `MIGRATION_RUNS` 的用例：cargo test 默认多线程并行，
+    /// 不加锁时彼此的计数会窜到一起（真实风险：断言偶发变成 +2）。
+    static MIGRATION_COUNTER_LOCK: Mutex<()> = Mutex::new(());
+
+    /// 取迁移计数锁。容忍 poisoning：某个用例失败不该把它后面的用例一起拖红。
+    fn lock_migration_counter() -> MutexGuard<'static, ()> {
+        MIGRATION_COUNTER_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    /// 计数用迁移体：被执行一次就让 `MIGRATION_RUNS` +1，并留下可观察的 DDL 痕迹。
+    fn counting_migration(tx: &Transaction<'_>) -> Result<(), DbError> {
+        MIGRATION_RUNS.fetch_add(1, Ordering::SeqCst);
+        tx.execute_batch("CREATE TABLE migration_probe_1 (id INTEGER PRIMARY KEY);")?;
+        Ok(())
+    }
+
+    /// 第二个计数用迁移体（供「跳过已应用步骤」用例的第 2 步使用，建不同的表）。
+    fn counting_migration_next(tx: &Transaction<'_>) -> Result<(), DbError> {
+        MIGRATION_RUNS.fetch_add(1, Ordering::SeqCst);
+        tx.execute_batch("CREATE TABLE migration_probe_2 (id INTEGER PRIMARY KEY);")?;
+        Ok(())
+    }
+
+    /// 测试专用：一步即可升到版本 1 的计数迁移列表（不污染生产 `MIGRATIONS`）。
+    const COUNTER_MIGRATIONS: &[Migration] = &[Migration {
+        to_version: 1,
+        apply: counting_migration,
+    }];
+
+    /// 第一步成功建表，第二步必然失败——用于验证整笔事务回滚。
+    fn create_probe_table(tx: &Transaction<'_>) -> Result<(), DbError> {
+        tx.execute_batch("CREATE TABLE migration_probe (id INTEGER PRIMARY KEY);")?;
+        Ok(())
+    }
+
+    /// 必然失败的迁移体（模拟某条 DDL 在用户库上挂掉）。
+    fn always_failing_migration(_tx: &Transaction<'_>) -> Result<(), DbError> {
+        Err(DbError::Other("迁移步骤故意失败".to_string()))
+    }
+
+    /// 测试专用：两步骤，第二步失败，目标版本 2。
+    const ROLLBACK_MIGRATIONS: &[Migration] = &[
+        Migration {
+            to_version: 1,
+            apply: create_probe_table,
+        },
+        Migration {
+            to_version: 2,
+            apply: always_failing_migration,
+        },
+    ];
+
+    /// 新库：`ensure_schema` 一次建到当前版本，版本号 / 表 / 索引 / 列齐全。
+    #[test]
+    fn ensure_schema_builds_fresh_db_to_current_version() {
+        let conn = rusqlite::Connection::open_in_memory().expect("内存库开启失败");
+        assert_eq!(
+            read_schema_version(&conn).expect("读版本失败"),
+            0,
+            "前置条件：新建的库版本号应为 0"
+        );
+
+        ensure_schema(&conn).expect("新库初始化失败");
+
+        assert_eq!(
+            read_schema_version(&conn).expect("读版本失败"),
+            CURRENT_SCHEMA_VERSION,
+            "新库应一次建到当前 schema 版本"
+        );
+        for table in [
+            "clip_items",
+            "clip_images",
+            "provider_config",
+            "provider_secret",
+            "translation_cache",
+            "translate_history",
+        ] {
+            assert!(table_exists(&conn, table), "新库应含 {table} 表");
+        }
+        assert_eq!(
+            index_names(&conn),
+            EXPECTED_INDEX_NAMES,
+            "新库应恰好建出约定的 5 条索引"
+        );
+        assert!(
+            has_column(&conn, "clip_items", "html_content").expect("查列失败"),
+            "新库 clip_items 应含 html_content 列"
+        );
+    }
+
+    /// 旧库升级：无 `html_content`、`user_version = 0`、已有 2 条数据。
+    ///
+    /// 升级后必须：版本到达当前版本、`html_content` 可写读、既有数据与去重键完好、
+    /// 索引补齐。这条同时钉住「版本 1 的形态探测不会把老库 ALTER 出错」。
+    #[test]
+    fn ensure_schema_upgrades_pre_framework_db_keeping_rows() {
+        // Arrange：版本 0 旧库 + 两条数据
+        let conn = make_pre_framework_conn();
+        conn.execute_batch(
+            "INSERT INTO clip_items
+                 (id, content, kind, created_utc, last_modified_utc, is_deleted, text_hash)
+             VALUES ('old-1', '旧条目一', 'text', 1700000000000, 1700000000000, 0, 'h-old-1'),
+                    ('old-2', '旧条目二', 'text', 1700000000001, 1700000000001, 0, 'h-old-2');",
+        )
+        .expect("写入旧数据失败");
+        assert_eq!(
+            read_schema_version(&conn).expect("读版本失败"),
+            0,
+            "前置条件：旧库版本号为 0"
+        );
+        assert!(
+            !has_column(&conn, "clip_items", "html_content").expect("查列失败"),
+            "前置条件：旧库无 html_content 列"
+        );
+
+        // Act
+        ensure_schema(&conn).expect("旧库升级失败");
+
+        // Assert：版本号、列、数据、去重键、索引
+        assert_eq!(
+            read_schema_version(&conn).expect("读版本失败"),
+            CURRENT_SCHEMA_VERSION,
+            "升级后版本号应到达当前版本"
+        );
+        assert!(
+            has_column(&conn, "clip_items", "html_content").expect("查列失败"),
+            "升级后应补上 html_content 列"
+        );
+
+        let rows = list_items_with_images(&conn).expect("升级后列表查询失败");
+        assert_eq!(rows.len(), 2, "升级不得丢失既有条目");
+        let mut contents: Vec<&str> = rows.iter().map(|r| r.content.as_str()).collect();
+        contents.sort_unstable();
+        assert_eq!(
+            contents,
+            vec!["旧条目一", "旧条目二"],
+            "升级后既有条目的内容应保持原值"
+        );
+
+        assert!(
+            has_live_text_item(&conn, "h-old-1").expect("去重查询失败"),
+            "升级后原条目的去重键仍应命中，否则同一内容会被重复入库"
+        );
+        assert!(
+            has_live_text_item(&conn, "h-old-2").expect("去重查询失败"),
+            "升级后第二条的去重键同样应命中"
+        );
+
+        // 新列在旧行上可用：写入再读回
+        conn.execute(
+            "UPDATE clip_items SET html_content = '<b>旧条目一</b>' WHERE id = 'old-1'",
+            [],
+        )
+        .expect("升级后应可写 html_content");
+        let read: Option<String> = conn
+            .query_row(
+                "SELECT html_content FROM clip_items WHERE id = 'old-1'",
+                [],
+                |r| r.get(0),
+            )
+            .expect("升级后应可读 html_content");
+        assert_eq!(
+            read.as_deref(),
+            Some("<b>旧条目一</b>"),
+            "旧行上的 html_content 应可写可读"
+        );
+
+        assert_eq!(
+            index_names(&conn),
+            EXPECTED_INDEX_NAMES,
+            "升级后索引应补齐到约定的 5 条"
+        );
+    }
+
+    /// 加密文件库上的旧库升级：端到端走生产开库路径（SQLCipher 真库 + 真密钥）。
+    ///
+    /// 内存库用例证明不了两件事：`PRAGMA user_version` 在加密库上是否同样随事务落盘，
+    /// 以及 ALTER 走真实文件库 + SQLCipher 时是否有差异。这条把两者一起钉住。
+    #[test]
+    fn ensure_schema_upgrades_encrypted_file_db_end_to_end() {
+        let dir = tempfile::tempdir().expect("临时目录创建失败");
+        let path = dir.path().join("legacy.db");
+        let key = [7u8; 32];
+
+        // Arrange：用真实密钥手工造一个版本 0 的旧库（无 html_content 列）+ 一条数据
+        {
+            let legacy = open_with_key(&path, &key).expect("开旧库失败");
+            legacy
+                .execute_batch(&format!(
+                    "{PRE_FRAMEWORK_CLIP_ITEMS_DDL}
+                     INSERT INTO clip_items
+                         (id, content, kind, created_utc, last_modified_utc, is_deleted, text_hash)
+                     VALUES ('legacy-1', '加密库旧条目', 'text', 1700000000000, 1700000000000, 0, 'h-legacy-1');"
+                ))
+                .expect("造版本 0 加密旧库失败");
+            assert_eq!(
+                read_schema_version(&legacy).expect("读版本失败"),
+                0,
+                "前置条件：加密旧库版本号为 0"
+            );
+        }
+
+        // Act：走生产开库路径
+        let conn = open_or_create(&path, &key).expect("加密旧库升级失败");
+
+        // Assert
+        assert_eq!(
+            read_schema_version(&conn).expect("读版本失败"),
+            CURRENT_SCHEMA_VERSION,
+            "加密旧库升级后版本号应到达当前版本"
+        );
+        assert!(
+            has_column(&conn, "clip_items", "html_content").expect("查列失败"),
+            "加密旧库升级后应补上 html_content 列"
+        );
+        assert_eq!(
+            count_live(&conn).expect("计数失败"),
+            1,
+            "升级不得丢失既有条目"
+        );
+        assert!(
+            has_live_text_item(&conn, "h-legacy-1").expect("去重查询失败"),
+            "加密旧库升级后去重键仍应命中"
+        );
+        assert_eq!(
+            index_names(&conn),
+            EXPECTED_INDEX_NAMES,
+            "加密旧库升级后索引应补齐"
+        );
+
+        // 再开一次：版本不变（幂等落在真实文件上）
+        drop(conn);
+        let again = open_or_create(&path, &key).expect("重复打开失败");
+        assert_eq!(
+            read_schema_version(&again).expect("读版本失败"),
+            CURRENT_SCHEMA_VERSION,
+            "重复打开不应改变版本号"
+        );
+    }
+
+    /// 幂等：重复 `ensure_schema` 不改版本、不重复执行迁移体。
+    ///
+    /// 两个层面都验：生产路径（版本号 + 列只出现一次）与计数路径（迁移体只跑一次）。
+    #[test]
+    fn repeated_ensure_schema_does_not_rerun_migrations() {
+        let _counter_guard = lock_migration_counter();
+        // Arrange：生产路径先建到最新
+        let conn = rusqlite::Connection::open_in_memory().expect("内存库开启失败");
+        ensure_schema(&conn).expect("首次初始化失败");
+        let version_after_first = read_schema_version(&conn).expect("读版本失败");
+        let columns_after_first = column_names(&conn, "clip_items");
+
+        // Act：再跑一次
+        ensure_schema(&conn).expect("重复初始化不应报错");
+
+        // Assert：版本与列集合都不变，html 列只出现一次
+        assert_eq!(
+            read_schema_version(&conn).expect("读版本失败"),
+            version_after_first,
+            "重复开库不应改变 schema 版本"
+        );
+        assert_eq!(
+            version_after_first, CURRENT_SCHEMA_VERSION,
+            "首次初始化后版本应为当前版本"
+        );
+        assert_eq!(
+            column_names(&conn, "clip_items"),
+            columns_after_first,
+            "重复开库不应再改表结构"
+        );
+        assert_eq!(
+            columns_after_first
+                .iter()
+                .filter(|c| c.as_str() == "html_content")
+                .count(),
+            1,
+            "html_content 列应恰好存在一次，实际列: {columns_after_first:?}"
+        );
+
+        // 计数路径：同一目标版本第二次调用不再执行迁移体
+        let counted = rusqlite::Connection::open_in_memory().expect("内存库开启失败");
+        let before = MIGRATION_RUNS.load(Ordering::SeqCst);
+        apply_migrations(&counted, 1, COUNTER_MIGRATIONS).expect("首次迁移失败");
+        let after_first = MIGRATION_RUNS.load(Ordering::SeqCst);
+        apply_migrations(&counted, 1, COUNTER_MIGRATIONS).expect("重复迁移不应报错");
+        let after_second = MIGRATION_RUNS.load(Ordering::SeqCst);
+
+        assert_eq!(after_first, before + 1, "首次调用应执行 1 次迁移体");
+        assert_eq!(
+            after_second, after_first,
+            "版本已是最新时不应再执行迁移体（否则每次开库都重放一遍 DDL）"
+        );
+        assert_eq!(
+            read_schema_version(&counted).expect("读版本失败"),
+            1,
+            "计数路径的版本号应停在目标版本"
+        );
+    }
+
+    /// 「已应用的步骤必须跳过」：库已在版本 1 时升到版本 2，只能跑第 2 步。
+    ///
+    /// 这条单独存在，是因为上面的计数用例有两条互相兜底的路径（目标已达成时提前返回、
+    /// 循环里跳过已应用步骤），只拆掉其中一条它仍然绿。这里用「列表里含一条已应用步骤 +
+    /// 一条新步骤」，把「跳过已应用步骤」单独钉住：一旦它失效，第 1 步会被重新执行，
+    /// 版本号从 1 跳到 1 的不连续会被拒绝（或计数变成 2）。
+    #[test]
+    fn already_applied_steps_are_skipped_during_upgrade() {
+        let _counter_guard = lock_migration_counter();
+        // Arrange：先把库建到版本 1
+        let conn = rusqlite::Connection::open_in_memory().expect("内存库开启失败");
+        apply_migrations(&conn, 1, COUNTER_MIGRATIONS).expect("首步迁移失败");
+        let before = MIGRATION_RUNS.load(Ordering::SeqCst);
+
+        // Act：目标版本 2，列表里第 1 步是已应用的同一步
+        const TWO_STEPS: &[Migration] = &[
+            Migration {
+                to_version: 1,
+                apply: counting_migration,
+            },
+            Migration {
+                to_version: 2,
+                apply: counting_migration_next,
+            },
+        ];
+        apply_migrations(&conn, 2, TWO_STEPS).expect("升到版本 2 不应失败");
+
+        // Assert：只执行了第 2 步
+        assert_eq!(
+            MIGRATION_RUNS.load(Ordering::SeqCst),
+            before + 1,
+            "库已在版本 1 时只应执行第 2 步，已应用的步骤必须跳过"
+        );
+        assert_eq!(
+            read_schema_version(&conn).expect("读版本失败"),
+            2,
+            "升级后版本号应为 2"
+        );
+    }
+
+    /// 目标版本已达成时一步都不跑：即便传入的列表里带着「未来」的步骤。
+    ///
+    /// 单独钉住 `apply_migrations` 的提前返回——它是「重复开库不做任何 schema 动作」
+    /// 这条契约的唯一实现点（循环里的跳过条件在这里不生效，因为版本号已经等于目标）。
+    #[test]
+    fn reached_target_version_runs_no_step_at_all() {
+        let _counter_guard = lock_migration_counter();
+        let conn = rusqlite::Connection::open_in_memory().expect("内存库开启失败");
+        apply_migrations(&conn, 1, COUNTER_MIGRATIONS).expect("首步迁移失败");
+        let before = MIGRATION_RUNS.load(Ordering::SeqCst);
+
+        // 目标版本 1 已达成；列表里的版本 2 步骤属于未来调用，不得在本次执行
+        const FUTURE_STEP: &[Migration] = &[Migration {
+            to_version: 2,
+            apply: always_failing_migration,
+        }];
+        apply_migrations(&conn, 1, FUTURE_STEP)
+            .expect("目标版本已达成时不应执行任何步骤（包括未来步骤）");
+
+        assert_eq!(
+            MIGRATION_RUNS.load(Ordering::SeqCst),
+            before,
+            "目标版本已达成时不应执行任何迁移体"
+        );
+        assert_eq!(
+            read_schema_version(&conn).expect("读版本失败"),
+            1,
+            "目标版本已达成时版本号不应变化"
+        );
+    }
+
+    /// 前沿保护：库里版本高于本程序支持时明确报错，且报错前不得先动库。
+    #[test]
+    fn ensure_schema_rejects_future_schema_version() {
+        // Arrange：把版本号设成「比本程序新」
+        let conn = rusqlite::Connection::open_in_memory().expect("内存库开启失败");
+        conn.pragma_update(None, "user_version", CURRENT_SCHEMA_VERSION + 1)
+            .expect("写版本号失败");
+
+        // Act
+        let err = ensure_schema(&conn).expect_err("旧程序打开新库必须报错");
+
+        // Assert
+        match err {
+            DbError::SchemaTooNew { found, supported } => {
+                assert_eq!(
+                    found,
+                    CURRENT_SCHEMA_VERSION + 1,
+                    "报错应带上库里的实际版本"
+                );
+                assert_eq!(
+                    supported, CURRENT_SCHEMA_VERSION,
+                    "报错应带上本程序支持的版本"
+                );
+            }
+            other => panic!("应报 SchemaTooNew 而不是其它错误，实际: {other}"),
+        }
+        assert!(
+            !table_exists(&conn, "clip_items"),
+            "版本超前时必须在任何 DDL 之前就报错，不能先建表再失败"
+        );
+    }
+
+    /// 迁移事务性：第二步失败 → 版本号与第一步的建表一起回滚。
+    #[test]
+    fn failed_migration_step_rolls_back_version_and_ddl() {
+        let conn = rusqlite::Connection::open_in_memory().expect("内存库开启失败");
+
+        let err = apply_migrations(&conn, 2, ROLLBACK_MIGRATIONS).expect_err("第二步应失败");
+
+        match err {
+            DbError::MigrationFailed {
+                to_version,
+                from_version,
+                reason,
+            } => {
+                assert_eq!(to_version, 2, "报错应指向失败的那一步");
+                assert_eq!(from_version, 0, "报错应带上迁移前的版本");
+                assert!(
+                    reason.contains("故意失败"),
+                    "底层失败原因应透传，实际: {reason}"
+                );
+            }
+            other => panic!("应报 MigrationFailed 而不是其它错误，实际: {other}"),
+        }
+        assert_eq!(
+            read_schema_version(&conn).expect("读版本失败"),
+            0,
+            "回滚后版本号应停在迁移前，不能留下「表改了但版本没写」的半成品库"
+        );
+        assert!(
+            !table_exists(&conn, "migration_probe"),
+            "第一步建的表也必须随事务回滚掉"
+        );
+    }
+
+    /// 迁移框架自身的一致性护栏：跳号、或列表短于目标版本，都必须硬失败且不留下痕迹。
+    ///
+    /// 这两种情况都是「改代码的人只做了一半」：加步骤忘了 bump 常量、或 bump 了常量忘了
+    /// 加步骤。必须在开库时就硬失败，而不是把库升到一半。
+    #[test]
+    fn apply_migrations_rejects_inconsistent_step_lists() {
+        // 跳号：库在版本 0，列表里第一个步骤直接是版本 2
+        let jump = rusqlite::Connection::open_in_memory().expect("内存库开启失败");
+        let err = apply_migrations(
+            &jump,
+            2,
+            &[Migration {
+                to_version: 2,
+                apply: create_probe_table,
+            }],
+        )
+        .expect_err("跳号必须报错");
+        assert!(
+            matches!(err, DbError::Other(_)),
+            "跳号应报 Other（迁移列表本身不自洽），实际: {err}"
+        );
+        assert_eq!(
+            read_schema_version(&jump).expect("读版本失败"),
+            0,
+            "跳号失败后版本号不应变化"
+        );
+        assert!(
+            !table_exists(&jump, "migration_probe"),
+            "跳号失败不应留下任何 DDL 痕迹"
+        );
+
+        // 列表短于目标版本：常量被 bump 到 2，但最高步骤仍是 1
+        let short = rusqlite::Connection::open_in_memory().expect("内存库开启失败");
+        let err = apply_migrations(
+            &short,
+            2,
+            &[Migration {
+                to_version: 1,
+                apply: create_probe_table,
+            }],
+        )
+        .expect_err("列表短于目标版本必须报错");
+        assert!(
+            matches!(err, DbError::Other(_)),
+            "应报 Other（步骤缺失），实际: {err}"
+        );
+        assert_eq!(
+            read_schema_version(&short).expect("读版本失败"),
+            0,
+            "失败后版本号应回滚到迁移前"
+        );
+        assert!(
+            !table_exists(&short, "migration_probe"),
+            "已经执行过的步骤也必须随事务回滚掉"
+        );
+    }
+
+    /// 迁移列表与版本常量必须同步：从 1 连续递增到 `CURRENT_SCHEMA_VERSION`。
+    ///
+    /// 这条会在「加了步骤忘了 bump 常量」或「bump 了常量忘了加步骤」时直接红，
+    /// 是模块头那条硬约束的机器执行版本。
+    #[test]
+    fn migration_list_is_contiguous_up_to_current_version() {
+        let versions: Vec<i32> = MIGRATIONS.iter().map(|m| m.to_version).collect();
+        let expected: Vec<i32> = (1..=CURRENT_SCHEMA_VERSION).collect();
+        assert_eq!(
+            versions, expected,
+            "迁移步骤必须从 1 连续递增到 CURRENT_SCHEMA_VERSION；新增步骤时要同时 bump 常量"
         );
     }
 
