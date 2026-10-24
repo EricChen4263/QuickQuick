@@ -2257,18 +2257,32 @@ fn map_deepl_error_from_body(msg: &str) -> TranslateError {
     }
 }
 
-/// 将 DeepL HTTP 状态码（由框架层传入）归一为 `TranslateError`。
+/// DeepL 用**非标准**状态码 456 表达「配额耗尽」。
 ///
-/// 供框架层（s03）在拿到 HTTP 状态码后调用，不依赖响应体文案。
+/// 这类失败只有状态码能分辨——响应体文案不保证稳定，不能当判据。通用 HTTP 归一层
+/// （`translate::error::map_provider_error`）凭此常量把它路由回 DeepL 自己的映射表，
+/// 使 provider 专属语义不必混进标准状态码段的通用映射。
+pub const DEEPL_QUOTA_EXCEEDED_STATUS: u16 = 456;
+
+/// 将 DeepL 请求的 HTTP 状态码归一为 `TranslateError`。
+///
+/// 供框架层在拿到 HTTP 状态码后调用，不依赖响应体文案。`body` 仅作诊断上下文
+/// 拼进错误文案，为空时文案只保留状态码。
 pub fn map_deepl_http_status(status: u16, body: &str) -> TranslateError {
+    let detail = if body.trim().is_empty() {
+        format!("HTTP {status}")
+    } else {
+        format!("HTTP {status} {body}")
+    };
+
     match status {
-        403 => TranslateError::Auth(format!("DeepL Free 认证失败: HTTP 403 {body}")),
-        429 => TranslateError::RateLimit(format!("DeepL Free 频率超限: HTTP 429 {body}")),
-        456 => TranslateError::Quota(format!("DeepL Free 配额耗尽: HTTP 456 {body}")),
-        500..=599 => {
-            TranslateError::ServerError(format!("DeepL Free 服务端错误: HTTP {status} {body}"))
+        403 => TranslateError::Auth(format!("DeepL Free 认证失败: {detail}")),
+        429 => TranslateError::RateLimit(format!("DeepL Free 频率超限: {detail}")),
+        DEEPL_QUOTA_EXCEEDED_STATUS => {
+            TranslateError::Quota(format!("DeepL Free 配额耗尽: {detail}"))
         }
-        _ => TranslateError::ServerError(format!("DeepL Free 未知错误: HTTP {status} {body}")),
+        500..=599 => TranslateError::ServerError(format!("DeepL Free 服务端错误: {detail}")),
+        _ => TranslateError::ServerError(format!("DeepL Free 未知错误: {detail}")),
     }
 }
 
@@ -3225,6 +3239,50 @@ mod tests {
         let result = build_provider("deepl_free", &creds, None);
         assert!(result.is_ok(), "deepl_free 有 auth_key 应成功");
         assert_eq!(result.unwrap().capability().id, "deepl_free");
+    }
+
+    // DeepL 的状态码表按 provider 私有语义归一：456 是「配额耗尽」，不是未知错误。
+    #[test]
+    fn deepl_http_status_maps_quota_code_and_standard_codes() {
+        // 456 必须归 Quota——若落到 ServerError，上层会把它当瞬时抖动重试
+        assert!(
+            matches!(
+                map_deepl_http_status(DEEPL_QUOTA_EXCEEDED_STATUS, ""),
+                TranslateError::Quota(_)
+            ),
+            "DeepL 456 应归一为 Quota，实际：{:?}",
+            map_deepl_http_status(DEEPL_QUOTA_EXCEEDED_STATUS, "")
+        );
+        assert!(matches!(
+            map_deepl_http_status(403, ""),
+            TranslateError::Auth(_)
+        ));
+        assert!(matches!(
+            map_deepl_http_status(429, ""),
+            TranslateError::RateLimit(_)
+        ));
+        assert!(matches!(
+            map_deepl_http_status(503, ""),
+            TranslateError::ServerError(_)
+        ));
+        // 未知状态码保守兜底为 ServerError，不当成功
+        assert!(matches!(
+            map_deepl_http_status(418, ""),
+            TranslateError::ServerError(_)
+        ));
+    }
+
+    // 空响应体不应在错误文案里留下尾巴空格（框架层只有状态码、没有 body）。
+    #[test]
+    fn deepl_http_status_message_without_body_has_no_trailing_space() {
+        let err = map_deepl_http_status(DEEPL_QUOTA_EXCEEDED_STATUS, "");
+        assert_eq!(err.to_string(), "配额超限: DeepL Free 配额耗尽: HTTP 456");
+
+        let with_body = map_deepl_http_status(503, "upstream down");
+        assert_eq!(
+            with_body.to_string(),
+            "服务端错误: DeepL Free 服务端错误: HTTP 503 upstream down"
+        );
     }
 
     #[test]
