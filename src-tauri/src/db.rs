@@ -260,6 +260,18 @@ pub struct ClipItemRowWithImage {
     pub html_content: Option<String>,
 }
 
+/// 列表主查询（含关联图片缩略图）的 SQL。
+///
+/// 独立成常量是为了让「查询计划不得退化」的测试断言的就是生产语句本身，
+/// 而不是测试里另抄一份、日后与实现悄悄漂移的副本。
+const LIST_ITEMS_WITH_IMAGES_SQL: &str =
+    "SELECT ci.id, ci.content, ci.kind, ci.is_favorite, ci.last_modified_utc,
+                cimg.id AS image_id, cimg.thumbnail, ci.html_content
+         FROM clip_items ci
+         LEFT JOIN clip_images cimg ON cimg.clip_item_id = ci.id AND cimg.is_deleted = 0
+         WHERE ci.is_deleted = 0
+         ORDER BY ci.is_favorite DESC, ci.last_modified_utc DESC, ci.rowid DESC";
+
 /// 返回未软删条目列表，LEFT JOIN 图片缩略图：收藏优先，组内按最近修改时间降序。
 ///
 /// 与 `list_items_full` 排序规则相同，但额外带出关联 `clip_images` 的
@@ -270,14 +282,7 @@ pub struct ClipItemRowWithImage {
 /// # Errors
 /// `DbError::Sqlite`：SQL 执行失败
 pub fn list_items_with_images(conn: &Connection) -> Result<Vec<ClipItemRowWithImage>, DbError> {
-    let mut stmt = conn.prepare(
-        "SELECT ci.id, ci.content, ci.kind, ci.is_favorite, ci.last_modified_utc,
-                cimg.id AS image_id, cimg.thumbnail, ci.html_content
-         FROM clip_items ci
-         LEFT JOIN clip_images cimg ON cimg.clip_item_id = ci.id AND cimg.is_deleted = 0
-         WHERE ci.is_deleted = 0
-         ORDER BY ci.is_favorite DESC, ci.last_modified_utc DESC, ci.rowid DESC",
-    )?;
+    let mut stmt = conn.prepare(LIST_ITEMS_WITH_IMAGES_SQL)?;
     let rows = stmt.query_map([], |row| {
         let id: String = row.get(0)?;
         let content: String = row.get::<_, Option<String>>(1)?.unwrap_or_default();
@@ -412,6 +417,11 @@ pub fn list_ordered(conn: &Connection) -> Result<Vec<ClipRow>, DbError> {
     Ok(result)
 }
 
+/// 容量裁剪候选查询的 SQL（独立成常量，供查询计划回归测试断言生产语句本身）。
+const CLEANUP_KEEP_RECENT_CANDIDATES_SQL: &str = "SELECT id FROM clip_items
+         WHERE is_deleted = 0 AND is_favorite = 0
+         ORDER BY last_modified_utc DESC";
+
 /// 容量裁剪：只删非收藏的旧项，收藏项永远豁免。
 ///
 /// 语义：非收藏的未软删条目中，按 last_modified_utc 降序保留最新 `keep_count` 条，
@@ -424,11 +434,7 @@ pub fn list_ordered(conn: &Connection) -> Result<Vec<ClipRow>, DbError> {
 pub fn cleanup_keep_recent(conn: &Connection, keep_count: usize) -> Result<usize, DbError> {
     let now_ms = current_utc_ms();
     // 查询需要被软删的非收藏旧项 id：跳过最新的 keep_count 条，删除余下的
-    let mut stmt = conn.prepare(
-        "SELECT id FROM clip_items
-         WHERE is_deleted = 0 AND is_favorite = 0
-         ORDER BY last_modified_utc DESC",
-    )?;
+    let mut stmt = conn.prepare(CLEANUP_KEEP_RECENT_CANDIDATES_SQL)?;
     let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
     let mut all_ids: Vec<String> = Vec::new();
     for r in rows {
@@ -466,6 +472,10 @@ pub enum IngestOutcome {
     Bumped(String),
 }
 
+/// `ingest` 文本去重命中判定查询的 SQL（独立成常量，供查询计划回归测试断言生产语句本身）。
+const INGEST_TEXT_DEDUP_SQL: &str = "SELECT id, html_content FROM clip_items
+             WHERE text_hash = ?1 AND is_deleted = 0 LIMIT 1";
+
 /// 去重入库：将捕获到的 `CapturedItem` 写入数据库，自动去重。
 ///
 /// 流程：
@@ -482,12 +492,9 @@ pub fn ingest(conn: &Connection, item: &CapturedItem) -> Result<IngestOutcome, D
 
     // 查询是否已有未软删的同 hash 行（连带其 html_content 以便补写判定）
     let existing: Option<(String, Option<String>)> = conn
-        .query_row(
-            "SELECT id, html_content FROM clip_items
-             WHERE text_hash = ?1 AND is_deleted = 0 LIMIT 1",
-            rusqlite::params![hash],
-            |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?)),
-        )
+        .query_row(INGEST_TEXT_DEDUP_SQL, rusqlite::params![hash], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?))
+        })
         .optional()?;
 
     if let Some((id, existing_html)) = existing {
@@ -621,6 +628,11 @@ pub fn purge_orphan_image_tombstones(conn: &Connection) -> Result<u64, DbError> 
     Ok(count as u64)
 }
 
+/// `ingest_image_as_clip` 图片去重命中判定查询的 SQL（独立成常量，供查询计划回归测试断言）。
+const INGEST_IMAGE_DEDUP_SQL: &str = "SELECT id, clip_item_id FROM clip_images
+             WHERE image_hash = ?1 AND is_deleted = 0
+             LIMIT 1";
+
 /// 图片剪贴板去重入库：将一张图片作为独立 clip_items 行写入，并关联 clip_images。
 ///
 /// 行为：
@@ -650,13 +662,9 @@ pub fn ingest_image_as_clip(
 
     // 查是否已有同 hash 的未软删图片行
     let existing: Option<(String, Option<String>)> = conn
-        .query_row(
-            "SELECT id, clip_item_id FROM clip_images
-             WHERE image_hash = ?1 AND is_deleted = 0
-             LIMIT 1",
-            rusqlite::params![hash],
-            |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?)),
-        )
+        .query_row(INGEST_IMAGE_DEDUP_SQL, rusqlite::params![hash], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?))
+        })
         .optional()?;
 
     // 合并嵌套 if let：仅当 clip_item_id 非 NULL 时才视为有效命中并 bump
@@ -1027,7 +1035,20 @@ fn open_with_key(path: &Path, key: &[u8; 32]) -> Result<Connection, DbError> {
 /// - `ensure_schema` 内再次确保 foreign_keys = ON（防止调用方绕过 open_with_key 直连）。
 /// - `clip_images.clip_item_id` 声明外键约束，并设 ON DELETE CASCADE：
 ///   GC 物理删除 clip_items 行时，关联图片自动级联清理（设计§五分级清理语义）。
+///
+/// 建表与建索引分两步：表结构由 [`create_tables`] 负责，查询索引由 [`ensure_indexes`]
+/// 负责。两者都幂等，存量库打开时会在原有表上补齐缺失的索引，不改任何列。
 fn ensure_schema(conn: &Connection) -> Result<(), DbError> {
+    create_tables(conn)?;
+    // 存量库迁移：CREATE TABLE IF NOT EXISTS 不会给旧表补列，故对已存在的旧 clip_items
+    // 单独做 html_content 列迁移（幂等）。新建库已含该列，迁移检测后直接跳过。
+    migrate_html_column(conn)?;
+    ensure_indexes(conn)?;
+    Ok(())
+}
+
+/// 建立全部业务表（幂等，使用 IF NOT EXISTS）。
+fn create_tables(conn: &Connection) -> Result<(), DbError> {
     conn.execute_batch(
         "
         PRAGMA foreign_keys = ON;
@@ -1111,9 +1132,66 @@ fn ensure_schema(conn: &Connection) -> Result<(), DbError> {
         );
         ",
     )?;
-    // 存量库迁移：CREATE TABLE IF NOT EXISTS 不会给旧表补列，故对已存在的旧 clip_items
-    // 单独做 html_content 列迁移（幂等）。新建库已含该列，迁移检测后直接跳过。
-    migrate_html_column(conn)?;
+    Ok(())
+}
+
+/// 建立查询索引（幂等，`IF NOT EXISTS`；不新增/修改任何列）。
+///
+/// 索引决定列表首屏、去重、分级清理这三类查询是「按索引定位」还是「全表扫 + 临时排序」。
+/// 每条索引的列顺序都由对应查询的 WHERE 等值前缀与 ORDER BY 决定，不是按「多建几个」堆的。
+///
+/// 命名统一 `idx_<表名>_*` 前缀，便于按前缀枚举与核对。
+///
+/// # Errors
+/// `DbError::Sqlite`：任一 `CREATE INDEX` 执行失败（表不存在、库只读等）
+fn ensure_indexes(conn: &Connection) -> Result<(), DbError> {
+    conn.execute_batch(
+        "
+        -- 列表主查询（list_items_with_images / list_items_full / list_ordered /
+        -- list_backup_items 共用同一过滤与排序）：
+        --   WHERE is_deleted = 0
+        --   ORDER BY is_favorite DESC, last_modified_utc DESC, rowid DESC
+        -- is_favorite 必须排在 last_modified_utc 之前：它是排序的第一键，省掉它之后
+        -- SQLite 仍能把 is_deleted 走索引，却必须把全部未软删行取回来做一次临时 B-tree
+        -- 排序（EXPLAIN QUERY PLAN 中的 USE TEMP B-TREE FOR ORDER BY），列表越长越慢。
+        -- 三列全 ASC 建，查询反向扫描即为全 DESC；rowid 是每个索引隐含的末列，所以
+        -- 「同毫秒用 rowid DESC 兜底」这一层排序同样被索引满足。
+        CREATE INDEX IF NOT EXISTS idx_clip_items_live_favorite_modified
+            ON clip_items (is_deleted, is_favorite, last_modified_utc);
+
+        -- 文本去重（ingest 的命中判定、备份导入的 has_live_text_item）：
+        --   WHERE text_hash = ? AND is_deleted = 0
+        -- is_deleted 作为第二列不是为了过滤（哈希已近乎唯一），而是让两个等值条件都落在
+        -- 索引前缀上：只建 (text_hash) 时，在没有 sqlite_stat1 统计的库上规划器会把
+        -- 「按 text_hash 定位」与「按 is_deleted 定位」估算成等价代价，从而改走
+        -- is_deleted 前缀索引，等于把全部未软删行扫一遍。两列前缀让这条路径稳定命中。
+        CREATE INDEX IF NOT EXISTS idx_clip_items_text_hash
+            ON clip_items (text_hash, is_deleted);
+
+        -- 图片去重（ingest_image_as_clip 的命中判定、备份导入的 has_live_image_item）：
+        --   WHERE image_hash = ? AND is_deleted = 0
+        -- 列顺序理由与文本去重索引相同，且它可覆盖 has_live_image_item 的存在性判定。
+        CREATE INDEX IF NOT EXISTS idx_clip_images_image_hash
+            ON clip_images (image_hash, is_deleted);
+
+        -- 分级清理的候选查询（image::tiered_cleanup 两级）：
+        --   第一级 WHERE is_deleted = 0 AND is_favorite = 0 AND original_present = 1
+        --   第二级 WHERE is_deleted = 0 AND is_favorite = 0
+        --   两级都 ORDER BY created_utc ASC
+        -- 两个等值列在前，两级查询都能顺扫索引直接拿到 created_utc 有序候选。
+        -- original_present 不进索引：它只出现在第一级，插在 created_utc 之前会破坏
+        -- 第二级的排序前缀，让第二级重新退化成临时排序。
+        CREATE INDEX IF NOT EXISTS idx_clip_images_live_favorite_created
+            ON clip_images (is_deleted, is_favorite, created_utc);
+
+        -- 图片按父条目反查：list_items_with_images 的 LEFT JOIN、list_backup_items 的
+        -- 相关子查询都按 clip_images.clip_item_id 定位。同时它是外键
+        -- clip_images.clip_item_id 的级联索引——SQLite 执行 ON DELETE CASCADE 时，
+        -- 每删一条父行都要在子表按该列找一次，缺索引就退化为逐行全表扫子表。
+        CREATE INDEX IF NOT EXISTS idx_clip_images_clip_item_id
+            ON clip_images (clip_item_id);
+        ",
+    )?;
     Ok(())
 }
 
@@ -1716,6 +1794,481 @@ mod tests {
             row.html_content.as_deref(),
             Some("<u>rich later</u>"),
             "补写后 html_content 应为新值"
+        );
+    }
+
+    // ===== 索引与查询计划 =====
+
+    /// 索引相关测试断言的实际索引名清单（与 `ensure_indexes` 一一对应）。
+    const EXPECTED_INDEX_NAMES: [&str; 5] = [
+        "idx_clip_images_clip_item_id",
+        "idx_clip_images_image_hash",
+        "idx_clip_images_live_favorite_created",
+        "idx_clip_items_live_favorite_modified",
+        "idx_clip_items_text_hash",
+    ];
+
+    /// 建立「只有表、没有任何业务索引」的内存库：复现建索引之前的状态。
+    ///
+    /// 直接复用生产建表语句（`create_tables`），保证基线表结构与线上完全一致，
+    /// 不另外抄一份 DDL 造成漂移。
+    fn make_schema_conn() -> rusqlite::Connection {
+        let conn = rusqlite::Connection::open_in_memory().expect("内存库开启失败");
+        create_tables(&conn).expect("建测试表失败");
+        conn
+    }
+
+    /// 取 `EXPLAIN QUERY PLAN` 的 detail 列（第 4 列）并拼成多行文本。
+    ///
+    /// 断言的就是生产语句本身（由调用方传入同一常量），不另抄一份 SQL。
+    /// 生产语句里的 `?n` 占位符在取计划时必须被绑定（填 NULL 即可），否则 SQLite 报参数个数不符。
+    fn explain_query_plan(conn: &rusqlite::Connection, sql: &str) -> String {
+        let mut stmt = conn
+            .prepare(&format!("EXPLAIN QUERY PLAN {sql}"))
+            .expect("EXPLAIN QUERY PLAN 准备失败");
+        let placeholders = vec![rusqlite::types::Value::Null; stmt.parameter_count()];
+        let rows = stmt
+            .query_map(rusqlite::params_from_iter(placeholders), |row| {
+                row.get::<_, String>(3)
+            })
+            .expect("EXPLAIN QUERY PLAN 执行失败");
+        let mut plan: Vec<String> = Vec::new();
+        for row in rows {
+            plan.push(row.expect("读取查询计划行失败"));
+        }
+        plan.join("\n")
+    }
+
+    /// 直接插入一条未软删的文本条目（构造查询计划/排序数据用）。
+    fn insert_text_row(
+        conn: &rusqlite::Connection,
+        id: &str,
+        hash: &str,
+        last_modified_utc: i64,
+        is_favorite: bool,
+    ) {
+        conn.execute(
+            "INSERT INTO clip_items
+                 (id, content, kind, created_utc, last_modified_utc, is_deleted, text_hash, is_favorite)
+             VALUES (?1, ?2, 'text', ?3, ?3, 0, ?4, ?5)",
+            rusqlite::params![
+                id,
+                format!("content-{id}"),
+                last_modified_utc,
+                hash,
+                if is_favorite { 1 } else { 0 }
+            ],
+        )
+        .expect("插入文本条目失败");
+    }
+
+    /// 列出库里 `idx_` 前缀的索引名（按名字排序）。
+    fn index_names(conn: &rusqlite::Connection) -> Vec<String> {
+        let mut stmt = conn
+            .prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND name LIKE 'idx_%' ORDER BY name")
+            .expect("查询索引清单失败");
+        let rows = stmt
+            .query_map([], |row| row.get::<_, String>(0))
+            .expect("查询索引清单失败");
+        rows.map(|r| r.expect("读取索引名失败")).collect()
+    }
+
+    /// 列表主查询的计划必须「按索引定位 + 索引自带有序」，不能全表扫再排序。
+    ///
+    /// 同时对比建索引前后的计划：前态必须真的需要临时排序，否则这个断言就失去意义。
+    #[test]
+    fn list_query_plan_seeks_index_and_drops_temp_sort() {
+        // Arrange：无索引库上先取一次基线计划
+        let conn = make_schema_conn();
+        insert_text_row(
+            &conn,
+            "id-old",
+            "hash-old000000000",
+            1_700_000_000_000,
+            false,
+        );
+        insert_text_row(
+            &conn,
+            "id-new",
+            "hash-new000000000",
+            1_700_000_001_000,
+            true,
+        );
+        let before = explain_query_plan(&conn, LIST_ITEMS_WITH_IMAGES_SQL);
+
+        // Act：补齐索引后再取一次
+        ensure_indexes(&conn).expect("建索引失败");
+        let after = explain_query_plan(&conn, LIST_ITEMS_WITH_IMAGES_SQL);
+
+        eprintln!("[列表主查询计划] 建索引前:\n{before}\n[列表主查询计划] 建索引后:\n{after}");
+
+        // Assert
+        assert!(
+            before.contains("TEMP B-TREE"),
+            "基线（无索引）本该需要临时排序，若这里不成立说明对比前提失效，实际计划:\n{before}"
+        );
+        assert!(
+            !after.contains("TEMP B-TREE"),
+            "建索引后 ORDER BY 必须完全由索引满足，否则条目一多就要把整表取回来排序，实际计划:\n{after}"
+        );
+        assert!(
+            !after.contains("SCAN clip_items"),
+            "列表查询不应再全表扫 clip_items，实际计划:\n{after}"
+        );
+        assert!(
+            after.contains("idx_clip_items_live_favorite_modified"),
+            "列表查询应走 is_deleted 过滤 + is_favorite/last_modified_utc 排序的复合索引，实际计划:\n{after}"
+        );
+        assert!(
+            after.contains("idx_clip_images_clip_item_id"),
+            "关联图片的 LEFT JOIN 必须按 clip_item_id 走索引，否则每个条目都要扫一遍图片表，实际计划:\n{after}"
+        );
+    }
+
+    /// 文本去重查询（`ingest` 命中判定）必须按 text_hash 定位，不能扫全部未软删行。
+    #[test]
+    fn text_dedup_query_plan_seeks_text_hash_index() {
+        let conn = make_schema_conn();
+        insert_text_row(&conn, "id-a", "hash-aaaaaaaaaaaa", 1_700_000_000_000, false);
+        let before = explain_query_plan(&conn, INGEST_TEXT_DEDUP_SQL);
+
+        ensure_indexes(&conn).expect("建索引失败");
+        let after = explain_query_plan(&conn, INGEST_TEXT_DEDUP_SQL);
+
+        eprintln!("[文本去重计划] 建索引前:\n{before}\n[文本去重计划] 建索引后:\n{after}");
+
+        assert!(
+            before.contains("SCAN clip_items"),
+            "基线（无索引）本该全表扫，若这里不成立说明对比前提失效，实际计划:\n{before}"
+        );
+        assert!(
+            after.contains("idx_clip_items_text_hash"),
+            "文本去重必须走 text_hash 索引，否则每次复制都要扫全部未软删条目，实际计划:\n{after}"
+        );
+        assert!(
+            !after.contains("SCAN clip_items"),
+            "文本去重不应再全表扫 clip_items，实际计划:\n{after}"
+        );
+    }
+
+    /// 图片去重查询（`ingest_image_as_clip` 命中判定）必须按 image_hash 定位。
+    #[test]
+    fn image_dedup_query_plan_seeks_image_hash_index() {
+        let conn = make_schema_conn();
+        insert_text_row(&conn, "id-a", "hash-aaaaaaaaaaaa", 1_700_000_000_000, false);
+        conn.execute(
+            "INSERT INTO clip_images
+                 (id, clip_item_id, thumbnail, original, original_present, image_hash,
+                  created_utc, last_modified_utc, is_deleted, is_favorite)
+             VALUES ('img-a', 'id-a', x'00', x'00', 1, 'imghash-aaaaaaaa', 1700000000000, 1700000000000, 0, 0)",
+            [],
+        )
+        .expect("插入图片行失败");
+        let before = explain_query_plan(&conn, INGEST_IMAGE_DEDUP_SQL);
+
+        ensure_indexes(&conn).expect("建索引失败");
+        let after = explain_query_plan(&conn, INGEST_IMAGE_DEDUP_SQL);
+
+        eprintln!("[图片去重计划] 建索引前:\n{before}\n[图片去重计划] 建索引后:\n{after}");
+
+        assert!(
+            before.contains("SCAN clip_images"),
+            "基线（无索引）本该全表扫图片表，若这里不成立说明对比前提失效，实际计划:\n{before}"
+        );
+        assert!(
+            after.contains("idx_clip_images_image_hash"),
+            "图片去重必须走 image_hash 索引，否则每次复制图片都要扫全部图片行，实际计划:\n{after}"
+        );
+        assert!(
+            !after.contains("SCAN clip_images"),
+            "图片去重不应再全表扫 clip_images，实际计划:\n{after}"
+        );
+    }
+
+    /// 容量裁剪候选查询必须按索引直接拿到有序候选，不能扫全表再排序。
+    #[test]
+    fn cleanup_keep_recent_plan_seeks_index() {
+        let conn = make_schema_conn();
+        insert_text_row(&conn, "id-a", "hash-aaaaaaaaaaaa", 1_700_000_000_000, false);
+        insert_text_row(&conn, "id-b", "hash-bbbbbbbbbbbb", 1_700_000_002_000, false);
+        let before = explain_query_plan(&conn, CLEANUP_KEEP_RECENT_CANDIDATES_SQL);
+
+        ensure_indexes(&conn).expect("建索引失败");
+        let after = explain_query_plan(&conn, CLEANUP_KEEP_RECENT_CANDIDATES_SQL);
+
+        eprintln!("[容量裁剪计划] 建索引前:\n{before}\n[容量裁剪计划] 建索引后:\n{after}");
+
+        assert!(
+            !after.contains("TEMP B-TREE"),
+            "容量裁剪按 last_modified_utc 取最旧的超出部分，索引应直接给出有序候选，实际计划:\n{after}"
+        );
+        assert!(
+            after.contains("idx_clip_items_live_favorite_modified"),
+            "容量裁剪应复用列表复合索引（is_deleted + is_favorite 双等值 + last_modified_utc 有序），实际计划:\n{after}"
+        );
+    }
+
+    /// 分级清理的两级候选查询都必须顺扫图片索引拿到 created_utc 有序候选。
+    ///
+    /// 这两条 SQL 的生产归属在 `image::tiered_cleanup`（本项不改该文件），
+    /// 故此处按同形语句断言索引足以支撑其排序，防止索引列序被改坏后清理退化为全表排序。
+    #[test]
+    fn tiered_cleanup_candidate_plans_seek_images_created_index() {
+        let conn = make_schema_conn();
+        insert_text_row(&conn, "id-a", "hash-aaaaaaaaaaaa", 1_700_000_000_000, false);
+        conn.execute(
+            "INSERT INTO clip_images
+                 (id, clip_item_id, thumbnail, original, original_present, image_hash,
+                  created_utc, last_modified_utc, is_deleted, is_favorite)
+             VALUES ('img-a', 'id-a', x'00', x'00', 1, 'imghash-aaaaaaaa', 1700000000000, 1700000000000, 0, 0)",
+            [],
+        )
+        .expect("插入图片行失败");
+
+        let level_one = "SELECT id, COALESCE(length(original), 0) FROM clip_images
+             WHERE is_deleted = 0 AND is_favorite = 0 AND original_present = 1
+             ORDER BY created_utc ASC";
+        let level_two = "SELECT id, clip_item_id,
+                    COALESCE(length(original), 0) + COALESCE(length(thumbnail), 0)
+             FROM clip_images
+             WHERE is_deleted = 0 AND is_favorite = 0
+             ORDER BY created_utc ASC";
+
+        let before_one = explain_query_plan(&conn, level_one);
+        let before_two = explain_query_plan(&conn, level_two);
+
+        ensure_indexes(&conn).expect("建索引失败");
+
+        let after_one = explain_query_plan(&conn, level_one);
+        let after_two = explain_query_plan(&conn, level_two);
+
+        eprintln!(
+            "[分级清理第一级] 建索引前:\n{before_one}\n[分级清理第一级] 建索引后:\n{after_one}\n\
+             [分级清理第二级] 建索引前:\n{before_two}\n[分级清理第二级] 建索引后:\n{after_two}"
+        );
+
+        for (level, plan) in [("第一级", &after_one), ("第二级", &after_two)] {
+            assert!(
+                !plan.contains("TEMP B-TREE"),
+                "分级清理{level}按 created_utc 顺序消耗旧行，索引应直接给出有序候选，实际计划:\n{plan}"
+            );
+            assert!(
+                plan.contains("idx_clip_images_live_favorite_created"),
+                "分级清理{level}应走 (is_deleted, is_favorite, created_utc) 索引，实际计划:\n{plan}"
+            );
+        }
+        assert!(
+            before_one.contains("TEMP B-TREE") && before_two.contains("TEMP B-TREE"),
+            "基线（无索引）本该需要临时排序，若这里不成立说明对比前提失效"
+        );
+    }
+
+    /// `ensure_schema` 可重复执行：不报错，且索引不会被重复创建。
+    #[test]
+    fn ensure_schema_creates_indexes_idempotently() {
+        let conn = make_schema_conn();
+
+        ensure_schema(&conn).expect("首次初始化 schema 失败");
+        let first = index_names(&conn);
+
+        ensure_schema(&conn).expect("重复初始化 schema 不应报错（IF NOT EXISTS 幂等）");
+        let second = index_names(&conn);
+
+        assert_eq!(
+            first, EXPECTED_INDEX_NAMES,
+            "首次初始化应恰好建出约定的 5 条索引，多建说明有冗余索引、少建说明索引漏了，实际: {first:?}"
+        );
+        assert_eq!(
+            second, first,
+            "重复执行不应新增或改名索引（幂等），否则每次开库都会堆索引、拖慢写入，实际: {second:?}"
+        );
+
+        // 与任务约定的核对方式一致：按 idx_ 前缀计数
+        let count: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM sqlite_master WHERE type = 'index' AND name LIKE 'idx_%'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("统计索引数失败");
+        assert_eq!(
+            count,
+            EXPECTED_INDEX_NAMES.len() as i64,
+            "idx_ 前缀索引数应等于约定条数"
+        );
+    }
+
+    /// 存量库补索引：已有数据在 `ensure_schema` 重跑后仍在、且可正常查询。
+    #[test]
+    fn ensure_schema_rerun_keeps_existing_rows_queryable() {
+        // Arrange：模拟一个只有表、没有索引的旧库，并写入数据
+        let conn = make_schema_conn();
+        let first = ingest(
+            &conn,
+            &CapturedItem {
+                text: "旧库里的条目".to_string(),
+                html: None,
+            },
+        )
+        .expect("首次 ingest 失败");
+        let first_id = match first {
+            IngestOutcome::Inserted(id) => id,
+            IngestOutcome::Bumped(_) => panic!("首次 ingest 应 Inserted"),
+        };
+        assert_eq!(
+            index_names(&conn),
+            Vec::<String>::new(),
+            "前置条件：旧库无任何 idx_ 索引"
+        );
+
+        // Act：重跑 ensure_schema（等价于升级后再次开库）
+        ensure_schema(&conn).expect("存量库补索引不应失败");
+
+        // Assert：数据仍在、内容不变、且能被列表与去重路径查到
+        let rows = list_items_with_images(&conn).expect("补索引后列表查询失败");
+        assert_eq!(rows.len(), 1, "补索引不得丢失既有条目");
+        assert_eq!(rows[0].id, first_id, "补索引后条目 id 应保持不变");
+        assert_eq!(rows[0].content, "旧库里的条目", "补索引后内容应保持不变");
+
+        let hash = text_hash("旧库里的条目");
+        assert!(
+            has_live_text_item(&conn, &hash).expect("去重查询失败"),
+            "补索引后原条目的去重键仍应命中，否则同一内容会被重复入库"
+        );
+    }
+
+    /// 同毫秒并列时列表顺序仍按 `rowid DESC` 兜底（索引反向扫描不得破坏该语义）。
+    ///
+    /// 这是建索引最容易悄悄改变的行为：索引自带 rowid 隐含列，
+    /// 一旦扫描方向与 ORDER BY 不一致，同时间戳条目的先后就会与索引前相反。
+    #[test]
+    fn list_order_tiebreak_is_rowid_desc_with_index() {
+        let conn = make_schema_conn();
+        ensure_indexes(&conn).expect("建索引失败");
+        let ts = 1_700_000_000_000;
+        insert_text_row(&conn, "id-first", "hash-first0000000", ts, false);
+        insert_text_row(&conn, "id-second", "hash-second000000", ts, false);
+        insert_text_row(&conn, "id-third", "hash-third0000000", ts, false);
+
+        let ids: Vec<String> = list_items_with_images(&conn)
+            .expect("列表查询失败")
+            .into_iter()
+            .map(|r| r.id)
+            .collect();
+
+        assert_eq!(
+            ids,
+            vec!["id-third", "id-second", "id-first"],
+            "同毫秒并列时必须按 rowid DESC 定序（后插入的排前）；顺序一旦随索引方向翻转，用户每次刷新看到的列表顺序都会跳变"
+        );
+    }
+
+    /// 规模化观测：2 万条条目（含 500 张图）下列表查询与去重查询走索引前后的耗时对比。
+    ///
+    /// 取 2 万条是为了让「全表扫 + 临时排序」与「索引定位」的差距脱离毫秒噪声。
+    /// 绝对耗时受机器负载与构建配置影响（debug 构建、内存库、无页 I/O），**不作断言**，
+    /// 只打印观测值；断言只覆盖确定性的结果集与顺序。
+    #[test]
+    fn list_query_scale_observation() {
+        let conn = make_schema_conn();
+        conn.execute_batch(
+            "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 20000)
+             INSERT INTO clip_items
+                 (id, content, kind, created_utc, last_modified_utc, is_deleted, text_hash, is_favorite)
+             SELECT printf('id-%06d', i), 'text ' || i, 'text',
+                    1700000000000 + i, 1700000000000 + i,
+                    CASE WHEN i % 97 = 0 THEN 1 ELSE 0 END,
+                    printf('%016x', i),
+                    CASE WHEN i % 41 = 0 THEN 1 ELSE 0 END
+             FROM n;
+             WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 500)
+             INSERT INTO clip_images
+                 (id, clip_item_id, thumbnail, original, original_present, image_hash,
+                  created_utc, last_modified_utc, is_deleted, is_favorite)
+             SELECT printf('img-%03d', i), printf('id-%06d', i * 7), x'00', x'00', 1,
+                    printf('h%015x', i), 1700000000000 + i, 1700000000000 + i, 0,
+                    CASE WHEN i % 11 = 0 THEN 1 ELSE 0 END
+             FROM n;",
+        )
+        .expect("批量造数失败");
+
+        let live: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM clip_items WHERE is_deleted = 0",
+                [],
+                |row| row.get(0),
+            )
+            .expect("统计未软删条目失败");
+        let images: i64 = conn
+            .query_row("SELECT COUNT(*) FROM clip_images", [], |row| row.get(0))
+            .expect("统计图片行数失败");
+        // 取最后一条的哈希：命中位置最靠后，全表扫必须扫到底才停
+        let last_hash = text_hash("text 20000");
+
+        // ---- 基线：无任何索引 ----
+        let started = std::time::Instant::now();
+        let before_rows = list_items_with_images(&conn).expect("基线列表查询失败");
+        let list_before = started.elapsed();
+
+        let started = std::time::Instant::now();
+        let text_hit_before = has_live_text_item(&conn, &last_hash).expect("基线文本去重查询失败");
+        let text_before = started.elapsed();
+
+        let started = std::time::Instant::now();
+        let image_hit_before =
+            has_live_image_item(&conn, "h0000000000001f3").expect("基线图片去重失败");
+        let image_before = started.elapsed();
+
+        // ---- 建索引后 ----
+        ensure_indexes(&conn).expect("建索引失败");
+
+        let started = std::time::Instant::now();
+        let after_rows = list_items_with_images(&conn).expect("建索引后列表查询失败");
+        let list_after = started.elapsed();
+
+        let started = std::time::Instant::now();
+        let text_hit_after =
+            has_live_text_item(&conn, &last_hash).expect("建索引后文本去重查询失败");
+        let text_after = started.elapsed();
+
+        let started = std::time::Instant::now();
+        let image_hit_after =
+            has_live_image_item(&conn, "h0000000000001f3").expect("建索引后图片去重失败");
+        let image_after = started.elapsed();
+
+        eprintln!(
+            "[规模观测] 未软删条目 {live} 条 / 图片 {images} 条（内存库 + debug 构建，绝对耗时不作断言）\
+             \n  列表查询：建索引前 {list_before:?} -> 建索引后 {list_after:?}\
+             \n  文本去重：建索引前 {text_before:?} -> 建索引后 {text_after:?}\
+             \n  图片去重：建索引前 {image_before:?} -> 建索引后 {image_after:?}"
+        );
+
+        // ---- 断言：只覆盖确定性的结果集与顺序 ----
+        assert_eq!(
+            after_rows.len() as i64,
+            live,
+            "建索引后列表查询必须仍返回全部未软删条目，少一条都是索引导致的漏行"
+        );
+        assert_eq!(
+            text_hit_after, text_hit_before,
+            "建索引不得改变文本去重判定结果，否则同一内容会被重复入库或反向漏判"
+        );
+        assert_eq!(
+            image_hit_after, image_hit_before,
+            "建索引不得改变图片去重判定结果，否则同图会被重复入库或反向漏判"
+        );
+
+        let before_order: Vec<(&String, bool, i64)> = before_rows
+            .iter()
+            .map(|r| (&r.id, r.is_favorite, r.last_modified_utc))
+            .collect();
+        let after_order: Vec<(&String, bool, i64)> = after_rows
+            .iter()
+            .map(|r| (&r.id, r.is_favorite, r.last_modified_utc))
+            .collect();
+        assert_eq!(
+            after_order, before_order,
+            "建索引不得改变列表排序结果（收藏优先 + 时间倒序 + rowid 兜底必须与索引前逐行一致）"
         );
     }
 }
