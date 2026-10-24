@@ -2,7 +2,7 @@
 //!
 //! 设计要点：
 //! - 镜像 autostart.rs 的文件持久化模式：serde_json、thiserror 枚举错误、不 unwrap/panic。
-//! - `AppSettings` 管理排除名单与翻译 provider 选择，不持有也不调用任何 Tauri 句柄。
+//! - `AppSettings` 管理排除名单、忽略规则与翻译 provider 选择，不持有也不调用任何 Tauri 句柄。
 //! - 路径解析（app_config_dir）属于命令层胶水，不在本模块处理。
 //! - 所有新字段均加 `#[serde(default)]`，保证旧 settings.json 缺字段时反序列化不失败，
 //!   向前兼容：既有 `excluded_apps` / `selected_provider` 绝不丢失。
@@ -10,6 +10,8 @@
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 use thiserror::Error;
+
+use crate::privacy::ExcludeMode;
 
 /// 应用设置相关错误
 #[derive(Debug, Error)]
@@ -51,8 +53,21 @@ fn default_max_image_bytes() -> u64 {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppSettings {
     /// 剪贴板捕获排除的应用标识列表（如 macOS bundle ID）
+    ///
+    /// 黑白名单共用这一份条目：`exclude_mode` 决定方向，切换模式时不动已填的条目。
     #[serde(default)]
     pub excluded_apps: Vec<String>,
+    /// 应用名单模式：blacklist（名单内不记录，默认）/ whitelist（只记录名单内）
+    ///
+    /// 旧 settings.json 没有该字段时按黑名单处理，与历史行为一致。
+    #[serde(default)]
+    pub exclude_mode: ExcludeMode,
+    /// 内容忽略正则（多条，任一命中即不入库）
+    ///
+    /// 只匹配文本内容；图片条目没有文本可比，不参与正则匹配。
+    /// 非法正则在编译时丢弃该条并留痕，其余规则照常生效（不会因写错一条把剪贴板全吞）。
+    #[serde(default)]
+    pub ignore_regexes: Vec<String>,
     /// 当前选中的翻译 provider id（与 providers::registry() 的 id 对应）
     #[serde(default = "default_selected_provider")]
     pub selected_provider: String,
@@ -80,6 +95,8 @@ impl Default for AppSettings {
     fn default() -> Self {
         Self {
             excluded_apps: Vec::new(),
+            exclude_mode: ExcludeMode::default(),
+            ignore_regexes: Vec::new(),
             selected_provider: default_selected_provider(),
             pause_capture: false,
             skip_sensitive: default_skip_sensitive(),
@@ -177,6 +194,8 @@ mod tests {
     fn round_trip_preserves_all_fields() {
         let original = AppSettings {
             excluded_apps: vec!["com.bar.app".to_string()],
+            exclude_mode: ExcludeMode::Whitelist,
+            ignore_regexes: vec![r"^\d{16}$".to_string(), "secret".to_string()],
             selected_provider: "openai".to_string(),
             pause_capture: true,
             skip_sensitive: false,
@@ -189,6 +208,8 @@ mod tests {
         let restored: AppSettings = serde_json::from_str(&json).expect("反序列化应成功");
 
         assert_eq!(restored.excluded_apps, original.excluded_apps);
+        assert_eq!(restored.exclude_mode, ExcludeMode::Whitelist);
+        assert_eq!(restored.ignore_regexes, original.ignore_regexes);
         assert_eq!(restored.selected_provider, original.selected_provider);
         assert_eq!(restored.pause_capture, original.pause_capture);
         assert_eq!(restored.skip_sensitive, original.skip_sensitive);
@@ -196,6 +217,44 @@ mod tests {
         assert_eq!(restored.auto_update, original.auto_update);
         assert_eq!(restored.theme, original.theme);
         assert_eq!(restored.max_image_bytes, 5 * 1024 * 1024);
+    }
+
+    /// 旧 JSON（没有 exclude_mode / ignore_regexes）能反序列化：模式回落到黑名单、
+    /// 内容规则为空，而既有排除名单原样保留。
+    #[test]
+    fn legacy_json_without_rule_fields_keeps_old_behavior() {
+        let json = r#"{"excluded_apps":["1Password"],"pause_capture":false}"#;
+        let settings: AppSettings = serde_json::from_str(json).expect("旧 JSON 反序列化应成功");
+
+        assert_eq!(settings.excluded_apps, vec!["1Password".to_string()]);
+        assert_eq!(
+            settings.exclude_mode,
+            ExcludeMode::Blacklist,
+            "缺字段时必须回落到黑名单（历史行为）"
+        );
+        assert!(
+            settings.ignore_regexes.is_empty(),
+            "缺字段时内容规则应为空（不启用）"
+        );
+    }
+
+    /// 模式字段在 JSON 里是小写字符串，与前端传输的形状一致。
+    #[test]
+    fn exclude_mode_serializes_as_lowercase_string() {
+        let settings = AppSettings {
+            exclude_mode: ExcludeMode::Whitelist,
+            ..AppSettings::default()
+        };
+        let json = serde_json::to_string(&settings).expect("序列化应成功");
+
+        assert!(
+            json.contains(r#""exclude_mode":"whitelist""#),
+            "模式必须序列化为小写字符串，实际：{json}"
+        );
+
+        let restored: AppSettings =
+            serde_json::from_str(r#"{"exclude_mode":"blacklist"}"#).expect("反序列化应成功");
+        assert_eq!(restored.exclude_mode, ExcludeMode::Blacklist);
     }
 
     /// 旧 JSON（无 max_image_bytes 字段）反序列化后该字段取默认值 20MiB。

@@ -48,6 +48,9 @@ ureq = { version = "2", features = ["tls"] }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }
 webp = "0.3"
 base64 = "0.22"
+# 内容忽略规则：用户配置的多条正则，命中即不入库（编译一次、轮询只匹配）。
+# 版本对齐 Cargo.lock 已锁定的 regex 1.12.3，不新增下载。
+regex = "1.12"
 
 [dev-dependencies]
 tempfile = "3"

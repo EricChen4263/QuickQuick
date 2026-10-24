@@ -168,6 +168,10 @@ pub fn run() {
             ipc::settings::set_hotkey,
             ipc::settings::get_exclude_list,
             ipc::settings::set_exclude_list,
+            ipc::settings::get_exclude_mode,
+            ipc::settings::set_exclude_mode,
+            ipc::settings::get_ignore_regexes,
+            ipc::settings::set_ignore_regexes,
             ipc::settings::get_translate_providers,
             ipc::settings::get_selected_provider,
             ipc::settings::set_selected_provider,
@@ -778,8 +782,11 @@ fn init_capture_state(app: &tauri::App) -> CaptureState {
         .map(|path| settings::AppSettings::load_or_default(&path))
         .unwrap_or_default();
 
-    let exclude_list =
-        privacy::IgnoreRules::new_with_apps(settings.excluded_apps.iter().map(String::as_str));
+    let exclude_list = privacy::ExcludeList::with_rules(
+        &settings.excluded_apps,
+        settings.exclude_mode,
+        &settings.ignore_regexes,
+    );
 
     CaptureState {
         paused: Arc::new(AtomicBool::new(settings.pause_capture)),

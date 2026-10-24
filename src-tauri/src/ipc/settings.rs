@@ -228,18 +228,90 @@ pub fn set_exclude_list_impl(
     runtime_rules: Option<&RwLock<crate::privacy::IgnoreRules>>,
 ) -> Result<(), String> {
     let mut settings = AppSettings::load_or_default(settings_path);
-    settings.excluded_apps = list.clone();
+    settings.excluded_apps = list;
     settings.save(settings_path).map_err(|e| e.to_string())?;
-
-    if let Some(lock) = runtime_rules {
-        let rules = crate::privacy::IgnoreRules::new_with_apps(list.iter().map(String::as_str));
-        match lock.write() {
-            Ok(mut guard) => *guard = rules,
-            Err(e) => eprintln!("[QuickQuick] 忽略规则写锁中毒，跳过运行时更新: {e}"),
-        }
-    }
-
+    rebuild_runtime_rules(runtime_rules, &settings);
     Ok(())
+}
+
+/// `get_exclude_mode` 的纯函数实现：返回应用名单模式（黑名单 / 白名单）。
+///
+/// # Errors
+/// 此函数实际上永不返回 `Err`（`load_or_default` 静默回退默认值），
+/// 签名保留 `Result` 以与命令层 `?` 传播保持一致。
+pub fn get_exclude_mode_impl(settings_path: &Path) -> Result<crate::privacy::ExcludeMode, String> {
+    Ok(AppSettings::load_or_default(settings_path).exclude_mode)
+}
+
+/// `set_exclude_mode_impl`：切换名单方向，**保留已填的应用条目与内容正则**。
+///
+/// 切换模式只改方向，不动条目——用户从黑名单换到白名单时，
+/// 刚填的那批应用名正好就是他想要的「只记录这些」，清空反而是破坏。
+///
+/// # Errors
+/// 文件写入失败时返回错误字符串。
+pub fn set_exclude_mode_impl(
+    mode: crate::privacy::ExcludeMode,
+    settings_path: &Path,
+    runtime_rules: Option<&RwLock<crate::privacy::IgnoreRules>>,
+) -> Result<(), String> {
+    let mut settings = AppSettings::load_or_default(settings_path);
+    settings.exclude_mode = mode;
+    settings.save(settings_path).map_err(|e| e.to_string())?;
+    rebuild_runtime_rules(runtime_rules, &settings);
+    Ok(())
+}
+
+/// `get_ignore_regexes_impl`：返回用户配置的内容忽略正则原文（未编译）。
+///
+/// 返回原文而非编译结果：前端要能原样编辑，编译失败的那条也要能被用户看到并修正。
+///
+/// # Errors
+/// 此函数实际上永不返回 `Err`（`load_or_default` 静默回退默认值）。
+pub fn get_ignore_regexes_impl(settings_path: &Path) -> Result<Vec<String>, String> {
+    Ok(AppSettings::load_or_default(settings_path).ignore_regexes)
+}
+
+/// `set_ignore_regexes_impl`：整体覆盖内容忽略正则，并重建运行时规则集。
+///
+/// 非法正则**不阻塞写入**：原文照存，运行时编译时丢弃该条并留痕。
+/// 若在这里拒收，用户存了一半的规则会在下次打开设置页时消失，反而更难修。
+///
+/// # Errors
+/// 文件写入失败时返回错误字符串。
+pub fn set_ignore_regexes_impl(
+    patterns: Vec<String>,
+    settings_path: &Path,
+    runtime_rules: Option<&RwLock<crate::privacy::IgnoreRules>>,
+) -> Result<(), String> {
+    let mut settings = AppSettings::load_or_default(settings_path);
+    settings.ignore_regexes = patterns;
+    settings.save(settings_path).map_err(|e| e.to_string())?;
+    rebuild_runtime_rules(runtime_rules, &settings);
+    Ok(())
+}
+
+/// 把设置里的忽略规则整体重建进运行时规则集。
+///
+/// 三个设置入口（应用名单 / 名单模式 / 内容正则）共用这一条重建路径，任何一处写入后
+/// 规则集都从**完整设置**重新构造——避免「改模式时把正则丢了」这类字段互相覆盖。
+/// 正则的编译也只发生在这里，轮询路径只读不编译。
+fn rebuild_runtime_rules(
+    lock: Option<&RwLock<crate::privacy::IgnoreRules>>,
+    settings: &AppSettings,
+) {
+    let Some(lock) = lock else {
+        return;
+    };
+    let rules = crate::privacy::IgnoreRules::with_rules(
+        &settings.excluded_apps,
+        settings.exclude_mode,
+        &settings.ignore_regexes,
+    );
+    match lock.write() {
+        Ok(mut guard) => *guard = rules,
+        Err(e) => eprintln!("[QuickQuick] 忽略规则写锁中毒，跳过运行时更新: {e}"),
+    }
 }
 
 /// `get_translate_providers` 的纯函数实现，可在测试中直接调用。
@@ -386,6 +458,42 @@ pub fn set_exclude_list(
 ) -> Result<(), String> {
     let path = resolve_config_path(&app, "settings.json")?;
     set_exclude_list_impl(list, &path, Some(&state.exclude_list))
+}
+
+/// Tauri 命令：读取应用名单模式（blacklist / whitelist）。
+#[tauri::command]
+pub fn get_exclude_mode(app: AppHandle) -> Result<crate::privacy::ExcludeMode, String> {
+    let path = resolve_config_path(&app, "settings.json")?;
+    get_exclude_mode_impl(&path)
+}
+
+/// Tauri 命令：切换应用名单模式（持久化 + 运行时即时生效，保留已填条目）。
+#[tauri::command]
+pub fn set_exclude_mode(
+    app: AppHandle,
+    state: State<'_, CaptureState>,
+    mode: crate::privacy::ExcludeMode,
+) -> Result<(), String> {
+    let path = resolve_config_path(&app, "settings.json")?;
+    set_exclude_mode_impl(mode, &path, Some(&state.exclude_list))
+}
+
+/// Tauri 命令：读取内容忽略正则原文。
+#[tauri::command]
+pub fn get_ignore_regexes(app: AppHandle) -> Result<Vec<String>, String> {
+    let path = resolve_config_path(&app, "settings.json")?;
+    get_ignore_regexes_impl(&path)
+}
+
+/// Tauri 命令：整体覆盖内容忽略正则（持久化 + 运行时即时生效）。
+#[tauri::command]
+pub fn set_ignore_regexes(
+    app: AppHandle,
+    state: State<'_, CaptureState>,
+    patterns: Vec<String>,
+) -> Result<(), String> {
+    let path = resolve_config_path(&app, "settings.json")?;
+    set_ignore_regexes_impl(patterns, &path, Some(&state.exclude_list))
 }
 
 /// Tauri 命令：返回所有可用翻译 provider 列表。
@@ -1101,6 +1209,74 @@ mod tests {
         assert!(
             lock.read().unwrap().contains("com.1password.1password"),
             "运行时排除名单应在 set_exclude_list 后立即生效"
+        );
+    }
+
+    // ===== 忽略规则增强（P3-5） =====
+
+    /// 默认模式是黑名单：旧 settings.json 与全新安装都走历史行为。
+    #[test]
+    fn get_exclude_mode_defaults_to_blacklist() {
+        use crate::privacy::ExcludeMode;
+
+        let file = NamedTempFile::new().unwrap();
+        assert_eq!(
+            get_exclude_mode_impl(file.path()).unwrap(),
+            ExcludeMode::Blacklist,
+            "无配置文件时模式应回落到黑名单"
+        );
+    }
+
+    /// 切换模式只改方向，不动已填条目与内容正则。
+    ///
+    /// 这是本项最容易写错的地方：三个设置入口各自 save 一次 settings，
+    /// 若从局部变量重建规则集，很容易把另外两个字段覆盖掉。
+    #[test]
+    fn set_exclude_mode_keeps_apps_and_regexes() {
+        use crate::privacy::{ExcludeMode, IgnoreRules};
+        use std::sync::RwLock;
+
+        let lock = RwLock::new(IgnoreRules::default());
+        let file = NamedTempFile::new().unwrap();
+        set_exclude_list_impl(vec!["1Password".to_string()], file.path(), Some(&lock)).unwrap();
+        set_ignore_regexes_impl(vec!["^secret-".to_string()], file.path(), Some(&lock)).unwrap();
+
+        // Act：切到白名单
+        set_exclude_mode_impl(ExcludeMode::Whitelist, file.path(), Some(&lock)).unwrap();
+
+        // Assert：模式变了，条目与正则都还在（持久化与运行时两侧都要成立）
+        let settings = AppSettings::load_or_default(file.path());
+        assert_eq!(settings.exclude_mode, ExcludeMode::Whitelist);
+        assert_eq!(settings.excluded_apps, vec!["1Password".to_string()]);
+        assert_eq!(settings.ignore_regexes, vec!["^secret-".to_string()]);
+
+        let rules = lock.read().unwrap();
+        assert_eq!(rules.mode(), ExcludeMode::Whitelist);
+        assert!(rules.contains("1password"), "切换模式不该清空应用条目");
+        assert_eq!(rules.regex_count(), 1, "切换模式不该丢掉内容正则");
+    }
+
+    /// 内容正则原文照存：非法条目也要能被前端读回来修正，不能被静默丢弃。
+    #[test]
+    fn set_ignore_regexes_persists_raw_patterns_even_invalid() {
+        use crate::privacy::IgnoreRules;
+        use std::sync::RwLock;
+
+        let lock = RwLock::new(IgnoreRules::default());
+        let file = NamedTempFile::new().unwrap();
+        let patterns = vec!["^\\d{16}$".to_string(), "([unclosed".to_string()];
+
+        set_ignore_regexes_impl(patterns.clone(), file.path(), Some(&lock)).unwrap();
+
+        assert_eq!(
+            get_ignore_regexes_impl(file.path()).unwrap(),
+            patterns,
+            "非法正则的原文也必须存下来，否则用户没法在设置页修它"
+        );
+        assert_eq!(
+            lock.read().unwrap().regex_count(),
+            1,
+            "运行时只编译合法的那一条，非法条目降级不生效"
         );
     }
 

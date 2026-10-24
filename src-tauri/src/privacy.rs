@@ -3,7 +3,7 @@
 //! 设计对齐：设计文档§三#6 + 关键机制隐私三件套
 //!
 //! 职责：
-//! - 持有当前生效的忽略规则集（`IgnoreRules`，历史名 `ExcludeList`）：应用名单 + 当轮静默意图
+//! - 持有当前生效的忽略规则集（`IgnoreRules`，历史名 `ExcludeList`）：应用名单 + 黑白模式 + 内容正则
 //! - 定义捕获策略（`CapturePolicy`）：暂停开关 + 敏感开关 + 规则集引用
 //! - 提供 `should_skip_with_source` 纯函数：依序判定快照是否应被跳过
 //! - 提供托盘点击的纯决策（`tray_click_action`）与「仅忽略下一次」的一次性开关（`SkipOnce`）
@@ -12,20 +12,24 @@
 //! 1. 本轮暂停且不是「仅忽略下一次」 → Paused
 //! 2. 本轮是「仅忽略下一次」        → SkipOnce
 //! 3. snapshot.is_concealed && policy.skip_sensitive → Concealed
-//! 4. 应用名单规则（黑名单命中）   → Excluded
-//! 5. snapshot.has_self_marker      → SelfMark
-//! 6. 否则 → None（可捕获）
+//! 4. 快照文本命中任一内容正则      → ContentRegex
+//! 5. 应用名单规则（黑名单命中 / 白名单未命中）→ Excluded
+//! 6. snapshot.has_self_marker      → SelfMark
+//! 7. 否则 → None（可捕获）
 //!
 //! 顺序理由：前两条是「用户此刻的硬意图」，第三条是「系统的隐私承诺」，
 //! 四五条是「用户可调规则」，最后一条是「机器事实」——自产标记只在本工具写回剪贴板时出现，
 //! 放到最后不影响正确性，还能让前面的规则先给出更贴近用户意图的原因。
 //!
 //! 重要约束：本模块不对剪贴板内容做任何启发式分析（不猜密码、不检测 token 等）。
-//! 敏感判定仅依赖平台标记（is_concealed）和用户显式配置（排除名单）。
+//! 敏感判定仅依赖平台标记（is_concealed）和用户显式配置（排除名单 / 内容正则）。
 
 use std::borrow::Cow;
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, Ordering};
+
+use regex::Regex;
+use serde::{Deserialize, Serialize};
 
 use crate::clipboard::{ClipboardBackend, ClipboardSnapshot, SourceApp};
 
@@ -41,7 +45,9 @@ pub enum SkipReason {
     SkipOnce,
     /// 快照携带平台 concealed/transient 标记（敏感内容，如密码管理器填充）
     Concealed,
-    /// 来源应用命中应用名单条目
+    /// 快照文本命中用户配置的内容忽略正则
+    ContentRegex,
+    /// 来源应用命中应用名单规则（黑名单：在名单内 / 白名单：不在名单内）
     Excluded,
     /// 本工具自写剪贴板的私有 UTI 标记（防自污染）
     SelfMark,
@@ -49,8 +55,8 @@ pub enum SkipReason {
 
 /// 当前生效的忽略规则集。
 ///
-/// **历史名保留**：这个类型最初只承载「App 排除名单」，现在还额外携带
-/// 一个当轮静默意图（见下方 `silence` 字段）。新代码请用别名 [`IgnoreRules`]，
+/// **历史名保留**：这个类型最初只承载「App 排除名单」，现在承载三层忽略规则里的两层——
+/// 应用名单（黑名单 / 白名单）与内容正则。新代码请用别名 [`IgnoreRules`]，
 /// 名字与本注释都按「规则集」理解，不要再当它是一个名单。
 ///
 /// 应用名单的条目既可以是 macOS bundle ID（`com.1password.1password`），
@@ -71,15 +77,32 @@ pub enum SkipReason {
 pub struct ExcludeList {
     /// 归一化（去首尾空白 + 小写折叠）后的应用名单条目
     apps: HashSet<String>,
+    /// 应用名单的判定方向（黑名单 / 白名单）
+    mode: ExcludeMode,
+    /// 已编译的内容忽略正则（空 = 内容规则未启用）
+    ///
+    /// 编译只发生在设置加载 / IPC 写入时；轮询路径只做匹配，不付编译成本。
+    regexes: Vec<Regex>,
     /// 当轮静默意图（只影响 `SkipReason` 取值，不改变任何判定结果）
     silence: RoundSilence,
 }
 
 /// 忽略规则集的语义化别名。
 ///
-/// `ExcludeList` 是历史名（当年只有排除名单），语义已经扩成「当前生效的忽略规则集」。
+/// `ExcludeList` 是历史名（当年只有排除名单），语义已经扩成「应用名单 + 黑白模式 + 内容正则」。
 /// 新代码请用这个名字；类型本身不改名是为了不牵动既有调用点与跨 crate 契约测试。
 pub type IgnoreRules = ExcludeList;
+
+/// 应用名单的判定方向。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ExcludeMode {
+    /// 黑名单：命中名单的应用不记录（默认，与历史行为一致）
+    #[default]
+    Blacklist,
+    /// 白名单：**只有**命中名单的应用才记录
+    Whitelist,
+}
 
 /// 当轮静默意图：区分「暂停」与「仅忽略下一次」这两种本轮行为完全等价、
 /// 但原因不同的情况。
@@ -106,9 +129,17 @@ fn normalize_app_key(value: &str) -> Cow<'_, str> {
 
 impl ExcludeList {
     /// 应用名单是否为空（空名单时名单规则短路返回「不拦」，零额外开销）。
+    ///
+    /// 只反映应用条目，不含内容正则：两者是独立的两层规则。
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.apps.is_empty()
+    }
+
+    /// 当前应用名单模式（黑名单 / 白名单）。
+    #[must_use]
+    pub fn mode(&self) -> ExcludeMode {
+        self.mode
     }
 
     /// 当前的当轮静默意图。
@@ -117,7 +148,13 @@ impl ExcludeList {
         self.silence
     }
 
-    /// 判断 `app` 是否在应用名单内（大小写不敏感）。
+    /// 已编译的内容正则条数（用于诊断与测试断言）。
+    #[must_use]
+    pub fn regex_count(&self) -> usize {
+        self.regexes.len()
+    }
+
+    /// 判断 `app` 是否在应用名单内（大小写不敏感，与模式无关的纯命中测试）。
     ///
     /// ```rust
     /// use quickquick_lib::privacy::ExcludeList;
@@ -136,6 +173,8 @@ impl ExcludeList {
 
     /// 判断来源应用身份是否命中名单条目：bundle id 或本地化显示名任一命中即算命中。
     ///
+    /// 注意返回的是**命中**而非**拦截**——黑名单里命中才拦，白名单里命中才放行，
+    /// 方向由 [`ExcludeList::mode`] 决定，判定在 `should_skip_with_source` 里做。
     /// 空名单直接返回 false，不读取身份字段（轮询路径零额外开销）。
     #[must_use]
     pub fn matches_source(&self, source: &SourceApp) -> bool {
@@ -152,19 +191,32 @@ impl ExcludeList {
                 .is_some_and(|name| self.contains(name))
     }
 
+    /// 文本内容是否命中任一内容忽略正则。
+    ///
+    /// 无正则时零开销短路（不碰任何字节）。
+    #[must_use]
+    pub fn matches_ignored_content(&self, text: &str) -> bool {
+        if self.regexes.is_empty() {
+            return false;
+        }
+        self.regexes.iter().any(|re| re.is_match(text))
+    }
+
     /// 派生一份带「仅忽略下一次」标记的当轮副本。
     ///
     /// 只在托盘 `⌥⇧` 置位且本轮确有新内容时才调用，常态轮次借用共享规则集、
-    /// 不付这份克隆成本（空名单时克隆不分配内存）。
+    /// 不付这份克隆成本（空名单 / 无正则时克隆不分配内存）。
     #[must_use]
     pub fn for_skip_once_round(&self) -> Self {
         Self {
             apps: self.apps.clone(),
+            mode: self.mode,
+            regexes: self.regexes.clone(),
             silence: RoundSilence::SkipOnce,
         }
     }
 
-    /// 从字符串切片迭代器构造只含应用名单的规则集。
+    /// 从字符串切片迭代器构造只含应用名单的规则集（黑名单、无内容正则）。
     ///
     /// ```rust
     /// use quickquick_lib::privacy::ExcludeList;
@@ -181,6 +233,50 @@ impl ExcludeList {
             ..Self::default()
         }
     }
+
+    /// 从设置项完整构造：应用名单 + 模式 + 内容正则。
+    ///
+    /// 正则在这里一次性编译，非法条目只留痕不生效（见 [`compile_ignore_regexes`]）。
+    /// 缓存失效时机与既有排除名单一致：设置页写入时由 IPC 层重建整个规则集并替换
+    /// `Arc<RwLock<_>>`，轮询线程下一轮读到新值——不会每条剪贴板都重新编译。
+    #[must_use]
+    pub fn with_rules(apps: &[String], mode: ExcludeMode, patterns: &[String]) -> Self {
+        Self {
+            apps: apps
+                .iter()
+                .map(|app| normalize_app_key(app))
+                .map(Cow::into_owned)
+                .collect(),
+            mode,
+            regexes: compile_ignore_regexes(patterns),
+            silence: RoundSilence::None,
+        }
+    }
+}
+
+/// 编译用户配置的内容忽略正则，逐条失败安全降级。
+///
+/// **失败方向是「不跳过」而不是「跳过」**：非法正则只 `eprintln` 留痕并丢弃该条，
+/// 其余规则照常生效，绝不 panic、也绝不让整条内容规则静默消失。
+/// 理由：规则写错是用户的手误，代价应该是「这条规则没生效」，
+/// 而不是「用户的剪贴板被一条写错的正则全吞了」——后者是数据丢失。
+#[must_use]
+pub fn compile_ignore_regexes(patterns: &[String]) -> Vec<Regex> {
+    let mut compiled = Vec::with_capacity(patterns.len());
+    for pattern in patterns {
+        if pattern.trim().is_empty() {
+            // 空行是 UI 上删干净的残留，静默忽略（不是用户错误，不需留痕噪声）
+            continue;
+        }
+        match Regex::new(pattern) {
+            Ok(re) => compiled.push(re),
+            Err(e) => eprintln!(
+                "[QuickQuick] 内容忽略正则编译失败，本条不生效（其余规则照常）：\
+                 pattern={pattern:?} 原因={e}"
+            ),
+        }
+    }
+    compiled
 }
 
 /// 捕获策略：聚合当前运行时的跳过规则。
@@ -200,7 +296,7 @@ pub struct CapturePolicy<'a> {
     /// false 时即使 `snapshot.is_concealed == true` 也不跳过，
     /// 允许用户主动关闭隐私保护来捕获密码管理器内容。
     pub skip_sensitive: bool,
-    /// 当前生效的忽略规则集引用
+    /// 当前生效的忽略规则集引用（应用名单 + 黑白模式 + 内容正则）
     pub exclude: &'a ExcludeList,
 }
 
@@ -214,11 +310,12 @@ pub struct CapturePolicy<'a> {
 /// 1. 本轮静默且非「仅忽略下一次」             → [`SkipReason::Paused`]
 /// 2. 本轮静默且为「仅忽略下一次」             → [`SkipReason::SkipOnce`]
 /// 3. `snapshot.is_concealed && skip_sensitive` → [`SkipReason::Concealed`]
-/// 4. 应用名单规则命中拦截                     → [`SkipReason::Excluded`]
-/// 5. `snapshot.has_self_marker`               → [`SkipReason::SelfMark`]
-/// 6. 否则 → `None`
+/// 4. 快照文本命中内容正则                     → [`SkipReason::ContentRegex`]
+/// 5. 应用名单规则命中拦截                     → [`SkipReason::Excluded`]
+/// 6. `snapshot.has_self_marker`               → [`SkipReason::SelfMark`]
+/// 7. 否则 → `None`
 ///
-/// 本函数不分析剪贴板内容（无启发式识别）。
+/// 本函数不分析剪贴板内容（无启发式识别），内容正则只做用户显式配置的匹配。
 #[must_use]
 pub fn should_skip(snapshot: &ClipboardSnapshot, policy: &CapturePolicy<'_>) -> Option<SkipReason> {
     should_skip_with_source(snapshot, policy, None)
@@ -250,6 +347,10 @@ pub fn should_skip_with_source(
         return Some(SkipReason::Concealed);
     }
 
+    if is_content_ignored(snapshot, policy) {
+        return Some(SkipReason::ContentRegex);
+    }
+
     if is_source_blocked(snapshot, policy, source_app) {
         return Some(SkipReason::Excluded);
     }
@@ -261,10 +362,32 @@ pub fn should_skip_with_source(
     None
 }
 
+/// 快照文本是否命中用户配置的内容忽略正则。
+///
+/// **只匹配文本内容**：图片条目没有文本可比（`snapshot.text == None`），不参与内容正则 ——
+/// 图片的忽略能力属于「类型集合」层，不在本规则内。
+/// 图文混合快照按整体判定：文本命中即整条不入库（含同一次复制里的图片），
+/// 因为用户写规则时想的是「这类内容我不要」，而不是「只要文字部分」。
+fn is_content_ignored(snapshot: &ClipboardSnapshot, policy: &CapturePolicy<'_>) -> bool {
+    if policy.exclude.regex_count() == 0 {
+        return false;
+    }
+    snapshot
+        .text
+        .as_deref()
+        .is_some_and(|text| policy.exclude.matches_ignored_content(text))
+}
+
 /// 来源应用是否被应用名单规则拦下。
 ///
 /// 两个来源都看：快照字段（后端给出的单值标识）与完整身份（bundle id / 显示名）。
-/// 命中即拦；空名单 = 不排除任何应用（历史行为）。
+/// 方向由名单模式决定：
+/// - 黑名单：命中即拦；空名单 = 不排除任何应用（历史行为）。
+/// - 白名单：**未命中即拦**；空名单视同规则未启用、不拦任何应用 ——
+///   否则用户刚切到白名单还没来得及填，剪贴板就会被全吞，那不是「只记录名单内」，
+///   而是「什么都不记录」，用户会先丢数据再看懂界面。宁可空名单时不拦。
+/// - 白名单下身份未知（拿不到 bundle id / 显示名）按**未命中**处理（不记录）：
+///   白名单的语义是「证明它在名单内才记」，证明不了就不记。
 fn is_source_blocked(
     snapshot: &ClipboardSnapshot,
     policy: &CapturePolicy<'_>,
@@ -273,6 +396,19 @@ fn is_source_blocked(
     if policy.exclude.is_empty() {
         return false;
     }
+    let hit = is_source_listed(snapshot, policy, source_app);
+    match policy.exclude.mode() {
+        ExcludeMode::Blacklist => hit,
+        ExcludeMode::Whitelist => !hit,
+    }
+}
+
+/// 来源应用是否命中名单条目（不含模式方向）。
+fn is_source_listed(
+    snapshot: &ClipboardSnapshot,
+    policy: &CapturePolicy<'_>,
+    source_app: Option<&SourceApp>,
+) -> bool {
     snapshot
         .source_app
         .as_deref()
@@ -829,5 +965,303 @@ mod tests {
             should_skip(&make_snapshot(), &policy),
             Some(SkipReason::Paused)
         );
+    }
+
+    // ===== 内容正则忽略（P3-5） =====
+
+    /// 构造带内容正则的规则集（黑名单、无应用条目）。
+    fn regex_rules(patterns: &[&str]) -> ExcludeList {
+        let owned: Vec<String> = patterns.iter().map(|p| (*p).to_string()).collect();
+        ExcludeList::with_rules(&[], ExcludeMode::Blacklist, &owned)
+    }
+
+    #[test]
+    fn content_matching_regex_skips_capture() {
+        // Arrange：用户配了「纯 16 位数字」（卡号类）
+        let rules = regex_rules(&[r"^\d{16}$"]);
+        let policy = default_policy(&rules);
+        let mut snap = make_snapshot();
+        snap.text = Some("6222021234567890".to_string());
+
+        // Act & Assert
+        assert_eq!(should_skip(&snap, &policy), Some(SkipReason::ContentRegex));
+    }
+
+    #[test]
+    fn non_matching_text_is_recorded_even_with_regexes() {
+        // Arrange：规则只匹配 16 位数字，内容是普通文本
+        let rules = regex_rules(&[r"^\d{16}$"]);
+        let policy = default_policy(&rules);
+        let mut snap = make_snapshot();
+        snap.text = Some("今天下午三点开会".to_string());
+
+        // Act & Assert：不命中就不该拦
+        assert_eq!(should_skip(&snap, &policy), None);
+    }
+
+    #[test]
+    fn invalid_regex_is_dropped_and_never_skips() {
+        // Arrange：一条写错的正则（未闭合分组）
+        let rules = regex_rules(&["([unclosed"]);
+        let policy = default_policy(&rules);
+        let snap = make_snapshot();
+
+        // Act & Assert：不 panic、整条规则不生效 → 内容照常可捕获
+        assert_eq!(
+            rules.regex_count(),
+            0,
+            "非法正则应被丢弃而非整条规则静默消失"
+        );
+        assert_eq!(
+            should_skip(&snap, &policy),
+            None,
+            "非法的容规则绝不能把用户剪贴板全吞了"
+        );
+    }
+
+    #[test]
+    fn invalid_regex_does_not_disable_valid_ones() {
+        // Arrange：一条合法 + 一条非法
+        let rules = regex_rules(&[r"secret", "([unclosed"]);
+        let policy = default_policy(&rules);
+        let mut snap = make_snapshot();
+        snap.text = Some("my secret token".to_string());
+
+        // Act & Assert：合法的那条照常生效
+        assert_eq!(rules.regex_count(), 1);
+        assert_eq!(should_skip(&snap, &policy), Some(SkipReason::ContentRegex));
+    }
+
+    #[test]
+    fn blank_pattern_lines_are_ignored_without_noise() {
+        // Arrange：UI 删空后留下的空行
+        let rules = regex_rules(&["", "   "]);
+
+        // Act & Assert：不算规则，也不该 panic
+        assert_eq!(rules.regex_count(), 0);
+    }
+
+    #[test]
+    fn content_regex_does_not_apply_to_image_only_snapshot() {
+        // Arrange：只有图片、没有文本的快照
+        let rules = regex_rules(&["."]); // 能匹配任意非空文本
+        let policy = default_policy(&rules);
+        let snap = ClipboardSnapshot {
+            text: None,
+            html: None,
+            image: Some(crate::clipboard::RawImageData {
+                width: 1,
+                height: 1,
+                bytes: vec![0, 0, 0, 255],
+            }),
+            has_self_marker: false,
+            is_concealed: false,
+            source_app: None,
+        };
+
+        // Act & Assert：图片条目没有文本可比，不参与内容正则
+        assert_eq!(should_skip(&snap, &policy), None);
+    }
+
+    // ===== 应用名单黑白模式（P3-5） =====
+
+    fn whitelist_rules(apps: &[&str]) -> ExcludeList {
+        let owned: Vec<String> = apps.iter().map(|a| (*a).to_string()).collect();
+        ExcludeList::with_rules(&owned, ExcludeMode::Whitelist, &[])
+    }
+
+    fn blacklist_rules(apps: &[&str]) -> ExcludeList {
+        let owned: Vec<String> = apps.iter().map(|a| (*a).to_string()).collect();
+        ExcludeList::with_rules(&owned, ExcludeMode::Blacklist, &[])
+    }
+
+    #[test]
+    fn blacklist_blocks_listed_app() {
+        // Arrange：历史行为，不能回归
+        let rules = blacklist_rules(&["1Password"]);
+        let policy = default_policy(&rules);
+        let snap = make_snapshot();
+        let source = named_source("1Password");
+
+        // Act & Assert
+        assert_eq!(
+            should_skip_with_source(&snap, &policy, Some(&source)),
+            Some(SkipReason::Excluded)
+        );
+    }
+
+    #[test]
+    fn blacklist_records_unlisted_app() {
+        let rules = blacklist_rules(&["1Password"]);
+        let policy = default_policy(&rules);
+        let snap = make_snapshot();
+        let source = named_source("TextEdit");
+
+        assert_eq!(should_skip_with_source(&snap, &policy, Some(&source)), None);
+    }
+
+    #[test]
+    fn whitelist_records_listed_app() {
+        // Arrange：白名单模式下，名单内应用是唯一被记录的
+        let rules = whitelist_rules(&["TextEdit"]);
+        let policy = default_policy(&rules);
+        let snap = make_snapshot();
+        let source = named_source("TextEdit");
+
+        // Act & Assert
+        assert_eq!(should_skip_with_source(&snap, &policy, Some(&source)), None);
+    }
+
+    #[test]
+    fn whitelist_blocks_unlisted_app() {
+        // Arrange：白名单模式下，名单外应用一律不记
+        let rules = whitelist_rules(&["TextEdit"]);
+        let policy = default_policy(&rules);
+        let snap = make_snapshot();
+        let source = named_source("1Password");
+
+        // Act & Assert：方向与黑名单相反
+        assert_eq!(
+            should_skip_with_source(&snap, &policy, Some(&source)),
+            Some(SkipReason::Excluded)
+        );
+    }
+
+    #[test]
+    fn empty_whitelist_blocks_nothing() {
+        // Arrange：刚切到白名单、还一条都没填
+        let rules = whitelist_rules(&[]);
+        let policy = default_policy(&rules);
+        let snap = make_snapshot();
+        let source = named_source("TextEdit");
+
+        // Act & Assert：空名单视同规则未启用——否则用户一开白名单就先丢数据
+        assert_eq!(
+            should_skip_with_source(&snap, &policy, Some(&source)),
+            None,
+            "空白名单不能拦任何应用"
+        );
+    }
+
+    #[test]
+    fn whitelist_blocks_when_source_unknown() {
+        // Arrange：白名单非空，但拿不到来源身份
+        let rules = whitelist_rules(&["TextEdit"]);
+        let policy = default_policy(&rules);
+        let snap = make_snapshot();
+
+        // Act & Assert：证明不了「它在名单内」就不记（白名单的语义方向）
+        assert_eq!(
+            should_skip_with_source(&snap, &policy, None),
+            Some(SkipReason::Excluded)
+        );
+    }
+
+    // ===== 判定优先级阶梯（顺序本身是契约） =====
+
+    /// 逐层叠加「更弱的规则」，断言每一步的 reason 恰为该层——有人调换顺序会立刻红。
+    #[test]
+    fn skip_reason_priority_ladder_is_locked() {
+        // 全条件齐备的快照：敏感 + 文本命中正则 + 来源在名单内 + 自产标记
+        let rules = blacklist_rules(&["1Password"]);
+        let regex_hit_text = regex_rules(&["pinned"]);
+        let mut all_hits = ClipboardSnapshot {
+            text: Some("pinned secret".to_string()),
+            html: None,
+            image: None,
+            has_self_marker: true,
+            is_concealed: true,
+            source_app: Some("1Password".to_string()),
+        };
+        let source = named_source("1Password");
+
+        // 1) 本轮静默（一次性忽略）压过一切；用带标记的当轮副本表达
+        let skip_once_round = rules.for_skip_once_round();
+        let policy = CapturePolicy {
+            paused: true,
+            skip_sensitive: true,
+            exclude: &skip_once_round,
+        };
+        assert_eq!(
+            should_skip_with_source(&all_hits, &policy, Some(&source)),
+            Some(SkipReason::SkipOnce)
+        );
+
+        // 2) 持久化暂停
+        let policy = CapturePolicy {
+            paused: true,
+            skip_sensitive: true,
+            exclude: &rules,
+        };
+        assert_eq!(
+            should_skip_with_source(&all_hits, &policy, Some(&source)),
+            Some(SkipReason::Paused)
+        );
+
+        // 3) 敏感标记
+        let policy = CapturePolicy {
+            paused: false,
+            skip_sensitive: true,
+            exclude: &rules,
+        };
+        assert_eq!(
+            should_skip_with_source(&all_hits, &policy, Some(&source)),
+            Some(SkipReason::Concealed)
+        );
+
+        // 4) 内容正则（压过来源名单与自产标记）
+        let mut regex_and_listed = all_hits.clone();
+        regex_and_listed.is_concealed = false;
+        regex_and_listed.text = Some("pinned secret".to_string());
+        let rules_with_regex = ExcludeList::with_rules(
+            &["1Password".to_string()],
+            ExcludeMode::Blacklist,
+            &["pinned".to_string()],
+        );
+        let policy = CapturePolicy {
+            paused: false,
+            skip_sensitive: true,
+            exclude: &rules_with_regex,
+        };
+        assert_eq!(
+            should_skip_with_source(&regex_and_listed, &policy, Some(&source)),
+            Some(SkipReason::ContentRegex)
+        );
+
+        // 5) 应用名单（压过自产标记）
+        all_hits.is_concealed = false;
+        all_hits.text = Some("harmless".to_string());
+        let policy = CapturePolicy {
+            paused: false,
+            skip_sensitive: true,
+            exclude: &rules,
+        };
+        assert_eq!(
+            should_skip_with_source(&all_hits, &policy, Some(&source)),
+            Some(SkipReason::Excluded)
+        );
+
+        // 6) 自产标记（前面都不命中时兜底）
+        let mut self_marked_only = all_hits.clone();
+        self_marked_only.source_app = None;
+        let empty_rules = ExcludeList::default();
+        let policy = CapturePolicy {
+            paused: false,
+            skip_sensitive: true,
+            exclude: &empty_rules,
+        };
+        assert_eq!(
+            should_skip_with_source(&self_marked_only, &policy, None),
+            Some(SkipReason::SelfMark)
+        );
+
+        // 7) 全不命中 → 可捕获
+        let mut clean = self_marked_only.clone();
+        clean.has_self_marker = false;
+        assert_eq!(should_skip_with_source(&clean, &policy, None), None);
+
+        // 顺带锁住「内容正则规则集」与「应用名单规则集」是两条独立的规则
+        assert_eq!(regex_hit_text.regex_count(), 1);
+        assert!(regex_hit_text.matches_ignored_content("pinned secret"));
     }
 }
