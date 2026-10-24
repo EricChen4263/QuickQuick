@@ -218,26 +218,24 @@ pub fn get_exclude_list_impl(settings_path: &Path) -> Result<Vec<String>, String
 /// `set_exclude_list` 的纯函数实现，可在测试中直接调用。
 ///
 /// 读取现有设置（保留其他字段），仅替换 excluded_apps 后 save。
-/// 写文件成功后，若传入 `runtime_list`，同步替换运行时 Arc 中的名单，
-/// 使轮询线程在下一次迭代即刻生效，无需重启。
+/// 写文件成功后重建运行时规则集，使轮询线程在下一次迭代即刻生效，无需重启。
 ///
 /// # Errors
 /// 文件写入失败时返回错误字符串（写入失败则不更新运行时，保持一致性）。
 pub fn set_exclude_list_impl(
     list: Vec<String>,
     settings_path: &Path,
-    runtime_list: Option<&RwLock<crate::privacy::ExcludeList>>,
+    runtime_rules: Option<&RwLock<crate::privacy::IgnoreRules>>,
 ) -> Result<(), String> {
     let mut settings = AppSettings::load_or_default(settings_path);
     settings.excluded_apps = list.clone();
     settings.save(settings_path).map_err(|e| e.to_string())?;
 
-    if let Some(lock) = runtime_list {
-        let new_exclude =
-            crate::privacy::ExcludeList::new_with_apps(list.iter().map(String::as_str));
+    if let Some(lock) = runtime_rules {
+        let rules = crate::privacy::IgnoreRules::new_with_apps(list.iter().map(String::as_str));
         match lock.write() {
-            Ok(mut guard) => *guard = new_exclude,
-            Err(e) => eprintln!("[QuickQuick] 排除名单写锁中毒，跳过运行时更新: {e}"),
+            Ok(mut guard) => *guard = rules,
+            Err(e) => eprintln!("[QuickQuick] 忽略规则写锁中毒，跳过运行时更新: {e}"),
         }
     }
 
@@ -586,7 +584,10 @@ pub fn get_pause_capture(state: State<'_, CaptureState>) -> bool {
     get_pause_capture_impl(&state)
 }
 
-/// Tauri 命令：设置暂停捕获状态（运行时生效 + 持久化）。
+/// Tauri 命令：设置暂停捕获状态（运行时生效 + 持久化 + 刷新托盘可见状态）。
+///
+/// 设置页与托盘 `⌥` 点击改的是同一个状态，托盘那侧也要立刻反映出来，
+/// 否则从设置页暂停后菜单仍写着「暂停捕获」。
 #[tauri::command]
 pub fn set_pause_capture(
     app: AppHandle,
@@ -594,7 +595,9 @@ pub fn set_pause_capture(
     value: bool,
 ) -> Result<(), String> {
     let path = resolve_config_path(&app, "settings.json")?;
-    set_pause_capture_impl(value, &state, &path)
+    set_pause_capture_impl(value, &state, &path)?;
+    crate::tray::refresh_tray_indicator(&app, value, state.skip_once.is_armed());
+    Ok(())
 }
 
 /// Tauri 命令：读取当前敏感内容跳过状态。
@@ -894,13 +897,14 @@ mod tests {
     use tempfile::NamedTempFile;
 
     fn make_state(paused: bool, skip_sensitive: bool, stay_in_tray: bool) -> CaptureState {
-        use crate::privacy::ExcludeList;
+        use crate::privacy::{IgnoreRules, SkipOnce};
         use std::sync::RwLock;
         CaptureState {
             paused: Arc::new(AtomicBool::new(paused)),
             skip_sensitive: Arc::new(AtomicBool::new(skip_sensitive)),
             stay_in_tray: Arc::new(AtomicBool::new(stay_in_tray)),
-            exclude_list: Arc::new(RwLock::new(ExcludeList::default())),
+            skip_once: Arc::new(SkipOnce::new()),
+            exclude_list: Arc::new(RwLock::new(IgnoreRules::default())),
         }
     }
 

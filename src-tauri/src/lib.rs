@@ -79,11 +79,18 @@ pub struct CaptureState {
     pub skip_sensitive: Arc<AtomicBool>,
     /// 失焦时是否隐藏到托盘（false = 退出应用）
     pub stay_in_tray: Arc<AtomicBool>,
-    /// App 排除名单：IPC set_exclude_list 写入后即时生效，无需重启。
+    /// 「仅忽略下一次」一次性开关：托盘 `⌥⇧` 点击置位，真实捕获一次后自动失效。
     ///
-    /// 用 RwLock 而非原子布尔：名单是 HashSet<String>，不可原子操作。
+    /// 与 [`CaptureState::paused`] 的关键区别：它**不持久化**、不写 settings.json、
+    /// 不改暂停态，只影响紧接着的那一次变化。消费规则见
+    /// [`privacy::SkipOnce::take_if_new_content`]。
+    pub skip_once: Arc<privacy::SkipOnce>,
+    /// 当前生效的忽略规则集：IPC 写入后即时生效，无需重启。
+    ///
+    /// 用 RwLock 而非原子布尔：规则集是 HashSet<String> + Vec<Regex>，不可原子操作。
     /// 读多写少（500ms 读一次，用户主动设置时才写），RwLock 读锁无竞争开销可忽略。
-    pub exclude_list: Arc<RwLock<privacy::ExcludeList>>,
+    /// 规则集的重建（含正则重新编译）只发生在设置写入时，轮询路径只读不编译。
+    pub exclude_list: Arc<RwLock<privacy::IgnoreRules>>,
 }
 
 /// 将所有插件注册到给定的 builder 并返回。
@@ -203,6 +210,7 @@ pub fn run() {
             let paused = Arc::clone(&capture_state.paused);
             let skip_sensitive = Arc::clone(&capture_state.skip_sensitive);
             let stay_in_tray = Arc::clone(&capture_state.stay_in_tray);
+            let skip_once = Arc::clone(&capture_state.skip_once);
             let exclude_list = Arc::clone(&capture_state.exclude_list);
             app.manage(capture_state);
             let source_app = setup_frontmost_tracking(app);
@@ -210,6 +218,7 @@ pub fn run() {
                 app.handle().clone(),
                 paused,
                 skip_sensitive,
+                skip_once,
                 exclude_list,
                 source_app,
             );
@@ -369,7 +378,8 @@ fn start_clipboard_poll(
     handle: tauri::AppHandle,
     paused: Arc<AtomicBool>,
     skip_sensitive: Arc<AtomicBool>,
-    exclude_list: Arc<RwLock<privacy::ExcludeList>>,
+    skip_once: Arc<privacy::SkipOnce>,
+    exclude_list: Arc<RwLock<privacy::IgnoreRules>>,
     source_app: Arc<pasteboard_meta::LastExternalSourceApp>,
 ) {
     let meta_reader = build_meta_reader(&handle, source_app);
@@ -400,15 +410,25 @@ fn start_clipboard_poll(
                 continue;
             };
 
-            // 每轮取读锁获取当前排除名单；lock poison 时跳过本轮不 panic
+            // 每轮取读锁获取当前忽略规则集；lock poison 时跳过本轮不 panic
             let Ok(exclude_guard) = exclude_list.read() else {
                 continue;
             };
 
+            // 「仅忽略下一次」必须先于本轮捕获判定：`capture_and_ingest` 内部才做变化检测，
+            // 等它返回时内容已入库，再消费开关只能算事后补救。消费规则本身全在
+            // `privacy::resolve_skip_once`（含「空轮不消费」与代价说明）。
+            let skip_once_now = privacy::resolve_skip_once(&skip_once, &backend, last_seen);
+            // 置位那一轮才为规则集派生带标记的副本（把「本轮静默原因是 SkipOnce」
+            // 带进 policy）；常态轮次直接借用共享规则集，零额外分配。
+            let round_rules = skip_once_now.then(|| exclude_guard.for_skip_once_round());
+            let rules: &privacy::IgnoreRules = round_rules.as_ref().unwrap_or(&exclude_guard);
+
             let policy = privacy::CapturePolicy {
-                paused: paused.load(Ordering::Relaxed),
+                // 暂停与「仅忽略下一次」在本轮的可观察行为一致：读完快照、推进基线、不入库。
+                paused: paused.load(Ordering::Relaxed) || skip_once_now,
                 skip_sensitive: skip_sensitive.load(Ordering::Relaxed),
-                exclude: &exclude_guard,
+                exclude: rules,
             };
 
             // 每轮（约 500ms）读一次 settings.json 取 max_image_bytes。
@@ -441,6 +461,16 @@ fn start_clipboard_poll(
                 Err(e) => {
                     eprintln!("[QuickQuick] 剪贴板写库失败（非致命）: {e}");
                 }
+            }
+
+            // 一次性忽略已用掉：立刻把托盘提示恢复成真实状态，
+            // 否则 tooltip 会一直停在「仅忽略下一次」上误导用户。
+            if skip_once_now {
+                tray::refresh_tray_indicator(
+                    &handle,
+                    paused.load(Ordering::Relaxed),
+                    skip_once.is_armed(),
+                );
             }
         }
     });
@@ -738,8 +768,9 @@ fn register_hotkeys(handle: &tauri::AppHandle) {
 
 /// 从 `AppSettings` 初始化运行时 `CaptureState`。
 ///
-/// 读取持久化的 settings.json（不存在则用默认值），将三个布尔字段
-/// 转换为 `Arc<AtomicBool>`，供轮询线程与 IPC 命令层共享。
+/// 读取持久化的 settings.json（不存在则用默认值），把持久化开关转成可跨线程共享的
+/// `Arc<AtomicBool>`，并按「应用名单 + 黑白模式 + 内容正则」一次性构造忽略规则集
+/// （正则在这里编译一次，轮询路径只匹配不编译）。
 fn init_capture_state(app: &tauri::App) -> CaptureState {
     let settings = ipc::settings::resolve_config_dir(app.handle())
         .ok()
@@ -748,12 +779,14 @@ fn init_capture_state(app: &tauri::App) -> CaptureState {
         .unwrap_or_default();
 
     let exclude_list =
-        privacy::ExcludeList::new_with_apps(settings.excluded_apps.iter().map(String::as_str));
+        privacy::IgnoreRules::new_with_apps(settings.excluded_apps.iter().map(String::as_str));
 
     CaptureState {
         paused: Arc::new(AtomicBool::new(settings.pause_capture)),
         skip_sensitive: Arc::new(AtomicBool::new(settings.skip_sensitive)),
         stay_in_tray: Arc::new(AtomicBool::new(settings.stay_in_tray)),
+        // 一次性开关不持久化：每次启动都是未置位状态
+        skip_once: Arc::new(privacy::SkipOnce::new()),
         exclude_list: Arc::new(RwLock::new(exclude_list)),
     }
 }

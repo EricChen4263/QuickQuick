@@ -67,6 +67,9 @@ objc2-app-kit = { version = "0.3", features = [
     "NSView",
     "NSControl",
     "NSButton",
+    # 托盘点击读取点击时刻的修饰键：NSEvent 的类方法 modifierFlags()
+    # （全局当前修饰键状态，不依赖具体事件对象）。
+    "NSEvent",
 ] }
 # NSWorkspace 通知中心走 block 形式注册观察者（addObserverForName:object:queue:usingBlock:），
 # 需 objc2-foundation 提供 NSNotification/NSDictionary/NSString，block2 提供 RcBlock；
