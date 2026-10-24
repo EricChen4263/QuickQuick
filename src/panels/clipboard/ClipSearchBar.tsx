@@ -23,51 +23,62 @@ const FILTER_OPTIONS: SelectOption[] = (Object.keys(FILTER_LABELS) as HistoryFil
 interface ClipSearchBarProps {
   searchQuery: string;
   typeFilter: HistoryFilter;
+  /** 搜索模式提示（如正则写法非法降级为文本搜索）；null / 缺省不显示 */
+  notice?: string | null;
   onSearchChange: (query: string) => void;
   onTypeFilterChange: (filter: HistoryFilter) => void;
   onKeyDown: (event: React.KeyboardEvent) => void;
 }
 
-/** 搜索栏子组件：搜索框 + 类型筛选下拉 */
+/** 搜索栏子组件：搜索框 + 类型筛选下拉 + 模式提示 */
 export function ClipSearchBar({
   searchQuery,
   typeFilter,
+  notice,
   onSearchChange,
   onTypeFilterChange,
   onKeyDown,
 }: ClipSearchBarProps) {
   return (
-    <div className="searchbar">
-      <div className="search-field">
-        <svg
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="1.8"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          aria-hidden="true"
-        >
-          <circle cx="11" cy="11" r="7" />
-          <path d="m21 21-4.3-4.3" />
-        </svg>
-        <input
-          type="search"
-          role="searchbox"
-          placeholder="搜索剪贴板内容…"
-          aria-label="搜索剪贴板内容"
-          autoFocus
-          value={searchQuery}
-          onChange={(e) => onSearchChange(e.target.value)}
-          onKeyDown={onKeyDown}
+    <div className="searchbar-col">
+      <div className="searchbar">
+        <div className="search-field">
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.8"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            aria-hidden="true"
+          >
+            <circle cx="11" cy="11" r="7" />
+            <path d="m21 21-4.3-4.3" />
+          </svg>
+          <input
+            type="search"
+            role="searchbox"
+            placeholder="搜索剪贴板内容…"
+            aria-label="搜索剪贴板内容"
+            autoFocus
+            value={searchQuery}
+            onChange={(e) => onSearchChange(e.target.value)}
+            onKeyDown={onKeyDown}
+          />
+        </div>
+        <Select
+          ariaLabel="类型筛选"
+          value={typeFilter}
+          options={FILTER_OPTIONS}
+          onChange={(value) => onTypeFilterChange(value as HistoryFilter)}
         />
       </div>
-      <Select
-        ariaLabel="类型筛选"
-        value={typeFilter}
-        options={FILTER_OPTIONS}
-        onChange={(value) => onTypeFilterChange(value as HistoryFilter)}
-      />
+      {notice !== null && notice !== undefined && (
+        // role="status"：降级这类「用户需要知道」的状态变化交给读屏播报，不靠颜色
+        <div className="search-notice" role="status">
+          {notice}
+        </div>
+      )}
     </div>
   );
 }

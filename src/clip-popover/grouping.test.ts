@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { isToday, filterClipBySearch, groupClipItems } from "./grouping";
+import { isToday, groupClipItems } from "./grouping";
 import type { ClipItem } from "../ipc/ipc-client";
 
 /** 构建测试用 ClipItem */
@@ -34,40 +34,6 @@ describe("isToday", () => {
     const now = new Date("2026-06-02T12:00:00").getTime();
     const ts = new Date("2026-06-03T12:00:00").getTime();
     expect(isToday(ts, now)).toBe(false);
-  });
-});
-
-describe("filterClipBySearch", () => {
-  const items: ClipItem[] = [
-    makeItem({ id: "a", content: "Hello World" }),
-    makeItem({ id: "b", content: "foo bar" }),
-    makeItem({ id: "c", content: "HELLO uppercase" }),
-  ];
-
-  it("空 query 返回全部副本", () => {
-    const result = filterClipBySearch(items, "");
-    expect(result).toHaveLength(3);
-    expect(result).not.toBe(items);
-  });
-
-  it("纯空白 query 返回全部副本", () => {
-    const result = filterClipBySearch(items, "   ");
-    expect(result).toHaveLength(3);
-  });
-
-  it("大小写不敏感命中", () => {
-    const result = filterClipBySearch(items, "hello");
-    expect(result.map((i) => i.id)).toEqual(["a", "c"]);
-  });
-
-  it("无命中返回空数组", () => {
-    const result = filterClipBySearch(items, "xyz");
-    expect(result).toHaveLength(0);
-  });
-
-  it("精确子串命中", () => {
-    const result = filterClipBySearch(items, "bar");
-    expect(result.map((i) => i.id)).toEqual(["b"]);
   });
 });
 

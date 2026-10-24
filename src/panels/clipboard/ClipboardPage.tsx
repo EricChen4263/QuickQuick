@@ -21,8 +21,14 @@ import {
 } from "../../ipc/ipc-client";
 import type { HistoryItem } from "../history/search";
 import type { HistoryFilter } from "../history/filter";
-import { filterBySearch } from "../history/search";
 import { filterByType } from "../history/filter";
+import {
+  DEFAULT_SEARCH_MODE,
+  clipSearchText,
+  prepareQuery,
+  searchClipsWithPlan,
+} from "../../clip-popover/clip-search";
+import { SEARCH_DEBOUNCE_MS, useDebouncedValue } from "./useDebouncedValue";
 import {
   moveHighlight,
   quickSelectIndex,
@@ -49,14 +55,14 @@ import "./clipboard.css";
 /** localStorage key：用户已关闭引导卡片 */
 const ONBOARD_DISMISSED_KEY = "qq-onboard-dismissed";
 
-/** 将 IPC ClipItem 适配为纯逻辑 HistoryItem */
+/** 将 IPC ClipItem 适配为纯逻辑 HistoryItem（文本口径与搜索/高亮一致） */
 function toHistoryItem(clip: ClipItem): HistoryItem {
   if (clip.kind === "image") {
-    return { id: clip.id, text: clip.content, kind: "image" };
+    return { id: clip.id, text: clipSearchText(clip), kind: "image" };
   }
   return {
     id: clip.id,
-    text: clip.content,
+    text: clipSearchText(clip),
     kind: clip.kind === "richtext" ? "richtext" : "text",
   };
 }
@@ -153,10 +159,29 @@ function ClipboardPage({ onTranslateItem }: ClipboardPageProps) {
     };
   }, [loadItems]);
 
-  // 两步过滤：先搜索词，再类型
-  const historyItems = items.map(toHistoryItem);
-  const afterSearch = filterBySearch(historyItems, searchQuery);
-  const filteredItems = filterByType(afterSearch, typeFilter);
+  // 搜索框值即时更新，过滤用值防抖提交：200ms 内的连续击键不触发重新搜索。
+  // 输入框仍是受控的即时值，打字与输入法组词反馈不受延迟影响。
+  const debouncedQuery = useDebouncedValue(searchQuery, SEARCH_DEBOUNCE_MS);
+
+  // 查询计划随防抖后的词更新：分词与正则编译一次，逐条目复用
+  const queryPlan = useMemo(
+    () => prepareQuery(debouncedQuery, DEFAULT_SEARCH_MODE),
+    [debouncedQuery],
+  );
+
+  // 两步过滤：先按搜索模块筛出命中条目并拿到高亮区间，再用类型筛选收窄
+  const hits = useMemo(() => searchClipsWithPlan(items, queryPlan), [items, queryPlan]);
+  const historyItems = useMemo(() => hits.map((hit) => toHistoryItem(hit.item)), [hits]);
+  const filteredItems = useMemo(
+    () => filterByType(historyItems, typeFilter),
+    [historyItems, typeFilter],
+  );
+
+  // id → 命中区间：渲染层按 id 取用，避免每行再匹配一次；类型筛选不改变命中区间
+  const hitRangesById = useMemo(
+    () => new Map(hits.map((hit) => [hit.item.id, hit.ranges])),
+    [hits],
+  );
 
   // id → 条目索引：列表渲染与取用都按 id 反查，避免每行对 items 做一次线性查找
   const clipById = useMemo(() => new Map(items.map((c) => [c.id, c])), [items]);
@@ -175,8 +200,10 @@ function ClipboardPage({ onTranslateItem }: ClipboardPageProps) {
   // 实际渲染行数：窗口大小收敛到过滤结果总数
   const visibleCount = Math.min(renderCount, filteredItems.length);
 
-  // 过滤条件键：任一项变化都意味着结果集换了，旧窗口必须作废
-  const filterKey = `${typeFilter}\u0000${searchQuery}`;
+  // 过滤条件键：任一项变化都意味着结果集换了，旧窗口必须作废。
+  // 键里放的是「实际生效的源条件」（类型筛选 + 防抖后的搜索词），不是派生量（命中条数）：
+  // 两个不同搜索词的命中条数可能完全相同，那时结果集内容已经变了，窗口照样必须重置。
+  const filterKey = `${typeFilter}\u0000${debouncedQuery}`;
   const prevFilterKeyRef = useRef(filterKey);
 
   // 过滤条件变化 → 窗口重置回首屏块。
@@ -361,6 +388,7 @@ function ClipboardPage({ onTranslateItem }: ClipboardPageProps) {
         <ClipSearchBar
           searchQuery={searchQuery}
           typeFilter={typeFilter}
+          notice={queryPlan.notice}
           onSearchChange={(q) => { setSearchQuery(q); setHighlightIndex(0); }}
           onTypeFilterChange={(f) => { setTypeFilter(f); setHighlightIndex(0); }}
           onKeyDown={handleKeyDown}
@@ -393,6 +421,7 @@ function ClipboardPage({ onTranslateItem }: ClipboardPageProps) {
                   key={histItem.id}
                   item={clipItem}
                   isHighlighted={idx === safeHighlight}
+                  hitRanges={hitRangesById.get(histItem.id)}
                   onToggleFavorite={handleToggleFavorite}
                   onSelect={() => { setHighlightIndex(idx); }}
                 />

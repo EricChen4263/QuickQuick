@@ -7,6 +7,8 @@
 
 import type { ClipItem } from "../../ipc/ipc-client";
 import { KindIcon } from "../../components/KindIcon";
+import { clipSearchText, type SearchRange } from "../../clip-popover/clip-search";
+import { HighlightedText } from "../../clip-popover/HighlightedText";
 import { useClipItemThumbnail } from "./useClipThumbnail";
 
 /** 内容摘要最大字符数 */
@@ -19,6 +21,11 @@ const FAVORITE_LABEL_OFF = "收藏";
 interface ClipItemRowProps {
   item: ClipItem;
   isHighlighted: boolean;
+  /**
+   * 搜索命中区间，作用于 `title ?? content`。
+   * 缺省表示无搜索条件，整段按普通文本渲染。
+   */
+  hitRanges?: SearchRange[];
   onToggleFavorite: (item: ClipItem) => Promise<void>;
   onSelect: (item: ClipItem) => void;
 }
@@ -68,6 +75,7 @@ function StarButton({ item, onToggleFavorite }: { item: ClipItem; onToggleFavori
 export function ClipItemRow({
   item,
   isHighlighted,
+  hitRanges,
   onToggleFavorite,
   onSelect,
 }: ClipItemRowProps) {
@@ -88,7 +96,8 @@ export function ClipItemRow({
           <ImageContent item={item} />
         ) : (
           <div className={isCode ? "clip-text code" : "clip-text"}>
-            {truncateSummary(item.content)}
+            {/* 先按既有上限截断再切分高亮：区间落在被截掉的部分时会被自动丢弃 */}
+            <HighlightedText text={truncateSummary(clipSearchText(item))} ranges={hitRanges} />
           </div>
         )}
       </div>

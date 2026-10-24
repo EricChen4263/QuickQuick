@@ -222,8 +222,9 @@ describe("ClipPopoverApp 键盘模型：搜索框编辑（P2-2）", () => {
     fireEvent.keyDown(input, { key: "w", ctrlKey: true });
 
     expect(input).toHaveValue("first item ");
+    // 命中的词在行内被拆进 <mark>，因此按容器文本（而非单一文本节点）断言
     await waitFor(() => {
-      expect(screen.getAllByText("first item").length).toBeGreaterThan(0);
+      expect(rowAt(0)).toHaveTextContent("first item");
     });
   });
 
@@ -263,5 +264,31 @@ describe("ClipPopoverApp 键盘模型：搜索框编辑（P2-2）", () => {
     expect(fireEvent.keyDown(input, { key: "w", ctrlKey: true })).toBe(false);
     expect(fireEvent.keyDown(input, { key: "h", ctrlKey: true })).toBe(false);
     expect(fireEvent.keyDown(input, { key: "u", ctrlKey: true })).toBe(false);
+  });
+});
+
+// P4-5b：popover 侧也走同一套搜索模块，命中片段同样高亮
+describe("ClipPopoverApp 搜索：命中高亮", () => {
+  it("命中片段包在 <mark class=clip-hit> 里，每行一个", async () => {
+    const input = await renderReady();
+
+    fireEvent.change(input, { target: { value: "item" } });
+
+    await waitFor(() => {
+      expect(screen.getAllByRole("option")).toHaveLength(4);
+    });
+    const marks = document.querySelectorAll("mark.clip-hit");
+    expect(marks).toHaveLength(4);
+    expect(marks[0].textContent).toBe("item");
+  });
+
+  it("非法正则降级后在搜索框下给出可读提示", async () => {
+    const input = await renderReady();
+
+    fireEvent.change(input, { target: { value: "foo[" } });
+
+    await waitFor(() => {
+      expect(screen.getByRole("status")).toHaveTextContent("正则表达式无效");
+    });
   });
 });

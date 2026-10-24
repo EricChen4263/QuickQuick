@@ -22,22 +22,6 @@ export function isToday(utcMs: number, now: number): boolean {
 }
 
 /**
- * 按 content 字段做大小写不敏感子串过滤。
- * query 为空或纯空白时返回全部条目的浅拷贝（保持调用方不受原数组变更影响）。
- */
-export function filterClipBySearch(
-  items: ClipItem[],
-  query: string
-): ClipItem[] {
-  const trimmed = query.trim();
-  if (trimmed === "") {
-    return [...items];
-  }
-  const lower = trimmed.toLowerCase();
-  return items.filter((item) => item.content.toLowerCase().includes(lower));
-}
-
-/**
  * 将条目按收藏/今天/更早分组。
  * 收藏项独占 favorites，不再落入其它组；非收藏项按 isToday 分流。
  * 各组内保持与入参相同的顺序。

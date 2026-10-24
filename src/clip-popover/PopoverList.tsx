@@ -2,11 +2,15 @@ import { useEffect, useRef } from "react";
 import type { ClipItem } from "../ipc/ipc-client";
 import { KindIcon } from "../components/KindIcon";
 import { useClipItemThumbnail } from "../panels/clipboard/useClipThumbnail";
+import { clipSearchText, type SearchRange } from "./clip-search";
+import { HighlightedText } from "./HighlightedText";
 import type { ClipGroups } from "./grouping";
 
 interface PopoverListProps {
   groups: ClipGroups;
   selectedId: string | null;
+  /** 条目 id → 命中区间；缺省表示无搜索条件，整段按普通文本渲染 */
+  hitRanges?: ReadonlyMap<string, SearchRange[]>;
   onSelect: (item: ClipItem) => void;
 }
 
@@ -37,10 +41,12 @@ function PopoverRowImage({ item }: { item: ClipItem }) {
 function PopoverRow({
   item,
   isSelected,
+  hitRanges,
   onSelect,
 }: {
   item: ClipItem;
   isSelected: boolean;
+  hitRanges?: SearchRange[];
   onSelect: (item: ClipItem) => void;
 }) {
   return (
@@ -58,7 +64,8 @@ function PopoverRow({
           <PopoverRowImage item={item} />
         ) : (
           <div className={item.kind === "richtext" ? "popover-row-text code" : "popover-row-text"}>
-            {truncate(item.content)}
+            {/* 先按既有上限截断再切分高亮：区间落在被截掉的部分时会被自动丢弃 */}
+            <HighlightedText text={truncate(clipSearchText(item))} ranges={hitRanges} />
           </div>
         )}
       </div>
@@ -83,11 +90,13 @@ function PopoverGroup({
   label,
   items,
   selectedId,
+  hitRanges,
   onSelect,
 }: {
   label: string;
   items: ClipItem[];
   selectedId: string | null;
+  hitRanges?: ReadonlyMap<string, SearchRange[]>;
   onSelect: (item: ClipItem) => void;
 }) {
   if (items.length === 0) return null;
@@ -99,6 +108,7 @@ function PopoverGroup({
           key={item.id}
           item={item}
           isSelected={item.id === selectedId}
+          hitRanges={hitRanges?.get(item.id)}
           onSelect={onSelect}
         />
       ))}
@@ -111,7 +121,7 @@ function PopoverGroup({
  * selectedId / onSelect 由 ClipPopoverApp 持有，B2 键盘流可直接复用同一状态。
  * 扁平遍历顺序：favorites → today → earlier（与 visibleFlatList 保持一致）。
  */
-export function PopoverList({ groups, selectedId, onSelect }: PopoverListProps) {
+export function PopoverList({ groups, selectedId, hitRanges, onSelect }: PopoverListProps) {
   const { favorites, today, earlier } = groups;
   const isEmpty = favorites.length === 0 && today.length === 0 && earlier.length === 0;
   const listRef = useRef<HTMLDivElement>(null);
@@ -133,9 +143,9 @@ export function PopoverList({ groups, selectedId, onSelect }: PopoverListProps) 
 
   return (
     <div ref={listRef} role="listbox" aria-label="剪贴板历史" className="popover-list">
-      <PopoverGroup label="收藏" items={favorites} selectedId={selectedId} onSelect={onSelect} />
-      <PopoverGroup label="今天" items={today} selectedId={selectedId} onSelect={onSelect} />
-      <PopoverGroup label="更早" items={earlier} selectedId={selectedId} onSelect={onSelect} />
+      <PopoverGroup label="收藏" items={favorites} selectedId={selectedId} hitRanges={hitRanges} onSelect={onSelect} />
+      <PopoverGroup label="今天" items={today} selectedId={selectedId} hitRanges={hitRanges} onSelect={onSelect} />
+      <PopoverGroup label="更早" items={earlier} selectedId={selectedId} hitRanges={hitRanges} onSelect={onSelect} />
     </div>
   );
 }

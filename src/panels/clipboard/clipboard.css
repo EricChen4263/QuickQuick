@@ -37,6 +37,30 @@
   border-bottom: 0;
 }
 
+/* 搜索栏外层：竖排容纳「搜索行 + 模式提示」，保持列表栏的 grid 子项个数不变 */
+.searchbar-col {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+/* 搜索模式提示（如正则写法非法、已降级为文本搜索）：次要信息，不抢列表视觉 */
+.search-notice {
+  padding: 0 18px 10px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--muted);
+}
+
+/* 搜索命中高亮：只改背景与字重，不动字号/行高，避免两行截断的高度跳动 */
+.clip-hit {
+  background: color-mix(in oklch, var(--accent) 26%, transparent);
+  color: inherit;
+  font-weight: 600;
+  border-radius: 3px;
+  padding: 0 1px;
+}
+
 /* 搜索框外层：相对定位容器，内嵌 SVG 图标 */
 .search-field {
   position: relative;

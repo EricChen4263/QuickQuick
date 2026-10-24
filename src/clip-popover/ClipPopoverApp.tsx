@@ -4,7 +4,8 @@ import { listClipItems, pasteToFront, hideAndReturnFocus, copyClipToClipboard } 
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { listen } from "@tauri-apps/api/event";
 import { CLIPBOARD_CHANGED_EVENT } from "../ipc/events";
-import { filterClipBySearch, groupClipItems } from "./grouping";
+import { groupClipItems } from "./grouping";
+import { DEFAULT_SEARCH_MODE, prepareQuery, searchClipsWithPlan } from "./clip-search";
 import { advanceSelection } from "./keyboard-nav";
 import {
   isImeComposing,
@@ -196,10 +197,31 @@ export default function ClipPopoverApp() {
     };
   }, []);
 
-  const groups = useMemo(() => {
-    const filtered = filterClipBySearch(items, query);
-    return groupClipItems(filtered, Date.now());
-  }, [items, query]);
+  /**
+   * popover 侧刻意不接防抖：面板里是几百行的纯内存过滤（无 IPC、无缩略图请求），
+   * 延迟 200ms 只会让「敲字 → 看到结果」明显滞后，还会与数字直达的 50ms 反馈时序纠缠；
+   * 需要防抖的是主窗——那边一次过滤会重置增量渲染窗口、重挂载上百行。
+   */
+  const queryPlan = useMemo(
+    () => prepareQuery(query, DEFAULT_SEARCH_MODE),
+    [query],
+  );
+
+  const hits = useMemo(
+    () => searchClipsWithPlan(items, queryPlan),
+    [items, queryPlan],
+  );
+
+  // 条目 id → 命中区间：列表行按 id 取用，不必每行再匹配一次
+  const hitRangesById = useMemo(
+    () => new Map(hits.map((hit) => [hit.item.id, hit.ranges])),
+    [hits],
+  );
+
+  const groups = useMemo(
+    () => groupClipItems(hits.map((hit) => hit.item), Date.now()),
+    [hits],
+  );
 
   const visibleFlatList = useMemo(() => buildFlatList(groups), [groups]);
 
@@ -436,11 +458,18 @@ export default function ClipPopoverApp() {
           autoFocus
           aria-label="搜索剪贴板"
         />
+        {queryPlan.notice !== null && (
+          // 模式降级这类「用户需要知道」的状态交给读屏播报，不静默吞掉
+          <div className="popover-search-notice" role="status">
+            {queryPlan.notice}
+          </div>
+        )}
       </div>
       <div className="popover-body">
         <PopoverList
           groups={groups}
           selectedId={selectedId}
+          hitRanges={hitRangesById}
           onSelect={(item) => setSelectedId(item.id)}
         />
         <PopoverPreview state={preview} />
