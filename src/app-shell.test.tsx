@@ -39,6 +39,8 @@ vi.mock("./ipc/ipc-client", () => ({
   setStayInTray: vi.fn().mockResolvedValue(undefined),
   getAutoUpdate: vi.fn().mockReturnValue(new Promise(() => {})),
   setAutoUpdate: vi.fn().mockResolvedValue(undefined),
+  // ClipboardPage 挂载即读外观设置：用 pending Promise 避免 act 外状态更新
+  getAppearanceSettings: vi.fn().mockReturnValue(new Promise(() => {})),
 }));
 
 // Mock browser-api：隔离 clipboard / speechSynthesis，防止 jsdom 环境报错

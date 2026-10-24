@@ -4,7 +4,8 @@
 //! 单测只测 impl 函数（传 `&Connection`），命令层把 `DbError` 映射为 `String`。
 //!
 //! 命令清单（前端通过 invoke 对应的命令名调用）：
-//! - `list_clip_items`           — 返回全部未软删条目（收藏优先），图片条目只带 `hasThumbnail` 标志
+//! - `list_clip_items`           — 返回全部未软删条目（收藏优先，组内顺序见 `sort_order` 设置），
+//!   图片条目只带 `hasThumbnail` 标志
 //! - `delete_clip_item`          — 软删指定 id 的条目
 //! - `toggle_favorite_clip`      — 设置或取消指定条目的收藏状态
 //! - `get_clip_image_original`   — 按 image_id 取原图，返回 PNG data URL
@@ -13,10 +14,11 @@
 use base64::Engine;
 use rusqlite::Connection;
 use serde::Serialize;
-use tauri::State;
+use tauri::{AppHandle, State};
 
 use crate::db::{self, DbError};
 use crate::ipc::{with_db, AppDb};
+use crate::settings::SortOrder;
 
 /// 前端展示用 DTO：剪贴板条目
 ///
@@ -40,9 +42,30 @@ pub struct ClipItemDto {
     pub html_content: Option<String>,
 }
 
-/// list_clip_items 的纯函数实现，可在测试中直接调用。
+/// list_clip_items 的纯函数实现（默认排序：最近复制优先），可在测试中直接调用。
 ///
-/// 返回所有未软删条目，按收藏优先、组内最近修改时间降序排列。
+/// 等价于 [`list_clip_items_ordered_impl`] 传 [`SortOrder::Recent`]。单独保留这个入口是
+/// 为了让「按最近取数」的调用方（如翻译取当前文本）**不随用户的展示排序偏好漂移**。
+///
+/// # Errors
+/// 数据库查询失败时返回 `DbError`。
+pub fn list_clip_items_impl(conn: &Connection) -> Result<Vec<ClipItemDto>, DbError> {
+    list_clip_items_ordered_impl(conn, SortOrder::Recent)
+}
+
+/// list_clip_items 的纯函数实现：按给定排序方式返回所有未软删条目。
+///
+/// 排序只在**已取回的行**上做一次稳定重排，不改写 SQL：
+/// - [`SortOrder::Recent`]：直接用库里的 `(is_favorite DESC, last_modified_utc DESC, rowid DESC)`，
+///   与引入本设置之前的列表顺序逐条一致，也不做任何额外排序；
+/// - [`SortOrder::FirstCopied`]：按 `(is_favorite DESC, created_utc DESC)` 稳定重排，
+///   同一内容再次复制只推进 `last_modified_utc`，位置不动。
+///
+/// 为什么不在 SQL 里换 ORDER BY 列：列表主查询的索引是
+/// `(is_deleted, is_favorite, last_modified_utc)`，改按 `created_utc` 排序会退化成
+/// 全表扫 + 临时 B-tree；而新建索引要动迁移与 schema，超出本项范围。
+/// 行数上界就是历史条目上限（默认 500、最高 999），内存里一次稳定排序的代价可忽略。
+///
 /// 图片条目的 `has_thumbnail` 透传自图片行、`image_id` 透传；
 /// 文本条目两者分别为 `false` / `None`。
 ///
@@ -55,8 +78,12 @@ pub struct ClipItemDto {
 ///
 /// # Errors
 /// 数据库查询失败时返回 `DbError`。
-pub fn list_clip_items_impl(conn: &Connection) -> Result<Vec<ClipItemDto>, DbError> {
-    let rows = db::list_items_with_image_flag(conn)?;
+pub fn list_clip_items_ordered_impl(
+    conn: &Connection,
+    order: SortOrder,
+) -> Result<Vec<ClipItemDto>, DbError> {
+    let mut rows = db::list_items_with_image_flag(conn)?;
+    sort_rows_for_order(&mut rows, order);
     let dtos = rows
         .into_iter()
         .map(|r| ClipItemDto {
@@ -73,11 +100,29 @@ pub fn list_clip_items_impl(conn: &Connection) -> Result<Vec<ClipItemDto>, DbErr
     Ok(dtos)
 }
 
+/// 按排序方式重排列表行（原地、稳定）。
+///
+/// 入参必须已经是库里的默认顺序：`Recent` 直接原样返回，`FirstCopied` 依赖
+/// 「同 key 的行沿用默认顺序」这一兜底（稳定排序，不额外比较 rowid）。
+fn sort_rows_for_order(rows: &mut [db::ClipItemRowWithImageFlag], order: SortOrder) {
+    if order != SortOrder::FirstCopied {
+        return;
+    }
+    rows.sort_by(|a, b| {
+        b.is_favorite
+            .cmp(&a.is_favorite)
+            .then_with(|| b.created_utc.cmp(&a.created_utc))
+    });
+}
+
 /// 取「当前应翻译的剪贴板文本」：复用 list_clip_items_impl 的排序与口径，
 /// 取首条（收藏优先、组内最近），仅 text/richtext 且 trim 非空才返回 Some。
 ///
 /// 与前端 src/trans-popover/source-text.ts 的 pickLatestText 同语义（跨语言镜像，
 /// 故意复用同一取数函数保证排序口径一致，避免两边漂移）。
+///
+/// 刻意固定走 [`SortOrder::Recent`]：「当前该翻译哪条」是取数语义，不是展示偏好。
+/// 用户把列表切成「首次复制」时，翻译源仍应是最近复制的内容。
 ///
 /// # Errors
 /// 数据库查询失败时返回 `DbError`。
@@ -136,12 +181,30 @@ fn validate_id(id: &str) -> Result<(), DbError> {
     Ok(())
 }
 
-/// Tauri 命令：列出所有未软删的剪贴板条目（收藏优先）。
+/// Tauri 命令：列出所有未软删的剪贴板条目（收藏优先，组内顺序按 `sort_order` 设置）。
 #[tauri::command]
-pub fn list_clip_items(state: State<'_, AppDb>) -> Result<Vec<ClipItemDto>, String> {
+pub fn list_clip_items(
+    app: AppHandle,
+    state: State<'_, AppDb>,
+) -> Result<Vec<ClipItemDto>, String> {
+    let order = resolve_sort_order(&app);
     with_db(&state, |conn| {
-        list_clip_items_impl(conn).map_err(|e| e.to_string())
+        list_clip_items_ordered_impl(conn, order).map_err(|e| e.to_string())
     })
+}
+
+/// 读当前排序方式；配置目录解析失败时回退默认（最近复制）。
+///
+/// 排序是纯展示偏好，读不到设置不该让整个列表加载失败——
+/// 按默认顺序把列表给出去，比「设置文件路径算不出来 → 剪贴板空白」好得多。
+fn resolve_sort_order(app: &AppHandle) -> SortOrder {
+    match crate::ipc::settings::resolve_config_path(app, "settings.json") {
+        Ok(path) => crate::ipc::settings::read_sort_order_from_path(&path),
+        Err(e) => {
+            eprintln!("[QuickQuick] 读取排序设置失败，回退最近复制顺序：{e}");
+            SortOrder::default()
+        }
+    }
 }
 
 /// Tauri 命令：软删指定剪贴板条目。
@@ -597,5 +660,171 @@ mod tests {
         let result = pick_latest_translate_text_impl(&conn)
             .expect("pick_latest_translate_text_impl 不应失败");
         assert!(result.is_none(), "纯空白 content 应返回 None");
+    }
+
+    /// 插入一条文本条目：created 与 last_modified 分开给，用于构造
+    /// 「首次复制先后」与「最近复制先后」不一致的数据（再次复制只推进 last_modified）。
+    fn insert_item(
+        conn: &Connection,
+        id: &str,
+        created_utc: i64,
+        last_modified_utc: i64,
+        is_favorite: bool,
+    ) {
+        conn.execute(
+            "INSERT INTO clip_items (id, content, kind, created_utc, last_modified_utc, is_favorite)
+             VALUES (?1, ?2, 'text', ?3, ?4, ?5)",
+            rusqlite::params![
+                id,
+                format!("content-{id}"),
+                created_utc,
+                last_modified_utc,
+                if is_favorite { 1 } else { 0 }
+            ],
+        )
+        .expect("clip_items 插入失败");
+    }
+
+    /// 取列表里的 id 序列，便于断言顺序。
+    fn ids(dtos: &[ClipItemDto]) -> Vec<String> {
+        dtos.iter().map(|d| d.id.clone()).collect()
+    }
+
+    /// 数据布局：A 最早创建、最近复制；B 次早创建、从未再复制；C 最新创建、最近复制。
+    /// 「最近复制」顺序 = [C, A, B]，「首次复制」顺序 = [C, B, A]。
+    fn insert_order_fixture(conn: &Connection) {
+        insert_item(
+            conn,
+            "a-oldest-created-recently-copied",
+            1_000,
+            9_000,
+            false,
+        );
+        insert_item(conn, "b-middle-created-never-recopied", 2_000, 2_000, false);
+        insert_item(
+            conn,
+            "c-newest-created-recently-copied",
+            3_000,
+            8_000,
+            false,
+        );
+    }
+
+    /// 默认排序（Recent）必须与引入本设置之前的列表顺序一致：最近复制在前。
+    #[test]
+    fn list_clip_items_recent_order_is_most_recently_copied_first() {
+        let conn = make_test_conn();
+        insert_order_fixture(&conn);
+
+        let dtos = list_clip_items_impl(&conn).expect("列表查询不应失败");
+
+        assert_eq!(
+            ids(&dtos),
+            vec![
+                "a-oldest-created-recently-copied",
+                "c-newest-created-recently-copied",
+                "b-middle-created-never-recopied",
+            ],
+            "默认排序应按 last_modified_utc 降序（与改动前逐条一致）"
+        );
+    }
+
+    /// 首次复制排序：按 created_utc 降序，再次复制（只推进 last_modified）不改变位置。
+    #[test]
+    fn list_clip_items_first_copied_order_ignores_recopy_bump() {
+        let conn = make_test_conn();
+        insert_order_fixture(&conn);
+
+        let dtos =
+            list_clip_items_ordered_impl(&conn, SortOrder::FirstCopied).expect("列表查询不应失败");
+
+        assert_eq!(
+            ids(&dtos),
+            vec![
+                "c-newest-created-recently-copied",
+                "b-middle-created-never-recopied",
+                "a-oldest-created-recently-copied",
+            ],
+            "首次复制排序应按 created_utc 降序，最近复制时间不参与"
+        );
+    }
+
+    /// 两档排序在同一条数据上必须真的不同——否则「各有测试」是结构性空转。
+    #[test]
+    fn recent_and_first_copied_orders_differ_on_same_data() {
+        let conn = make_test_conn();
+        insert_order_fixture(&conn);
+
+        let recent = ids(&list_clip_items_impl(&conn).expect("最近复制查询不应失败"));
+        let first = ids(&list_clip_items_ordered_impl(&conn, SortOrder::FirstCopied)
+            .expect("首次复制查询不应失败"));
+
+        assert_ne!(
+            recent, first,
+            "两档排序必须产生不同顺序，否则测试无法区分分支，最近={recent:?} 首次={first:?}"
+        );
+    }
+
+    /// 收藏优先在「首次复制」排序下同样成立：收藏项整体在前，不因 created 更旧而落到后面。
+    #[test]
+    fn first_copied_order_keeps_favorites_first() {
+        let conn = make_test_conn();
+        insert_item(&conn, "pinned-oldest", 500, 500, true);
+        insert_item(&conn, "normal-newest", 9_000, 9_000, false);
+
+        let dtos =
+            list_clip_items_ordered_impl(&conn, SortOrder::FirstCopied).expect("列表查询不应失败");
+
+        assert_eq!(
+            ids(&dtos),
+            vec!["pinned-oldest", "normal-newest"],
+            "收藏项必须整体排在非收藏项之前（收藏优先级高于首次复制时间）"
+        );
+    }
+
+    /// Recent 排序是**严格不重排**：库返回什么顺序就输出什么顺序。
+    ///
+    /// 用「created 与 last_modified 反向」的数据验证：若有人把 Recent 分支
+    /// 也接上按 created 的重排，这里会红。
+    #[test]
+    fn recent_order_does_not_reorder_by_created() {
+        let conn = make_test_conn();
+        insert_item(&conn, "created-late-modified-early", 9_000, 1_000, false);
+        insert_item(&conn, "created-early-modified-late", 1_000, 9_000, false);
+
+        let dtos =
+            list_clip_items_ordered_impl(&conn, SortOrder::Recent).expect("列表查询不应失败");
+
+        assert_eq!(
+            ids(&dtos),
+            vec!["created-early-modified-late", "created-late-modified-early",],
+            "最近复制排序只看 last_modified_utc"
+        );
+    }
+
+    /// 翻译取数不受展示排序影响：即使「首次复制」会把老条目排到最前，
+    /// 「当前该翻译的文本」仍取最近复制的那条。
+    #[test]
+    fn pick_latest_translate_text_ignores_first_copied_display_order() {
+        let conn = make_test_conn();
+        // 老条目：最早创建、最近复制；新条目：最近创建、很久没复制
+        insert_item(&conn, "old-created-recent-copied", 1_000, 9_000, false);
+        insert_item(&conn, "new-created-stale-copied", 5_000, 6_000, false);
+
+        let first =
+            ids(&list_clip_items_ordered_impl(&conn, SortOrder::FirstCopied)
+                .expect("列表查询不应失败"));
+        assert_eq!(
+            first.first().map(String::as_str),
+            Some("new-created-stale-copied"),
+            "前提：首次复制排序会把最近创建的条目排到最前"
+        );
+
+        let picked = pick_latest_translate_text_impl(&conn).expect("取数不应失败");
+        assert_eq!(
+            picked.as_deref(),
+            Some("content-old-created-recent-copied"),
+            "翻译取数必须取最近复制的那条，不随展示排序漂移"
+        );
     }
 }

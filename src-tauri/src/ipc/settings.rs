@@ -25,6 +25,12 @@
 //! - `set_image_threshold`      — 校验范围后写入 max_image_bytes
 //! - `get_max_history_items`    — 读 AppSettings.max_history_items（已收敛到 1..=999）
 //! - `set_max_history_items`    — 校验 1..=999 → 写入 → 立即按新上限淘汰历史
+//! - `get_appearance_settings`  — 一次返回排序方式 / 图片高度 / 首次预览延迟 / 命中高亮样式
+//!   （两个数值已收敛到合法区间）
+//! - `set_sort_order`           — 校验 ∈{recent, first_copied}，合法才写入
+//! - `set_image_height`         — 校验 16..=48 px，合法才写入
+//! - `set_preview_first_delay`  — 校验 200..=5000 ms，合法才写入
+//! - `set_highlight_style`      — 校验 ∈{default, underline, bold}，合法才写入
 //! - `get_launch_on_login`      — 读 autostart.json enabled
 //! - `set_launch_on_login`      — 写 autostart.json + 调用 OS autolaunch
 
@@ -40,7 +46,10 @@ use std::collections::HashMap;
 use crate::autostart::AutostartConfig;
 use crate::hotkey::{HotkeyAction, HotkeyConfig, HotkeyError};
 use crate::ipc::translate::resolve_provider_or_fallback;
-use crate::settings::{AppSettings, MAX_HISTORY_ITEMS, MIN_HISTORY_ITEMS};
+use crate::settings::{
+    AppSettings, HighlightStyle, SortOrder, MAX_HISTORY_ITEMS, MAX_IMAGE_HEIGHT_PX,
+    MAX_PREVIEW_FIRST_DELAY_MS, MIN_HISTORY_ITEMS, MIN_IMAGE_HEIGHT_PX, MIN_PREVIEW_FIRST_DELAY_MS,
+};
 use crate::translate::credential::{
     credential_schema, delete_credentials, load_credentials_for_display, save_credentials,
     DbCredStore,
@@ -732,6 +741,131 @@ pub fn set_max_history_items_impl(
     }
 }
 
+/// 外观设置 DTO（返回给前端）。
+///
+/// 四个字段一次性返回：弹窗每次打开都要读其中三个，分四次 IPC 只会让打开变慢。
+/// 枚举以 snake_case 字符串下发（`recent` / `first_copied` / `default` / `underline` / `bold`）。
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AppearanceSettingsDto {
+    /// 列表排序方式
+    pub sort_order: SortOrder,
+    /// 弹出面板图片缩略图高度（px，已收敛到 16..=48）
+    pub image_height_px: u32,
+    /// 首次预览延迟（毫秒，已收敛到 200..=5000）
+    pub preview_first_delay_ms: u32,
+    /// 搜索命中高亮样式
+    pub highlight_style: HighlightStyle,
+}
+
+/// `get_appearance_settings` 的纯函数实现：一次读盘返回四个外观设置（数值已收敛）。
+///
+/// # Errors
+/// 此函数实际上永不返回 `Err`（`load_or_default` 静默回退默认值）。
+/// 签名保留 `Result` 以与命令层 `?` 传播保持一致。
+pub fn get_appearance_settings_impl(settings_path: &Path) -> Result<AppearanceSettingsDto, String> {
+    let settings = AppSettings::load_or_default(settings_path);
+    Ok(AppearanceSettingsDto {
+        sort_order: settings.sort_order,
+        image_height_px: settings.effective_image_height_px(),
+        preview_first_delay_ms: settings.effective_preview_first_delay_ms(),
+        highlight_style: settings.highlight_style,
+    })
+}
+
+/// 从 settings.json 读列表排序方式；读取或解析失败时回退默认（最近复制）。
+///
+/// 供剪贴板列表命令使用：排序是展示偏好，读不到就按默认顺序出列表。
+pub fn read_sort_order_from_path(settings_path: &Path) -> SortOrder {
+    AppSettings::load_or_default(settings_path).sort_order
+}
+
+/// 把前端传来的排序方式字符串解析成枚举。
+///
+/// 只认 `recent` / `first_copied`：命令参数是字符串而不是枚举，是为了在非法值时
+/// 返回中文说明，而不是 serde 那句「unknown variant」。
+fn parse_sort_order(raw: &str) -> Result<SortOrder, String> {
+    match raw {
+        "recent" => Ok(SortOrder::Recent),
+        "first_copied" => Ok(SortOrder::FirstCopied),
+        other => Err(format!(
+            "非法排序方式：{other}，合法值为 recent / first_copied"
+        )),
+    }
+}
+
+/// 把前端传来的高亮样式字符串解析成枚举（`default` / `underline` / `bold`）。
+fn parse_highlight_style(raw: &str) -> Result<HighlightStyle, String> {
+    match raw {
+        "default" => Ok(HighlightStyle::Default),
+        "underline" => Ok(HighlightStyle::Underline),
+        "bold" => Ok(HighlightStyle::Bold),
+        other => Err(format!(
+            "非法命中高亮样式：{other}，合法值为 default / underline / bold"
+        )),
+    }
+}
+
+/// `set_sort_order` 的纯函数实现：校验后写入 settings.json。
+///
+/// # Errors
+/// - 非法取值：返回说明合法值的错误字符串（不写文件）
+/// - 文件写入失败：返回错误字符串
+pub fn set_sort_order_impl(order: &str, settings_path: &Path) -> Result<(), String> {
+    let parsed = parse_sort_order(order)?;
+    let mut settings = AppSettings::load_or_default(settings_path);
+    settings.sort_order = parsed;
+    settings.save(settings_path).map_err(|e| e.to_string())
+}
+
+/// `set_image_height` 的纯函数实现：校验范围后写入 settings.json。
+///
+/// 合法区间 `MIN_IMAGE_HEIGHT_PX..=MAX_IMAGE_HEIGHT_PX`（16..=48 px）。
+///
+/// # Errors
+/// - 越界值：返回说明合法范围的错误字符串（不写文件）
+/// - 文件写入失败：返回错误字符串
+pub fn set_image_height_impl(px: u32, settings_path: &Path) -> Result<(), String> {
+    if !(MIN_IMAGE_HEIGHT_PX..=MAX_IMAGE_HEIGHT_PX).contains(&px) {
+        return Err(format!(
+            "图片高度超出范围：{px}px，合法范围为 {MIN_IMAGE_HEIGHT_PX} 到 {MAX_IMAGE_HEIGHT_PX}px"
+        ));
+    }
+    let mut settings = AppSettings::load_or_default(settings_path);
+    settings.image_height_px = px;
+    settings.save(settings_path).map_err(|e| e.to_string())
+}
+
+/// `set_preview_first_delay` 的纯函数实现：校验范围后写入 settings.json。
+///
+/// 合法区间 `MIN_PREVIEW_FIRST_DELAY_MS..=MAX_PREVIEW_FIRST_DELAY_MS`（200..=5000 ms）。
+///
+/// # Errors
+/// - 越界值：返回说明合法范围的错误字符串（不写文件）
+/// - 文件写入失败：返回错误字符串
+pub fn set_preview_first_delay_impl(ms: u32, settings_path: &Path) -> Result<(), String> {
+    if !(MIN_PREVIEW_FIRST_DELAY_MS..=MAX_PREVIEW_FIRST_DELAY_MS).contains(&ms) {
+        return Err(format!(
+            "首次预览延迟超出范围：{ms}ms，合法范围为 {MIN_PREVIEW_FIRST_DELAY_MS} 到 {MAX_PREVIEW_FIRST_DELAY_MS}ms"
+        ));
+    }
+    let mut settings = AppSettings::load_or_default(settings_path);
+    settings.preview_first_delay_ms = ms;
+    settings.save(settings_path).map_err(|e| e.to_string())
+}
+
+/// `set_highlight_style` 的纯函数实现：校验后写入 settings.json。
+///
+/// # Errors
+/// - 非法取值：返回说明合法值的错误字符串（不写文件）
+/// - 文件写入失败：返回错误字符串
+pub fn set_highlight_style_impl(style: &str, settings_path: &Path) -> Result<(), String> {
+    let parsed = parse_highlight_style(style)?;
+    let mut settings = AppSettings::load_or_default(settings_path);
+    settings.highlight_style = parsed;
+    settings.save(settings_path).map_err(|e| e.to_string())
+}
+
 /// `get_launch_on_login` 的纯函数实现：从 autostart.json 读取 enabled 值。
 ///
 /// # Errors
@@ -884,6 +1018,66 @@ pub fn set_max_history_items(
         }
     }
     Ok(evicted)
+}
+
+/// Tauri 命令：读取外观设置（排序方式 / 图片高度 / 首次预览延迟 / 命中高亮样式）。
+#[tauri::command]
+pub fn get_appearance_settings(app: AppHandle) -> Result<AppearanceSettingsDto, String> {
+    let path = resolve_config_path(&app, "settings.json")?;
+    get_appearance_settings_impl(&path)
+}
+
+/// Tauri 命令：设置列表排序方式（`recent` / `first_copied`）。
+///
+/// 落盘后发 `clipboard-changed`：列表的**顺序**变了，前端只按该事件重新取数。
+/// 不发的话用户会看到「设置里选了首次复制、列表还是旧顺序」，直到下一次复制。
+#[tauri::command]
+pub fn set_sort_order(app: AppHandle, order: String) -> Result<(), String> {
+    let path = resolve_config_path(&app, "settings.json")?;
+    set_sort_order_impl(&order, &path)?;
+    notify_list_needs_refresh(&app);
+    Ok(())
+}
+
+/// Tauri 命令：设置弹出面板图片缩略图高度（px，16–48）。
+///
+/// 不发刷新事件：高度是纯 CSS 尺寸，列表数据与顺序都没变，重取一次只会白传 payload。
+#[tauri::command]
+pub fn set_image_height(app: AppHandle, px: u32) -> Result<(), String> {
+    let path = resolve_config_path(&app, "settings.json")?;
+    set_image_height_impl(px, &path)
+}
+
+/// Tauri 命令：设置首次预览延迟（毫秒，200–5000）。
+///
+/// 不发刷新事件：它只影响面板打开后的等待时长，下一次开面板自然读到新值。
+#[tauri::command]
+pub fn set_preview_first_delay(app: AppHandle, ms: u32) -> Result<(), String> {
+    let path = resolve_config_path(&app, "settings.json")?;
+    set_preview_first_delay_impl(ms, &path)
+}
+
+/// Tauri 命令：设置搜索命中高亮样式（`default` / `underline` / `bold`）。
+///
+/// 落盘后发 `clipboard-changed`：主窗列表与弹窗都常驻挂载，只按该事件重新取数，
+/// 不发的话新样式要等重启才生效——那等于设置页在骗人。
+#[tauri::command]
+pub fn set_highlight_style(app: AppHandle, style: String) -> Result<(), String> {
+    let path = resolve_config_path(&app, "settings.json")?;
+    set_highlight_style_impl(&style, &path)?;
+    notify_list_needs_refresh(&app);
+    Ok(())
+}
+
+/// 通知前端「列表需要重新取数」。
+///
+/// 事件名复用 `clipboard-changed`：它是本工程既有的「列表数据需要刷新」信号
+/// （见 `crate::CLIPBOARD_CHANGED_EVENT` 的文档与 `set_max_history_items` 的先例），
+/// 并不字面表示「剪贴板内容变了」。排序与命中高亮都会改变列表的呈现结果。
+fn notify_list_needs_refresh(app: &AppHandle) {
+    if let Err(e) = app.emit(crate::CLIPBOARD_CHANGED_EVENT, ()) {
+        eprintln!("[QuickQuick] 外观设置落盘后发送列表刷新事件失败: {e}");
+    }
 }
 
 /// Tauri 命令：读取开机自启状态。
@@ -1812,6 +2006,220 @@ mod tests {
         assert_eq!(restored.excluded_apps, vec!["1Password".to_string()]);
         assert_eq!(restored.selected_provider, "deepl");
         assert_eq!(restored.max_history_items, 77);
+    }
+
+    /// 没有 settings.json 时，外观设置四项都必须等于改动前的硬编码默认值。
+    #[test]
+    fn get_appearance_settings_defaults_match_pre_change_behaviour() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("no-such-settings.json");
+
+        let appearance = get_appearance_settings_impl(&missing).unwrap();
+
+        assert_eq!(appearance.sort_order, SortOrder::Recent, "默认最近复制优先");
+        assert_eq!(appearance.image_height_px, 24, "默认缩略图高度 24px");
+        assert_eq!(
+            appearance.preview_first_delay_ms, 1500,
+            "默认首个预览延迟 1500ms（与改动前一致）"
+        );
+        assert_eq!(appearance.highlight_style, HighlightStyle::Default);
+    }
+
+    /// 读路径兜底：手写越界的图片高度/预览延迟要收敛到区间内，而不是原样透出。
+    #[test]
+    fn get_appearance_settings_clamps_hand_edited_numbers() {
+        let file = NamedTempFile::new().unwrap();
+        std::fs::write(
+            file.path(),
+            r#"{"image_height_px":999,"preview_first_delay_ms":0}"#,
+        )
+        .unwrap();
+
+        let appearance = get_appearance_settings_impl(file.path()).unwrap();
+
+        assert_eq!(appearance.image_height_px, MAX_IMAGE_HEIGHT_PX);
+        assert_eq!(
+            appearance.preview_first_delay_ms,
+            MIN_PREVIEW_FIRST_DELAY_MS
+        );
+    }
+
+    /// 每个 setter 都要能落盘并被批量读取读回（读写同一来源，不各自解析）。
+    #[test]
+    fn appearance_setters_persist_and_read_back() {
+        let file = NamedTempFile::new().unwrap();
+
+        set_sort_order_impl("first_copied", file.path()).unwrap();
+        set_image_height_impl(40, file.path()).unwrap();
+        set_preview_first_delay_impl(800, file.path()).unwrap();
+        set_highlight_style_impl("underline", file.path()).unwrap();
+
+        let appearance = get_appearance_settings_impl(file.path()).unwrap();
+        assert_eq!(appearance.sort_order, SortOrder::FirstCopied);
+        assert_eq!(appearance.image_height_px, 40);
+        assert_eq!(appearance.preview_first_delay_ms, 800);
+        assert_eq!(appearance.highlight_style, HighlightStyle::Underline);
+    }
+
+    /// 区间两端必须被接受（边界值不能被误判为越界）。
+    #[test]
+    fn appearance_setters_accept_boundary_values() {
+        let file = NamedTempFile::new().unwrap();
+
+        for px in [MIN_IMAGE_HEIGHT_PX, MAX_IMAGE_HEIGHT_PX] {
+            set_image_height_impl(px, file.path()).unwrap();
+            assert_eq!(
+                get_appearance_settings_impl(file.path())
+                    .unwrap()
+                    .image_height_px,
+                px
+            );
+        }
+        for ms in [MIN_PREVIEW_FIRST_DELAY_MS, MAX_PREVIEW_FIRST_DELAY_MS] {
+            set_preview_first_delay_impl(ms, file.path()).unwrap();
+            assert_eq!(
+                get_appearance_settings_impl(file.path())
+                    .unwrap()
+                    .preview_first_delay_ms,
+                ms
+            );
+        }
+    }
+
+    /// 越界图片高度被拒收且**不落盘**：先写一个合法值，再证明非法值没改动文件。
+    #[test]
+    fn set_image_height_rejects_out_of_range_without_touching_file() {
+        let file = NamedTempFile::new().unwrap();
+        set_image_height_impl(24, file.path()).unwrap();
+
+        for bad in [0u32, 15, 49, 999] {
+            let err = set_image_height_impl(bad, file.path()).unwrap_err();
+            assert!(err.contains("范围"), "错误信息应说明范围：{err}");
+            assert!(
+                err.contains("16") && err.contains("48"),
+                "错误信息应点明 16 到 48：{err}"
+            );
+        }
+
+        assert_eq!(
+            get_appearance_settings_impl(file.path())
+                .unwrap()
+                .image_height_px,
+            24,
+            "非法值不得落盘（文件应保留上一次的合法值）"
+        );
+    }
+
+    /// 越界首次预览延迟被拒收且不落盘。
+    #[test]
+    fn set_preview_first_delay_rejects_out_of_range_without_touching_file() {
+        let file = NamedTempFile::new().unwrap();
+        set_preview_first_delay_impl(1500, file.path()).unwrap();
+
+        for bad in [0u32, 199, 5001, 60_000] {
+            let err = set_preview_first_delay_impl(bad, file.path()).unwrap_err();
+            assert!(err.contains("范围"), "错误信息应说明范围：{err}");
+            assert!(
+                err.contains("200") && err.contains("5000"),
+                "错误信息应点明 200 到 5000：{err}"
+            );
+        }
+
+        assert_eq!(
+            get_appearance_settings_impl(file.path())
+                .unwrap()
+                .preview_first_delay_ms,
+            1500,
+            "非法值不得落盘（文件应保留上一次的合法值）"
+        );
+    }
+
+    /// 非法排序方式被拒收，且错误文案列全合法值；文件保持上一次的合法值。
+    #[test]
+    fn set_sort_order_rejects_unknown_value_without_touching_file() {
+        let file = NamedTempFile::new().unwrap();
+        set_sort_order_impl("recent", file.path()).unwrap();
+
+        let err = set_sort_order_impl("by_magic", file.path()).unwrap_err();
+
+        assert!(err.contains("by_magic"), "错误信息应回显非法值：{err}");
+        assert!(
+            err.contains("recent") && err.contains("first_copied"),
+            "错误信息应列出合法值：{err}"
+        );
+        assert_eq!(
+            get_appearance_settings_impl(file.path())
+                .unwrap()
+                .sort_order,
+            SortOrder::Recent,
+            "非法值不得落盘"
+        );
+    }
+
+    /// 非法高亮样式被拒收，且错误文案列全三档。
+    #[test]
+    fn set_highlight_style_rejects_unknown_value_without_touching_file() {
+        let file = NamedTempFile::new().unwrap();
+        set_highlight_style_impl("bold", file.path()).unwrap();
+
+        let err = set_highlight_style_impl("rainbow", file.path()).unwrap_err();
+
+        assert!(err.contains("rainbow"), "错误信息应回显非法值：{err}");
+        for allowed in ["default", "underline", "bold"] {
+            assert!(
+                err.contains(allowed),
+                "错误信息应列出合法值 {allowed}：{err}"
+            );
+        }
+        assert_eq!(
+            get_appearance_settings_impl(file.path())
+                .unwrap()
+                .highlight_style,
+            HighlightStyle::Bold,
+            "非法值不得落盘"
+        );
+    }
+
+    /// 外观 setter 不能丢其他字段（与历史上限的同类用例同口径）。
+    #[test]
+    fn appearance_setters_preserve_other_settings() {
+        let file = NamedTempFile::new().unwrap();
+        let initial = AppSettings {
+            excluded_apps: vec!["1Password".to_string()],
+            selected_provider: "deepl".to_string(),
+            max_history_items: 300,
+            ..AppSettings::default()
+        };
+        initial.save(file.path()).unwrap();
+
+        set_image_height_impl(32, file.path()).unwrap();
+
+        let restored = AppSettings::load_or_default(file.path());
+        assert_eq!(restored.excluded_apps, vec!["1Password".to_string()]);
+        assert_eq!(restored.selected_provider, "deepl");
+        assert_eq!(restored.max_history_items, 300);
+        assert_eq!(restored.image_height_px, 32);
+    }
+
+    /// `read_sort_order_from_path` 是列表命令的读口：缺文件回退最近复制。
+    #[test]
+    fn read_sort_order_from_path_defaults_to_recent_when_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("missing.json");
+
+        assert_eq!(read_sort_order_from_path(&missing), SortOrder::Recent);
+    }
+
+    /// `read_sort_order_from_path` 读回已写入的首次复制。
+    #[test]
+    fn read_sort_order_from_path_reads_persisted_value() {
+        let file = NamedTempFile::new().unwrap();
+        set_sort_order_impl("first_copied", file.path()).unwrap();
+
+        assert_eq!(
+            read_sort_order_from_path(file.path()),
+            SortOrder::FirstCopied
+        );
     }
 
     /// 运行时注册失败映射：底层 `AlreadyRegistered`（X11 / Windows 重复注册形态）

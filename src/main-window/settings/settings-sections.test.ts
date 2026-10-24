@@ -8,17 +8,18 @@ import {
 } from "./sections";
 
 describe("V3-F3-A10 设置子项栏", () => {
-  describe("settingsSections — 六项纵向", () => {
-    it("返回恰好六项", () => {
+  describe("settingsSections — 七项纵向", () => {
+    it("返回恰好七项", () => {
       const sections = settingsSections();
 
-      expect(sections).toHaveLength(6);
+      expect(sections).toHaveLength(7);
     });
 
-    it("包含 general / hotkey / translate-source / privacy / storage / about", () => {
+    it("包含 general / appearance / hotkey / translate-source / privacy / storage / about", () => {
       const sections = settingsSections();
 
       expect(sections).toContain("general");
+      expect(sections).toContain("appearance");
       expect(sections).toContain("hotkey");
       expect(sections).toContain("translate-source");
       expect(sections).toContain("privacy");
@@ -26,11 +27,12 @@ describe("V3-F3-A10 设置子项栏", () => {
       expect(sections).toContain("about");
     });
 
-    it("顺序固定：general 在最前，about 在最后", () => {
+    it("顺序固定：general 在最前，about 在最后，外观紧跟通用", () => {
       const sections = settingsSections();
 
       expect(sections[0]).toBe("general");
-      expect(sections[5]).toBe("about");
+      expect(sections[1]).toBe("appearance");
+      expect(sections[6]).toBe("about");
     });
   });
 

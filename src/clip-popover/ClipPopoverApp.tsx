@@ -1,4 +1,5 @@
 import { useState, useEffect, useLayoutEffect, useMemo, useRef } from "react";
+import type { CSSProperties } from "react";
 import type { ClipItem } from "../ipc/ipc-client";
 import { listClipItems, pasteToFront, hideAndReturnFocus, copyClipToClipboard } from "../ipc/ipc-client";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -7,6 +8,7 @@ import { CLIPBOARD_CHANGED_EVENT } from "../ipc/events";
 import { groupClipItems } from "./grouping";
 import { DEFAULT_SEARCH_MODE, prepareQuery, searchClipsWithPlan } from "./clip-search";
 import { advanceSelection, createInputOwnership } from "./keyboard-nav";
+import { useAppearancePreferences } from "../panels/settings/useAppearanceSettings";
 import {
   isImeComposing,
   directPickIndex,
@@ -52,7 +54,7 @@ const DIGIT_KEY_PATTERN = /^[0-9]$/;
  *   - modifiers: 当前按下的修饰键，仅驱动底部徽标切换
  *
  * 预览区（右侧）不直接跟随 selectedId：选中项经 useDeferredPreviewId 分级延迟后才显示
- * （首个预览 1500ms、此后切换 200ms），避免快速翻页时预览区逐条闪烁；
+ * （首个预览默认 1500ms、可由设置项调整；此后切换固定 200ms），避免快速翻页时预览区逐条闪烁；
  * 延迟窗口内渲染中性占位而不是「无选中项」（三态判定见 preview-state.ts）。
  * 底部徽标随按下的修饰键切换分层提示（默认层 / ⌃ 层 / ⌘ 层 / ⌥ 层，见 footer-hints）。
  *
@@ -75,6 +77,12 @@ export default function ClipPopoverApp() {
   const [ownership] = useState(createInputOwnership);
   // 面板会话序号：每次窗口重新获得焦点（面板被打开）递增，预览延迟档位随之重置
   const [previewSession, setPreviewSession] = useState(0);
+  // 外观设置刷新序号：后端在排序/高亮落盘后发 clipboard-changed（列表数据变了），
+  // 届时重读一次外观设置，让新样式立刻生效而不是等下次重启。
+  const [appearanceReload, setAppearanceReload] = useState(0);
+  // 外观设置：面板常驻不重挂载，所以按会话序号重读——改完设置，下一次开面板即生效。
+  // 首个预览延迟、图片高度与命中高亮都从这里来，读取失败时沿用默认值。
+  const appearance = useAppearancePreferences(`${previewSession}:${appearanceReload}`);
   // 当前按下的修饰键：只驱动底部徽标切换，不参与任何取用/移动判定
   const [modifiers, setModifiers] = useState<ModifierState>(NO_MODIFIERS);
 
@@ -144,10 +152,13 @@ export default function ClipPopoverApp() {
   // 采用与 ClipboardPage 相同的 cancelled+unlisten 范式，防止卸载后泄漏。
   // 只 setItems，不抢占用户当前选中：选中项校正交由下方 useEffect 处理
   // （选中项还在则保留、不在了回第一项）。
+  // 该事件同时承担「列表数据变了」的信号：排序或命中高亮落盘后后端也发它，
+  // 所以这里顺带递增外观刷新序号，让新顺序/新样式立刻生效。
   useEffect(() => {
     const cancelled = { current: false };
     let unlisten: (() => void) | undefined;
     listen(CLIPBOARD_CHANGED_EVENT, () => {
+      setAppearanceReload((epoch) => epoch + 1);
       listClipItems()
         .then((loaded) => {
           if (cancelled.current) return;
@@ -251,7 +262,21 @@ export default function ClipPopoverApp() {
 
   // 预览区跟随「延迟后的 ID」，而不是 selectedId：快速连按时中间项来不及到期就被下一项覆盖，
   // 因此预览不会逐条闪过去。
-  const displayedId = useDeferredPreviewId(selectedItem?.id ?? null, previewSession);
+  const displayedId = useDeferredPreviewId(
+    selectedItem?.id ?? null,
+    previewSession,
+    appearance.previewFirstDelayMs,
+  );
+
+  // 缩略图高度通过 CSS 自定义属性下发：一张图一行地用内联样式传会散成两处来源，
+  // 而它是纯展示尺寸，整块列表共用同一个值。
+  const shellStyle = useMemo<CSSProperties>(
+    () =>
+      ({
+        "--popover-thumb-height": `${appearance.imageHeightPx}px`,
+      }) as CSSProperties,
+    [appearance.imageHeightPx],
+  );
 
   // 按延迟后的 ID 从当前列表取对象而不是缓存条目本身：列表刷新（如收藏状态变化）后
   // 预览用的是新数据，不会停在打开面板那一刻的旧快照。
@@ -462,7 +487,7 @@ export default function ClipPopoverApp() {
   }
 
   return (
-    <div className="popover-shell">
+    <div className="popover-shell" style={shellStyle} data-hit-style={appearance.highlightStyle}>
       <div className="popover-search-row">
         <input
           ref={inputRef}

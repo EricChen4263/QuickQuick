@@ -9,6 +9,7 @@ import TranslateSourcePanel from "./TranslateSourcePanel";
 import PrivacyPanel from "./PrivacyPanel";
 import StoragePanel from "./StoragePanel";
 import GeneralPanel from "./GeneralPanel";
+import AppearancePanel from "./AppearancePanel";
 
 /** 关于子项面板：logo + 应用名 + 版本号 + 描述 */
 function AboutPanel() {
@@ -43,6 +44,7 @@ function AboutPanel() {
 /** 根据当前选中子项渲染对应内容面板 */
 function SectionContent({ section }: { section: SettingsSection }) {
   if (section === "general") return <GeneralPanel />;
+  if (section === "appearance") return <AppearancePanel />;
   if (section === "hotkey") return <HotkeyPanel />;
   if (section === "translate-source") return <TranslateSourcePanel />;
   if (section === "privacy") return <PrivacyPanel />;

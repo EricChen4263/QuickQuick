@@ -64,6 +64,7 @@ import {
   type GuideState,
 } from "./OnboardCard";
 import EmptyState from "../../components/EmptyState";
+import { useAppearancePreferences } from "../settings/useAppearanceSettings";
 import "./clipboard.css";
 
 /** localStorage key：首次引导已结束（走完或关闭），此后不再出现 */
@@ -110,6 +111,10 @@ interface ClipboardPageProps {
 
 /** 剪贴板历史页根组件 */
 function ClipboardPage({ onTranslateItem }: ClipboardPageProps) {
+  // 外观设置刷新序号：clipboard-changed 到达时递增，命中高亮样式随之重读
+  const [appearanceReload, setAppearanceReload] = useState(0);
+  // 命中高亮样式：主窗列表与弹窗共用同一设置，读取失败时用默认档（背景 + 加粗）
+  const appearance = useAppearancePreferences(appearanceReload);
   const [items, setItems] = useState<ClipItem[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [opError, setOpError] = useState<string | null>(null);
@@ -170,10 +175,13 @@ function ClipboardPage({ onTranslateItem }: ClipboardPageProps) {
 
   // 订阅后端 clipboard-changed 事件，有新条目或条目置顶时重新拉取列表。
   // 采用与 App.tsx route 监听相同的 cancelled+unlisten 范式，防止卸载后泄漏。
+  // 该事件同时承担「列表数据变了」的信号：排序或命中高亮落盘后后端也发它，
+  // 所以这里顺带递增外观刷新序号，让新样式立刻生效而不是等重启。
   useEffect(() => {
     const cancelled = { current: false };
     let unlisten: (() => void) | undefined;
     listen(CLIPBOARD_CHANGED_EVENT, () => {
+      setAppearanceReload((epoch) => epoch + 1);
       loadItems(cancelled);
     })
       .then((fn) => {
@@ -474,7 +482,7 @@ function ClipboardPage({ onTranslateItem }: ClipboardPageProps) {
   }
 
   return (
-    <div className="clip-page">
+    <div className="clip-page" data-hit-style={appearance.highlightStyle}>
       {opError !== null && (
         <div
           role="alert"

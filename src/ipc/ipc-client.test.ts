@@ -30,6 +30,11 @@ import {
   getStorageStats,
   cleanupHistory,
   clearUnpinnedHistory,
+  getAppearanceSettings,
+  setSortOrder,
+  setImageHeight,
+  setPreviewFirstDelay,
+  setHighlightStyle,
 } from "./ipc-client";
 import type {
   ClipItem,
@@ -40,6 +45,7 @@ import type {
   ExportBackupResult,
   ImportBackupResult,
   StorageStats,
+  AppearanceSettings,
 } from "./ipc-client";
 
 const mockInvoke = invoke as MockedFunction<typeof invoke>;
@@ -538,5 +544,103 @@ describe("clearUnpinnedHistory", () => {
     const err = await clearUnpinnedHistory().catch((e: unknown) => e);
     expect(err).toBeInstanceOf(Error);
     expect((err as Error).message).toContain("清空失败：数据库被锁");
+  });
+});
+
+describe("getAppearanceSettings", () => {
+  it("使用正确命令名调用 invoke，并原样透传四项外观设置", async () => {
+    const settings: AppearanceSettings = {
+      sortOrder: "first_copied",
+      imageHeightPx: 40,
+      previewFirstDelayMs: 800,
+      highlightStyle: "underline",
+    };
+    mockInvoke.mockResolvedValueOnce(settings);
+
+    const result = await getAppearanceSettings();
+
+    expect(mockInvoke).toHaveBeenCalledWith("get_appearance_settings");
+    expect(result).toEqual(settings);
+  });
+
+  it("invoke reject 字符串时重抛为含原始消息的 Error", async () => {
+    mockInvoke.mockRejectedValueOnce("无法获取配置目录");
+
+    const err = await getAppearanceSettings().catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).message).toContain("无法获取配置目录");
+  });
+});
+
+describe("setSortOrder", () => {
+  // 参数名必须是 order：命令签名是 set_sort_order(app, order)，写错会让 Tauri 报缺参数。
+  it("传入正确命令名与 order 参数", async () => {
+    mockInvoke.mockResolvedValueOnce(undefined);
+
+    await setSortOrder("first_copied");
+
+    expect(mockInvoke).toHaveBeenCalledWith("set_sort_order", { order: "first_copied" });
+  });
+
+  it("invoke reject 字符串时重抛为含原始消息的 Error", async () => {
+    mockInvoke.mockRejectedValueOnce("非法排序方式：by_magic");
+
+    const err = await setSortOrder("recent").catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).message).toContain("非法排序方式");
+  });
+});
+
+describe("setImageHeight", () => {
+  it("传入正确命令名与 px 参数", async () => {
+    mockInvoke.mockResolvedValueOnce(undefined);
+
+    await setImageHeight(40);
+
+    expect(mockInvoke).toHaveBeenCalledWith("set_image_height", { px: 40 });
+  });
+
+  it("invoke reject 字符串时重抛为含原始消息的 Error", async () => {
+    mockInvoke.mockRejectedValueOnce("图片高度超出范围：999px");
+
+    const err = await setImageHeight(999).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).message).toContain("图片高度超出范围");
+  });
+});
+
+describe("setPreviewFirstDelay", () => {
+  it("传入正确命令名与 ms 参数", async () => {
+    mockInvoke.mockResolvedValueOnce(undefined);
+
+    await setPreviewFirstDelay(800);
+
+    expect(mockInvoke).toHaveBeenCalledWith("set_preview_first_delay", { ms: 800 });
+  });
+
+  it("invoke reject 字符串时重抛为含原始消息的 Error", async () => {
+    mockInvoke.mockRejectedValueOnce("首次预览延迟超出范围：10ms");
+
+    const err = await setPreviewFirstDelay(10).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).message).toContain("首次预览延迟超出范围");
+  });
+});
+
+describe("setHighlightStyle", () => {
+  it("传入正确命令名与 style 参数", async () => {
+    mockInvoke.mockResolvedValueOnce(undefined);
+
+    await setHighlightStyle("underline");
+
+    expect(mockInvoke).toHaveBeenCalledWith("set_highlight_style", { style: "underline" });
+  });
+
+  it("invoke reject 字符串时重抛为含原始消息的 Error", async () => {
+    mockInvoke.mockRejectedValueOnce("非法命中高亮样式：rainbow");
+
+    const err = await setHighlightStyle("bold").catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).message).toContain("非法命中高亮样式");
   });
 });

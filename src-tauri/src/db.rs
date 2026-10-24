@@ -319,6 +319,8 @@ pub struct ClipItemRowWithImage {
     pub is_favorite: bool,
     /// 最后修改时间（UTC epoch ms）
     pub last_modified_utc: i64,
+    /// 首次入库时间（UTC epoch ms）；「首次复制」排序用它，再次复制不会改动
+    pub created_utc: i64,
     /// 关联图片行 id（None 表示无图）
     pub image_id: Option<String>,
     /// 缩略图 BLOB（WebP 字节；None 表示无图）
@@ -336,6 +338,7 @@ macro_rules! list_items_sql {
     ($image_projection:literal) => {
         concat!(
             "SELECT ci.id, ci.content, ci.kind, ci.is_favorite, ci.last_modified_utc,
+                ci.created_utc,
                 cimg.id AS image_id, ",
             $image_projection,
             ", ci.html_content
@@ -377,15 +380,17 @@ pub fn list_items_with_images(conn: &Connection) -> Result<Vec<ClipItemRowWithIm
         let kind: String = row.get(2)?;
         let is_fav_int: i64 = row.get(3)?;
         let last_modified: i64 = row.get(4)?;
-        let image_id: Option<String> = row.get(5)?;
-        let thumbnail: Option<Vec<u8>> = row.get(6)?;
-        let html_content: Option<String> = row.get(7)?;
+        let created: i64 = row.get(5)?;
+        let image_id: Option<String> = row.get(6)?;
+        let thumbnail: Option<Vec<u8>> = row.get(7)?;
+        let html_content: Option<String> = row.get(8)?;
         Ok(ClipItemRowWithImage {
             id,
             content,
             kind,
             is_favorite: is_fav_int != 0,
             last_modified_utc: last_modified,
+            created_utc: created,
             image_id,
             thumbnail,
             html_content,
@@ -415,6 +420,8 @@ pub struct ClipItemRowWithImageFlag {
     pub is_favorite: bool,
     /// 最后修改时间（UTC epoch ms）
     pub last_modified_utc: i64,
+    /// 首次入库时间（UTC epoch ms）；「首次复制」排序用它，再次复制不会改动
+    pub created_utc: i64,
     /// 关联图片行 id（None 表示无图）
     pub image_id: Option<String>,
     /// 关联图片行是否有非空缩略图 BLOB（无图条目为 false）
@@ -441,15 +448,17 @@ pub fn list_items_with_image_flag(
         let kind: String = row.get(2)?;
         let is_fav_int: i64 = row.get(3)?;
         let last_modified: i64 = row.get(4)?;
-        let image_id: Option<String> = row.get(5)?;
-        let has_thumbnail_int: i64 = row.get(6)?;
-        let html_content: Option<String> = row.get(7)?;
+        let created: i64 = row.get(5)?;
+        let image_id: Option<String> = row.get(6)?;
+        let has_thumbnail_int: i64 = row.get(7)?;
+        let html_content: Option<String> = row.get(8)?;
         Ok(ClipItemRowWithImageFlag {
             id,
             content,
             kind,
             is_favorite: is_fav_int != 0,
             last_modified_utc: last_modified,
+            created_utc: created,
             image_id,
             has_thumbnail: has_thumbnail_int != 0,
             html_content,

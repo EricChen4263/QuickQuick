@@ -14,4 +14,15 @@ describe("previewDelayMs 分级延迟取值", () => {
     expect(PREVIEW_FIRST_DELAY_MS).toBe(1500);
     expect(PREVIEW_SWITCH_DELAY_MS).toBe(200);
   });
+
+  it("首个预览档可被设置覆盖（传 300 就等 300ms）", () => {
+    expect(previewDelayMs(true, 300)).toBe(300);
+    expect(previewDelayMs(true, 300)).not.toBe(PREVIEW_FIRST_DELAY_MS);
+  });
+
+  it("后续切换档不受设置影响：传任何首个延迟都仍是 200ms", () => {
+    for (const firstDelay of [200, 300, 1500, 5000]) {
+      expect(previewDelayMs(false, firstDelay)).toBe(PREVIEW_SWITCH_DELAY_MS);
+    }
+  });
 });

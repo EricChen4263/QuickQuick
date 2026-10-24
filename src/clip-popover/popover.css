@@ -173,6 +173,22 @@ body {
   padding: 0 1px;
 }
 
+/* 命中高亮的可选样式：默认档即上面那条（背景 + 加粗）。
+   另两档都去掉背景，只留一种强调，靠 .popover-shell 上的 data-hit-style 切换——
+   属性由外观设置下发，不给每个 <mark> 挂类名，命中区间与渲染结构保持唯一。 */
+.popover-shell[data-hit-style="underline"] .clip-hit {
+  background: none;
+  font-weight: inherit;
+  text-decoration: underline;
+  text-decoration-color: color-mix(in oklch, var(--accent) 80%, transparent);
+  text-underline-offset: 2px;
+}
+
+.popover-shell[data-hit-style="bold"] .clip-hit {
+  background: none;
+  font-weight: 700;
+}
+
 /* 搜索模式提示（如非法正则已降级为文本搜索）：贴在搜索框下方，弱化显示 */
 .popover-search-notice {
   margin-top: 6px;
@@ -181,9 +197,11 @@ body {
   color: var(--muted);
 }
 
+/* 图片行的缩略图：高度由外观设置下发（--popover-thumb-height），
+   缺省 24px 与默认设置一致；宽度固定，超高时 object-fit: cover 裁切不撑行 */
 .popover-row-thumb {
   width: 36px;
-  height: 24px;
+  height: var(--popover-thumb-height, 24px);
   border-radius: 4px;
   object-fit: cover;
   border: 1px solid color-mix(in oklch, var(--border) 72%, transparent);

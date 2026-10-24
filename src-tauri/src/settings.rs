@@ -49,6 +49,73 @@ fn default_max_image_bytes() -> u64 {
     20 * 1024 * 1024
 }
 
+/// 列表排序方式（只影响展示顺序，不改变去重与淘汰语义）。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SortOrder {
+    /// 最近复制优先（默认）：按 `last_modified_utc` 降序，最近一次复制在最前。
+    ///
+    /// 这正是列表查询本来的顺序，所以默认值不改动任何既有行为。
+    #[default]
+    Recent,
+    /// 首次复制优先：按 `created_utc` 降序，同一内容再次复制不会让它跳到最前。
+    FirstCopied,
+}
+
+/// 搜索命中高亮样式。
+///
+/// 三档都是纯视觉：命中区间不变、<mark> 结构不变，只换 CSS 呈现。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HighlightStyle {
+    /// 默认：背景染色 + 加粗（与既有视觉一致）
+    #[default]
+    Default,
+    /// 下划线：去掉背景，只在命中片段下划一条 accent 线
+    Underline,
+    /// 纯加粗：去掉背景，只加字重
+    Bold,
+}
+
+/// 弹出面板行内图片缩略图高度的合法区间下限（px）。
+///
+/// 比 16px 更矮就只剩一条缝，既看不出图也点不准行。
+pub const MIN_IMAGE_HEIGHT_PX: u32 = 16;
+
+/// 弹出面板行内图片缩略图高度的合法区间上限（px）。
+///
+/// 上限压在 48px：一行缩略图再高就会把列表挤成一屏只放得下几条，
+/// 弹窗本体高度固定，超出部分只能靠滚动补。
+pub const MAX_IMAGE_HEIGHT_PX: u32 = 48;
+
+/// 弹出面板行内图片缩略图高度的默认值（px）。
+///
+/// 与改动前 `.popover-row-thumb` 的硬编码高度一致，升级后默认视觉不变。
+pub const DEFAULT_IMAGE_HEIGHT_PX: u32 = 24;
+
+/// 首次预览延迟的合法区间下限（毫秒）。
+///
+/// 与「后续切换 200ms」同一档：首个预览比后续切换还快就没有「先看列表」的意义。
+pub const MIN_PREVIEW_FIRST_DELAY_MS: u32 = 200;
+
+/// 首次预览延迟的合法区间上限（毫秒）。
+///
+/// 5 秒是「等太久就等于没预览」的上界；再长用户会以为预览坏了。
+pub const MAX_PREVIEW_FIRST_DELAY_MS: u32 = 5000;
+
+/// 首次预览延迟的默认值（毫秒）。
+///
+/// 与改动前 `PREVIEW_FIRST_DELAY_MS` 的硬编码一致，升级后默认手感不变。
+pub const DEFAULT_PREVIEW_FIRST_DELAY_MS: u32 = 1500;
+
+fn default_image_height_px() -> u32 {
+    DEFAULT_IMAGE_HEIGHT_PX
+}
+
+fn default_preview_first_delay_ms() -> u32 {
+    DEFAULT_PREVIEW_FIRST_DELAY_MS
+}
+
 /// 历史条目上限的合法区间下限。
 ///
 /// 1 是「只留最新一条」的极限，不允许 0：那等于每复制一次就把历史清空，
@@ -115,6 +182,26 @@ pub struct AppSettings {
     /// 被手工改坏（0 / 10000），直接用会让历史被清空或淘汰彻底失效。
     #[serde(default = "default_max_history_items")]
     pub max_history_items: usize,
+    /// 列表排序方式（默认 `Recent`：最近复制优先）
+    ///
+    /// 只改变列表展示顺序，不参与去重、收藏与淘汰判定。
+    #[serde(default)]
+    pub sort_order: SortOrder,
+    /// 弹出面板行内图片缩略图高度（px，16..=48，默认 24）
+    ///
+    /// 消费侧请读 [`AppSettings::effective_image_height_px`]：settings.json 是明文文件，
+    /// 手工写出的 1 或 999 会让缩略图小到看不见 / 大到挤爆一行。
+    #[serde(default = "default_image_height_px")]
+    pub image_height_px: u32,
+    /// 弹出面板首个行内预览的等待时长（毫秒，200..=5000，默认 1500）
+    ///
+    /// 只作用于「面板本次打开后的首个预览」；后续切换固定 200ms 不开放配置，
+    /// 因为那一档的取值只影响翻页时中间项闪不闪，没有第二种合理值。
+    #[serde(default = "default_preview_first_delay_ms")]
+    pub preview_first_delay_ms: u32,
+    /// 搜索命中高亮样式（默认 `Default`：背景 + 加粗）
+    #[serde(default)]
+    pub highlight_style: HighlightStyle,
 }
 
 impl Default for AppSettings {
@@ -131,6 +218,10 @@ impl Default for AppSettings {
             theme: default_theme(),
             max_image_bytes: default_max_image_bytes(),
             max_history_items: default_max_history_items(),
+            sort_order: SortOrder::default(),
+            image_height_px: default_image_height_px(),
+            preview_first_delay_ms: default_preview_first_delay_ms(),
+            highlight_style: HighlightStyle::default(),
         }
     }
 }
@@ -148,6 +239,24 @@ impl AppSettings {
     pub fn effective_max_history_items(&self) -> usize {
         self.max_history_items
             .clamp(MIN_HISTORY_ITEMS, MAX_HISTORY_ITEMS)
+    }
+
+    /// 生效的缩略图高度（已收敛到 [`MIN_IMAGE_HEIGHT_PX`]..=[`MAX_IMAGE_HEIGHT_PX`]）。
+    ///
+    /// 与 [`AppSettings::effective_max_history_items`] 同理：写路径已经拒收越界值，
+    /// 这里兜的是**读路径**——手工改坏的 1 / 999 不该让弹窗缩略图小到看不见或撑爆行。
+    pub fn effective_image_height_px(&self) -> u32 {
+        self.image_height_px
+            .clamp(MIN_IMAGE_HEIGHT_PX, MAX_IMAGE_HEIGHT_PX)
+    }
+
+    /// 生效的首次预览延迟（已收敛到 [`MIN_PREVIEW_FIRST_DELAY_MS`]..=[`MAX_PREVIEW_FIRST_DELAY_MS`]）。
+    ///
+    /// 读路径兜底理由同 [`AppSettings::effective_image_height_px`]：0 会让首个预览变成
+    /// 「面板一打开就闪一下预览」，远超上限则等于关掉了预览。
+    pub fn effective_preview_first_delay_ms(&self) -> u32 {
+        self.preview_first_delay_ms
+            .clamp(MIN_PREVIEW_FIRST_DELAY_MS, MAX_PREVIEW_FIRST_DELAY_MS)
     }
 
     /// 将当前设置序列化为 JSON 并写入指定路径。
@@ -228,6 +337,10 @@ mod tests {
         assert!(d.stay_in_tray);
         assert!(d.auto_update);
         assert_eq!(d.theme, "auto");
+        assert_eq!(d.sort_order, SortOrder::Recent);
+        assert_eq!(d.image_height_px, DEFAULT_IMAGE_HEIGHT_PX);
+        assert_eq!(d.preview_first_delay_ms, DEFAULT_PREVIEW_FIRST_DELAY_MS);
+        assert_eq!(d.highlight_style, HighlightStyle::Default);
     }
 
     /// 序列化后再反序列化，值不变（round-trip）。
@@ -245,6 +358,10 @@ mod tests {
             theme: "dark".to_string(),
             max_image_bytes: 5 * 1024 * 1024,
             max_history_items: 42,
+            sort_order: SortOrder::FirstCopied,
+            image_height_px: 40,
+            preview_first_delay_ms: 800,
+            highlight_style: HighlightStyle::Underline,
         };
         let json = serde_json::to_string(&original).expect("序列化应成功");
         let restored: AppSettings = serde_json::from_str(&json).expect("反序列化应成功");
@@ -260,6 +377,10 @@ mod tests {
         assert_eq!(restored.theme, original.theme);
         assert_eq!(restored.max_image_bytes, 5 * 1024 * 1024);
         assert_eq!(restored.max_history_items, 42, "历史条目上限应原样保留");
+        assert_eq!(restored.sort_order, SortOrder::FirstCopied);
+        assert_eq!(restored.image_height_px, 40);
+        assert_eq!(restored.preview_first_delay_ms, 800);
+        assert_eq!(restored.highlight_style, HighlightStyle::Underline);
     }
 
     /// 旧 JSON（没有 exclude_mode / ignore_regexes）能反序列化：模式回落到黑名单、
@@ -381,5 +502,159 @@ mod tests {
                 "区间内的值 {value} 不应被收敛改动"
             );
         }
+    }
+
+    /// 旧 JSON（无四个外观字段）反序列化后取默认值：排序=最近复制、缩略图 24px、
+    /// 首次预览 1500ms、高亮=默认。这四个值必须与改动前代码里的硬编码一致。
+    #[test]
+    fn legacy_json_missing_appearance_fields_uses_pre_change_defaults() {
+        let json = r#"{"excluded_apps":["1Password"],"max_history_items":300}"#;
+        let settings: AppSettings = serde_json::from_str(json).expect("旧 JSON 反序列化应成功");
+
+        assert_eq!(
+            settings.sort_order,
+            SortOrder::Recent,
+            "默认排序必须是最近复制"
+        );
+        assert_eq!(
+            settings.image_height_px, 24,
+            "默认缩略图高度必须等于改动前的 24px"
+        );
+        assert_eq!(
+            settings.preview_first_delay_ms, 1500,
+            "默认首次预览延迟必须等于改动前的 1500ms"
+        );
+        assert_eq!(
+            settings.highlight_style,
+            HighlightStyle::Default,
+            "默认高亮样式必须等于改动前的背景+加粗"
+        );
+    }
+
+    /// 四个外观字段在 JSON 里都是小写/下划线字符串，与前端传输的形状一致。
+    #[test]
+    fn appearance_enums_serialize_as_snake_case_strings() {
+        let settings = AppSettings {
+            sort_order: SortOrder::FirstCopied,
+            highlight_style: HighlightStyle::Bold,
+            ..AppSettings::default()
+        };
+        let json = serde_json::to_string(&settings).expect("序列化应成功");
+
+        assert!(
+            json.contains(r#""sort_order":"first_copied""#),
+            "排序方式必须序列化为 first_copied，实际：{json}"
+        );
+        assert!(
+            json.contains(r#""highlight_style":"bold""#),
+            "高亮样式必须序列化为 bold，实际：{json}"
+        );
+    }
+
+    /// 读路径兜底：手写 1px 会被收敛到下限 16px（否则缩略图小到看不见）。
+    #[test]
+    fn effective_image_height_px_clamps_below_min() {
+        let settings = AppSettings {
+            image_height_px: 1,
+            ..AppSettings::default()
+        };
+
+        assert_eq!(settings.effective_image_height_px(), MIN_IMAGE_HEIGHT_PX);
+        assert_eq!(settings.effective_image_height_px(), 16);
+    }
+
+    /// 读路径兜底：手写 999px 会被收敛到上限 48px（否则一行挤爆弹窗）。
+    #[test]
+    fn effective_image_height_px_clamps_above_max() {
+        let settings = AppSettings {
+            image_height_px: 999,
+            ..AppSettings::default()
+        };
+
+        assert_eq!(settings.effective_image_height_px(), MAX_IMAGE_HEIGHT_PX);
+        assert_eq!(settings.effective_image_height_px(), 48);
+    }
+
+    /// 缩略图高度区间内的值原样透出（含两端）。
+    #[test]
+    fn effective_image_height_px_keeps_boundary_values_intact() {
+        for value in [MIN_IMAGE_HEIGHT_PX, 24, MAX_IMAGE_HEIGHT_PX] {
+            let settings = AppSettings {
+                image_height_px: value,
+                ..AppSettings::default()
+            };
+            assert_eq!(settings.effective_image_height_px(), value);
+        }
+    }
+
+    /// 读路径兜底：手写 0ms 会被收敛到下限 200ms（否则首个预览瞬间闪现）。
+    #[test]
+    fn effective_preview_first_delay_ms_clamps_below_min() {
+        let settings = AppSettings {
+            preview_first_delay_ms: 0,
+            ..AppSettings::default()
+        };
+
+        assert_eq!(
+            settings.effective_preview_first_delay_ms(),
+            MIN_PREVIEW_FIRST_DELAY_MS
+        );
+        assert_eq!(settings.effective_preview_first_delay_ms(), 200);
+    }
+
+    /// 读路径兜底：手写 60_000ms 会被收敛到上限 5000ms（否则等于关掉预览）。
+    #[test]
+    fn effective_preview_first_delay_ms_clamps_above_max() {
+        let settings = AppSettings {
+            preview_first_delay_ms: 60_000,
+            ..AppSettings::default()
+        };
+
+        assert_eq!(
+            settings.effective_preview_first_delay_ms(),
+            MAX_PREVIEW_FIRST_DELAY_MS
+        );
+        assert_eq!(settings.effective_preview_first_delay_ms(), 5000);
+    }
+
+    /// 首次预览延迟区间内的值原样透出（含两端）。
+    #[test]
+    fn effective_preview_first_delay_ms_keeps_boundary_values_intact() {
+        for value in [MIN_PREVIEW_FIRST_DELAY_MS, 1500, MAX_PREVIEW_FIRST_DELAY_MS] {
+            let settings = AppSettings {
+                preview_first_delay_ms: value,
+                ..AppSettings::default()
+            };
+            assert_eq!(settings.effective_preview_first_delay_ms(), value);
+        }
+    }
+
+    /// 枚举字段写坏时的爆炸半径：serde 反序列化整体失败 → `load_or_default` 回退全默认。
+    ///
+    /// 这是与 `exclude_mode` 一致的历史行为，不是本项引入的新风险；测试把它显式钉住，
+    /// 免得日后有人以为「只坏一个字段只丢一个字段」。
+    #[test]
+    fn invalid_sort_order_string_falls_back_to_all_defaults() {
+        let dir = std::env::temp_dir().join(format!("qq-settings-enum-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("临时目录创建失败");
+        let path = dir.join("settings.json");
+        std::fs::write(
+            &path,
+            r#"{"sort_order":"by_magic","excluded_apps":["com.foo.app"]}"#,
+        )
+        .expect("写临时设置文件失败");
+
+        let settings = AppSettings::load_or_default(&path);
+
+        assert_eq!(
+            settings.sort_order,
+            SortOrder::Recent,
+            "未知排序方式回退默认值"
+        );
+        assert!(
+            settings.excluded_apps.is_empty(),
+            "整份设置都回退默认——这正是必须写进文档的爆炸半径"
+        );
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

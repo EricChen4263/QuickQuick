@@ -61,6 +61,22 @@
   padding: 0 1px;
 }
 
+/* 命中高亮的可选样式：默认档即上面那条（背景 + 加粗）。
+   另两档去掉背景，只留一种强调；属性挂在外观设置驱动的 .clip-page 上，
+   不逐条给 <mark> 加类名，命中区间与渲染结构保持唯一。 */
+.clip-page[data-hit-style="underline"] .clip-hit {
+  background: none;
+  font-weight: inherit;
+  text-decoration: underline;
+  text-decoration-color: color-mix(in oklch, var(--accent) 80%, transparent);
+  text-underline-offset: 2px;
+}
+
+.clip-page[data-hit-style="bold"] .clip-hit {
+  background: none;
+  font-weight: 700;
+}
+
 /* 搜索框外层：相对定位容器，内嵌 SVG 图标 */
 .search-field {
   position: relative;

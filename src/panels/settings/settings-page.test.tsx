@@ -37,6 +37,11 @@ vi.mock("../../ipc/ipc-client", () => ({
   setImageThreshold: vi.fn(),
   getMaxHistoryItems: vi.fn(),
   setMaxHistoryItems: vi.fn(),
+  getAppearanceSettings: vi.fn(),
+  setSortOrder: vi.fn(),
+  setImageHeight: vi.fn(),
+  setPreviewFirstDelay: vi.fn(),
+  setHighlightStyle: vi.fn(),
   MIN_HISTORY_ITEMS: 1,
   MAX_HISTORY_ITEMS: 999,
   exportBackup: vi.fn(),
@@ -73,6 +78,11 @@ import {
   setImageThreshold,
   getMaxHistoryItems,
   setMaxHistoryItems,
+  getAppearanceSettings,
+  setSortOrder,
+  setImageHeight,
+  setPreviewFirstDelay,
+  setHighlightStyle,
 } from "../../ipc/ipc-client";
 
 const mockGetVersion = vi.mocked(getVersion);
@@ -103,6 +113,11 @@ const mockGetImageThreshold = vi.mocked(getImageThreshold);
 const mockSetImageThreshold = vi.mocked(setImageThreshold);
 const mockGetMaxHistoryItems = vi.mocked(getMaxHistoryItems);
 const mockSetMaxHistoryItems = vi.mocked(setMaxHistoryItems);
+const mockGetAppearanceSettings = vi.mocked(getAppearanceSettings);
+const mockSetSortOrder = vi.mocked(setSortOrder);
+const mockSetImageHeight = vi.mocked(setImageHeight);
+const mockSetPreviewFirstDelay = vi.mocked(setPreviewFirstDelay);
+const mockSetHighlightStyle = vi.mocked(setHighlightStyle);
 
 const MOCK_HOTKEYS = {
   history: "CmdOrCtrl+Shift+H",
@@ -151,20 +166,72 @@ describe("settings-page", () => {
     mockSetImageThreshold.mockResolvedValue(undefined);
     mockGetMaxHistoryItems.mockResolvedValue(500);
     mockSetMaxHistoryItems.mockResolvedValue(0);
+    mockGetAppearanceSettings.mockResolvedValue({
+      sortOrder: "recent",
+      imageHeightPx: 24,
+      previewFirstDelayMs: 1500,
+      highlightStyle: "default",
+    });
+    mockSetSortOrder.mockResolvedValue(undefined);
+    mockSetImageHeight.mockResolvedValue(undefined);
+    mockSetPreviewFirstDelay.mockResolvedValue(undefined);
+    mockSetHighlightStyle.mockResolvedValue(undefined);
   });
 
-  it("settings-page: 左侧纵向子项栏渲染六个子项（通用/热键/翻译源/隐私/存储/关于）", async () => {
+  it("settings-page: 左侧纵向子项栏渲染七个子项（通用/外观/热键/翻译源/隐私/存储/关于）", async () => {
     // Arrange & Act
     render(<SettingsPage />);
 
-    // Assert：六个子项全部渲染
+    // Assert：七个子项全部渲染
     const nav = screen.getByRole("navigation", { name: "设置子项" });
     expect(within(nav).getByRole("button", { name: "通用" })).toBeInTheDocument();
+    expect(within(nav).getByRole("button", { name: "外观" })).toBeInTheDocument();
     expect(within(nav).getByRole("button", { name: "热键" })).toBeInTheDocument();
     expect(within(nav).getByRole("button", { name: "翻译源" })).toBeInTheDocument();
     expect(within(nav).getByRole("button", { name: "隐私" })).toBeInTheDocument();
     expect(within(nav).getByRole("button", { name: "存储" })).toBeInTheDocument();
     expect(within(nav).getByRole("button", { name: "关于" })).toBeInTheDocument();
+  });
+
+  it("settings-page: 点击外观后渲染四项设置与含默认值的 tooltip", async () => {
+    // Arrange
+    const user = userEvent.setup();
+    render(<SettingsPage />);
+    const nav = screen.getByRole("navigation", { name: "设置子项" });
+
+    // Act
+    await user.click(within(nav).getByRole("button", { name: "外观" }));
+
+    // Assert：四行都渲染，且 tooltip 写明默认值
+    expect(within(nav).getByRole("button", { name: "外观" })).toHaveAttribute("aria-current", "page");
+    expect(await screen.findByRole("button", { name: "排序方式" })).toBeInTheDocument();
+    expect(screen.getByLabelText("弹出面板图片高度")).toBeInTheDocument();
+    expect(screen.getByLabelText("首次预览延迟")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "命中高亮样式" })).toBeInTheDocument();
+    expect(screen.getByTitle(/默认：最近复制/)).toBeInTheDocument();
+    expect(screen.getByTitle(/默认：24px/)).toBeInTheDocument();
+    expect(screen.getByTitle(/默认：1500ms/)).toBeInTheDocument();
+    expect(screen.getByTitle(/默认：背景高亮/)).toBeInTheDocument();
+  });
+
+  it("settings-page: 外观面板切换排序方式调用 setSortOrder(first_copied)", async () => {
+    // Arrange
+    const user = userEvent.setup();
+    render(<SettingsPage />);
+    const nav = screen.getByRole("navigation", { name: "设置子项" });
+    await user.click(within(nav).getByRole("button", { name: "外观" }));
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "排序方式" })).toHaveTextContent("最近复制");
+    });
+
+    // Act
+    await user.click(screen.getByRole("button", { name: "排序方式" }));
+    await user.click(screen.getByRole("option", { name: "首次复制" }));
+
+    // Assert
+    await waitFor(() => {
+      expect(mockSetSortOrder).toHaveBeenCalledWith("first_copied");
+    });
   });
 
   it("settings-page: 默认选中通用，点击热键后右内容切换（DOM 变化）", async () => {

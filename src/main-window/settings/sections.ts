@@ -1,5 +1,6 @@
 export type SettingsSection =
   | "general"
+  | "appearance"
   | "hotkey"
   | "translate-source"
   | "privacy"
@@ -8,6 +9,7 @@ export type SettingsSection =
 
 const SECTIONS: SettingsSection[] = [
   "general",
+  "appearance",
   "hotkey",
   "translate-source",
   "privacy",
@@ -15,7 +17,7 @@ const SECTIONS: SettingsSection[] = [
   "about",
 ];
 
-/** 返回设置面板六个子项，顺序固定（通用/热键/翻译源/隐私/存储/关于）。 */
+/** 返回设置面板七个子项，顺序固定（通用/外观/热键/翻译源/隐私/存储/关于）。 */
 export function settingsSections(): SettingsSection[] {
   return [...SECTIONS];
 }

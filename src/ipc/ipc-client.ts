@@ -105,6 +105,33 @@ export interface Hotkeys {
 export type HotkeyAction = "history" | "translate" | "main";
 
 /**
+ * 列表排序方式，与 Rust `SortOrder` 的 snake_case 序列化值对齐。
+ *
+ * - `recent`：最近复制优先（默认，与引入本设置之前的列表顺序一致）
+ * - `first_copied`：首次复制优先（再次复制不改变位置）
+ */
+export type SortOrder = "recent" | "first_copied";
+
+/**
+ * 搜索命中高亮样式，与 Rust `HighlightStyle` 的 snake_case 序列化值对齐。
+ *
+ * - `default`：背景染色 + 加粗（默认，与既有视觉一致）
+ * - `underline`：去掉背景，命中片段加下划线
+ * - `bold`：去掉背景，只加字重
+ */
+export type HighlightStyle = "default" | "underline" | "bold";
+
+/** 外观设置四项，与 Rust AppearanceSettingsDto（camelCase）对齐。 */
+export interface AppearanceSettings {
+  sortOrder: SortOrder;
+  /** 弹出面板行内缩略图高度（px，16–48，默认 24） */
+  imageHeightPx: number;
+  /** 首次预览延迟（毫秒，200–5000，默认 1500） */
+  previewFirstDelayMs: number;
+  highlightStyle: HighlightStyle;
+}
+
+/**
  * 将 invoke 的 reject 值（通常是 Rust 返回的 String）重抛为 Error。
  *
  * Tauri invoke 在 Rust 返回 Err(String) 时以字符串形式 reject，
@@ -477,6 +504,62 @@ export async function getMaxHistoryItems(): Promise<number> {
 export async function setMaxHistoryItems(items: number): Promise<number> {
   try {
     return await invoke<number>("set_max_history_items", { items });
+  } catch (err) {
+    throw toError(err);
+  }
+}
+
+/**
+ * 读取外观设置四项（排序方式 / 图片高度 / 首次预览延迟 / 命中高亮样式）。
+ *
+ * 一次 IPC 返回四项：弹窗每次打开都要读其中三项，分三次调用只会让打开变慢。
+ * 数值项返回时已由后端收敛到合法区间；调用方仍应经 `normalizeAppearanceSettings`
+ * 归一，避免旧版后端或缺字段时拿到 undefined。
+ */
+export async function getAppearanceSettings(): Promise<AppearanceSettings> {
+  try {
+    return await invoke<AppearanceSettings>("get_appearance_settings");
+  } catch (err) {
+    throw toError(err);
+  }
+}
+
+/**
+ * 设置列表排序方式。
+ *
+ * 只影响列表展示顺序，不改变去重、收藏与淘汰语义；
+ * 非法值（recent / first_copied 之外）由 Rust 侧拒收并返回中文 Err。
+ */
+export async function setSortOrder(order: SortOrder): Promise<void> {
+  try {
+    await invoke<void>("set_sort_order", { order });
+  } catch (err) {
+    throw toError(err);
+  }
+}
+
+/** 设置弹出面板行内缩略图高度（px，合法 16–48）。 */
+export async function setImageHeight(px: number): Promise<void> {
+  try {
+    await invoke<void>("set_image_height", { px });
+  } catch (err) {
+    throw toError(err);
+  }
+}
+
+/** 设置首次预览延迟（毫秒，合法 200–5000）。 */
+export async function setPreviewFirstDelay(ms: number): Promise<void> {
+  try {
+    await invoke<void>("set_preview_first_delay", { ms });
+  } catch (err) {
+    throw toError(err);
+  }
+}
+
+/** 设置搜索命中高亮样式（合法值：default / underline / bold）。 */
+export async function setHighlightStyle(style: HighlightStyle): Promise<void> {
+  try {
+    await invoke<void>("set_highlight_style", { style });
   } catch (err) {
     throw toError(err);
   }
