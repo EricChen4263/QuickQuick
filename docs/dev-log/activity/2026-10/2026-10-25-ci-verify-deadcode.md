@@ -5,7 +5,7 @@ subject: Maccy 对标 · Phase 6 工程加固（P6-1 PR/push 验证 workflow + P
 summary: 新增独立于发布流水线的 verify workflow（PR/push 跑 make verify，只上 macOS 腿）+ knip 与后端人工清单两类死代码检测；门禁只拦「未接线文件/未声明依赖」，11 项前端告警与 18 项后端零生产引用候选全部只报告不删除。干净树上实跑才暴露真坑：tauri::generate_context! 要求 dist/ 存在，否则干净克隆的 clippy/cargo test 直接 panic——已在 Makefile 加 dist 前置目标修掉。
 evidence:
   commits:
-    - "（本卡对应提交）ci: 新增 PR/push 验证 workflow 与死代码检测（P6-1/P6-3）"
+    - "42f2cf3 ci: 新增 PR/push 验证 workflow 与死代码检测（P6-1/P6-3）"
   commands:
     - "make verify"
     - "make deadcode"
