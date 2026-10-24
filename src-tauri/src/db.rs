@@ -260,17 +260,38 @@ pub struct ClipItemRowWithImage {
     pub html_content: Option<String>,
 }
 
-/// 列表主查询（含关联图片缩略图）的 SQL。
+/// 列表主查询骨架：FROM/JOIN/WHERE/ORDER BY 统一由本宏给出，图片列由调用方指定。
 ///
-/// 独立成常量是为了让「查询计划不得退化」的测试断言的就是生产语句本身，
-/// 而不是测试里另抄一份、日后与实现悄悄漂移的副本。
-const LIST_ITEMS_WITH_IMAGES_SQL: &str =
-    "SELECT ci.id, ci.content, ci.kind, ci.is_favorite, ci.last_modified_utc,
-                cimg.id AS image_id, cimg.thumbnail, ci.html_content
+/// 两个变体（缩略图 BLOB / 缩略图标志）必须共享同一份「决定索引计划」的骨架：
+/// 计划测试断言的是常量里的生产语句本身，若两处各抄一份 SQL，
+/// 改了一处忘了另一处时查询计划会在无告警的情况下退化。
+macro_rules! list_items_sql {
+    ($image_projection:literal) => {
+        concat!(
+            "SELECT ci.id, ci.content, ci.kind, ci.is_favorite, ci.last_modified_utc,
+                cimg.id AS image_id, ",
+            $image_projection,
+            ", ci.html_content
          FROM clip_items ci
          LEFT JOIN clip_images cimg ON cimg.clip_item_id = ci.id AND cimg.is_deleted = 0
          WHERE ci.is_deleted = 0
-         ORDER BY ci.is_favorite DESC, ci.last_modified_utc DESC, ci.rowid DESC";
+         ORDER BY ci.is_favorite DESC, ci.last_modified_utc DESC, ci.rowid DESC"
+        )
+    };
+}
+
+/// 列表主查询（含关联图片缩略图 BLOB）的 SQL。
+///
+/// 独立成常量是为了让「查询计划不得退化」的测试断言的就是生产语句本身，
+/// 而不是测试里另抄一份、日后与实现悄悄漂移的副本。
+const LIST_ITEMS_WITH_IMAGES_SQL: &str = list_items_sql!("cimg.thumbnail");
+
+/// 列表主查询（图片列只取「是否有缩略图」标志）的 SQL。
+///
+/// IPC 列表用这个变体：缩略图 BLOB 不出库，Rust 侧也就不必为每行分配一块图片内存。
+const LIST_ITEMS_WITH_THUMBNAIL_FLAG_SQL: &str = list_items_sql!(
+    "CASE WHEN cimg.thumbnail IS NOT NULL AND length(cimg.thumbnail) > 0 THEN 1 ELSE 0 END"
+);
 
 /// 返回未软删条目列表，LEFT JOIN 图片缩略图：收藏优先，组内按最近修改时间降序。
 ///
@@ -300,6 +321,70 @@ pub fn list_items_with_images(conn: &Connection) -> Result<Vec<ClipItemRowWithIm
             last_modified_utc: last_modified,
             image_id,
             thumbnail,
+            html_content,
+        })
+    })?;
+
+    let mut result = Vec::new();
+    for row in rows {
+        result.push(row?);
+    }
+    Ok(result)
+}
+
+/// 列表行，图片列只带「是否有缩略图」标志（`list_items_with_image_flag` 返回元素）。
+///
+/// 与 `ClipItemRowWithImage` 的区别只有一处：不把缩略图 BLOB 取进内存。
+/// IPC 列表只需要知道「该不该为此行拉缩略图」，字节留给按需接口去取。
+#[derive(Debug)]
+pub struct ClipItemRowWithImageFlag {
+    /// 条目 UUID
+    pub id: String,
+    /// 条目内容（文本）
+    pub content: String,
+    /// 内容类型（"text" / "image"）
+    pub kind: String,
+    /// 收藏标记
+    pub is_favorite: bool,
+    /// 最后修改时间（UTC epoch ms）
+    pub last_modified_utc: i64,
+    /// 关联图片行 id（None 表示无图）
+    pub image_id: Option<String>,
+    /// 关联图片行是否有非空缩略图 BLOB（无图条目为 false）
+    pub has_thumbnail: bool,
+    /// 富文本 HTML（None=纯文本/图片条目）；供预览富文本渲染与粘贴/复制还原格式
+    pub html_content: Option<String>,
+}
+
+/// 返回未软删条目列表，图片列只取「是否有缩略图」标志：收藏优先，组内按最近修改时间降序。
+///
+/// 与 `list_items_with_images` 排序与关联口径完全一致，唯一差别是缩略图 BLOB 不出库，
+/// 供 IPC 列表使用——列表每次刷新都会走这条路，把 BLOB 搬进内存没有收益。
+/// 「空 BLOB 也算没有缩略图」：降级写入路径会留下零字节缩略图，按标志取图时必然返回空。
+///
+/// # Errors
+/// `DbError::Sqlite`：SQL 执行失败
+pub fn list_items_with_image_flag(
+    conn: &Connection,
+) -> Result<Vec<ClipItemRowWithImageFlag>, DbError> {
+    let mut stmt = conn.prepare(LIST_ITEMS_WITH_THUMBNAIL_FLAG_SQL)?;
+    let rows = stmt.query_map([], |row| {
+        let id: String = row.get(0)?;
+        let content: String = row.get::<_, Option<String>>(1)?.unwrap_or_default();
+        let kind: String = row.get(2)?;
+        let is_fav_int: i64 = row.get(3)?;
+        let last_modified: i64 = row.get(4)?;
+        let image_id: Option<String> = row.get(5)?;
+        let has_thumbnail_int: i64 = row.get(6)?;
+        let html_content: Option<String> = row.get(7)?;
+        Ok(ClipItemRowWithImageFlag {
+            id,
+            content,
+            kind,
+            is_favorite: is_fav_int != 0,
+            last_modified_utc: last_modified,
+            image_id,
+            has_thumbnail: has_thumbnail_int != 0,
             html_content,
         })
     })?;
@@ -1926,6 +2011,15 @@ mod tests {
         assert!(
             !after.contains("AUTOMATIC"),
             "关联图片的 LEFT JOIN 不应再依赖查询期为本次查询临时建的自动索引（那等于每次开列表都重建一遍索引），实际计划:\n{after}"
+        );
+
+        // IPC 列表走的是「只取缩略图标志」的变体：它必须与上面被钉住的 BLOB 变体同计划，
+        // 否则生产路径会在没人察觉的情况下退化成全表扫 + 临时排序。
+        let flag_plan = explain_query_plan(&conn, LIST_ITEMS_WITH_THUMBNAIL_FLAG_SQL);
+        eprintln!("[列表主查询计划] 只取缩略图标志:\n{flag_plan}");
+        assert_eq!(
+            flag_plan, after,
+            "只取缩略图标志的列表查询必须与 BLOB 变体走完全相同的索引计划"
         );
     }
 

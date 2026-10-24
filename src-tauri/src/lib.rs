@@ -162,6 +162,7 @@ pub fn run() {
             ipc::clipboard::delete_clip_item,
             ipc::clipboard::toggle_favorite_clip,
             ipc::clipboard::get_clip_image_original,
+            ipc::clipboard::get_clip_thumbnail,
             ipc::translate::translate_text,
             ipc::translate::list_translate_history,
             ipc::settings::get_hotkeys,
