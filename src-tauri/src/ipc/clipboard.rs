@@ -48,6 +48,11 @@ pub struct ClipItemDto {
 ///
 /// 这里刻意不做 base64 编码：列表 payload 每多 1 KB，每次刷新就多传 1 KB。
 ///
+/// 也刻意**不带**库里预计算的 `title`：`content` 目前仍然全量随列表下发，
+/// 再带一份 title 只会让 payload 变大而信息量为零（2000 条实测：无条件带 title
+/// 让列表 JSON +82.8%）。等列表改成分段加载、正文不再随每次刷新传输时，
+/// title 才作为「列表只传它、正文按需取」的那一半接进来。
+///
 /// # Errors
 /// 数据库查询失败时返回 `DbError`。
 pub fn list_clip_items_impl(conn: &Connection) -> Result<Vec<ClipItemDto>, DbError> {
@@ -262,7 +267,8 @@ mod tests {
                  deleted_at_utc    INTEGER,
                  text_hash         TEXT,
                  is_favorite       INTEGER NOT NULL DEFAULT 0,
-                 html_content      TEXT
+                 html_content      TEXT,
+                 title             TEXT  -- 版本 2 增量列：手抄 DDL 必须与 CURRENT_SCHEMA_VERSION 同步
              );
              CREATE TABLE IF NOT EXISTS clip_images (
                  id                TEXT PRIMARY KEY NOT NULL,

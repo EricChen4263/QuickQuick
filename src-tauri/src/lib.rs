@@ -266,11 +266,63 @@ fn setup_app_db(app: &mut tauri::App) {
             (None, Some(format!("无法获取或创建配置目录：{e}")))
         }
     };
+    let has_conn = conn_opt.is_some();
 
     // 无论成功与否都注册状态，防止 dispatch 层 panic
     app.manage(ipc::AppDb {
         conn: Mutex::new(conn_opt),
         open_error,
+    });
+
+    if has_conn {
+        spawn_title_backfill(app.handle().clone());
+    }
+}
+
+/// 批间暂停：让出写锁给轮询与 IPC 命令（回填是纯后台工作，没有截止时间）。
+const TITLE_BACKFILL_PAUSE_MS: u64 = 20;
+
+/// 开库后启动 title 列的后台分批回填。
+///
+/// 为什么不在迁移步骤里做：迁移跑在开库**同步**路径上，整表 `UPDATE` 会把写锁持有到
+/// 秒级，旧库首启会明显卡住且期间所有命令排队。这里改成一次一批、每批一个短事务、
+/// 批间释放 `AppDb` 锁并暂停 [`TITLE_BACKFILL_PAUSE_MS`]，进程中途被杀掉只是丢掉当前批
+/// （已提交的批落盘，下次启动从剩下的 `title IS NULL` 行继续，幂等）。
+///
+/// 没有任何待补行时（新库 / 已补完的库）第一轮就返回 0 并结束线程，常态零额外开销。
+fn spawn_title_backfill(app: tauri::AppHandle) {
+    std::thread::spawn(move || loop {
+        // 锁只在单批内持有：批与批之间必须放开，否则热键唤起的列表刷新会等整轮回填。
+        let started = std::time::Instant::now();
+        let filled = {
+            let Some(state) = app.try_state::<ipc::AppDb>() else {
+                return;
+            };
+            let Ok(guard) = state.conn.lock() else {
+                eprintln!("[QuickQuick] title 回填放弃本轮：连接锁已中毒");
+                return;
+            };
+            let Some(conn) = guard.as_ref() else {
+                return;
+            };
+            match db::backfill_titles_batch(conn, db::TITLE_BACKFILL_BATCH_SIZE) {
+                Ok(n) => n,
+                Err(e) => {
+                    // 单批失败不重试、不 panic：剩余行留待下次启动，已提交的批不会丢。
+                    eprintln!("[QuickQuick] title 回填批次失败，剩余行留待下次启动: {e}");
+                    return;
+                }
+            }
+        };
+
+        if filled == 0 {
+            return;
+        }
+        eprintln!(
+            "[QuickQuick] title 回填 {filled} 行，本批耗时 {} ms",
+            started.elapsed().as_millis()
+        );
+        std::thread::sleep(std::time::Duration::from_millis(TITLE_BACKFILL_PAUSE_MS));
     });
 }
 

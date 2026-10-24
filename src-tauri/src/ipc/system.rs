@@ -916,7 +916,8 @@ mod tests {
                  deleted_at_utc    INTEGER,
                  text_hash         TEXT,
                  is_favorite       INTEGER NOT NULL DEFAULT 0,
-                 html_content      TEXT
+                 html_content      TEXT,
+                 title             TEXT  -- 版本 2 增量列：手抄 DDL 必须与 CURRENT_SCHEMA_VERSION 同步
              );
              CREATE TABLE IF NOT EXISTS clip_images (
                  id                TEXT PRIMARY KEY NOT NULL,

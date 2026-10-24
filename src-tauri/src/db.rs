@@ -14,6 +14,9 @@
 //!   不得再往里加结构，否则会出现「同一 user_version 对应两种表形态」的库。
 //! - **禁止再用「探测列是否存在再 ALTER」的 ad-hoc 迁移**：版本号已经确定了库的形态。
 //!   探测只允许活在版本 1 的历史对齐里（[`reconcile_html_column`]），不要复制该模式。
+//! - **数据回填不写进迁移步骤**：迁移跑在开库同步路径上，全表 `UPDATE` 会把写锁拖到秒级。
+//!   版本 2 的 `title` 列就是范例——迁移只无条件 `ADD COLUMN`（既有行为 NULL），
+//!   回填走开库后的分批幂等 [`backfill_titles_batch`]。
 //!
 //! 核心函数：
 //! - `open_or_create`       — 打开或新建加密库，并确保 schema 已初始化
@@ -28,6 +31,8 @@
 //! - `list_ordered`         — 返回排序后的条目列表（收藏优先，组内按最近）
 //! - `cleanup_keep_recent`  — 容量裁剪：只删非收藏的旧项，收藏永远豁免
 //! - `evict_over_limit`     — 自动淘汰入口：非收藏条目超过可配上限时裁剪（带计数短路）
+//! - `compute_title`        — 预计算 title：正文空白规范化后截断到 1000 字符（图片条目留空）
+//! - `backfill_titles_batch` — title 分批幂等回填：只补 `title IS NULL` 的行，可中断可续跑
 //!
 //! 安全约定：
 //! - 密钥以 raw key 格式传入（`PRAGMA key = "x'<hex>'"`)，不写入日志
@@ -694,14 +699,139 @@ pub fn ingest(conn: &Connection, item: &CapturedItem) -> Result<IngestOutcome, D
     } else {
         "text"
     };
+    // 预计算 title 与去重键在同一个 INSERT 内写定：写入路径是本列的唯一新增来源，
+    // 晚补会让「刚复制的条目搜不到」与「回填又要重扫新行」同时发生。
+    let title = compute_title(kind, &item.text);
     conn.execute(
         "INSERT INTO clip_items
-             (id, content, kind, created_utc, last_modified_utc, is_deleted, text_hash, html_content)
-         VALUES (?1, ?2, ?3, ?4, ?4, 0, ?5, ?6)",
-        rusqlite::params![new_id, item.text, kind, now_ms, hash, item.html],
+             (id, content, kind, created_utc, last_modified_utc, is_deleted, text_hash,
+              html_content, title)
+         VALUES (?1, ?2, ?3, ?4, ?4, 0, ?5, ?6, ?7)",
+        rusqlite::params![new_id, item.text, kind, now_ms, hash, item.html, title],
     )?;
 
     Ok(IngestOutcome::Inserted(new_id))
+}
+
+/// 预计算 title 的最大字符数（Unicode 标量个数）。
+///
+/// 1000 是产品约定的搜索文本上界：它要短到「整库 title 能常驻内存做过滤」，
+/// 又要长到「正常的一段话不丢搜索命中」。**不要在别处另设一个截断值**——
+/// 前端与 DTO 都按这一条的产物走，长度散落成两处就会出现「列里 1000、显示 100」的漂移。
+pub const TITLE_MAX_CHARS: usize = 1000;
+
+/// 图片条目的 `kind` 取值（与前端 `ClipKind` 对齐）。
+const KIND_IMAGE: &str = "image";
+
+/// 把任意空白串折叠成单空格分隔的词串（去首尾空白）。
+///
+/// 为什么 title 必须做空白规范化：剪贴板里粘进来的多行文本/代码缩进会让同一句话
+/// 在搜索文本里被换行切开，逐词子串匹配本身不敏感，但命中高亮的区间会把换行算进去，
+/// 用户看到的高亮块会带上整段缩进。规范化后 title 是「单行等价物」。
+fn collapse_whitespace(text: &str) -> String {
+    let mut collapsed = String::with_capacity(text.len());
+    for word in text.split_whitespace() {
+        if !collapsed.is_empty() {
+            collapsed.push(' ');
+        }
+        collapsed.push_str(word);
+    }
+    collapsed
+}
+
+/// 计算某条目的预计算 title。
+///
+/// 规则（与前端 `clipSearchText` 的口径一致）：
+/// - **图片条目留空**（空串，不是 NULL）：图片文本要靠后续 OCR 能力，本列不臆造内容。
+/// - 其余条目取正文的空白规范化结果，再截断到 [`TITLE_MAX_CHARS`] 个字符。
+///
+/// 空串与 NULL 的语义必须分开：NULL = 「尚未回填」，空串 = 「回填过且按约定为空」。
+/// 混用会让 [`backfill_titles_batch`] 的 `WHERE title IS NULL` 永远挑到图片行，无法收敛。
+///
+/// # Examples
+/// ```
+/// # use quickquick_lib::db::compute_title;
+/// assert_eq!(compute_title("text", "  多行\n\t文本  "), "多行 文本");
+/// assert_eq!(compute_title("image", "[图片] 12×34"), "");
+/// ```
+pub fn compute_title(kind: &str, content: &str) -> String {
+    if kind == KIND_IMAGE {
+        return String::new();
+    }
+    collapse_whitespace(content)
+        .chars()
+        .take(TITLE_MAX_CHARS)
+        .collect()
+}
+
+/// title 回填的单批行数上限。
+///
+/// 200 行的理由：单批 = 一次「选 200 行 + 一个短写事务」，在 1 万行库上实测单批
+/// 0.2–0.8 ms（见 dev-log 活动卡），既能保证单次持锁停在毫秒级（启动期不阻塞别的命令），
+/// 又不至于把「每批固定开销（事务提交 + 一次 rowid 顺序扫描）」摊到太少行上——
+/// 批越小，同一批行被反复扫到的次数越多。
+pub const TITLE_BACKFILL_BATCH_SIZE: usize = 200;
+
+/// 待回填候选：`(id, kind, content)`。
+///
+/// **`WHERE title IS NULL` 是幂等与可续跑的唯一落点**：一行被补上后立刻离开候选集，
+/// 所以「跑一半被杀掉」后重跑只会挑剩下的行，已补行不会被重算。
+const PENDING_TITLE_SQL: &str =
+    "SELECT id, kind, content FROM clip_items WHERE title IS NULL ORDER BY rowid LIMIT ?1";
+
+/// 单批写入 SQL。
+///
+/// 写入侧不再重复判 `title IS NULL`：候选集已经由 [`PENDING_TITLE_SQL`] 筛过一遍，
+/// 而写入值由 [`compute_title`] 从 `content` 确定性算出——即便真有第二个写者补同一行，
+/// 两者算出的值也相同，重写是幂等的。留一个「谁都覆盖不到」的条件只会让分支无人验证。
+const BACKFILL_TITLE_ONE_SQL: &str = "UPDATE clip_items SET title = ?1 WHERE id = ?2";
+
+/// 单批回填：把最多 `batch_size` 行 `title IS NULL` 的条目补上 title，返回本批写入行数。
+///
+/// 单批一个短事务：进程在批与批之间被杀掉时，已提交的批全部落盘、当前批整体回滚，
+/// 因此「可中断」在批粒度上成立；重跑只挑 `title IS NULL`，天然「可续跑」。
+///
+/// **调用方负责循环与批间让锁**（见 `lib.rs` 的 `spawn_title_backfill`）：
+/// 一次只补一批、批间释放 `AppDb` 锁，启动路径与用户命令不会被长写锁挡住。
+/// 返回 0 即表示候选集已空，可以停。
+///
+/// # Errors
+/// `DbError::Sqlite`：查询或 UPDATE 失败（事务已回滚，本批一行未写）
+pub fn backfill_titles_batch(conn: &Connection, batch_size: usize) -> Result<usize, DbError> {
+    if batch_size == 0 {
+        return Ok(0);
+    }
+
+    let pending: Vec<(String, String, Option<String>)> = {
+        let mut stmt = conn.prepare(PENDING_TITLE_SQL)?;
+        let rows = stmt.query_map(rusqlite::params![batch_size as i64], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, Option<String>>(2)?,
+            ))
+        })?;
+        let mut collected = Vec::with_capacity(batch_size);
+        for row in rows {
+            collected.push(row?);
+        }
+        collected
+    };
+    if pending.is_empty() {
+        return Ok(0);
+    }
+
+    let tx = conn.unchecked_transaction()?;
+    let mut written = 0usize;
+    {
+        let mut stmt = tx.prepare(BACKFILL_TITLE_ONE_SQL)?;
+        for (id, kind, content) in &pending {
+            let title = compute_title(kind, content.as_deref().unwrap_or_default());
+            written += stmt.execute(rusqlite::params![title, id])?;
+        }
+    }
+    tx.commit()?;
+    Ok(written)
 }
 
 /// 显式置顶：仅更新 `last_modified_utc = now`，不新建任何记录。
@@ -898,11 +1028,14 @@ fn try_insert_image_clip(
     png_bytes: &[u8],
     max_image_bytes: u64,
 ) -> Result<(), DbError> {
+    // 图片条目的 title 写空串而非留 NULL：空串 = 「已定值且按约定为空」，
+    // NULL 保留给「尚未回填」，否则回填的 `WHERE title IS NULL` 会永远挑到图片行。
+    let title = compute_title(KIND_IMAGE, content);
     conn.execute(
         "INSERT INTO clip_items
-             (id, content, kind, created_utc, last_modified_utc, is_deleted, text_hash)
-         VALUES (?1, ?2, 'image', ?3, ?3, 0, NULL)",
-        rusqlite::params![item_id, content, now_ms],
+             (id, content, kind, created_utc, last_modified_utc, is_deleted, text_hash, title)
+         VALUES (?1, ?2, 'image', ?3, ?3, 0, NULL, ?4)",
+        rusqlite::params![item_id, content, now_ms, title],
     )?;
 
     let policy = img_mod::OversizePolicy {
@@ -1086,8 +1219,8 @@ pub fn insert_backup_text_item(
     conn.execute(
         "INSERT INTO clip_items
              (id, content, kind, created_utc, last_modified_utc, is_deleted,
-              text_hash, is_favorite, html_content)
-         VALUES (?1, ?2, ?3, ?4, ?5, 0, ?6, ?7, ?8)",
+              text_hash, is_favorite, html_content, title)
+         VALUES (?1, ?2, ?3, ?4, ?5, 0, ?6, ?7, ?8, ?9)",
         rusqlite::params![
             id,
             content,
@@ -1096,7 +1229,8 @@ pub fn insert_backup_text_item(
             last_modified_utc,
             hash,
             is_favorite as i64,
-            html
+            html,
+            compute_title(kind, content)
         ],
     )?;
 
@@ -1144,14 +1278,15 @@ pub fn insert_backup_image_item(
     conn.execute(
         "INSERT INTO clip_items
              (id, content, kind, created_utc, last_modified_utc, is_deleted,
-              text_hash, is_favorite)
-         VALUES (?1, ?2, 'image', ?3, ?4, 0, NULL, ?5)",
+              text_hash, is_favorite, title)
+         VALUES (?1, ?2, 'image', ?3, ?4, 0, NULL, ?5, ?6)",
         rusqlite::params![
             item_id,
             row.content,
             row.created_utc,
             row.last_modified_utc,
-            row.is_favorite as i64
+            row.is_favorite as i64,
+            compute_title(KIND_IMAGE, row.content)
         ],
     )?;
 
@@ -1210,7 +1345,7 @@ fn open_with_key(path: &Path, key: &[u8; 32]) -> Result<Connection, DbError> {
 /// `to_version` 为本值 +1 的步骤，并把本常量 +1。两者由
 /// `migration_list_is_contiguous_up_to_current_version` 与
 /// `apply_migrations` 的运行期校验双重钉住——只改一边会立刻在开库时报错。
-pub const CURRENT_SCHEMA_VERSION: i32 = 1;
+pub const CURRENT_SCHEMA_VERSION: i32 = 2;
 
 /// 单个 schema 迁移步骤：把库从 `to_version - 1` 升到 `to_version`。
 struct Migration {
@@ -1228,10 +1363,34 @@ struct Migration {
 /// 版本 1 是从「无版本号时代」到「版本化」的过渡步骤，同时承担建表、建索引与形态对齐，
 /// 因此内含一次列存在性探测（见 [`reconcile_html_column`]）。版本 2 起每步只做无条件的
 /// 增量 DDL，不再需要探测。
-const MIGRATIONS: &[Migration] = &[Migration {
-    to_version: 1,
-    apply: baseline_schema_v1,
-}];
+const MIGRATIONS: &[Migration] = &[
+    Migration {
+        to_version: 1,
+        apply: baseline_schema_v1,
+    },
+    Migration {
+        to_version: 2,
+        apply: add_title_column_v2,
+    },
+];
+
+/// 版本 2：`clip_items` 增加预计算 `title` 列。
+///
+/// 只做**无条件**的 `ALTER TABLE ADD COLUMN`——不在这里判存在性（版本号已经确定形态），
+/// 也**不在这里回填**：本步骤跑在开库同步路径上，全表 `UPDATE` 会把写锁拖到秒级，
+/// 同时 5 条索引也会全表扫。旧库升级后既有行的 `title` 为 NULL，表示「尚未回填」，
+/// 由开库后的 [`backfill_titles_batch`] 分批补齐。
+fn add_title_column_v2(tx: &Transaction<'_>) -> Result<(), DbError> {
+    add_title_column(tx)
+}
+
+/// 版本 2 的 DDL 本体（接受 `&Connection`，以便测试库直接复用同一句，而不是手抄列定义）。
+///
+/// `Transaction` 自动解引用成 `Connection`，迁移步骤只需一层转调，不必有第二份 DDL 文本。
+fn add_title_column(conn: &Connection) -> Result<(), DbError> {
+    conn.execute_batch("ALTER TABLE clip_items ADD COLUMN title TEXT;")?;
+    Ok(())
+}
 
 /// 初始化 / 升级 schema（幂等）。
 ///
@@ -1642,7 +1801,8 @@ mod tests {
                  deleted_at_utc    INTEGER,
                  text_hash         TEXT,
                  is_favorite       INTEGER NOT NULL DEFAULT 0,
-                 html_content      TEXT
+                 html_content      TEXT,
+                 title             TEXT  -- 版本 2 增量列：手抄 DDL 必须与 CURRENT_SCHEMA_VERSION 同步
              );
              CREATE TABLE IF NOT EXISTS clip_images (
                  id                TEXT PRIMARY KEY NOT NULL,
@@ -2355,6 +2515,137 @@ mod tests {
         );
     }
 
+    /// 版本 1 → 版本 2 的真实文件库升级：加密库 + 真密钥 + 既有数据。
+    ///
+    /// 这条把「真实形态的旧库」钉住：先用生产迁移链只升到版本 1（等价于上一版 QuickQuick
+    /// 建出来的库），写入数据；再用当前代码 `open_or_create` 打开（= 生产升级路径）。
+    ///
+    /// 二次打开本身就是「迁移没有被重放」的证据：`ALTER TABLE ADD COLUMN title` 重放会
+    /// 报 `duplicate column name`，能打开就说明版本号拦住了它。
+    #[test]
+    fn ensure_schema_upgrades_v1_file_db_to_v2_keeping_rows() {
+        let dir = tempfile::tempdir().expect("临时目录创建失败");
+        let path = dir.path().join("v1.db");
+        let key = [7u8; 32];
+
+        // Arrange：只升到版本 1，并写入两条数据
+        {
+            let v1 = open_with_key(&path, &key).expect("开 v1 库失败");
+            apply_migrations(&v1, 1, &MIGRATIONS[..1]).expect("建到版本 1 失败");
+            assert_eq!(
+                read_schema_version(&v1).expect("读版本失败"),
+                1,
+                "前置条件：库应停在版本 1"
+            );
+            assert!(
+                !has_column(&v1, "clip_items", "title").expect("查列失败"),
+                "前置条件：版本 1 的库还没有 title 列"
+            );
+            v1.execute_batch(
+                "INSERT INTO clip_items
+                     (id, content, kind, created_utc, last_modified_utc, is_deleted, text_hash)
+                 VALUES ('v1-a', '版本一的条目', 'text', 1700000000000, 1700000000000, 0, 'h-v1-a'),
+                        ('v1-b', '版本一的第二条', 'text', 1700000000001, 1700000000001, 0, 'h-v1-b');",
+            )
+            .expect("写入 v1 数据失败");
+        }
+
+        // Act：用当前代码打开（生产升级路径）
+        let conn = open_or_create(&path, &key).expect("v1→v2 升级失败");
+
+        // Assert 1：版本、列、数据
+        assert_eq!(
+            read_schema_version(&conn).expect("读版本失败"),
+            CURRENT_SCHEMA_VERSION,
+            "升级后版本号应到达当前版本"
+        );
+        assert_eq!(CURRENT_SCHEMA_VERSION, 2, "本项把 schema 版本推进到 2");
+        assert!(
+            has_column(&conn, "clip_items", "title").expect("查列失败"),
+            "升级后应补上 title 列"
+        );
+        assert_eq!(count_live(&conn).expect("计数失败"), 2, "升级不得丢数据");
+        assert!(
+            has_live_text_item(&conn, "h-v1-a").expect("去重查询失败")
+                && has_live_text_item(&conn, "h-v1-b").expect("去重查询失败"),
+            "升级后既有条目的去重键必须仍然命中"
+        );
+
+        // Assert 2：既有行的 title 是 NULL（= 尚未回填），迁移不在这里做全表 UPDATE
+        let pending: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM clip_items WHERE title IS NULL",
+                [],
+                |row| row.get(0),
+            )
+            .expect("统计待回填失败");
+        assert_eq!(pending, 2, "迁移只加列，既有行的 title 应留待回填");
+
+        // Assert 3：二次打开不重放迁移（重放会在 ADD COLUMN 上直接报错）
+        drop(conn);
+        let again = open_or_create(&path, &key).expect("二次打开应成功（迁移不得重放）");
+        assert_eq!(
+            read_schema_version(&again).expect("读版本失败"),
+            CURRENT_SCHEMA_VERSION,
+            "二次打开不应改变版本号"
+        );
+        assert_eq!(
+            column_names(&again, "clip_items")
+                .iter()
+                .filter(|c| c.as_str() == "title")
+                .count(),
+            1,
+            "title 列应恰好存在一次"
+        );
+        assert_eq!(
+            count_live(&again).expect("计数失败"),
+            2,
+            "二次打开不得丢数据"
+        );
+
+        // Assert 4：在升级后的库上回填一次，两条老行的 title 都补上
+        assert_eq!(
+            backfill_titles_batch(&again, TITLE_BACKFILL_BATCH_SIZE).expect("回填失败"),
+            2,
+            "回填应补齐两条升级前的老行"
+        );
+        let filled: Vec<String> = {
+            let mut stmt = again
+                .prepare("SELECT title FROM clip_items ORDER BY id")
+                .expect("准备查询失败");
+            stmt.query_map([], |row| row.get::<_, Option<String>>(0))
+                .expect("查询失败")
+                .filter_map(|r| r.ok().flatten())
+                .collect()
+        };
+        assert_eq!(
+            filled,
+            vec!["版本一的条目".to_string(), "版本一的第二条".to_string()],
+            "回填后的 title 应等于各自正文（两条都是单行短文本）"
+        );
+    }
+
+    /// `compute_title` 的边界：全空白 / 空串都得到空串（不是空白串）。
+    #[test]
+    fn compute_title_collapses_blank_input_to_empty() {
+        assert_eq!(compute_title("text", ""), "", "空正文的 title 应为空串");
+        assert_eq!(
+            compute_title("text", " \n\t\r\n "),
+            "",
+            "纯空白正文的 title 应为空串，不留首尾空白"
+        );
+        assert_eq!(
+            compute_title("richtext", "富文本\n正文"),
+            "富文本 正文",
+            "富文本条目与纯文本同口径（kind 只区分图片）"
+        );
+        assert_eq!(
+            compute_title(KIND_IMAGE, "[图片] 10×10"),
+            "",
+            "图片条目 title 固定为空串"
+        );
+    }
+
     /// 幂等：重复 `ensure_schema` 不改版本、不重复执行迁移体。
     ///
     /// 两个层面都验：生产路径（版本号 + 列只出现一次）与计数路径（迁移体只跑一次）。
@@ -2697,11 +2988,26 @@ mod tests {
 
     /// 建立「只有表、没有任何业务索引」的内存库：复现建索引之前的状态。
     ///
-    /// 直接复用生产建表语句（`create_tables`），保证基线表结构与线上完全一致，
-    /// 不另外抄一份 DDL 造成漂移。
+    /// 直接复用生产建表语句（`create_tables`）+ 后续版本的增量列迁移体，
+    /// 保证基线表结构与线上完全一致，不另外抄一份 DDL 造成漂移。
+    /// 版本仍停在 0：索引类用例要的正是「已升级过 schema 但还没建索引」这个中间态，
+    /// 写版本号会让后续 `ensure_schema` 直接短路、一条索引都不建。
     fn make_schema_conn() -> rusqlite::Connection {
         let conn = rusqlite::Connection::open_in_memory().expect("内存库开启失败");
         create_tables(&conn).expect("建测试表失败");
+        // 版本 2 起的增量列：与生产迁移步骤共用同一句 DDL（不是手抄列定义）。
+        add_title_column(&conn).expect("补版本 2 的 title 列失败");
+        conn
+    }
+
+    /// 建立「只到版本 1 表形态、无索引、`user_version = 0`」的内存库。
+    ///
+    /// 与 [`make_schema_conn`] 的差别只有「不预先补版本 2 的列」，专供那些**自己会跑
+    /// `ensure_schema` 全链**的用例：表已经是 v2 形态时，版本 2 的 `ADD COLUMN` 会命中
+    /// `duplicate column name`，测的就不再是「从旧库一路升上来」了。
+    fn make_baseline_v1_conn() -> rusqlite::Connection {
+        let conn = rusqlite::Connection::open_in_memory().expect("内存库开启失败");
+        create_tables(&conn).expect("建 v1 基线表失败");
         conn
     }
 
@@ -3006,7 +3312,9 @@ mod tests {
     /// `ensure_schema` 可重复执行：不报错，且索引不会被重复创建。
     #[test]
     fn ensure_schema_creates_indexes_idempotently() {
-        let conn = make_schema_conn();
+        // 用 v1 基线形态起步：这条例要跑完整条迁移链（版本 0 → 当前），
+        // 表若已是当前形态，版本 2 的 ADD COLUMN 会命中 duplicate column。
+        let conn = make_baseline_v1_conn();
 
         ensure_schema(&conn).expect("首次初始化 schema 失败");
         let first = index_names(&conn);
@@ -3041,20 +3349,24 @@ mod tests {
     /// 存量库补索引：已有数据在 `ensure_schema` 重跑后仍在、且可正常查询。
     #[test]
     fn ensure_schema_rerun_keeps_existing_rows_queryable() {
-        // Arrange：模拟一个只有表、没有索引的旧库，并写入数据
-        let conn = make_schema_conn();
-        let first = ingest(
-            &conn,
-            &CapturedItem {
-                text: "旧库里的条目".to_string(),
-                html: None,
-            },
+        // Arrange：模拟一个只到版本 1 表形态、没有索引的旧库，并写入数据。
+        // 这里刻意不走 `ingest`：它要求 `title` 列存在（版本 2 才加），
+        // 而这条例要的正是「在版本 2 之前就存在的老数据」在升级后仍然可查。
+        let conn = make_baseline_v1_conn();
+        let first_id = "id-legacy";
+        conn.execute(
+            "INSERT INTO clip_items
+                 (id, content, kind, created_utc, last_modified_utc, is_deleted,
+                  text_hash, is_favorite)
+             VALUES (?1, ?2, 'text', ?3, ?3, 0, ?4, 0)",
+            rusqlite::params![
+                first_id,
+                "旧库里的条目",
+                1_700_000_000_000i64,
+                text_hash("旧库里的条目")
+            ],
         )
-        .expect("首次 ingest 失败");
-        let first_id = match first {
-            IngestOutcome::Inserted(id) => id,
-            IngestOutcome::Bumped(_) => panic!("首次 ingest 应 Inserted"),
-        };
+        .expect("写入旧数据失败");
         assert_eq!(
             index_names(&conn),
             Vec::<String>::new(),
@@ -3069,6 +3381,17 @@ mod tests {
         assert_eq!(rows.len(), 1, "补索引不得丢失既有条目");
         assert_eq!(rows[0].id, first_id, "补索引后条目 id 应保持不变");
         assert_eq!(rows[0].content, "旧库里的条目", "补索引后内容应保持不变");
+        let title: Option<String> = conn
+            .query_row(
+                "SELECT title FROM clip_items WHERE id = ?1",
+                [first_id],
+                |row| row.get(0),
+            )
+            .expect("补索引后应可读 title 列");
+        assert_eq!(
+            title, None,
+            "版本 2 之前的老行升级后 title 应是 NULL（= 尚未回填），迁移不得顺手做全表 UPDATE"
+        );
 
         let hash = text_hash("旧库里的条目");
         assert!(
