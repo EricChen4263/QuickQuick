@@ -80,3 +80,17 @@ evidence:
 - **`window.confirm` 在打包 GUI 中的表现**：WKWebView 的 `confirm` 是原生模态；但本应用是 Accessory 策略 + 窗口可能刚被 `show()` 唤起，是否会出现「模态框挂在未激活窗口后面」未验证。已在 `request_clear_unpinned` 里选择「先 show 再 emit」，就是为了降低这个风险，但需要真机确认。
 - **Windows**：`current_modifiers` 的 `GetKeyState` 分支未编译（本机只有 aarch64-apple-darwin target）。
 - 清空后列表刷新依赖 `clipboard-changed` 事件，只在单测层面确认了发射条件，未做真机联调。
+
+## 补记：rustfmt 对齐
+
+`e92c87d` 落地后拖红了 `cargo fmt --all --check`（`make verify` 的 `[2/5]`）。原因是三处手写换行与 rustfmt 的布局不一致：
+
+1. `clear_unpinned_history` 里 `let result = with_db(...)` 的闭包参数压成一行后仍需折行，rustfmt 选择把闭包体拆成块；
+2. `mod tests` 的 `use super::{...}` 导入列表按列宽重排；
+3. 一条 `assert_eq!` 由三行折叠成一行。
+
+修法只跑了 `rustfmt --edition 2021 src/tray.rs`（**未跑 `cargo fmt`，避免碰到别人的文件**），diff 恰好是上面三处的换行，token 序列不变，故无语义改动。提交 `b9aceec`（位置在 `6a8bd62` 之后）。
+
+验证（隔离 worktree 内：HEAD + 该格式化，以避开共享工作区里他人未完成的改动）：`cargo fmt --all --check` 输出 0 行、`cargo test --lib tray::` 30 passed、`cargo clippy --all-targets -- -D warnings` 干净。
+
+顺带记一个判据：确认「纯格式化」不能只看行数，要把 `git diff` 与 `rustfmt --check` 报出的 hunk 逐条对齐——本次两边都是 3 处且行内容一一对应，才算证据成立。
