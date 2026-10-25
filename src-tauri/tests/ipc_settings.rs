@@ -548,7 +548,7 @@ fn ipc_settings_get_hotkeys_returns_corrupt_hint_instead_of_error() {
         corrupt.hint
     );
     assert!(
-        backup_files(dir.path()).len() >= 1,
+        !backup_files(dir.path()).is_empty(),
         "读路径应留下保护性备份"
     );
 }
