@@ -593,13 +593,23 @@ fn list_backups(path: &Path) -> Vec<PathBuf> {
 }
 
 /// 只保留最近 [`BACKUP_KEEP_COUNT`] 份备份，更旧的删掉。
-fn prune_backups(path: &Path) {
-    let backups = list_backups(path);
-    if backups.len() <= BACKUP_KEEP_COUNT {
+///
+/// `keep` 是**刚创建的那份**，永远不参与淘汰：备份名按时间戳排序，
+/// 一旦系统时钟回拨，新备份的时间戳会小于旧的，纯按时间排序会把它当成最旧的删掉——
+/// 那正是「刚刚保护下来的文件」被清掉、只剩几份旧垃圾的最坏情形。
+fn prune_backups(path: &Path, keep: &Path) {
+    let mut candidates: Vec<PathBuf> = list_backups(path)
+        .into_iter()
+        .filter(|backup| backup != keep)
+        .collect();
+    if candidates.len() < BACKUP_KEEP_COUNT {
         return;
     }
-    for stale in &backups[..backups.len() - BACKUP_KEEP_COUNT] {
-        if let Err(err) = std::fs::remove_file(stale) {
+    // 除 keep 外再留 KEEP_COUNT - 1 份最新的，其余删掉
+    let keep_others = BACKUP_KEEP_COUNT - 1;
+    let delete_count = candidates.len() - keep_others;
+    for stale in candidates.drain(..delete_count) {
+        if let Err(err) = std::fs::remove_file(&stale) {
             // 删不掉不是致命问题：留着的备份只是多占一点空间
             eprintln!("[QuickQuick] 清理旧备份失败（{}）：{err}", stale.display());
         }
@@ -632,8 +642,8 @@ pub fn ensure_writable_json_object(path: &Path) -> Result<(), SettingsError> {
 /// 选一个尚未占用的备份路径：`<ms>.bak` 已存在时依次试 `<ms>-1.bak`、`<ms>-2.bak`…
 ///
 /// 同一毫秒内连续触发（例如两次坏文件写入）也不会互相覆盖。
-fn unique_backup_path(path: &Path) -> Result<PathBuf, SettingsError> {
-    let now_ms = now_unix_ms();
+/// 时间戳由调用方给（生产用 [`now_unix_ms`]，测试用它模拟时钟回拨）。
+fn unique_backup_path_at(path: &Path, now_ms: i64) -> Result<PathBuf, SettingsError> {
     let first = backup_path_for(path, now_ms);
     if !first.exists() {
         return Ok(first);
@@ -718,6 +728,15 @@ fn value_kind(value: &Value) -> &'static str {
 /// 备份成功**也不继续写**——调用方会返回 [`SettingsError::Unparsable`] 拒写。
 /// 备份只是留痕，让用户能对照修；活文件保持原样。
 fn backup_broken_settings(path: &Path, reason: &str) -> Result<PathBuf, SettingsError> {
+    backup_broken_settings_at(path, reason, now_unix_ms())
+}
+
+/// 同 [`backup_broken_settings`]，但时间戳由调用方给（测试用来模拟时钟回拨）。
+fn backup_broken_settings_at(
+    path: &Path,
+    reason: &str,
+    now_ms: i64,
+) -> Result<PathBuf, SettingsError> {
     let file = path
         .file_name()
         .and_then(|name| name.to_str())
@@ -739,9 +758,9 @@ fn backup_broken_settings(path: &Path, reason: &str) -> Result<PathBuf, Settings
         }
     }
 
-    let backup = unique_backup_path(path)?;
+    let backup = unique_backup_path_at(path, now_ms)?;
     std::fs::copy(path, &backup)?;
-    prune_backups(path);
+    prune_backups(path, &backup);
     eprintln!(
         "[QuickQuick] {file} {reason}，已备份原文件到 {}，并拒绝写入以免覆盖你的设置",
         backup.display()
@@ -1395,6 +1414,53 @@ mod tests {
                 "第 {round} 轮应已被淘汰，实际：{contents:?}"
             );
         }
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 时钟回拨保护：新备份即使时间戳比旧备份小，也不得被 prune 当成最旧的删掉。
+    ///
+    /// 通过可注入的时间源模拟：先造 5 份「未来时间戳」的旧备份，再用一个更小的 now 触发备份，
+    /// 旧实现会按时间排序把刚创建的那份排到最前并删掉（等于刚保护下来就丢了）。
+    #[test]
+    fn prune_never_deletes_the_just_created_backup_when_clock_rolls_back() {
+        let dir = std::env::temp_dir().join(format!("qq-settings-rollback-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("临时目录创建失败");
+        let path = dir.join("settings.json");
+        std::fs::write(&path, "{ rollback broken ").expect("写临时设置文件失败");
+
+        // 5 份「未来」备份（时间戳远大于本次使用的 now）
+        let future_ms = 4_102_444_800_000; // 2100-01-01
+        for offset in 0..BACKUP_KEEP_COUNT as i64 {
+            let backup = backup_path_for(&path, future_ms + offset);
+            std::fs::write(&backup, format!("old-{offset}")).expect("写旧备份失败");
+        }
+
+        // 时钟回拨：now 远小于既有备份的时间戳
+        let now_ms = 1_600_000_000_000;
+        let created =
+            backup_broken_settings_at(&path, "JSON 语法错误（测试）", now_ms).expect("备份应成功");
+
+        assert!(
+            created.exists(),
+            "刚创建的备份必须还在：{}",
+            created.display()
+        );
+        let backups = backup_files(&dir);
+        assert_eq!(
+            backups.len(),
+            BACKUP_KEEP_COUNT,
+            "总份数仍应收敛到 {BACKUP_KEEP_COUNT}，实际：{backups:?}"
+        );
+        assert!(
+            backups.contains(&created),
+            "prune 不得删除刚创建的备份，实际：{backups:?}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&created).expect("读备份失败"),
+            "{ rollback broken ",
+            "刚创建的备份内容必须是本次的原文件"
+        );
 
         std::fs::remove_dir_all(&dir).ok();
     }
