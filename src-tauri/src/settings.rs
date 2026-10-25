@@ -552,6 +552,60 @@ fn now_unix_ms() -> i64 {
         .unwrap_or(0)
 }
 
+/// 每个配置文件滚动保留的备份份数（含最新一份）。
+///
+/// 依据：业界常见做法是只留最近几份（N=5 足够覆盖"改坏了想回退"的场景）；
+/// 只增不删会让目录里堆出几十上百个 `.bak`，反而没人愿意去找。
+pub const BACKUP_KEEP_COUNT: usize = 5;
+
+/// 某个配置文件的既有备份，按「时间戳 → 同毫秒序号」升序（最旧在前）。
+///
+/// 只认 `<文件名>.<ms>.bak` / `<文件名>.<ms>-<n>.bak` 两种形态，
+/// 别的文件（例如另一个配置的备份）不会被误删。
+fn list_backups(path: &Path) -> Vec<PathBuf> {
+    let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
+        return Vec::new();
+    };
+    let Some(dir) = path.parent() else {
+        return Vec::new();
+    };
+    let prefix = format!("{file_name}.");
+
+    let mut found: Vec<(i64, i64, PathBuf)> = std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .filter_map(|entry| entry.ok())
+        .filter_map(|entry| {
+            let name = entry.file_name().to_str()?.to_string();
+            let rest = name.strip_prefix(&prefix)?.strip_suffix(".bak")?;
+            // rest 形如 "1792899443151" 或 "1792899443151-2"
+            let (ms_part, seq_part) = match rest.split_once('-') {
+                Some((ms, seq)) => (ms, seq),
+                None => (rest, "0"),
+            };
+            let ms: i64 = ms_part.parse().ok()?;
+            let seq: i64 = seq_part.parse().ok()?;
+            Some((ms, seq, entry.path()))
+        })
+        .collect();
+    found.sort_by_key(|(ms, seq, _)| (*ms, *seq));
+    found.into_iter().map(|(_, _, path)| path).collect()
+}
+
+/// 只保留最近 [`BACKUP_KEEP_COUNT`] 份备份，更旧的删掉。
+fn prune_backups(path: &Path) {
+    let backups = list_backups(path);
+    if backups.len() <= BACKUP_KEEP_COUNT {
+        return;
+    }
+    for stale in &backups[..backups.len() - BACKUP_KEEP_COUNT] {
+        if let Err(err) = std::fs::remove_file(stale) {
+            // 删不掉不是致命问题：留着的备份只是多占一点空间
+            eprintln!("[QuickQuick] 清理旧备份失败（{}）：{err}", stale.display());
+        }
+    }
+}
+
 /// 选一个尚未占用的备份路径：`<ms>.bak` 已存在时依次试 `<ms>-1.bak`、`<ms>-2.bak`…
 ///
 /// 同一毫秒内连续触发（例如两次坏文件写入）也不会互相覆盖。
@@ -641,10 +695,32 @@ fn value_kind(value: &Value) -> &'static str {
 /// 备份成功**也不继续写**——调用方会返回 [`SettingsError::Unparsable`] 拒写。
 /// 备份只是留痕，让用户能对照修；活文件保持原样。
 fn backup_broken_settings(path: &Path, reason: &str) -> Result<PathBuf, SettingsError> {
+    let file = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("配置文件")
+        .to_string();
+    let content = std::fs::read(path)?;
+
+    // 与最近一份备份字节相同：直接复用，不再新建（同一份坏内容反复触发时不堆文件）
+    if let Some(latest) = list_backups(path).last() {
+        if std::fs::read(latest)
+            .map(|bytes| bytes == content)
+            .unwrap_or(false)
+        {
+            eprintln!(
+                "[QuickQuick] {file} {reason}，与最近一份备份内容相同，复用 {} 并拒绝写入以免覆盖你的设置",
+                latest.display()
+            );
+            return Ok(latest.clone());
+        }
+    }
+
     let backup = unique_backup_path(path)?;
     std::fs::copy(path, &backup)?;
+    prune_backups(path);
     eprintln!(
-        "[QuickQuick] settings.json {reason}，已备份原文件到 {}，并拒绝写入以免覆盖你的设置",
+        "[QuickQuick] {file} {reason}，已备份原文件到 {}，并拒绝写入以免覆盖你的设置",
         backup.display()
     );
     Ok(backup)
@@ -1257,6 +1333,65 @@ mod tests {
                     .expect("备份文件名非法 UTF-8")
             ),
             "错误文案应带上备份文件名，方便用户去找，实际：{message}"
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 滚动保留：连续 7 次**不同的**损坏内容 → 目录里只留最新 5 份，且就是最后写的那 5 份。
+    #[test]
+    fn backups_keep_only_the_latest_five() {
+        let dir = std::env::temp_dir().join(format!("qq-settings-rotate-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("临时目录创建失败");
+        let path = dir.join("settings.json");
+
+        for round in 1..=7 {
+            std::fs::write(&path, format!("{{ broken {round} ")).expect("写临时设置文件失败");
+            write_setting_field(&path, "theme", &"dark").expect_err("每轮都应拒写");
+        }
+
+        let backups = backup_files(&dir);
+        assert_eq!(
+            backups.len(),
+            BACKUP_KEEP_COUNT,
+            "只应保留最近 {BACKUP_KEEP_COUNT} 份，实际：{backups:?}"
+        );
+        let contents: Vec<String> = backups
+            .iter()
+            .map(|path| std::fs::read_to_string(path).expect("读备份失败"))
+            .collect();
+        for round in 3..=7 {
+            assert!(
+                contents.contains(&format!("{{ broken {round} ")),
+                "第 {round} 轮的内容应在保留范围内，实际：{contents:?}"
+            );
+        }
+        for round in 1..=2 {
+            assert!(
+                !contents.contains(&format!("{{ broken {round} ")),
+                "第 {round} 轮应已被淘汰，实际：{contents:?}"
+            );
+        }
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 去重：同一份坏内容触发两次，只留一份备份（不堆同内容副本）。
+    #[test]
+    fn identical_corrupt_content_reuses_existing_backup() {
+        let dir = std::env::temp_dir().join(format!("qq-settings-dedupe-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("临时目录创建失败");
+        let path = dir.join("settings.json");
+        std::fs::write(&path, "{ same broken content ").expect("写临时设置文件失败");
+
+        write_setting_field(&path, "theme", &"dark").expect_err("第一次应拒写");
+        write_setting_field(&path, "theme", &"dark").expect_err("第二次应拒写");
+
+        let backups = backup_files(&dir);
+        assert_eq!(backups.len(), 1, "同内容只应留一份备份，实际：{backups:?}");
+        assert_eq!(
+            std::fs::read_to_string(&backups[0]).expect("读备份失败"),
+            "{ same broken content "
         );
 
         std::fs::remove_dir_all(&dir).ok();
