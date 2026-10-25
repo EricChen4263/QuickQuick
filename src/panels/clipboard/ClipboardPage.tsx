@@ -333,8 +333,8 @@ function ClipboardPage({ onTranslateItem }: ClipboardPageProps) {
   // 若删空后不清，重新有数据时会**一次性渲染几百行**，增量渲染等于白做。
   // 用 ref 记录上一次的条数：挂载时 prev 也是 0，所以挂载不会误触发。
   //
-  // **与扩窗 effect 的先后不影响结果**（实测把两者对调，clipboard-page 全部 39 条用例仍绿）：
-  // 扩窗那条在数据为空时返回 prev 原样，收到我们写入的 100 就是 100，不会覆盖回去。
+  // 与扩窗 effect 的先后不影响结果：扩窗那条在数据为空时返回 prev 原样，
+  // 收到这里写入的 100 就是 100，不会覆盖回去。
   // 真正承担行为的是上面那句 `setHighlightIndex(0)`——少了它，回填后 highlightIndex
   // 还停在旧位置（例如删空前 ⌘↓ 停在 299），扩窗 effect 会为包住它把窗口一次扩回几百行。
   // 用例「删空后清空选中并把窗口收回首屏块」同时锁住这两点。
@@ -471,11 +471,18 @@ function ClipboardPage({ onTranslateItem }: ClipboardPageProps) {
     setGuide((prev) => finishGuide(prev));
   }
 
-  /** 自启确认步骤切换：先更新界面，写盘失败要如实提示，不假装已生效。 */
+  /**
+   * 自启确认步骤切换：先更新界面，**写盘失败必须回滚**并显示后端原文。
+   *
+   * 只提示不回滚等于「界面撒谎」：开关停在用户点的位置，实际偏好没变，
+   * 下次重启又变回去，用户无从判断到底生效了没有。与设置页通用面板的处理保持一致。
+   */
   function handleLaunchOnLoginChange(enabled: boolean): void {
+    const previous = launchOnLogin;
     setLaunchOnLoginPreference(enabled);
-    void setLaunchOnLogin(enabled).catch(() => {
-      setOpError("保存开机自启设置失败，请稍后重试");
+    void setLaunchOnLogin(enabled).catch((err: unknown) => {
+      setLaunchOnLoginPreference(previous);
+      setOpError(err instanceof Error ? err.message : String(err));
     });
   }
 

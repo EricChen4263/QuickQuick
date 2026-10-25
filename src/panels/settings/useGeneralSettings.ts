@@ -26,7 +26,7 @@ interface GeneralSettings {
  * - setter：IPC 成功后更新本地 state；**IPC 失败则不更新且把错误抛给调用方**——
  *   错误该由谁显示、算谁的来源，交给面板用 `runSave` 显式处理（不在这里存状态，
  *   否则错误会随着组件挂载/卸载的时机被推断式清掉）。
- * - 对外接口形状不变，GeneralPanel 零改动。
+ * - 对外返回值已去掉 saveErrors（不再自存错误状态），错误由面板经 `runSave` 处理。
  */
 export function useGeneralSettings(): GeneralSettings {
   const [launchOnLogin, setLaunchOnLoginState] = useState(true);
