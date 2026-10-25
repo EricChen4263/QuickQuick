@@ -290,3 +290,20 @@ GeneralPanel 用 `reportedSources` 记住报过谁——挂载时不误清别处
 - `d01289b`（D + F/G/I/Windows）：台账补四类 settings.json 写入者与「同步路径（grep 核实）、
   运行时线程归属待验证」的措辞；补 G（启动期 apply 失败对界面不可见）、I（`opError` 单槽位为既有语义）、
   Windows 未编译验证、以及 `cargo test autostart` 过滤器会漏跑回滚用例（改用 `--test autostart`）。
+
+## 补记十二：收尾批次（`f7a507a` / `3c6cc32` / `9af50b3` / `9ee2231`）
+
+- `f7a507a`：settings.json 写入改「同目录临时文件 + `fs::rename`」原子替换（与 portable.rs 备份包落盘
+  一致）。此前「截断+写入」在崩溃/写满时留下半份 JSON → 下次启动整份按默认值生效（用户视角是设置全丢）。
+  顺带修一个受影响的既有用例：回滚失败的原注入点是「文件设只读」，但原子写走 rename 覆盖、
+  POSIX 上覆盖只读文件是合法的（权限在目录上），改为「把目录设只读」，注入依旧精确。
+- `3c6cc32` / `9af50b3`：补两条组合分支用例——读状态与删除同时失败（错误串要同时含两个原因）、
+  回滚失败且文件原本不存在（文案要说明「将于下次启动生效」且磁盘确实是新值）。
+- `9ee2231`：IPC 通道描述更正为「默认 `ipc://` 自定义协议（WKURLSchemeHandler，MainThreadOnly），
+  回退 WKScriptMessageHandler」；`translate.rs:381` 的调用者更正为 `translate_text_with_runtime`；
+  台账补三组可复现 grep、跨线程读取者（轮询线程经 `resolve_ingest_limits` 读 settings.json，
+  原子写后撕裂读取风险消除）、Windows 残留登录项（任务管理器禁用后 Run 值不清，依据源码阅读、未验证）。
+
+**过程失误（如实记录）**：拆分第 4/5 条测试时，我用 `t[:start] + t[end:]` 而 end < start，
+把一段代码复制成了两份并发现在同一次提交里；随后 `git reset --soft` 重做，按「先 item4、再 item5」
+两个提交拆干净（最终历史里没有重复函数，`cargo test --test autostart` 15 passed）。
