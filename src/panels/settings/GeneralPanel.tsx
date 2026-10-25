@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   checkForUpdates,
   downloadAndInstallUpdate,
@@ -7,6 +7,7 @@ import PanelHeader from "./PanelHeader";
 import SettingGroup from "./SettingGroup";
 import SettingToggle from "./SettingToggle";
 import { useGeneralSettings } from "./useGeneralSettings";
+import { useSettingsSaveError } from "./settings-save-error";
 
 /** 检查更新的结果：是否有新版本及其版本号。 */
 interface UpdateCheckOutcome {
@@ -113,8 +114,15 @@ function GeneralPanel() {
     setStayInTray,
     autoUpdate,
     setAutoUpdate,
-    saveError,
+    saveError: hookSaveError,
   } = useGeneralSettings();
+
+  // 开关保存失败统一走页面级错误条（后端中文原文），面板内不再自己渲染一条
+  const { reportSaveError, clearSaveError } = useSettingsSaveError();
+  useEffect(() => {
+    if (hookSaveError === null) clearSaveError();
+    else reportSaveError(hookSaveError);
+  }, [hookSaveError, reportSaveError, clearSaveError]);
 
   const [outcome, setOutcome] = useState<UpdateCheckOutcome | null>(null);
   const [checkMsg, setCheckMsg] = useState<string | null>(null);
@@ -181,14 +189,6 @@ function GeneralPanel() {
         </div>
       </SettingGroup>
 
-      {saveError !== null && (
-        <div
-          role="alert"
-          style={{ color: "var(--danger)", marginTop: 8, fontSize: 12 }}
-        >
-          {saveError}
-        </div>
-      )}
       {hasUpdate ? (
         <UpdateInstallAction version={outcome.version} />
       ) : (

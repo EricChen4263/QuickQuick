@@ -76,6 +76,43 @@
   border-radius: var(--r-lg);
 }
 
+/* 页面级保存失败错误条：所有面板的写失败都汇总到这里（文案是后端原文）。
+   贴在内容区顶部但不 sticky —— 设置页本身不滚动整页，错误条跟着内容走即可。 */
+.set-save-error {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  margin-bottom: 18px;
+  padding: 10px 12px;
+  color: var(--danger);
+  font-size: 12px;
+  line-height: 1.5;
+  background: color-mix(in oklch, var(--danger) 10%, transparent);
+  border: 1px solid color-mix(in oklch, var(--danger) 34%, transparent);
+  border-radius: var(--r-md);
+}
+
+.set-save-error-text {
+  flex: 1;
+  /* 后端文案可能很长（含备份路径），允许换行而不是撑破容器 */
+  overflow-wrap: anywhere;
+}
+
+.set-save-error-dismiss {
+  flex: none;
+  padding: 2px 8px;
+  font-size: 12px;
+  color: var(--danger);
+  background: transparent;
+  border: 1px solid color-mix(in oklch, var(--danger) 40%, transparent);
+  border-radius: var(--r-sm);
+  cursor: pointer;
+}
+
+.set-save-error-dismiss:hover {
+  background: color-mix(in oklch, var(--danger) 14%, transparent);
+}
+
 /* 面板大标题：字号偏大、字重粗，字间距收紧 */
 .set-h {
   font-size: 19px;

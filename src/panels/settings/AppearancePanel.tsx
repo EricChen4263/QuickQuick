@@ -12,6 +12,7 @@
  */
 
 import { useEffect, useState } from "react";
+import { useSettingsSaveError } from "./settings-save-error";
 import type { HighlightStyle, SortOrder } from "../../ipc/ipc-client";
 import { Select } from "../../components/Select";
 import {
@@ -44,16 +45,6 @@ const PREVIEW_DELAY_TOOLTIP = `默认：${DEFAULT_PREVIEW_FIRST_DELAY_MS}ms（�
 const HIGHLIGHT_STYLE_TOOLTIP =
   "默认：加粗（对齐 Maccy 的默认档）。可选 加粗 / 背景色 / 斜体 / 下划线，四档都只改命中片段的呈现，命中区间与搜索行为不变。";
 
-/**
- * 保存失败时给用户看的文案。
- *
- * 直接透出后端中文错误（例如 settings.json 损坏时的「已拒绝写入……请先修复该文件，
- * 备份副本：…」）——这类错误必须让用户看到修复路径，不能被通用文案盖掉。
- */
-function saveErrorMessage(err: unknown): string {
-  return err instanceof Error ? err.message : "保存失败，请稍后重试";
-}
-
 /** 外观子项面板 */
 function AppearancePanel() {
   const {
@@ -73,6 +64,8 @@ function AppearancePanel() {
   const [previewDelayInput, setPreviewDelayInput] = useState(
     String(DEFAULT_PREVIEW_FIRST_DELAY_MS),
   );
+  // 保存失败统一走页面级错误条（后端中文原文，含修复指引）；这里的 message 只留校验类提示
+  const { runSave } = useSettingsSaveError();
   const [message, setMessage] = useState<string | null>(null);
 
   // 读到（或成功保存）后把输入框同步成已生效值
@@ -85,22 +78,14 @@ function AppearancePanel() {
 
   async function handleSortOrderChange(value: string): Promise<void> {
     setMessage(null);
-    try {
-      await setSortOrder(value as SortOrder);
-    } catch (err) {
-      console.error("排序方式保存失败:", err);
-      setMessage(saveErrorMessage(err));
-    }
+    const result = await runSave(() => setSortOrder(value as SortOrder));
+    if (!result.ok) console.error("排序方式保存失败:", result.error);
   }
 
   async function handleHighlightStyleChange(value: string): Promise<void> {
     setMessage(null);
-    try {
-      await setHighlightStyle(value as HighlightStyle);
-    } catch (err) {
-      console.error("命中高亮样式保存失败:", err);
-      setMessage(saveErrorMessage(err));
-    }
+    const result = await runSave(() => setHighlightStyle(value as HighlightStyle));
+    if (!result.ok) console.error("命中高亮样式保存失败:", result.error);
   }
 
   /** 提交图片高度：非法输入不调后端，把输入框回滚到已生效值并提示范围。 */
@@ -119,11 +104,9 @@ function AppearancePanel() {
       setImageHeightInput(String(imageHeightPx));
       return;
     }
-    try {
-      await setImageHeightPx(parsed);
-    } catch (err) {
-      console.error("图片高度保存失败:", err);
-      setMessage(saveErrorMessage(err));
+    const result = await runSave(() => setImageHeightPx(parsed));
+    if (!result.ok) {
+      console.error("图片高度保存失败:", result.error);
       setImageHeightInput(String(imageHeightPx));
     }
   }
@@ -147,11 +130,9 @@ function AppearancePanel() {
       setPreviewDelayInput(String(previewFirstDelayMs));
       return;
     }
-    try {
-      await setPreviewFirstDelayMs(parsed);
-    } catch (err) {
-      console.error("首次预览延迟保存失败:", err);
-      setMessage(saveErrorMessage(err));
+    const result = await runSave(() => setPreviewFirstDelayMs(parsed));
+    if (!result.ok) {
+      console.error("首次预览延迟保存失败:", result.error);
       setPreviewDelayInput(String(previewFirstDelayMs));
     }
   }

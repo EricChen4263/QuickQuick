@@ -12,6 +12,7 @@ vi.mock("../../ipc/ipc-client", () => ({
 }));
 
 import AppearancePanel from "./AppearancePanel";
+import { SettingsSaveErrorBanner, SettingsSaveErrorProvider } from "./settings-save-error";
 import {
   getAppearanceSettings,
   setHighlightStyle,
@@ -204,16 +205,21 @@ describe("AppearancePanel", () => {
     const backendMessage =
       "settings.json 无法解析（JSON 语法错误），已拒绝写入以免覆盖你的设置；请先修复该文件。备份副本：settings.json.1.bak";
     mockSetImageHeight.mockRejectedValue(new Error(backendMessage));
-    render(<AppearancePanel />);
+    render(
+      <SettingsSaveErrorProvider>
+        <AppearancePanel />
+        <SettingsSaveErrorBanner />
+      </SettingsSaveErrorProvider>,
+    );
     await waitFor(() => expect(imageHeightInput().value).toBe("40"));
 
     // Act
     fireEvent.change(imageHeightInput(), { target: { value: "120" } });
     fireEvent.blur(imageHeightInput());
 
-    // Assert：文案必须透到 UI（含「已拒绝写入」与备份指引），输入框回滚到已生效值
-    expect(await screen.findByRole("status")).toHaveTextContent("已拒绝写入");
-    expect(screen.getByRole("status")).toHaveTextContent("settings.json.1.bak");
+    // Assert：文案必须透到**页面级错误条**（含「已拒绝写入」与备份指引），输入框回滚到已生效值
+    expect(await screen.findByRole("alert")).toHaveTextContent("已拒绝写入");
+    expect(screen.getByRole("alert")).toHaveTextContent("settings.json.1.bak");
     expect(imageHeightInput().value).toBe("40");
     error.mockRestore();
   });

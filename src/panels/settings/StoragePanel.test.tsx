@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import StoragePanel from "./StoragePanel";
+import { SettingsSaveErrorBanner, SettingsSaveErrorProvider } from "./settings-save-error";
 
 vi.mock("../../ipc/ipc-client", () => ({
   getStorageStats: vi.fn(),
@@ -41,6 +42,21 @@ const mockExportBackup = vi.mocked(exportBackup);
 const mockImportBackup = vi.mocked(importBackup);
 const mockRevealBackupInFinder = vi.mocked(revealBackupInFinder);
 
+/**
+ * 渲染存储面板，并挂上页面级错误条。
+ *
+ * 写失败（含后端拒写）现在统一由设置页顶部的错误条展示，不再由面板自己渲染，
+ * 所以断言 `role="alert"` 时必须把 Provider + Banner 一起挂上。
+ */
+function renderStorage() {
+  return render(
+    <SettingsSaveErrorProvider>
+      <StoragePanel />
+      <SettingsSaveErrorBanner />
+    </SettingsSaveErrorProvider>,
+  );
+}
+
 /** 测试用导出结果：路径取真实备份包命名格式，便于断言展示文案 */
 const BACKUP_PATH = "/Users/tester/Documents/QuickQuick-Backup-20231114-221320.qqbp";
 
@@ -65,7 +81,7 @@ describe("StoragePanel 单张图片阈值", () => {
   it("挂载后调用 getImageThreshold，trigger 显示对应 MB（返回 10MiB → 10 MB）", async () => {
     mockGetImageThreshold.mockResolvedValue(10 * 1024 * 1024);
 
-    render(<StoragePanel />);
+    renderStorage();
 
     // 必须等到 DOM 落地：只等 mock 被调用时，promise 回调可能在断言之后才触发
     // setState，并发负载下会读到初始的 20 MB（曾偶发 expected 10 MB / received 20 MB）。
@@ -78,7 +94,7 @@ describe("StoragePanel 单张图片阈值", () => {
   it("返回默认 20MiB 时，trigger 显示 20 MB", async () => {
     mockGetImageThreshold.mockResolvedValue(20 * 1024 * 1024);
 
-    render(<StoragePanel />);
+    renderStorage();
 
     await waitFor(() => {
       expect(screen.getByRole("button", { name: /单张图片阈值/ })).toHaveTextContent("20 MB");
@@ -88,7 +104,7 @@ describe("StoragePanel 单张图片阈值", () => {
   it("getImageThreshold 失败时退回默认值 20，trigger 显示 20 MB", async () => {
     mockGetImageThreshold.mockRejectedValue(new Error("IPC error"));
 
-    render(<StoragePanel />);
+    renderStorage();
 
     await waitFor(() => {
       expect(screen.getByRole("button", { name: /单张图片阈值/ })).toHaveTextContent("20 MB");
@@ -99,7 +115,7 @@ describe("StoragePanel 单张图片阈值", () => {
     mockGetImageThreshold.mockResolvedValue(20 * 1024 * 1024);
     const user = userEvent.setup();
 
-    render(<StoragePanel />);
+    renderStorage();
 
     await waitFor(() => {
       expect(screen.getByRole("button", { name: /单张图片阈值/ })).toHaveTextContent("20 MB");
@@ -119,7 +135,7 @@ describe("StoragePanel 单张图片阈值", () => {
     mockGetImageThreshold.mockResolvedValue(20 * 1024 * 1024);
     const user = userEvent.setup();
 
-    render(<StoragePanel />);
+    renderStorage();
 
     await waitFor(() => {
       expect(screen.getByRole("button", { name: /单张图片阈值/ })).toHaveTextContent("20 MB");
@@ -133,7 +149,7 @@ describe("StoragePanel 单张图片阈值", () => {
   it("desc 文案不含「静态展示，无对应 IPC」", async () => {
     mockGetImageThreshold.mockResolvedValue(20 * 1024 * 1024);
 
-    render(<StoragePanel />);
+    renderStorage();
 
     await waitFor(() => {
       expect(screen.queryByText(/静态展示，无对应 IPC/)).not.toBeInTheDocument();
@@ -159,7 +175,7 @@ describe("StoragePanel 备份 / 恢复", () => {
   });
 
   it("口令输入框是 password 类型（口令不明文显示）", () => {
-    render(<StoragePanel />);
+    renderStorage();
 
     expect(screen.getByLabelText("备份口令")).toHaveAttribute("type", "password");
   });
@@ -167,7 +183,7 @@ describe("StoragePanel 备份 / 恢复", () => {
   it("导出成功时把口令交给后端、展示落盘路径，并可「在 Finder 中显示」", async () => {
     // Arrange
     const user = userEvent.setup();
-    render(<StoragePanel />);
+    renderStorage();
 
     // Act
     await user.type(screen.getByLabelText("备份口令"), "backup-passphrase");
@@ -198,7 +214,7 @@ describe("StoragePanel 备份 / 恢复", () => {
       usedFallbackDir: true,
     });
     const user = userEvent.setup();
-    render(<StoragePanel />);
+    renderStorage();
 
     // Act
     await user.click(screen.getByRole("button", { name: "导出备份" }));
@@ -212,7 +228,7 @@ describe("StoragePanel 备份 / 恢复", () => {
   it("未回退时不显示回退说明（不让用户看到假的降级提示）", async () => {
     // Arrange: 默认 mock 的 usedFallbackDir 为 false
     const user = userEvent.setup();
-    render(<StoragePanel />);
+    renderStorage();
 
     // Act
     await user.click(screen.getByRole("button", { name: "导出备份" }));
@@ -228,7 +244,7 @@ describe("StoragePanel 备份 / 恢复", () => {
     // Arrange
     mockExportBackup.mockRejectedValue(new Error("备份加密失败：密钥派生失败"));
     const user = userEvent.setup();
-    render(<StoragePanel />);
+    renderStorage();
 
     // Act
     await user.click(screen.getByRole("button", { name: "导出备份" }));
@@ -241,7 +257,7 @@ describe("StoragePanel 备份 / 恢复", () => {
     // Arrange
     mockImportBackup.mockRejectedValue(new Error("备份口令错误，或文件已损坏"));
     const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
-    render(<StoragePanel />);
+    renderStorage();
 
     // Act: 选文件 → 确认 → 后端报口令错
     fireEvent.change(screen.getByLabelText("选择备份文件"), {
@@ -257,7 +273,7 @@ describe("StoragePanel 备份 / 恢复", () => {
   it("导入前二次确认取消时不调用后端", async () => {
     // Arrange
     const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(false);
-    render(<StoragePanel />);
+    renderStorage();
 
     // Act
     fireEvent.change(screen.getByLabelText("选择备份文件"), {
@@ -274,7 +290,7 @@ describe("StoragePanel 备份 / 恢复", () => {
     // Arrange
     const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
     const user = userEvent.setup();
-    render(<StoragePanel />);
+    renderStorage();
 
     // Act
     await user.type(screen.getByLabelText("备份口令"), "backup-passphrase");
@@ -326,7 +342,7 @@ describe("StoragePanel 占用口径（图片占用 vs 库文件体积）", () =>
     });
 
     // Act
-    const { container } = render(<StoragePanel />);
+    const { container } = renderStorage();
     await screen.findByText("100.0 MB 已用");
 
     // Assert
@@ -343,7 +359,7 @@ describe("StoragePanel 占用口径（图片占用 vs 库文件体积）", () =>
     });
 
     // Act
-    render(<StoragePanel />);
+    renderStorage();
 
     // Assert：图片占用一行（受上限约束）
     expect(await screen.findByText("图片占用")).toBeInTheDocument();
@@ -362,7 +378,7 @@ describe("StoragePanel 占用口径（图片占用 vs 库文件体积）", () =>
       .mockResolvedValueOnce({ liveCount: 8, imageBytes: 100 * MB, fileSizeBytes: 500 * MB });
     mockCleanupHistory.mockResolvedValue({ softDeleted: 2, purged: 0 });
     const user = userEvent.setup();
-    const { container } = render(<StoragePanel />);
+    const { container } = renderStorage();
 
     // Assert：清理前 400/500 = 80%
     await screen.findByText("400.0 MB 已用");
@@ -401,7 +417,7 @@ describe("StoragePanel 历史条目上限", () => {
     mockGetMaxHistoryItems.mockResolvedValue(42);
 
     // Act
-    render(<StoragePanel />);
+    renderStorage();
 
     // Assert：必须等 IPC 落地后再断言 DOM（只等 mock 被调用会读到初始值）
     await waitFor(() => {
@@ -416,7 +432,7 @@ describe("StoragePanel 历史条目上限", () => {
       .mockResolvedValueOnce({ liveCount: 10, imageBytes: 0, fileSizeBytes: 4096 })
       .mockResolvedValueOnce({ liveCount: 7, imageBytes: 0, fileSizeBytes: 4096 });
     mockSetMaxHistoryItems.mockResolvedValue(12);
-    render(<StoragePanel />);
+    renderStorage();
     await waitFor(() => expect(historyInput().value).toBe("500"));
 
     // Act：改成 50 并失焦提交
@@ -438,7 +454,7 @@ describe("StoragePanel 历史条目上限", () => {
   it("上限改小时没有淘汰任何条目则不显示清理提示", async () => {
     // Arrange：调大上限（或调小但仍未超限）→ 后端返回 0
     mockSetMaxHistoryItems.mockResolvedValue(0);
-    render(<StoragePanel />);
+    renderStorage();
     await waitFor(() => expect(historyInput().value).toBe("500"));
 
     // Act
@@ -457,7 +473,7 @@ describe("StoragePanel 历史条目上限", () => {
       .mockResolvedValueOnce({ liveCount: 500, imageBytes: 0, fileSizeBytes: 4096 })
       .mockResolvedValueOnce({ liveCount: 50, imageBytes: 0, fileSizeBytes: 4096 });
     mockSetMaxHistoryItems.mockResolvedValue(450);
-    render(<StoragePanel />);
+    renderStorage();
     await screen.findByText("500 条活跃记录（不含软删）");
 
     // Act
@@ -472,7 +488,7 @@ describe("StoragePanel 历史条目上限", () => {
   it("回车提交与失焦提交等价", async () => {
     // Arrange
     mockSetMaxHistoryItems.mockResolvedValue(0);
-    render(<StoragePanel />);
+    renderStorage();
     await waitFor(() => expect(historyInput().value).toBe("500"));
 
     // Act：只按回车、不失焦
@@ -486,7 +502,7 @@ describe("StoragePanel 历史条目上限", () => {
 
   it("非法值 0 被拒绝：不调后端、给出提示、输入框回滚到已生效值", async () => {
     // Arrange
-    render(<StoragePanel />);
+    renderStorage();
     await waitFor(() => expect(historyInput().value).toBe("500"));
 
     // Act
@@ -501,7 +517,7 @@ describe("StoragePanel 历史条目上限", () => {
 
   it("非法值 1000 被拒绝（上限之外，不能悄悄截断成 999）", async () => {
     // Arrange
-    render(<StoragePanel />);
+    renderStorage();
     await waitFor(() => expect(historyInput().value).toBe("500"));
 
     // Act
@@ -516,7 +532,7 @@ describe("StoragePanel 历史条目上限", () => {
 
   it("小数被拒绝而不是悄悄取整（2.5 不能变成 2）", async () => {
     // Arrange
-    render(<StoragePanel />);
+    renderStorage();
     await waitFor(() => expect(historyInput().value).toBe("500"));
 
     // Act
@@ -531,7 +547,7 @@ describe("StoragePanel 历史条目上限", () => {
 
   it("空输入被拒绝（清空后失焦不应把上限设成 0）", async () => {
     // Arrange
-    render(<StoragePanel />);
+    renderStorage();
     await waitFor(() => expect(historyInput().value).toBe("500"));
 
     // Act
@@ -546,7 +562,7 @@ describe("StoragePanel 历史条目上限", () => {
 
   it("边界值 1 与 999 都能提交", async () => {
     // Arrange
-    render(<StoragePanel />);
+    renderStorage();
     await waitFor(() => expect(historyInput().value).toBe("500"));
 
     // Act & Assert：最小值
@@ -564,7 +580,7 @@ describe("StoragePanel 历史条目上限", () => {
 
   it("值没变时不打后端（路过输入框失焦不应产生一次落盘 + 一次淘汰查询）", async () => {
     // Arrange
-    render(<StoragePanel />);
+    renderStorage();
     await waitFor(() => expect(historyInput().value).toBe("500"));
 
     // Act：原样失焦（用户只是路过，没有改值）
@@ -579,7 +595,7 @@ describe("StoragePanel 历史条目上限", () => {
   it("前导零被归一化（输入 050 视为 50，回填为 50 而不是 050）", async () => {
     // Arrange
     mockSetMaxHistoryItems.mockResolvedValue(0);
-    render(<StoragePanel />);
+    renderStorage();
     await waitFor(() => expect(historyInput().value).toBe("500"));
 
     // Act
@@ -593,7 +609,7 @@ describe("StoragePanel 历史条目上限", () => {
 
   it("输入框带宽高约束（min=1 / max=999 / step=1），浏览器层面也能拦非法值", async () => {
     // Arrange
-    render(<StoragePanel />);
+    renderStorage();
     await waitFor(() => expect(historyInput().value).toBe("500"));
 
     // Assert：与后端同一组边界，不在前端重写一套数字
@@ -606,15 +622,15 @@ describe("StoragePanel 历史条目上限", () => {
   it("后端拒绝时把错误文案展示出来并回滚输入框", async () => {
     // Arrange：模拟后端越界报错（前端校验通过但后端不认，例如版本不一致）
     mockSetMaxHistoryItems.mockRejectedValue(new Error("历史条目上限超出范围：1000"));
-    render(<StoragePanel />);
+    renderStorage();
     await waitFor(() => expect(historyInput().value).toBe("500"));
 
     // Act
     fireEvent.change(historyInput(), { target: { value: "300" } });
     fireEvent.blur(historyInput());
 
-    // Assert：显示后端原文，输入框回到已生效值
-    expect(await screen.findByRole("status")).toHaveTextContent(
+    // Assert：后端原文出现在页面级错误条，输入框回到已生效值
+    expect(await screen.findByRole("alert")).toHaveTextContent(
       "历史条目上限超出范围：1000"
     );
     expect(historyInput().value).toBe("500");

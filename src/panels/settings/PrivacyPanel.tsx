@@ -21,6 +21,7 @@ import {
 import PanelHeader from "./PanelHeader";
 import SettingGroup from "./SettingGroup";
 import SettingToggle from "./SettingToggle";
+import { useSettingsSaveError } from "./settings-save-error";
 
 /** SVG × 图标，用于 chip 删除按钮 */
 function CloseIcon() {
@@ -98,7 +99,8 @@ function PrivacyPanel() {
   const [inputValue, setInputValue] = useState("");
   const [regexInput, setRegexInput] = useState("");
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [opError, setOpError] = useState<string | null>(null);
+  // 写失败统一走页面级错误条（后端原文）；本地只保留「加载失败」这种读路径提示
+  const { reportSaveError } = useSettingsSaveError();
   const [pauseCaptureState, setPauseCaptureState] = useState(false);
   const [skipSensitiveState, setSkipSensitiveState] = useState(true);
 
@@ -147,9 +149,8 @@ function PrivacyPanel() {
       // 只切换方向：已填的应用条目与内容正则由后端一并保留，前端不动它们
       await setExcludeMode(next);
       setExcludeModeState(next);
-      setOpError(null);
-    } catch {
-      setOpError("切换名单模式失败，请稍后重试");
+    } catch (err) {
+      reportSaveError(err);
     }
   }
 
@@ -162,9 +163,8 @@ function PrivacyPanel() {
       await setExcludeList(newList);
       setExcludeListState(newList);
       setInputValue("");
-      setOpError(null);
-    } catch {
-      setOpError("添加失败，请稍后重试");
+    } catch (err) {
+      reportSaveError(err);
     }
   }
 
@@ -173,9 +173,8 @@ function PrivacyPanel() {
     try {
       await setExcludeList(newList);
       setExcludeListState(newList);
-      setOpError(null);
-    } catch {
-      setOpError("删除失败，请稍后重试");
+    } catch (err) {
+      reportSaveError(err);
     }
   }
 
@@ -188,9 +187,8 @@ function PrivacyPanel() {
       await setIgnoreRegexes(newPatterns);
       setRegexPatterns(newPatterns);
       setRegexInput("");
-      setOpError(null);
-    } catch {
-      setOpError("添加正则失败，请稍后重试");
+    } catch (err) {
+      reportSaveError(err);
     }
   }
 
@@ -199,9 +197,8 @@ function PrivacyPanel() {
     try {
       await setIgnoreRegexes(newPatterns);
       setRegexPatterns(newPatterns);
-      setOpError(null);
-    } catch {
-      setOpError("删除正则失败，请稍后重试");
+    } catch (err) {
+      reportSaveError(err);
     }
   }
 
@@ -209,9 +206,8 @@ function PrivacyPanel() {
     try {
       await setPauseCapture(v);
       setPauseCaptureState(v);
-      setOpError(null);
-    } catch {
-      setOpError("暂停监听设置失败，请稍后重试");
+    } catch (err) {
+      reportSaveError(err);
     }
   }
 
@@ -219,9 +215,8 @@ function PrivacyPanel() {
     try {
       await setSkipSensitive(v);
       setSkipSensitiveState(v);
-      setOpError(null);
-    } catch {
-      setOpError("跳过敏感内容设置失败，请稍后重试");
+    } catch (err) {
+      reportSaveError(err);
     }
   }
 
@@ -356,11 +351,6 @@ function PrivacyPanel() {
         </div>
       </SettingGroup>
 
-      {opError !== null && (
-        <div role="alert" style={{ color: "var(--danger)", marginTop: 8, fontSize: 12 }}>
-          {opError}
-        </div>
-      )}
     </div>
   );
 }

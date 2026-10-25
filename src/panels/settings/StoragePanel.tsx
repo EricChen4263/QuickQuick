@@ -17,6 +17,7 @@ import { Select } from "../../components/Select";
 import type { SelectOption } from "../../components/Select";
 import { arrayBufferToBase64 } from "./backup-file";
 import PanelHeader from "./PanelHeader";
+import { useSettingsSaveError } from "./settings-save-error";
 import SettingGroup from "./SettingGroup";
 
 /** 存储上限：500 MB（字节） */
@@ -65,7 +66,8 @@ function StoragePanel() {
   const [imageBytes, setImageBytes] = useState(0);
   const [fileSizeBytes, setFileSizeBytes] = useState(0);
   const [cleanupMsg, setCleanupMsg] = useState<string | null>(null);
-  const [opError, setOpError] = useState<string | null>(null);
+  // 写失败统一走页面级错误条（后端中文原文）；本地消息只留「成功/清理条数/校验」这类反馈
+  const { reportSaveError } = useSettingsSaveError();
   const [imageThresholdMB, setImageThresholdMB] = useState(DEFAULT_IMAGE_THRESHOLD_MB);
   // 历史条目上限：inputText 是输入框当前文本，savedItems 是后端已确认生效的值。
   // 两者分开才能允许用户自由编辑（含清空、输错），而不让「输入框显示的」和
@@ -88,9 +90,10 @@ function StoragePanel() {
       setLiveCount(stats.liveCount);
       setImageBytes(stats.imageBytes);
       setFileSizeBytes(stats.fileSizeBytes);
-    } catch {
+    } catch (err) {
       if (cancelled.current) return;
-      setOpError("存储统计加载失败，请稍后重试");
+      console.error("存储统计加载失败:", err);
+      reportSaveError("存储统计加载失败，请稍后重试");
     }
   }, []);
 
@@ -134,6 +137,7 @@ function StoragePanel() {
       setImageThresholdMB(mb);
     } catch (err) {
       console.error("设置图片阈值失败:", err);
+      reportSaveError(err);
     }
   }
 
@@ -170,27 +174,25 @@ function StoragePanel() {
       const cancelled = { current: false };
       await fetchStats(cancelled);
     } catch (err) {
-      setHistoryMsg(err instanceof Error ? err.message : "历史条目上限设置失败");
+      reportSaveError(err);
       setHistoryInput(String(savedHistoryItems));
     }
   }
 
   async function handleCleanup() {
     setCleanupMsg(null);
-    setOpError(null);
     try {
       const result = await cleanupHistory();
       const cancelled = { current: false };
       await fetchStats(cancelled);
       setCleanupMsg(`已清理 ${result.softDeleted + result.purged} 条`);
-    } catch {
-      setOpError("清理失败，请稍后重试");
+    } catch (err) {
+      reportSaveError(err);
     }
   }
 
   /** 导出备份：成功后展示后端回传的落盘路径，并刷新条目统计。 */
   async function handleExportBackup() {
-    setOpError(null);
     setBackupMsg(null);
     setBackupPath(null);
     setBackupUsedFallbackDir(false);
@@ -205,7 +207,7 @@ function StoragePanel() {
           : "";
       setBackupMsg(`已导出 ${result.itemCount} 条到备份包${skippedNote}`);
     } catch (err) {
-      setOpError(err instanceof Error ? err.message : "导出备份失败");
+      reportSaveError(err);
     } finally {
       setIsExporting(false);
     }
@@ -217,7 +219,7 @@ function StoragePanel() {
     try {
       await revealBackupInFinder(backupPath);
     } catch (err) {
-      setOpError(err instanceof Error ? err.message : "无法在文件管理器中显示备份文件");
+      reportSaveError(err);
     }
   }
 
@@ -233,7 +235,6 @@ function StoragePanel() {
     input.value = "";
     if (file === undefined) return;
 
-    setOpError(null);
     setBackupMsg(null);
 
     const confirmed = window.confirm(
@@ -249,7 +250,7 @@ function StoragePanel() {
       const cancelled = { current: false };
       await fetchStats(cancelled);
     } catch (err) {
-      setOpError(err instanceof Error ? err.message : "导入备份失败");
+      reportSaveError(err);
     } finally {
       setIsImporting(false);
     }
@@ -450,11 +451,6 @@ function StoragePanel() {
       {backupMsg !== null && (
         <div style={{ marginTop: 8, fontSize: 12, color: "var(--muted)" }}>
           {backupMsg}
-        </div>
-      )}
-      {opError !== null && (
-        <div role="alert" style={{ color: "var(--danger)", marginTop: 8, fontSize: 12 }}>
-          {opError}
         </div>
       )}
     </div>

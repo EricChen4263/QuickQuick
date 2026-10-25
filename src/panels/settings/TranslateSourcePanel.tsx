@@ -13,6 +13,7 @@ import {
 import { SELECTED_PROVIDER_CHANGED_EVENT } from "../../ipc/events";
 import { isProviderConfigured } from "../../ipc/credential-utils";
 import PanelHeader from "./PanelHeader";
+import { useSettingsSaveError } from "./settings-save-error";
 import SettingGroup from "./SettingGroup";
 import CredentialForm from "./CredentialForm";
 
@@ -114,7 +115,8 @@ function TranslateSourcePanel() {
   const [schemaCache, setSchemaCache] = useState<Record<string, CredentialField[]>>({});
   const [configuredIds, setConfiguredIds] = useState<Set<string>>(new Set());
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [opError, setOpError] = useState<string | null>(null);
+  // 写失败统一走页面级错误条（后端原文）；加载失败仍留在本地面板内
+  const { reportSaveError } = useSettingsSaveError();
   const isMounted = useRef(true);
 
   useEffect(() => {
@@ -232,9 +234,8 @@ function TranslateSourcePanel() {
     try {
       await setSelectedProvider(id);
       setSelectedId(id);
-      setOpError(null);
-    } catch {
-      setOpError("切换翻译源失败，请稍后重试");
+    } catch (err) {
+      reportSaveError(err);
     }
   }
 
@@ -307,9 +308,6 @@ function TranslateSourcePanel() {
           </div>
         ))}
       </SettingGroup>
-      {opError !== null && (
-        <div role="alert" style={{ color: "var(--danger)" }}>{opError}</div>
-      )}
     </div>
   );
 }

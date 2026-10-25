@@ -4,6 +4,7 @@ import { validateRebind } from "../../main-window/settings/rebind";
 import { keyEventToAccelerator } from "../../main-window/settings/key-capture";
 import PanelHeader from "./PanelHeader";
 import SettingGroup from "./SettingGroup";
+import { useSettingsSaveError } from "./settings-save-error";
 
 interface HotkeyRowConfig {
   action: HotkeyAction;
@@ -80,21 +81,20 @@ function HotkeyRow({
   const [isRecording, setIsRecording] = useState(false);
   const [captured, setCaptured] = useState<string | null>(null);
   const [conflictError, setConflictError] = useState<string | null>(null);
-  const [saveError, setSaveError] = useState<string | null>(null);
+  // 写失败统一走页面级错误条（后端原文）；本行的提示只用于键位校验/冲突
+  const { reportSaveError, clearSaveError } = useSettingsSaveError();
   const captureRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
     setIsRecording(false);
     setCaptured(null);
     setConflictError(null);
-    setSaveError(null);
   }, [currentValue]);
 
   function enterRecording() {
     setIsRecording(true);
     setCaptured(null);
     setConflictError(null);
-    setSaveError(null);
     setTimeout(() => captureRef.current?.focus(), 0);
   }
 
@@ -102,7 +102,6 @@ function HotkeyRow({
     setIsRecording(false);
     setCaptured(null);
     setConflictError(null);
-    setSaveError(null);
   }
 
   function handleCaptureKeyDown(e: React.KeyboardEvent<HTMLButtonElement>) {
@@ -137,16 +136,17 @@ function HotkeyRow({
     setConflictError(null);
     try {
       await setHotkey(action, result.accelerator);
-      setSaveError(null);
+      clearSaveError();
       setIsRecording(false);
       setCaptured(null);
       onSaved();
     } catch (err: unknown) {
-      setSaveError(err instanceof Error ? err.message : "保存失败，请稍后重试");
+      // 键位冲突属于校验（留在本行提示），写失败统一走页面级错误条
+      reportSaveError(err);
     }
   }
 
-  const errorMessage = conflictError ?? saveError;
+  const errorMessage = conflictError;
 
   if (isRecording) {
     return (

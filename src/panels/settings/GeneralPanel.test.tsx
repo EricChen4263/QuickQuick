@@ -22,6 +22,7 @@ import {
   setLaunchOnLogin,
 } from "../../ipc/ipc-client";
 import GeneralPanel from "./GeneralPanel";
+import { SettingsSaveErrorBanner, SettingsSaveErrorProvider } from "./settings-save-error";
 
 const mockCheckForUpdates = vi.mocked(checkForUpdates);
 const mockDownloadAndInstall = vi.mocked(downloadAndInstallUpdate);
@@ -111,7 +112,12 @@ describe("GeneralPanel 开关保存失败时把后端原文显示出来", () => 
     vi.mocked(setLaunchOnLogin).mockRejectedValueOnce(new Error(backendMessage));
 
     const user = userEvent.setup();
-    render(<GeneralPanel />);
+    render(
+      <SettingsSaveErrorProvider>
+        <GeneralPanel />
+        <SettingsSaveErrorBanner />
+      </SettingsSaveErrorProvider>,
+    );
     const toggle = await screen.findByRole("switch", { name: "开机自启动" });
     expect(toggle).toHaveAttribute("aria-checked", "true");
 

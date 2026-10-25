@@ -10,6 +10,10 @@ import PrivacyPanel from "./PrivacyPanel";
 import StoragePanel from "./StoragePanel";
 import GeneralPanel from "./GeneralPanel";
 import AppearancePanel from "./AppearancePanel";
+import {
+  SettingsSaveErrorBanner,
+  SettingsSaveErrorProvider,
+} from "./settings-save-error";
 
 /** 关于子项面板：logo + 应用名 + 版本号 + 描述 */
 function AboutPanel() {
@@ -58,16 +62,20 @@ function SettingsPage() {
   const sections = settingsSections();
 
   return (
-    <div className="set-page">
-      <SectionNav
-        sections={sections}
-        activeSection={activeSection}
-        onSelect={(section) => setActiveSection(() => section)}
-      />
-      <main className="set-body">
-        <SectionContent section={activeSection} />
-      </main>
-    </div>
+    <SettingsSaveErrorProvider>
+      <div className="set-page">
+        <SectionNav
+          sections={sections}
+          activeSection={activeSection}
+          onSelect={(section) => setActiveSection(() => section)}
+        />
+        <main className="set-body">
+          {/* 页面级保存失败出口：所有面板的写失败都路由到这一条，文案是后端原文 */}
+          <SettingsSaveErrorBanner />
+          <SectionContent section={activeSection} />
+        </main>
+      </div>
+    </SettingsSaveErrorProvider>
   );
 }
 
