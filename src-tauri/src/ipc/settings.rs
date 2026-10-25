@@ -2281,24 +2281,57 @@ mod tests {
         assert_eq!(map["image_height_px"], serde_json::json!(40));
     }
 
-    /// P5-8 验收：语法损坏的文件在写入前被备份，且新文件只含本次写入的键。
+    /// P5-8 验收：语法损坏的文件 → setter **返回中文 Err 并拒写**，原文件逐字节不变，
+    /// 同时留一份备份（带时间戳）。
+    ///
+    /// 拒写而不是「从空对象重建」：无法解析的文件里可能全是用户的真实设置，
+    /// 重建后写回等于把它们删掉。错误文案要能直接给用户看，所以断言中文关键句与备份名。
     #[test]
-    fn setter_backs_up_syntax_broken_file_before_writing() {
-        let file = NamedTempFile::new().unwrap();
-        std::fs::write(file.path(), "{ this is not json").unwrap();
+    fn setter_rejects_syntax_broken_file_and_keeps_it_intact() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        let original = "{ this is not json";
+        std::fs::write(&path, original).unwrap();
 
-        set_theme_impl("dark", file.path()).unwrap();
+        let err = set_theme_impl("dark", &path).expect_err("损坏文件必须拒写");
 
-        let backup = crate::settings::backup_path_for(file.path());
-        assert_eq!(
-            std::fs::read_to_string(&backup).unwrap(),
-            "{ this is not json",
-            "原文件内容必须完整进备份"
+        assert!(
+            err.contains("已拒绝写入") && err.contains("修复"),
+            "IPC 错误文案必须可读，实际：{err}"
         );
-        let written: serde_json::Value =
-            serde_json::from_str(&std::fs::read_to_string(file.path()).unwrap()).unwrap();
-        assert_eq!(written, serde_json::json!({"theme": "dark"}));
-        std::fs::remove_file(&backup).ok();
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            original,
+            "拒写后原文件必须逐字节不变"
+        );
+
+        let backups: Vec<std::path::PathBuf> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(|entry| entry.ok())
+            .map(|entry| entry.path())
+            .filter(|path| {
+                path.file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| {
+                        name.starts_with("settings.json.") && name.ends_with(".bak")
+                    })
+            })
+            .collect();
+        assert_eq!(backups.len(), 1, "应留一份备份，实际：{backups:?}");
+        assert_eq!(
+            std::fs::read_to_string(&backups[0]).unwrap(),
+            original,
+            "备份必须是原文件完整副本"
+        );
+        assert!(
+            err.contains(
+                backups[0]
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .unwrap()
+            ),
+            "错误文案应带上备份文件名，实际：{err}"
+        );
     }
 
     /// P5-8 读侧验收：同文件里有个坏字段时，读别的字段仍拿得到真实值。

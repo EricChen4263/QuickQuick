@@ -15,6 +15,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use thiserror::Error;
 
 use crate::privacy::ExcludeMode;
@@ -28,6 +29,14 @@ pub enum SettingsError {
     /// 文件 I/O 失败
     #[error("应用设置文件读写失败：{0}")]
     IoError(#[from] std::io::Error),
+    /// 文件存在但无法解析为 JSON 对象：**拒绝写入**，避免把用户设置覆盖成空对象/默认值。
+    ///
+    /// `Display` 就是要给用户看的文案：它经命令层 `to_string()` 原样传到前端。
+    /// `backup` 是留痕副本的路径（带时间戳），提示里带上，方便用户去修。
+    #[error(
+        "settings.json 无法解析（{reason}），已拒绝写入以免覆盖你的设置；请先修复该文件，本次未改动原文件。备份副本：{backup}"
+    )]
+    Unparsable { reason: String, backup: PathBuf },
 }
 
 fn default_selected_provider() -> String {
@@ -322,15 +331,35 @@ impl AppSettings {
             Err(err) => return (Self::default(), vec![format!("读取设置文件失败：{err}")]),
         };
 
-        match serde_json::from_str::<Value>(&content) {
-            Ok(Value::Object(map)) => Self::from_json_object_lenient(&map),
+        let (settings, problems, whole_file_fallback) = Self::lenient_from_json_str(&content);
+        if whole_file_fallback {
+            // 整份回退 = 用户的设置这一轮全部按默认值生效，必须留痕；
+            // 但读盘可能每约 500ms 一次，所以只提示一次（见 warn_corrupt_settings_once）。
+            warn_corrupt_settings_once(&CORRUPT_SETTINGS_WARNED, &problems);
+        }
+        (settings, problems)
+    }
+
+    /// 把整份 JSON 文本按字段级容错解析。
+    ///
+    /// 返回 `(设置, 问题清单, 是否整份回退)`：第三项为真表示语法损坏 / 根不是对象，
+    /// 此时所有字段都取了默认值——读路径据此决定要不要打「启动期一次性提示」。
+    /// 字段级坏值不算整份回退（只有那个字段回默认）。
+    fn lenient_from_json_str(content: &str) -> (Self, Vec<String>, bool) {
+        match serde_json::from_str::<Value>(content) {
+            Ok(Value::Object(map)) => {
+                let (settings, problems) = Self::from_json_object_lenient(&map);
+                (settings, problems, false)
+            }
             Ok(_) => (
                 Self::default(),
-                vec!["设置文件根不是 JSON 对象".to_string()],
+                vec!["设置文件根不是 JSON 对象，整份按默认值生效".to_string()],
+                true,
             ),
             Err(err) => (
                 Self::default(),
-                vec![format!("设置文件 JSON 语法错误：{err}")],
+                vec![format!("设置文件 JSON 语法错误，整份按默认值生效：{err}")],
+                true,
             ),
         }
     }
@@ -413,6 +442,30 @@ impl AppSettings {
     }
 }
 
+/// 进程级「已提示过设置文件损坏」标记。
+///
+/// 读盘在入库轮询里每约 500ms 发生一次；没有它，一个坏文件会把 stderr 刷成每秒两行。
+static CORRUPT_SETTINGS_WARNED: AtomicBool = AtomicBool::new(false);
+
+/// 整份回退时打一次提示（同一进程只打一次）。
+///
+/// `flag` 由调用方注入：生产传进程级 [`CORRUPT_SETTINGS_WARNED`]，
+/// 测试可传局部标记来验证「第一次 true、第二次 false」而不受其它用例影响。
+/// 返回本次是否真的打印了。
+fn warn_corrupt_settings_once(flag: &AtomicBool, problems: &[String]) -> bool {
+    if flag.swap(true, Ordering::Relaxed) {
+        return false;
+    }
+    let reason = problems
+        .first()
+        .map(String::as_str)
+        .unwrap_or("内容无法解析");
+    eprintln!(
+        "[QuickQuick] settings.json {reason}；本次按默认设置运行（该提示只打一次）。请修复该文件后重启应用。"
+    );
+    true
+}
+
 /// 同名字段宽松读取：缺失或解析失败返回 `fallback`，失败时把字段名与原因记进 `problems`。
 fn read_field<T: serde::de::DeserializeOwned>(
     map: &Map<String, Value>,
@@ -432,17 +485,53 @@ fn read_field<T: serde::de::DeserializeOwned>(
     }
 }
 
-/// 与某个设置文件同目录的备份文件名：`settings.json` → `settings.json.bak`。
-pub fn backup_path_for(path: &Path) -> PathBuf {
+/// 与某个设置文件同目录的备份文件名：`settings.json` → `settings.json.<unix_ms>.bak`。
+///
+/// 带时间戳是为了**不覆盖已有备份**：连续两次损坏应当留下两份留痕，而不是后一份把前一份顶掉。
+pub fn backup_path_for(path: &Path, unix_ms: i64) -> PathBuf {
     let mut name = path.file_name().unwrap_or_default().to_os_string();
-    name.push(".bak");
+    name.push(format!(".{unix_ms}.bak"));
     path.with_file_name(name)
 }
 
-/// 读 settings.json 为 JSON 对象；文件不存在返回空对象。
+/// 当前 unix 毫秒时间戳（只用于备份文件名；取不到时间时退化为 0，仍能生成备份）。
+fn now_unix_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_millis() as i64)
+        .unwrap_or(0)
+}
+
+/// 选一个尚未占用的备份路径：`<ms>.bak` 已存在时依次试 `<ms>-1.bak`、`<ms>-2.bak`…
 ///
-/// 文件存在但**语法损坏 / 根不是对象**时：先把原文件备份为 `settings.json.bak`，
-/// 再从空对象开始。备份失败直接返回 Err——宁可不写，也不能在没有备份的情况下覆盖用户原文件。
+/// 同一毫秒内连续触发（例如两次坏文件写入）也不会互相覆盖。
+fn unique_backup_path(path: &Path) -> Result<PathBuf, SettingsError> {
+    let now_ms = now_unix_ms();
+    let first = backup_path_for(path, now_ms);
+    if !first.exists() {
+        return Ok(first);
+    }
+    for suffix in 1..1000 {
+        let mut name = path.file_name().unwrap_or_default().to_os_string();
+        name.push(format!(".{now_ms}-{suffix}.bak"));
+        let candidate = path.with_file_name(name);
+        if !candidate.exists() {
+            return Ok(candidate);
+        }
+    }
+    Err(SettingsError::IoError(std::io::Error::new(
+        std::io::ErrorKind::AlreadyExists,
+        "备份文件过多，拒绝继续写入以免覆盖留痕",
+    )))
+}
+
+/// 读 settings.json 为 JSON 对象；文件不存在返回空对象（首次写就是新建）。
+///
+/// 文件存在但**语法损坏 / 根不是对象**时：先备份留痕，然后**拒绝写入**（返回
+/// [`SettingsError::Unparsable`]）。理由：无法解析的文件里可能全是用户的真实设置，
+/// 从空对象重建再写回去等于把它们删掉；宁可让用户看到明确错误去修，也不静默覆盖。
+///
+/// 备份失败（目录只读等）同样返回 Err，且原文件一个字节都不动。
 fn read_settings_object_for_write(path: &Path) -> Result<Map<String, Value>, SettingsError> {
     let content = match std::fs::read_to_string(path) {
         Ok(content) => content,
@@ -450,18 +539,23 @@ fn read_settings_object_for_write(path: &Path) -> Result<Map<String, Value>, Set
         Err(err) => return Err(SettingsError::IoError(err)),
     };
 
+    // 空文件（0 字节 / 只有空白）按「还没有任何设置」处理，不当作损坏：
+    // 它里面没有可丢的用户数据，`touch settings.json` 后写第一次设置也不该被拒。
+    if content.trim().is_empty() {
+        return Ok(Map::new());
+    }
+
     match serde_json::from_str::<Value>(&content) {
         Ok(Value::Object(map)) => Ok(map),
         Ok(other) => {
-            backup_broken_settings(
-                path,
-                &format!("根是 {} 而不是 JSON 对象", value_kind(&other)),
-            )?;
-            Ok(Map::new())
+            let reason = format!("根是 {} 而不是 JSON 对象", value_kind(&other));
+            let backup = backup_broken_settings(path, &reason)?;
+            Err(SettingsError::Unparsable { reason, backup })
         }
         Err(err) => {
-            backup_broken_settings(path, &format!("JSON 语法错误（{err}）"))?;
-            Ok(Map::new())
+            let reason = format!("JSON 语法错误：{err}");
+            let backup = backup_broken_settings(path, &reason)?;
+            Err(SettingsError::Unparsable { reason, backup })
         }
     }
 }
@@ -478,28 +572,38 @@ fn value_kind(value: &Value) -> &'static str {
     }
 }
 
-/// 备份损坏的 settings.json 并留痕；备份失败返回 Err 以阻止后续写入。
-fn backup_broken_settings(path: &Path, reason: &str) -> Result<(), SettingsError> {
-    let backup = backup_path_for(path);
+/// 备份损坏的 settings.json 并留痕，返回备份路径；备份失败返回 Err。
+///
+/// 备份成功**也不继续写**——调用方会返回 [`SettingsError::Unparsable`] 拒写。
+/// 备份只是留痕，让用户能对照修；活文件保持原样。
+fn backup_broken_settings(path: &Path, reason: &str) -> Result<PathBuf, SettingsError> {
+    let backup = unique_backup_path(path)?;
     std::fs::copy(path, &backup)?;
     eprintln!(
-        "[QuickQuick] settings.json {reason}，已备份原文件到 {}，本次只写入要修改的键",
+        "[QuickQuick] settings.json {reason}，已备份原文件到 {}，并拒绝写入以免覆盖你的设置",
         backup.display()
     );
-    Ok(())
+    Ok(backup)
 }
 
 /// 以「读原始 JSON 对象 → 只改目标键 → 写回」的方式更新 settings.json。
 ///
 /// 与 [`AppSettings::save`] 的区别就是本函数存在的理由：**未知键与其他字段原样保留**。
-/// 于是「某个字段被写坏」不再演变成「整份设置被默认值覆盖」——
+/// 于是「某个字段的类型写坏」不再演变成「整份设置被默认值覆盖」——
 /// 写坏的键会留在文件里（用户可修），其余键一个字节都不动。
+///
+/// **前提（重要）**：当前设置类 IPC 全部是**同步**命令，Tauri 在同一条命令内串行执行，
+/// 所以这里的「读 → 改 → 写」没有加锁。若将来有命令改成 `async`（或在同一条命令里
+/// `await` 别的东西），两个并发写会互相吞掉对方的键——那时必须给本函数加互斥
+/// （例如进程级 `Mutex<()>` 或文件锁）。改 async 的人请连带补这条。
 ///
 /// 写完顺手体检一次已知字段：仍有解析失败的字段就 `eprintln` 留痕。
 /// 只在写入时体检而不是每次读盘，是为了不让入库轮询（约 500ms 一轮）刷日志。
 ///
 /// # Errors
-/// - `SettingsError::IoError`：读文件、备份或写文件失败（备份失败时不写）
+/// - `SettingsError::Unparsable`：文件存在但语法损坏/根不是对象 —— **拒写**（不丢键），
+///   备份已落盘，错误文案带备份路径
+/// - `SettingsError::IoError`：读文件、备份或写文件失败（备份失败时同样不写）
 /// - `SettingsError::SerdeError`：目标键的值无法序列化（只可能是调用方传了非法类型）
 pub fn update_settings_value<F>(path: &Path, mutate: F) -> Result<(), SettingsError>
 where
@@ -1011,31 +1115,151 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
-    /// 语法损坏的文件在写入前必须备份为 `settings.json.bak`，绝不静默覆盖。
+    /// 目录下所有备份文件（`settings.json.*.bak`）。
+    fn backup_files(dir: &Path) -> Vec<PathBuf> {
+        let mut found: Vec<PathBuf> = std::fs::read_dir(dir)
+            .expect("读临时目录失败")
+            .filter_map(|entry| entry.ok())
+            .map(|entry| entry.path())
+            .filter(|path| {
+                path.file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| {
+                        name.starts_with("settings.json.") && name.ends_with(".bak")
+                    })
+            })
+            .collect();
+        found.sort();
+        found
+    }
+
+    /// 语法损坏的文件：**备份留痕但拒写**，原文件字节不变、不丢一个键。
     #[test]
-    fn write_setting_field_backs_up_syntax_broken_file() {
+    fn write_setting_field_rejects_syntax_broken_file_and_keeps_it_intact() {
         let dir = std::env::temp_dir().join(format!("qq-settings-bak-{}", std::process::id()));
         std::fs::create_dir_all(&dir).expect("临时目录创建失败");
         let path = dir.join("settings.json");
-        let original = "{ broken json ";
-        std::fs::write(&path, original).expect("写临时设置文件失败");
+        let original = b"{ broken json ".to_vec();
+        std::fs::write(&path, &original).expect("写临时设置文件失败");
 
-        write_setting_field(&path, "theme", &"dark").expect("写字段失败");
+        let err = write_setting_field(&path, "theme", &"dark").expect_err("损坏文件必须拒写");
 
-        let backup = backup_path_for(&path);
+        assert!(
+            matches!(err, SettingsError::Unparsable { .. }),
+            "应是「无法解析」错误而不是 I/O 错误，实际：{err:?}"
+        );
+        let message = err.to_string();
+        assert!(
+            message.contains("已拒绝写入") && message.contains("修复"),
+            "错误文案要能直接给用户看，实际：{message}"
+        );
+
         assert_eq!(
-            std::fs::read_to_string(&backup).expect("备份文件应存在"),
+            std::fs::read(&path).expect("读回失败"),
+            original,
+            "拒写后原文件必须逐字节不变"
+        );
+
+        let backups = backup_files(&dir);
+        assert_eq!(backups.len(), 1, "应留一份备份，实际：{backups:?}");
+        assert_eq!(
+            std::fs::read(&backups[0]).expect("读备份失败"),
             original,
             "备份必须是原文件的完整副本"
         );
+        assert!(
+            message.contains(
+                backups[0]
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .expect("备份文件名非法 UTF-8")
+            ),
+            "错误文案应带上备份文件名，方便用户去找，实际：{message}"
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 连续两次损坏：两份备份都在（带时间戳 + 序号，不互相覆盖）。
+    #[test]
+    fn two_corrupt_writes_keep_two_backups() {
+        let dir = std::env::temp_dir().join(format!("qq-settings-bak2-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("临时目录创建失败");
+        let path = dir.join("settings.json");
+        std::fs::write(&path, "{ broken once ").expect("写临时设置文件失败");
+        write_setting_field(&path, "theme", &"dark").expect_err("第一次应拒写");
+
+        std::fs::write(&path, "{ broken twice ").expect("写临时设置文件失败");
+        write_setting_field(&path, "theme", &"dark").expect_err("第二次应拒写");
+
+        let backups = backup_files(&dir);
+        assert_eq!(backups.len(), 2, "两次损坏应留两份备份，实际：{backups:?}");
+        let contents: Vec<String> = backups
+            .iter()
+            .map(|path| std::fs::read_to_string(path).expect("读备份失败"))
+            .collect();
+        assert!(
+            contents.contains(&"{ broken once ".to_string())
+                && contents.contains(&"{ broken twice ".to_string()),
+            "两份备份应分别是两次的原内容，实际：{contents:?}"
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 备份失败（目录不可写）时：返回 Err 且原文件字节不变——绝不在没有留痕的情况下动活文件。
+    #[cfg(unix)]
+    #[test]
+    fn write_setting_field_aborts_when_backup_fails() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = std::env::temp_dir().join(format!("qq-settings-bakfail-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("临时目录创建失败");
+        let path = dir.join("settings.json");
+        let original = b"{ broken json ".to_vec();
+        std::fs::write(&path, &original).expect("写临时设置文件失败");
+
+        // 目录设为只读：备份 copy 无法在目录里创建新文件（不能预建同名目录，因为备份名带时间戳）
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o555))
+            .expect("设置目录只读失败");
+
+        let result = write_setting_field(&path, "theme", &"dark");
+
+        // 先恢复权限，保证清理与后续断言可靠
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755))
+            .expect("恢复目录权限失败");
+
+        let err = result.expect_err("备份失败必须拒写");
+        assert!(
+            matches!(err, SettingsError::IoError(_)),
+            "备份失败应是 I/O 错误，实际：{err:?}"
+        );
+        assert_eq!(
+            std::fs::read(&path).expect("读回失败"),
+            original,
+            "备份失败时原文件必须逐字节不变"
+        );
+        assert!(backup_files(&dir).is_empty(), "备份失败时不该留下半份备份");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 空文件（`touch settings.json`、被截断到 0 字节）按「还没有设置」处理：
+    /// 允许写入，不当成损坏拒写，也不留无意义备份。
+    #[test]
+    fn write_setting_field_accepts_empty_file() {
+        let dir = std::env::temp_dir().join(format!("qq-settings-empty-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("临时目录创建失败");
+        let path = dir.join("settings.json");
+        std::fs::write(&path, "  \n").expect("写临时设置文件失败");
+
+        write_setting_field(&path, "theme", &"dark").expect("空文件应允许写入");
+
+        assert!(backup_files(&dir).is_empty(), "空文件不该留备份");
         let written: Value =
             serde_json::from_str(&std::fs::read_to_string(&path).expect("读回失败"))
                 .expect("回写内容必须是合法 JSON");
-        assert_eq!(
-            written,
-            serde_json::json!({"theme": "dark"}),
-            "损坏文件从空对象重建，只含本次写入的键"
-        );
+        assert_eq!(written, serde_json::json!({"theme": "dark"}));
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -1048,8 +1272,39 @@ mod tests {
 
         write_setting_field(&path, "stay_in_tray", &false).expect("写字段失败");
 
-        assert!(!backup_path_for(&path).exists(), "首次创建不该留 .bak");
+        assert!(backup_files(&dir).is_empty(), "首次创建不该留备份");
         assert!(!AppSettings::load_or_default(&path).stay_in_tray);
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 整份回退的判定：语法坏/根不是对象 → 需要提示；字段级坏值 → 不需要。
+    #[test]
+    fn whole_file_fallback_flag_only_set_for_unparsable_content() {
+        let (settings, problems, whole) = AppSettings::lenient_from_json_str("{ broken ");
+        assert!(whole, "语法坏必须标记为整份回退");
+        assert_eq!(settings.sort_order, SortOrder::Recent);
+        assert_eq!(problems.len(), 1);
+
+        let (_, _, whole_root) = AppSettings::lenient_from_json_str("[]");
+        assert!(whole_root, "根不是对象也算整份回退");
+
+        let (settings, problems, whole_field) =
+            AppSettings::lenient_from_json_str(r#"{"sort_order":"by_magic","theme":"light"}"#);
+        assert!(!whole_field, "只有字段坏时不算整份回退");
+        assert_eq!(settings.theme, "light", "好字段照常生效");
+        assert_eq!(problems.len(), 1);
+    }
+
+    /// 启动期提示只打一次：注入局部标记验证「第一次 true、第二次 false」。
+    #[test]
+    fn corrupt_settings_warning_is_emitted_only_once() {
+        let flag = AtomicBool::new(false);
+        let problems = vec!["设置文件 JSON 语法错误".to_string()];
+
+        assert!(warn_corrupt_settings_once(&flag, &problems), "第一次应打印");
+        assert!(
+            !warn_corrupt_settings_once(&flag, &problems),
+            "第二次必须被去重（读盘每约 500ms 一轮，不能刷屏）"
+        );
     }
 }
