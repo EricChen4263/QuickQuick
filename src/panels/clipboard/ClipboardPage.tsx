@@ -118,6 +118,13 @@ function ClipboardPage({ onTranslateItem }: ClipboardPageProps) {
   const [items, setItems] = useState<ClipItem[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [opError, setOpError] = useState<string | null>(null);
+  /**
+   * 自启开关的保存失败文案（后端原文）。
+   *
+   * 与 `opError` 分开是有意的：`opError` 是面板级「某次操作失败」的共用槽位，
+   * 若自启成功就清它，会把删除/粘贴等其它操作的失败原因一起抹掉。
+   */
+  const [launchOnLoginError, setLaunchOnLoginError] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [typeFilter, setTypeFilter] = useState<HistoryFilter>("all");
   const [highlightIndex, setHighlightIndex] = useState(0);
@@ -476,14 +483,19 @@ function ClipboardPage({ onTranslateItem }: ClipboardPageProps) {
    *
    * 只提示不回滚等于「界面撒谎」：开关停在用户点的位置，实际偏好没变，
    * 下次重启又变回去，用户无从判断到底生效了没有。与设置页通用面板的处理保持一致。
+   * 成功后清掉本开关的旧失败文案——否则修好一次之后，那条错误会一直挂在那里。
    */
   function handleLaunchOnLoginChange(enabled: boolean): void {
     const previous = launchOnLogin;
     setLaunchOnLoginPreference(enabled);
-    void setLaunchOnLogin(enabled).catch((err: unknown) => {
-      setLaunchOnLoginPreference(previous);
-      setOpError(err instanceof Error ? err.message : String(err));
-    });
+    void setLaunchOnLogin(enabled)
+      .then(() => {
+        setLaunchOnLoginError(null);
+      })
+      .catch((err: unknown) => {
+        setLaunchOnLoginPreference(previous);
+        setLaunchOnLoginError(err instanceof Error ? err.message : String(err));
+      });
   }
 
   async function handlePasteToFront(item: ClipItem): Promise<void> {
@@ -514,12 +526,12 @@ function ClipboardPage({ onTranslateItem }: ClipboardPageProps) {
 
   return (
     <div className="clip-page" data-hit-style={appearance.highlightStyle}>
-      {opError !== null && (
+      {(launchOnLoginError ?? opError) !== null && (
         <div
           role="alert"
           style={{ gridColumn: "1 / -1", padding: "8px 12px", color: "var(--danger)", background: "var(--surface)" }}
         >
-          {opError}
+          {launchOnLoginError ?? opError}
         </div>
       )}
       {pasteMsg !== null && (

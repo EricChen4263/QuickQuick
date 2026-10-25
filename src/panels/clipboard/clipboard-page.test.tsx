@@ -575,6 +575,32 @@ describe("clipboard-page", () => {
     expect(screen.getByRole("checkbox", { name: /登录时自动启动/ })).toBeChecked();
   });
 
+  it("clipboard-page: 自启开关第一次失败后第二次成功，失败文案被清除（P5-8）", async () => {
+    mockListClipItems.mockResolvedValue(MOCK_ITEMS);
+    localStorage.removeItem("qq-onboard-finished");
+    localStorage.removeItem("qq-onboard-dismissed");
+    vi.mocked(setLaunchOnLogin).mockRejectedValueOnce(new Error("autostart 写入失败：已拒绝写入"));
+    vi.mocked(setLaunchOnLogin).mockResolvedValueOnce(undefined);
+    const user = userEvent.setup();
+    render(<ClipboardPage />);
+
+    await waitForListReady();
+    for (let step = 0; step < 4; step += 1) {
+      const next = screen.queryByRole("button", { name: "下一步" });
+      if (next === null) break;
+      await user.click(next);
+    }
+    const toggle = await screen.findByRole("checkbox", { name: /登录时自动启动/ });
+
+    // 第一次：失败 → 错误文案出现
+    await user.click(toggle);
+    expect(await screen.findByRole("alert")).toHaveTextContent("已拒绝写入");
+
+    // 第二次：成功 → 旧失败文案必须消失（不是「一直挂着」）
+    await user.click(screen.getByRole("checkbox", { name: /登录时自动启动/ }));
+    await waitFor(() => expect(screen.queryByRole("alert")).not.toBeInTheDocument());
+  });
+
   it("clipboard-page: OnboardCard「前往系统设置」调用 openAccessibilitySettings", async () => {
     mockListClipItems.mockResolvedValue(MOCK_ITEMS);
     localStorage.removeItem("qq-onboard-dismissed");
