@@ -135,3 +135,17 @@ Maccy 只有一条全局列表，没有分组，所以它的 `firstCopiedAt` 天
 - `settings.rs::legacy_highlight_default_value_falls_back_to_bold`：旧高亮值 `"default"` 不做 serde alias，读路径回退默认档 `bold` 并计入字段级问题清单。
 
 **最终复核（`902f7d5`）**：前端全量 **81 files / 871 passed**，设置相关子集 **45 files / 495 passed**，`tsc` 退出 0；`cargo test` **855 passed / 0 failed**，`cargo test settings` **111 passed**，`cargo fmt --check` 与 `clippy -D warnings` 干净。
+
+## 补记四：复审两条（settings）+ clipboard flake（commit `30de19d` / `8c9fbd7`）
+
+**settings 复审两条**（`30de19d`）：
+1. **空文件读写一致**：读路径 `lenient_from_json_str` 对 0 字节/纯空白直接返回默认值，不计入整份回退、不产生问题清单、不消耗 `CORRUPT_SETTINGS_WARNED`——此前空文件会被当成「语法错误」并吃掉那唯一一次提示（写路径早已按空对象处理，两侧终于同口径）。
+2. **提示复位**：提示逻辑抽成 `apply_corrupt_warning(flag, whole_file_fallback, problems)`——整份回退只提示一次；**成功解析为 JSON 对象（含只有字段级坏值）时复位标记**，于是「损坏→提示→修复→再损坏→再次提示」成立。否则同一进程里用户修过一次之后，再坏就永久静默。
+3. 台账两处表述订正：`-1/-2` 序号是**同一毫秒内的重名冲突计数**，不是备份总量上限；同内容备份不去重（只在用户主动操作时产生、增长缓慢，暂不改）。
+4. 测试（注入局部 `AtomicBool`，风格不变）：只提示一次、修复后复位再损坏可再提示、空文件不算整份回退且不消耗提示机会、`load_lenient` 完整链路（空文件零问题 → 随后损坏报 1 条）。
+
+**clipboard-page flake**（`8c9fbd7`，仅测试侧）：
+- 根因：`waitFor` 谓词用 `screen.getAllByText("Hello World")`，会被**预览区**提前满足；挂载期 `renderCount` 被清零 → 列表某提交 0 行、预览已有首条 → 断言落在中间提交，随 RTL 收尾 `setTimeout(0)` 与 React 调度先后抖动。搜索/类型筛选用例则是**靠预览区的未切分原文**才通过（列表里命中片段被 `<mark>` 切开了）。
+- 修法：`waitForListReady()`（`findByRole("listbox")` + 在子树内等首行）替换全文 33 处同模式就绪门；首条用例三条断言并入同一 `waitFor`；筛选类断言改「行数 + 整行 `textContent`」。
+- 业务代码未改。`total=0` 时把 `renderCount` 清成 0 的缺陷本身**未修**，已登记到 P4-2（需先补 `total=0` 单测）。
+- 验收：单文件 37 passed；**14 路并发各跑一次全部通过**（14 × 37）；`tsc` 0；全量 871 passed 连跑两次。反证：把就绪门期望文本改成不存在 → 报 `Unable to find an element with the text: …`（真回归仍会红）。
