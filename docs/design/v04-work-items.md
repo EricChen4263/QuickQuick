@@ -227,7 +227,7 @@
 - **补真虚拟滚动的触发信号**：用户库常态到数千条**且真机滚动掉帧**；届时需要先解决「行高可变」的测量问题（`ResizeObserver` 或测量缓存），不能靠固定行高糊过去。
 - **未验证**：真机滚动流畅度、`⌘↑`/`⌘↓` 真机键位；`PopoverList` 仍是全量渲染（分组标题 + 扁平索引是另一套模型，未做）。
 - **P5-5 审查挂号约束**：若分页落地，`first_copied` 排序（P5-5）只能在已取回页内稳定重排，跨页顺序会错乱；分页时须改为 SQL 层排序或服务端全量重排。当前全量取回无 LIMIT，不是 bug。
-- **挂载期清零（已修，commit `93ef41b`）**：`ClipboardPage` 驱动扩窗的 effect 是无条件 `setRenderCount(prev => nextRenderCount(prev, safeHighlight, filteredItems.length))`，而 `nextRenderCount` 内部先 `clampToTotal(current, total)`——原先 **`total = 0`（挂载期条目还没取回）时窗口被压成 0**，违背「永不小于当前窗口」的契约，导致数据到达后的第一个提交渲染 0 行（下一提交才补齐）。**修法**（Maccy 无对应问题：HistoryListView 用 LazyVStack 惰性渲染，没有窗口状态）：`clampToTotal` 在 `total <= 0` 时保留窗口（只把负值收敛到 0），`initialRenderCount(0)` 取首屏块，`growRenderCount(current, 0)` 不变也不清零。**验收**：`render-window` 单测三种 total=0 取值；ClipboardPage 集成用例用 MutationObserver 断言「数据到达后的首个渲染批次即全部行」（反证：把 `clampToTotal` 改回旧实现 → snapshots 变 `[0,3]` 断言红）。测试侧 `waitForListReady` 保留不回退。
+- **挂载期清零（已修，commit `93ef41b`）**：`ClipboardPage` 驱动扩窗的 effect 是无条件 `setRenderCount(prev => nextRenderCount(prev, safeHighlight, filteredItems.length))`，而 `nextRenderCount` 内部先 `clampToTotal(current, total)`——原先 **`total = 0`（挂载期条目还没取回）时窗口被压成 0**，违背「永不小于当前窗口」的契约，导致数据到达后的第一个提交渲染 0 行（下一提交才补齐）。**修法**（Maccy 无对应问题：HistoryListView 用 LazyVStack 惰性渲染，没有窗口状态）：`clampToTotal` 在 `total <= 0` 时保留窗口（只把负值收敛到 0），`initialRenderCount(0)` 取首屏块，`growRenderCount(current, 0)` 不变也不清零。**验收**：`render-window` 单测三种 total=0 取值；ClipboardPage 集成用例用 MutationObserver 断言「数据到达后的首个渲染批次即全部行」（反证：把 `clampToTotal` 改回旧实现 → snapshots 变 `[0,3]` 断言红）。测试侧 `waitForListReady` 保留不回退。**补充（`8eb7a12`）**：反过来也有坑——窗口被滚到底扩到几百条后若列表被删空，回填时会一次性渲染几百行；现在「由非空变空」时收回首屏块并清空选中（`setHighlightIndex(0)`，否则回填后 highlightIndex 停在旧位置，窗口又为包住它扩回去）。该 effect 的声明顺序必须在扩窗 effect 之后（同一提交内后写者生效），注释与用例都锁住了这一点。
 
 ### P4-3 · 缩略图移出 IPC payload（消除 base64 全量重传）
 - **状态**：done
@@ -336,15 +336,20 @@
   5. **读盘失败也留痕（`af8563f`）**：`load_lenient` 的 I/O 失败（非「文件不存在」）此前只把原因写进返回值、没有任何日志；现在补一次 eprintln「settings.json 读取失败（…），本次使用默认设置」，并复用损坏提示的同一个去重标记（抽出 `warn_once` 公共实现）。**回退行为未变**：仍返回默认值、仍把问题记入清单。
   6. **读路径整份回退只提示一次，且解析成功即复位**：语法坏 / 根不是对象时读路径仍回退整份默认值（行为不变），但用进程级 `AtomicBool` 只打一次 `eprintln`（读盘每约 500ms 一轮，不能刷屏）；**一旦读到可解析的 JSON 对象就把标记复位**，使「损坏 → 提示 → 修复 → 再次损坏」还能再提示一次（否则同一进程里修过一次之后永久静默）；字段级坏值不触发该提示、但同样复位（文件已经能打开）。`apply_corrupt_warning` 的 flag 由调用方注入，测试可验证完整时序而不受其它用例干扰。Maccy 无对应；业界做法是启动期提示一次。
   7. **并发前提已写进代码文档**：`update_settings_value` 注释写明「当前设置类 IPC 全是同步命令，读改写无锁；若有命令改成 async 必须加互斥」。
-  8. **错误文案透到界面**（`7bbad50`）：外观面板四处保存失败、通用面板三个开关保存失败都改为显示**后端中文原文**（含「已拒绝写入……请先修复该文件，备份副本：settings.json.<ms>.bak」），不再只落 `console`；通用面板此前连提示都没有（表现为「点了没反应」）。其余面板（隐私 / 存储 / 热键 / 翻译源）仍显示各自的通用文案，**未统一**，见已知边界。
+  8. **错误文案透到界面**（`7bbad50`）：外观面板四处保存失败、通用面板三个开关保存失败都改为显示**后端中文原文**（含「已拒绝写入……请先修复该文件，备份副本：settings.json.<ms>.bak」），不再只落 `console`；通用面板此前连提示都没有（表现为「点了没反应」）。**本批补齐**（`93bb299`）：通道改为**按来源隔离**（`reportSaveError(source, msg)` / `clearSaveError(source)` / `runSave(source, action)`），六个面板全部带来源；失败显示后端原文、成功只清同源。其余补齐：通用面板挂载不再误清别处错误（D）、各开关错误互不覆盖（C）、无 Provider 时兜底改 `console.error` 不静默（G）、存储统计**读**失败改用面板内 `statsLoadError`、不冒充保存失败（J）。
+  9. **热键读取容错 + 修复指引**（`ae0727b`）：`HotkeyConfig::load_lenient` 逐键读到可用值；整份损坏时仍返回默认键位，并在 `corrupt { file, backupPath, hint }` 里给指引（读路径先做一次保护性备份，保证提示里的路径真实存在）。`get_hotkeys_impl` 不再返回 Err，面板在键位行上方展示「已备份到 X，请修复或删除该文件后重启」，**去掉「稍后重试」误导文案**，键位行照常渲染；`lib.rs` 启动期注册改用同一函数（K）。Maccy 无对应（UserDefaults 逐键、无整文件损坏形态）。
+  10. **同键早退先校验可写**（`7fe43b4`）：同键早退原本直接 `Ok(())` 跳过落盘校验，损坏文件下用户会以为改键成功；现在早退前 `ensure_writable_json_object`，损坏即走「备份 + 拒写」。回滚注销新键失败、改键后注销旧键失败都补 `eprintln` 留痕（返回值不变）。
+  11. **备份 prune 跳过刚创建的那份**（`a4543f9`）：时钟回拨时新备份时间戳可能小于旧备份，纯按时间排序会把它当最旧的删掉；`prune_backups(path, keep)` 显式排除 `keep`，时间源可注入（`backup_broken_settings_at`）便于测试模拟回拨。
 - **已知边界（两条失效路径必须区分清楚）**：
   - **JSON 语法错误 / 根不是对象 = 整份回退默认 + 启动期提示一次**：读路径拿不到任何字段（连哪个键都不知道），只能整份按默认运行；此时**写路径已经拒写**，所以默认值不会被写回文件——用户修好文件再重启即可。`03a84d0` 的提交描述写的是「坏字段不再连累整份设置」，那句话只覆盖**类型错误**，语法错误仍整份回退，这里更正以免误读。
   - **字段类型错误 = 字段级回退**：只有那个字段取默认值（并在写入路径体检时 `eprintln` 点名），其余字段原样生效；坏键的值**不会被自动改写**（自动"修"成默认值等于悄悄改用户设置）。
   - **备份滚动保留最近 5 份 + 同内容去重**（`3f00c05`）：Maccy 无备份概念，按业界做法只留最近 `BACKUP_KEEP_COUNT = 5` 份（新建后删最旧，删除失败只 eprintln）；与最近一份备份**字节相同则复用**、不新建。三个配置文件（settings / hotkey / autostart）共用同一套逻辑。
     序号上限的准确表述：`-1`/`-2`… 是**同一毫秒内的重名冲突计数**（最多试 1000 个名字），**不是备份总量上限**；跨毫秒的备份各自独立命名。
+  - **错误条位置**：设置页内容区顶部（页面级固定条），业界做法保留现状；**未做视觉验证**（窄窗口换行、长文案 + 备份路径的观感）——L。
+  - **热键回滚注销失败**（I）：只 `eprintln` 留痕、不改返回值。极端情况下新键仍处于注册状态，可能出现「改键失败但这个键仍能唤起」；日志可追踪，未做自动重试或注册状态回滚。
   - **备份与写入不是原子对**（先 copy 再 write）：极端情况下两次操作之间崩溃会留下完整 `.bak` + 未更新的原文件——**不会丢数据**。
-  - **写失败提示已全站统一**（`e9e73ad`，不再是边界）：Maccy 无对应逻辑（UserDefaults 写入没有失败路径）；按业界做法抽了页面级 `settings-save-error` 通道（Context + `runSave` + `SettingsSaveErrorBanner`），**六个面板全部接入**（通用 / 外观 / 隐私 / 存储 / 热键 / 翻译源），失败显示后端中文原文、成功自动清空，控件仍受控回滚（aria-checked 不撒谎）。降级说明：面板单独渲染（无 Provider）时通道走兜底实现，只 `console.warn` 不抛错。
-  - **hotkey.json / autostart.json 已改为逐键读写**（`1e5dde7`）：`AutostartConfig::save_enabled` / `HotkeyConfig::save_accelerator` 走通用 `update_json_object`，只改目标键、保留未知键与其他动作；语法坏 / 根非对象时先备份再**拒写**。热键 setter 的前置读取同步改成容错版（`HotkeyConfig::load_or_default`），否则损坏文件会在「注册新键之前」就失败，永远走不到「备份 + 拒写」分支；落盘失败仍先注销刚注册的新键。
+  - **写失败提示已全站统一**（`e9e73ad`，不再是边界）：Maccy 无对应逻辑（UserDefaults 写入没有失败路径）；按业界做法抽了页面级 `settings-save-error` 通道（Context + `runSave` + `SettingsSaveErrorBanner`），**六个面板全部接入**（通用 / 外观 / 隐私 / 存储 / 热键 / 翻译源），失败显示后端中文原文、成功自动清空，控件仍受控回滚（aria-checked 不撒谎）。降级说明：面板单独渲染（无 Provider）时通道走兜底实现——`reportSaveError` / `runSave` 改为 `console.error` 留痕（**不再 warn、不静默**，有测试锚定该分支），`runSave` 仍如实返回 `ok:false`。
+  - **hotkey.json / autostart.json 已改为逐键读写**（`1e5dde7`；**写路径逐键，读路径逐键于本批补齐** `ae0727b`）：`AutostartConfig::save_enabled` / `HotkeyConfig::save_accelerator` 走通用 `update_json_object`，只改目标键、保留未知键与其他动作；语法坏 / 根非对象时先备份再**拒写**。热键 setter 的前置读取同步改成容错版（`HotkeyConfig::load_or_default`），否则损坏文件会在「注册新键之前」就失败，永远走不到「备份 + 拒写」分支；落盘失败仍先注销刚注册的新键。
 - **验收（实跑）**：
   - 新增 Rust 用例：坏字段只回退自身（其余字段与 `problems` 清单）、语法坏文件读路径回退默认并留痕、缺文件不算问题、`Default` 与 serde 缺省值逐字段一致、单字段写入保留其他字段与未知键、**语法坏文件被拒写且原文件逐字节不变（同时留一份备份、错误文案带备份名）**、**连续两次损坏留两份备份**、**备份失败（目录只读）返回 Err 且原文件不变**、**整份回退标记只在语法坏/根非对象时置位**、**启动提示只打一次**、**空文件允许首次写入**、缺文件不产生备份；IPC 层：坏字段下 setter 保留其余字段（含坏键原样）、语法坏文件 setter 返回中文 Err 且文件不变、读侧兄弟字段坏掉不影响别的 getter、未知键保留。
   - `cargo test` → **855 passed / 0 failed**（`902f7d5` 上实跑）；`cargo test settings` 过滤跑 **111 passed**。

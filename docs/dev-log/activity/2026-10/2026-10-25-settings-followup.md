@@ -172,3 +172,32 @@ Maccy 只有一条全局列表，没有分组，所以它的 `firstCopiedAt` 天
 
 **复核（HEAD 上实跑）**：`cargo test` 869 passed / 0 failed、子集 `cargo test settings` 见汇报；
 前端 `tsc -b` 退出 0、全量 vitest 82 files / 881 passed（设置页级错误条新增 8 条用例后）。
+
+## 补记六：复审批次 A–L（`ae0727b` / `7fe43b4` / `dd0a913` / `a4543f9` / `93bb299` / `8eb7a12`）
+
+按「Maccy 有则照搬、无则业界」逐条落地：
+
+**A + K 热键读取容错**（`ae0727b`）：`HotkeyConfig::load_lenient` 逐键读到可用值，整份损坏时
+仍返回默认键位并附 `corrupt { file, backupPath, hint }`；读路径顺手做一次保护性备份，保证提示里的
+路径真实存在。`get_hotkeys_impl` 不再返回 Err，面板在键位行上方展示「已备份到 X，请修复或删除后重启」，
+删掉「稍后重试」。`lib.rs` 启动期注册改用同一函数——坏文件不再导致「没有热键可用」。
+
+**E + I 同键早退与回滚日志**（`7fe43b4`）：早退前先 `ensure_writable_json_object`，损坏即「备份 + 拒写」；
+回滚注销失败、改键后注销旧键失败都补 `eprintln`（返回值不变），残留风险记入台账边界。
+
+**F 备份 prune 防时钟回拨**（`a4543f9`）：`prune_backups(path, keep)` 显式排除刚创建的那份；
+时间源可注入（`backup_broken_settings_at`）。反证：去掉 `keep` 过滤后用例立刻红（「刚创建的备份必须还在」）。
+
+**C + B + D + G + J 错误条按来源隔离**（`93bb299`）：通道改为
+`reportSaveError(source, msg)` / `clearSaveError(source)` / `runSave(source, action)`，
+六个面板全部带来源；成功只清同源；`useGeneralSettings` 改为按开关分别记录 `saveErrors`，
+GeneralPanel 用 `reportedSources` 记住报过谁——挂载时不误清别处错误。无 Provider 时兜底改
+`console.error` 不静默；存储统计**读**失败改用面板内 `statsLoadError`，不再冒充保存失败。
+（G/B 并入本提交：同一模块与同一批成功路径的原子改写，拆开会出现编译不过的中间态。）
+
+**H 删空收回窗口**（`8eb7a12`）：`filteredItems` 由非空变空时收回首屏块并清空选中，
+避免「滚到底扩到 300 → 删空 → 回填」一次性渲染 300 行。反证：去掉收回那一行 → 用例红（300 ≠ 100）。
+注意该 effect 必须声明在扩窗 effect 之后（同提交内后写者生效），注释与用例都锁住了顺序。
+
+**一处过程失误**：`ae0727b` 里的测试写了 `len() >= 1` 触发 clippy `len_zero`，追了一个 `dd0a913` 修正——
+之后每轮提交前都先跑 clippy（不再在提交后才看）。
