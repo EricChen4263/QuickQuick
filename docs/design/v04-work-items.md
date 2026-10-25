@@ -227,6 +227,7 @@
 - **补真虚拟滚动的触发信号**：用户库常态到数千条**且真机滚动掉帧**；届时需要先解决「行高可变」的测量问题（`ResizeObserver` 或测量缓存），不能靠固定行高糊过去。
 - **未验证**：真机滚动流畅度、`⌘↑`/`⌘↓` 真机键位；`PopoverList` 仍是全量渲染（分组标题 + 扁平索引是另一套模型，未做）。
 - **P5-5 审查挂号约束**：若分页落地，`first_copied` 排序（P5-5）只能在已取回页内稳定重排，跨页顺序会错乱；分页时须改为 SQL 层排序或服务端全量重排。当前全量取回无 LIMIT，不是 bug。
+- **挂载期清零（既有缺陷，P6-2 flake 的根因，未修）**：`src/panels/clipboard/ClipboardPage.tsx` 里驱动扩窗的 effect 是无条件 `setRenderCount(prev => nextRenderCount(prev, safeHighlight, filteredItems.length))`，而 `nextRenderCount` 内部先 `clampToTotal(current, total)`——**`total = 0`（挂载期条目还没取回）时窗口被压成 0**，违背它自己注释承诺的「永不小于当前窗口」。后果：数据到达后的第一个提交里列表渲染 0 行（下一提交才补齐），任何「等列表出现某条文案」的测试都可能读到中间态。**修法方向**：`total === 0` 时保持窗口不动（或只在真实过滤条件变化时复位），并先补一条 `total=0` 的单测锚定契约，再改实现。本条为独立小项，P6-2 只修了测试侧。
 
 ### P4-3 · 缩略图移出 IPC payload（消除 base64 全量重传）
 - **状态**：done
@@ -383,7 +384,7 @@
   - 前端（74 文件 / 768 测试全绿）：lines **91.32%**（4908/5374）、branches **90.72%**（1301/1434）、functions **87.83%**（325/370）。洼地是形态而非测试少：`src/ipc` 48.48%（全量 Tauri 命令薄封装，测试只覆盖 UI 实际走到的命令）、三个 `main.tsx` 0%、`panels/translate/browser-api.ts` 18.18%（浏览器兜底路径在 jsdom 中无法触发）。
   - 后端（35 个测试二进制 / 771 测试全绿）：lines **85.44%**（12958/15166）、regions 84.98%、functions 79.40%；**Rust 侧不产出分支覆盖（branches 0/0），两端分支覆盖不可比**。洼地是必须真窗口 / 系统事件才能跑到的路径：`popover.rs` 14.29%、`lib.rs` 19.84%、`ipc/update.rs` 23.86%、`macos_paste.rs` 48.91%、`window_pos.rs` 57.32%。反向证据：`tray.rs` 因 P5-1 补了菜单测试，从 19.74% 抬到 58.19%，基线对「补测试」敏感。
 - **两个工具层面的坑（已实测，写进 Makefile）**：① `cargo llvm-cov` 不能同时给 `--html` 与 `--lcov`，需先跑一次测试，再用 `cargo llvm-cov report` 复用缓存出各报告；② macOS 自带的 Apple LLVM 21 的 `llvm-profdata` 只认 raw profile v10，rustc 1.99.1 产出 v11，合并直接失败，必须用 rustup 的 `llvm-tools-preview`。
-- **未验证 / 未闭环**：① `coverage.yml` 未在真实 GitHub Actions 跑过（actionlint 1.7.7 通过），`taiki-e/install-action` 与 `rust-cache` 面对约 715MB 目录的行为未验证；② 脏工作树首跑出现 1 例 `clipboard-page.test.tsx` 富文本断言失败，单文件复跑与后续全量均绿，未复现、未定位，列为观察项；③ 基线是快照，trunk 前进后需按活动卡取数方式在干净 worktree 重跑，不可直接引用旧数字比较；④ 本机后端工具链是 `/tmp` 临时副本（沙箱限制），仓库侧硬性前提仅为 `llvm-tools-preview` 与 `cargo-llvm-cov`。
+- **未验证 / 未闭环**：① `coverage.yml` 未在真实 GitHub Actions 跑过（actionlint 1.7.7 通过），`taiki-e/install-action` 与 `rust-cache` 面对约 715MB 目录的行为未验证；② `clipboard-page.test.tsx` 富文本断言 flake **已定位并修（测试侧，commit `8c9fbd7`）**：根因是 `waitFor` 谓词用 `screen.getAllByText("Hello World")`，会被**预览区**提前满足——挂载期 `renderCount` 被清零让列表在某一提交里是 0 行、而预览已显示首条，随后被动 effect 才补齐，断言就落在中间提交上，结果随 RTL 收尾 `setTimeout(0)` 与 React 调度的先后抖动；同文件的搜索/类型筛选用例还依赖「预览区渲染未切分原文」才通过。修法：新增 `waitForListReady()`（先 `findByRole("listbox")` 再在**该子树内**等首行），全文 33 处同模式就绪门统一改用它，首条用例三条断言并入同一个 `waitFor`，筛选类断言改「行数 + 整行 `textContent`」。**业务代码未改**；`ClipboardPage` 挂载期把 `renderCount` 清成 0 的缺陷**未修**，已登记到 P4-2（需先补 `total=0` 单测）。验收：单文件 37 passed、14 路并发各一次全通过、全量 81 files / 871 passed；反证：把就绪门期望文本改成不存在时报 `Unable to find an element with the text: …`；③ 基线是快照，trunk 前进后需按活动卡取数方式在干净 worktree 重跑，不可直接引用旧数字比较；④ 本机后端工具链是 `/tmp` 临时副本（沙箱限制），仓库侧硬性前提仅为 `llvm-tools-preview` 与 `cargo-llvm-cov`。
 - **明确未做**：不设阈值、不接第三方覆盖率服务、不挂进 `make verify`。
 ### P6-3 · 死代码检测（knip / cargo-udeps）
 - **状态**：done（工具接入 + 基线清单 + 门禁分流；告警本身**零删除**，待裁决项见下）
