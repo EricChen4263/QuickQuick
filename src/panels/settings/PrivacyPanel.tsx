@@ -163,8 +163,8 @@ function PrivacyPanel() {
     try {
       await setExcludeList(newList);
       setExcludeListState(newList);
+      // 只清自己的来源：添加成功不该抹掉「删除失败」的原因，反之亦然
       clearSaveError("privacy.addApp");
-      clearSaveError("privacy.removeApp");
       setInputValue("");
     } catch (err) {
       reportSaveError("privacy.addApp", err);
@@ -176,7 +176,6 @@ function PrivacyPanel() {
     try {
       await setExcludeList(newList);
       setExcludeListState(newList);
-      clearSaveError("privacy.addApp");
       clearSaveError("privacy.removeApp");
     } catch (err) {
       reportSaveError("privacy.removeApp", err);
@@ -192,10 +191,9 @@ function PrivacyPanel() {
       await setIgnoreRegexes(newPatterns);
       setRegexPatterns(newPatterns);
       setRegexInput("");
-      clearSaveError("privacy.regexAdd");
-      clearSaveError("privacy.regexRemove");
+      clearSaveError("privacy.addRegex");
     } catch (err) {
-      reportSaveError("privacy.regexAdd", err);
+      reportSaveError("privacy.addRegex", err);
     }
   }
 
@@ -204,10 +202,9 @@ function PrivacyPanel() {
     try {
       await setIgnoreRegexes(newPatterns);
       setRegexPatterns(newPatterns);
-      clearSaveError("privacy.regexAdd");
-      clearSaveError("privacy.regexRemove");
+      clearSaveError("privacy.removeRegex");
     } catch (err) {
-      reportSaveError("privacy.regexRemove", err);
+      reportSaveError("privacy.removeRegex", err);
     }
   }
 

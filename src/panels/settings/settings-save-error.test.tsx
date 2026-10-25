@@ -61,7 +61,9 @@ vi.mock("@tauri-apps/api/event", () => ({
 }));
 
 import {
+  getExcludeList,
   getHotkeys,
+  setExcludeList,
   setLaunchOnLogin,
   setSkipSensitive,
   setSelectedProvider,
@@ -396,5 +398,27 @@ describe("各面板的保存失败都路由到页面级错误条", () => {
     // 同开关这次成功：错误条应当消失（清除发生在成功路径上，不依赖挂载时机）
     await user.click(await screen.findByRole("switch", { name: "开机自启动" }));
     await waitFor(() => expect(screen.queryByRole("alert")).not.toBeInTheDocument());
+  });
+
+  it("隐私：添加名单失败后删除成功，添加的错误不被抹掉（跨来源不误清）", async () => {
+    vi.mocked(setExcludeList).mockRejectedValueOnce(new Error("添加失败：已拒绝写入"));
+    vi.mocked(setExcludeList).mockResolvedValueOnce(undefined);
+    vi.mocked(getExcludeList).mockResolvedValue(["钉钉"]);
+    const user = userEvent.setup();
+    renderWithBanner(<PrivacyPanel />);
+
+    // 初始名单里有一条「钉钉」，删除按钮可用
+    const removeButton = await screen.findByRole("button", { name: /删除 钉钉/ });
+    const input = screen.getByPlaceholderText("应用名称（如 1Password）");
+    await user.type(input, "飞书");
+    await user.click(screen.getByRole("button", { name: "添加应用" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("添加失败：已拒绝写入");
+
+    // 删除成功：只清 privacy.removeApp，添加的错误必须还在
+    await user.click(removeButton);
+
+    await waitFor(() => expect(setExcludeList).toHaveBeenCalledTimes(2));
+    expect(screen.getByRole("alert")).toHaveTextContent("添加失败：已拒绝写入");
   });
 });
