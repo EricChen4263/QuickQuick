@@ -127,3 +127,11 @@ Maccy 只有一条全局列表，没有分组，所以它的 `firstCopiedAt` 天
 「已拒绝写入」与备份文件名出现在 UI 上——这条就是「IPC 错误没被吞」的证据。
 
 其余面板（隐私 / 存储 / 热键 / 翻译源）仍是各自的通用文案，统一成设置页级错误条属独立小项，未做，已登记在 P5-8 已知边界。
+
+## 补记三：两处契约锚定（commit `902f7d5`）
+
+审查里有两条属于「配置/注释」层面，原本无测试兜底，补了两个便宜但有效的锚：
+- `popover-style.test.ts`：读 `popover.css` 断言缩略图高度走 `--popover-thumb-height` 且 fallback = **40px**，并与前端常量 `DEFAULT_IMAGE_HEIGHT_PX` 逐值相等——审查指出的 `24px` 遗留由此锁死。
+- `settings.rs::legacy_highlight_default_value_falls_back_to_bold`：旧高亮值 `"default"` 不做 serde alias，读路径回退默认档 `bold` 并计入字段级问题清单。
+
+**最终复核（`902f7d5`）**：前端全量 **81 files / 871 passed**，设置相关子集 **45 files / 495 passed**，`tsc` 退出 0；`cargo test` **855 passed / 0 failed**，`cargo test settings` **111 passed**，`cargo fmt --check` 与 `clippy -D warnings` 干净。

@@ -344,8 +344,8 @@
   - `autostart.json`（单键）与 `hotkey.json`（三键）仍是整份读写，风险面小，**未纳入本轮**。
 - **验收（实跑）**：
   - 新增 Rust 用例：坏字段只回退自身（其余字段与 `problems` 清单）、语法坏文件读路径回退默认并留痕、缺文件不算问题、`Default` 与 serde 缺省值逐字段一致、单字段写入保留其他字段与未知键、**语法坏文件被拒写且原文件逐字节不变（同时留一份备份、错误文案带备份名）**、**连续两次损坏留两份备份**、**备份失败（目录只读）返回 Err 且原文件不变**、**整份回退标记只在语法坏/根非对象时置位**、**启动提示只打一次**、**空文件允许首次写入**、缺文件不产生备份；IPC 层：坏字段下 setter 保留其余字段（含坏键原样）、语法坏文件 setter 返回中文 Err 且文件不变、读侧兄弟字段坏掉不影响别的 getter、未知键保留。
-  - `cargo test` → **854 passed / 0 failed**（`6c2e7a7` 上实跑）；`cargo test settings` 过滤跑 **110 passed**。
-  - 前端：`tsc -b` 退出 0；设置相关 vitest 子集（settings + clip-popover + clipboard）**44 files / 492 passed**；全量 **80 files / 870 passed**（`7bbad50` 上实跑，含「后端错误显示到 UI」的新用例）。
+  - `cargo test` → **855 passed / 0 failed**（`902f7d5` 上实跑）；`cargo test settings` 过滤跑 **111 passed**。
+  - 前端：`tsc -b` 退出 0；设置相关 vitest 子集（settings + clip-popover + clipboard）**45 files / 495 passed**；全量 **81 files / 871 passed**（`902f7d5` 上实跑，含「后端错误显示到 UI」与「CSS fallback 契约」的新用例）。
   - **变异自证**：把 `write_setting_field` 改回「宽松读出整份设置 → 只改目标键 → 全量落盘」 → **红 5**（两份「保留其他字段 / 未知键」、两组「语法坏文件备份」、IPC 侧保留用例）。还原后绿、无残留。
 - **未验证**：真机上手工改坏 settings.json 后重启的表现（日志文案在打包 GUI 里是否可见——与 P4-7 同一限制）；Windows。
 
