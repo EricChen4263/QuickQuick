@@ -479,23 +479,20 @@ function ClipboardPage({ onTranslateItem }: ClipboardPageProps) {
   }
 
   /**
-   * 自启确认步骤切换：先更新界面，**写盘失败必须回滚**并显示后端原文。
+   * 自启确认步骤切换：**悲观更新**——先等后端写盘成功，再改界面。
    *
-   * 只提示不回滚等于「界面撒谎」：开关停在用户点的位置，实际偏好没变，
-   * 下次重启又变回去，用户无从判断到底生效了没有。与设置页通用面板的处理保持一致。
-   * 成功后清掉本开关的旧失败文案——否则修好一次之后，那条错误会一直挂在那里。
+   * 与设置页通用面板一致（那边也是 `await ipc(); setState(v)`），不做「先改界面再回滚」：
+   * 乐观 + 回滚需要额外的 previous 闭包，且中间那一帧界面已经撒谎（用户会看到开关闪一下）。
+   * 失败时界面保持已生效值不动，只把后端原文显示出来；成功时顺手清掉旧失败文案。
    */
-  function handleLaunchOnLoginChange(enabled: boolean): void {
-    const previous = launchOnLogin;
-    setLaunchOnLoginPreference(enabled);
-    void setLaunchOnLogin(enabled)
-      .then(() => {
-        setLaunchOnLoginError(null);
-      })
-      .catch((err: unknown) => {
-        setLaunchOnLoginPreference(previous);
-        setLaunchOnLoginError(err instanceof Error ? err.message : String(err));
-      });
+  async function handleLaunchOnLoginChange(enabled: boolean): Promise<void> {
+    setLaunchOnLoginError(null);
+    try {
+      await setLaunchOnLogin(enabled);
+      setLaunchOnLoginPreference(enabled);
+    } catch (err) {
+      setLaunchOnLoginError(err instanceof Error ? err.message : String(err));
+    }
   }
 
   async function handlePasteToFront(item: ClipItem): Promise<void> {

@@ -546,7 +546,7 @@ describe("clipboard-page", () => {
     });
   });
 
-  it("clipboard-page: 自启开关写盘失败时回滚界面并显示后端原文（P5-8）", async () => {
+  it("clipboard-page: 自启开关写盘失败时界面保持原值并显示后端原文（悲观更新，P5-8）", async () => {
     mockListClipItems.mockResolvedValue(MOCK_ITEMS);
     localStorage.removeItem("qq-onboard-finished");
     localStorage.removeItem("qq-onboard-dismissed");
@@ -570,9 +570,12 @@ describe("clipboard-page", () => {
     // Act：点掉自启（后端拒写）
     await user.click(toggle);
 
-    // Assert：界面回滚到已生效值（不再显示成已关闭），并展示后端原文
+    // Assert：悲观更新——界面从头到尾没动过（既没先变再回滚，也没停止在错误位置），
+    // 后端原文如实显示，且只发生过这一次写请求（失败即不再重试）
     await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("已拒绝写入"));
     expect(screen.getByRole("checkbox", { name: /登录时自动启动/ })).toBeChecked();
+    expect(setLaunchOnLogin).toHaveBeenCalledTimes(1);
+    expect(setLaunchOnLogin).toHaveBeenCalledWith(false);
   });
 
   it("clipboard-page: 自启开关第一次失败后第二次成功，失败文案被清除（P5-8）", async () => {
@@ -599,6 +602,41 @@ describe("clipboard-page", () => {
     // 第二次：成功 → 旧失败文案必须消失（不是「一直挂着」）
     await user.click(screen.getByRole("checkbox", { name: /登录时自动启动/ }));
     await waitFor(() => expect(screen.queryByRole("alert")).not.toBeInTheDocument());
+  });
+
+  it("clipboard-page: 自启开关是悲观更新——后端没返回前界面不动（P5-8）", async () => {
+    mockListClipItems.mockResolvedValue(MOCK_ITEMS);
+    localStorage.removeItem("qq-onboard-finished");
+    localStorage.removeItem("qq-onboard-dismissed");
+    let resolveWrite!: () => void;
+    vi.mocked(setLaunchOnLogin).mockReturnValueOnce(
+      new Promise<void>((resolve) => {
+        resolveWrite = resolve;
+      }),
+    );
+    const user = userEvent.setup();
+    render(<ClipboardPage />);
+
+    await waitForListReady();
+    for (let step = 0; step < 4; step += 1) {
+      const next = screen.queryByRole("button", { name: "下一步" });
+      if (next === null) break;
+      await user.click(next);
+    }
+    const toggle = await screen.findByRole("checkbox", { name: /登录时自动启动/ });
+    expect(toggle).toBeChecked();
+
+    // Act：点掉开关，但后端还没返回
+    await user.click(toggle);
+
+    // Assert：悲观更新 → 界面仍是「勾选」；乐观实现此刻已经把它关掉了
+    expect(screen.getByRole("checkbox", { name: /登录时自动启动/ })).toBeChecked();
+
+    // 后端成功后界面才跟上
+    resolveWrite();
+    await waitFor(() =>
+      expect(screen.getByRole("checkbox", { name: /登录时自动启动/ })).not.toBeChecked(),
+    );
   });
 
   it("clipboard-page: OnboardCard「前往系统设置」调用 openAccessibilitySettings", async () => {
