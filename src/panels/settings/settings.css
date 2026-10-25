@@ -114,8 +114,7 @@
   font-weight: 600;
 }
 
-.hotkey-corrupt-hint,
-.hotkey-corrupt-backup {
+.hotkey-corrupt-hint {
   overflow-wrap: anywhere;
 }
 

@@ -305,7 +305,10 @@ describe("各面板的保存失败都路由到页面级错误条", () => {
     // 修复指引可见，且指向真实备份路径
     expect(await screen.findByText("热键配置文件已损坏")).toBeInTheDocument();
     expect(screen.getByRole("alert")).toHaveTextContent("已备份到");
-    expect(screen.getByRole("alert")).toHaveTextContent("hotkey.json.1792899443151.bak");
+    // 路径只出现一次（就在 hint 文案里），不再单独渲染一行「备份副本：X」
+    const alertText = screen.getByRole("alert").textContent ?? "";
+    expect(alertText.match(/hotkey\.json\.1792899443151\.bak/g) ?? []).toHaveLength(1);
+    expect(alertText).not.toContain("备份副本：");
     expect(screen.getByRole("alert")).not.toHaveTextContent("稍后重试");
 
     // 键位行照常渲染（三行都能改键），不是「加载失败」整块替换

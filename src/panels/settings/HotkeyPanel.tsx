@@ -255,11 +255,6 @@ function HotkeyPanel() {
         <div className="hotkey-corrupt" role="alert">
           <span className="hotkey-corrupt-title">热键配置文件已损坏</span>
           <span className="hotkey-corrupt-hint">{hotkeys.corrupt.hint}</span>
-          {hotkeys.corrupt.backupPath !== null && (
-            <span className="hotkey-corrupt-backup">
-              备份副本：<code>{hotkeys.corrupt.backupPath}</code>
-            </span>
-          )}
         </div>
       )}
       <SettingGroup>
