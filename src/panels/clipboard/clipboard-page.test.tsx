@@ -141,6 +141,13 @@ describe("clipboard-page", () => {
       expect(listbox.textContent).not.toContain("富文本内容示例");
       expect(listbox.textContent).not.toContain("Another text item");
     });
+
+    // 预览区也必须跟随筛选结果（不只是左侧列表）：搜索后预览显示命中的那条文案。
+    // 反证方式：把预览来源从 filteredItems 换成未过滤的 items 时，这条会红。
+    const previewRegion = screen.getByRole("region", { name: "预览" });
+    await waitFor(() => {
+      expect(within(previewRegion).getByText("Hello World")).toBeInTheDocument();
+    });
   });
 
   it("clipboard-page: 类型筛选选 richtext 后只剩 richtext 条目", async () => {
@@ -161,6 +168,13 @@ describe("clipboard-page", () => {
       expect(rows[0].textContent).toContain("富文本内容示例");
       expect(listbox.textContent).not.toContain("Hello World");
       expect(listbox.textContent).not.toContain("Another text item");
+    });
+
+    // 预览区同样要跟着筛选走：筛 richtext 后预览必须是那条富文本，而不是筛前的首条。
+    // 反证：把预览来源从 filteredItems 换成未过滤的 items 时，这条会红。
+    const previewRegion = screen.getByRole("region", { name: "预览" });
+    await waitFor(() => {
+      expect(within(previewRegion).getByText("富文本内容示例")).toBeInTheDocument();
     });
   });
 
