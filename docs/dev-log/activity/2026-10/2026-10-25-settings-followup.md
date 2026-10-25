@@ -1,0 +1,100 @@
+---
+status: done
+category: implementation
+subject: Maccy 对标 · P5-5 收尾 + P5-8（逐键设置、分组口径、高亮/范围/tooltip 对齐 Maccy）
+summary: 按 Maccy 2.6.1 源码对齐四件事：① settings.json 改逐键读写（P5-8，坏字段只回退自己、写入只改目标键、语法坏文件先备份 .bak）；② 「首次复制」排序下弹窗分组改按 created_utc 划分今天/更早（Maccy 无分组，按「排序口径 = 分组口径」处理）；③ 高亮改 Maccy 的 color/bold/italic/underline 四档、默认 bold，图片高度默认 40 / 1–200，预览延迟上限放宽到 100000（两处默认视觉变化已在台账登记待真机确认）；④ 全部设置项补 tooltip 并写明默认值（默认值逐项从代码读出）。四个独立 commit，变异自证三轮（A 红 5、C 红 2 与 4）。
+evidence:
+  commits:
+    - "03a84d0 fix(settings): settings.json 改逐键读写，坏字段不再连累整份设置（P5-8）"
+    - "cd1af1f feat(settings): 高亮四档、图片高度与预览延迟范围对齐 Maccy（P5-5）"
+    - "e36db71 feat(popover): 「首次复制」排序下分组按 createdUtc 划分今天/更早（P5-5）"
+    - "8bb7ed1 feat(settings): 全部设置项补齐 tooltip 并写明默认值（P5-5）"
+  files:
+    - "src-tauri/src/settings.rs（load_lenient / from_json_object_lenient / write_setting_field / update_settings_value / 备份）"
+    - "src-tauri/src/ipc/settings.rs（16 个 setter 改逐键写；高亮四档解析与校验）"
+    - "src-tauri/src/ipc/clipboard.rs + tests/search_title.rs（DTO 加 createdUtc；payload 基线修订）"
+    - "src/clip-popover/grouping.ts（GroupBasis / groupingTimestamp）"
+    - "src/panels/settings/appearance-settings.ts + AppearancePanel.tsx（默认值/区间/四档）"
+    - "src/panels/settings/*.tsx（全部设置项 tooltip）+ settings-tooltips.test.tsx"
+  commands:
+    - "rtk pnpm exec tsc -b  # 退出 0"
+    - "rtk pnpm test  # 80 files / 868 passed"
+    - "cd src-tauri && cargo fmt --all --check  # 退出 0"
+    - "cd src-tauri && cargo clippy --all-targets -- -D warnings  # 干净"
+    - "cd src-tauri && cargo test  # 849 passed / 0 failed"
+  urls: []
+---
+
+# AI 活动记录 · P5-5 收尾 + P5-8（Maccy 对齐）
+
+## 数字出处（本次实跑，可复算）
+
+| 指标 | 数值 | 取数 commit | 命令 |
+|---|---|---|---|
+| 前端测试（最终） | **80 files / 868 passed** | `8bb7ed1` | `rtk pnpm test` |
+| 前端测试（P5-5 首轮末，对照） | 79 files / 853 passed | `5118cc6` | 同上 |
+| Rust 测试（最终） | **849 passed / 0 failed** | `8bb7ed1` | `cargo test` |
+| Rust 测试（P5-8 单独提交时） | 848 passed | `03a84d0` | 同上 |
+| Rust 测试（P5-5 首轮末，对照） | 838 passed | `5118cc6` | 同上 |
+| 列表 payload 基线（混合形态） | 2,105,877 → **2,159,877 B**（+54,000 B，+2.6%） | `e36db71` | `cargo test --test search_title` |
+| 列表 payload 基线（全多行形态） | 923,648 → **977,648 B**（+54,000 B，+5.8%） | `e36db71` | 同上 |
+| 变异①（整份写回）红测试数 | **5** | `03a84d0` + 变异 | `cargo test --lib settings` |
+| 变异②（图片高度默认 40→24）红测试数 | **2** | `8bb7ed1` + 变异 | `cargo test --lib settings` |
+| 变异③（高亮默认 bold→color）红测试数 | **4** | `8bb7ed1` + 变异 | `npx vitest run src/panels/settings …` |
+
+> payload 的 +54,000 B 是 **2000 行 × 27 B**（`"createdUtc":1792897518450,`）的固定成本，来自任务 B；`tests/search_title.rs` 的绝对基线数字与说明已同步修订，该测试仍守「不得再加 title」。
+
+## 摘要
+
+1. **P5-8 · settings.json 逐键读写**（`03a84d0`）：读走 `load_lenient`（逐字段容错，坏字段只回退自己并给出问题清单，`load_or_default` 是它的静默包装以免 500ms 轮询刷日志）；写走 `write_setting_field` / `update_settings_value`（读原始 JSON 对象 → 只改目标键 → 写回，未知键原样保留），16 个 setter 全改；语法坏文件**先备份 `settings.json.bak` 再写**（备份失败拒绝写入）。依据：Maccy 用 UserDefaults 逐键存储，一个坏键只影响它自己。
+2. **B · 「首次复制」的分组口径**（`e36db71`）：`first_copied` 下按 `created_utc` 划分「今天 / 更早」，`recent` 维持 `last_modified_utc`。Maccy **没有分组**（`Sorter.swift` 只做整体排序 + pin 置顶），所以这是「排序口径 = 分组口径」的业界常识解法，不是照抄。列表 DTO 因此加 `createdUtc`。
+3. **C · 三处对齐 Maccy**（`cd1af1f`）：高亮四档 `color/bold/italic/underline`、默认 `bold`（`HighlightMatch.swift` + `Defaults` 默认值 + `HistoryItemDecorator.swift:148-173` 的渲染分支）；图片高度默认 **40**、范围 **1–200**（`imageMaxHeight` / Stepper `1...200`）；预览延迟上限放宽到 **100_000**（Stepper `200...100_000`），默认 1500 不变。
+4. **D · 全部 tooltip**（`8bb7ed1`）：Maccy 每个设置项都有 `.help(...)`（全仓 17 处），按其约定给通用 3 + 外观 4 + 热键 3 + 翻译源 1 组 + 隐私 5 + 存储 6 全部补 tooltip 并写明默认值；默认值逐个从代码读出。
+
+## 两处有意的默认视觉变化（需真机确认）
+
+| 项 | 首轮（P5-5） | 现在（对齐 Maccy） | 依据 |
+|---|---|---|---|
+| 命中高亮默认 | 背景染色 + 加粗（自造 `default` 档） | **纯加粗、无背景**（`bold`） | `highlightMatch` 默认 `.bold` |
+| 弹窗缩略图默认高度 | 24px | **40px** | `imageMaxHeight` 默认 40 |
+
+首轮把高亮默认做成「背景+加粗」是自己的设计，不是 Maccy 的；删掉自造档后默认视觉必然变。两处都已写进 `docs/design/v04-work-items.md` P5-5 的「未验证 / 待人工」。
+
+## 三个实现判断
+
+### 1. 字段级容错为什么读路径不自动修坏键
+
+宽松解析只负责「让坏字段不连累别人」，**不改写文件**。把坏键自动"修"成默认值等于悄悄改用户设置，而且用户下次打开文件会以为自己的值从来没写错过。所以：读侧回退 + 留痕清单；写侧只动本次要改的键；坏键原地留着等人修。
+
+写后体检也只在**写路径**做（用户动作触发，低频），读热路径（入库轮询每约 500ms 一次）刻意不打日志——否则一个坏字段就是一秒两行 stderr。
+
+### 2. 分组口径不是抄 Maccy，而是「两处口径必须一致」
+
+Maccy 只有一条全局列表，没有分组，所以它的 `firstCopiedAt` 天然全局有序。我们多了「收藏 / 今天 / 更早」三层分组，**排序口径与分组口径一旦不一致，跨组顺序就不再单调**——首轮就是这个状态（按 created 排、却按 modified 归档），已登记为待裁决项。收尾按「两处同源」处理：同一个 `appearance.sortOrder` 同时决定后端排序键与前端分组时间戳，`recent` 档完全不变。
+
+### 3. 高亮 CSS 改成「基础规则只留公共属性 + 四分支」
+
+首轮是「`.clip-hit` 自带背景与字重 + 两档覆盖」，删掉自造默认档后这种写法会留下"默认档样式散落在基础规则里"的隐患。现在基础规则只有 `color: inherit; border-radius; padding`，四档各自一条 `data-hit-style` 分支——加第五档只需加一条分支，不会碰默认档。
+
+## 变异自证（三轮，均在最终树上做，还原后子集复跑全绿、无残留）
+
+| # | 变异 | 红测试 |
+|---|---|---|
+| ① | `write_setting_field` 改回「宽松读出整份设置 → 只改目标键 → 全量落盘」 | **5 条**：`setter_preserves_other_fields_when_one_field_is_invalid`、`setter_keeps_unknown_keys`、`setter_backs_up_syntax_broken_file_before_writing`、`write_setting_field_preserves_other_fields_and_unknown_keys`、`write_setting_field_backs_up_syntax_broken_file` |
+| ② | `DEFAULT_IMAGE_HEIGHT_PX` 40 → 24 | **2 条**：`settings::legacy_json_missing_appearance_fields_uses_pre_change_defaults`、`ipc::settings::get_appearance_settings_defaults_match_pre_change_behaviour` |
+| ③ | `DEFAULT_HIGHLIGHT_STYLE` `"bold"` → `"color"` | **4 条**：`appearance-settings` 默认值、下拉首项为默认档、`popover-appearance` 读取失败回退默认、`highlight-style` 读取失败回退默认 |
+
+## 已知边界
+
+- 坏字段的值不会被自动改写；`.bak` 每次覆盖不累积；`autostart.json` / `hotkey.json` 仍是整份读写（键少、未纳入本轮）。
+- 备份与写入不是原子对（先 copy 再 write）：中间崩溃会留下完整 `.bak` + 未更新的原文件，不丢数据。
+- tooltip 文案是硬编码中文：**改默认值必须同步改文案**，目前靠 `settings-tooltips.test.tsx` 的逐面板断言兜住明显缺漏（断言的是「有 tooltip 且写明默认口径」，不是把每个默认值都与 Rust 常量比对）。
+- `numberOfCopies` 排序依赖 P3-8 的 `copy_count`（迁移 v4），未做。
+
+## 未验证 / 待人工
+
+- **两处默认视觉变化**（高亮「纯加粗」、缩略图 40px）未在真机看过；`color` 档用 OKLCH accent token 替代 Maccy 的 `findHighlightColor`，观感差异也未验证。
+- 各档预览延迟（200ms / 1500ms / 100000ms）的实际体感、长列表切排序后的滚动位置、分组口径切换后的观感。
+- 打包 GUI 下的表现（含 P5-8 的 `eprintln` 留痕在打包应用里基本不可见——与 P4-7 同一限制）。
+- Windows 全链路（本项无平台相关代码，但未在 Windows 编译验证）。
+- **收尾三个 commit 未经独立审查**（首轮 `07fd8f6` 的审查结论为「非 BLOCK」，见台账）。

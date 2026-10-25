@@ -294,30 +294,52 @@
 - **验收**：22 条前端测试；Rust 侧 `tests/onboarding.rs`；全量 `cargo test` 与 vitest 通过（以 `7f72e43` 为准，见下方验证记录）。
 - **待人工**：系统辅助功能授权弹窗的实际行为、授权后即时恢复手感、打包 GUI 呈现。
 ### P5-5 · 设置项扩充（排序、图片高度、预览延迟、命中高亮、容量上限、弹出位置）
-- **状态**：done（commit `07fd8f6`）。本轮只做四项：排序方式、图片高度、首次预览延迟、命中高亮样式，外加这四项的「默认值 tooltip」。**容量上限归 P4-4（已完成，未重复做）**；**弹出位置归 P2-9（blocked）**；设置页搜索归 P5-7、i18n 归 P5-6；「按复制次数」排序依赖 P3-8 的 `copy_count` 列（迁移 v4），本轮不做。
-- **新增设置页子项「外观」**（设置页由 6 项变 7 项）：四个控件 + 四个默认值 tooltip（`SettingRow` 新增可选 `tooltip`，渲染为原生 `title`）。导航/sections 及其测试同步改成 7 项。
-- **排序方式**：`recent`（默认）/ `first_copied`。默认档**逐条等同改动前顺序**（直接沿用库里 `is_favorite DESC, last_modified_utc DESC, rowid DESC`，不做任何额外排序）；`first_copied` 按 `(is_favorite DESC, created_utc DESC)` 做**稳定重排**——同 key 沿用库顺序兜底，收藏优先级仍是第一键。**实现不在 SQL 里换 ORDER BY 列**：列表索引是 `(is_deleted, is_favorite, last_modified_utc)`，改按 `created_utc` 会退化成全表扫 + 临时 B-tree，而新建索引要动迁移/schema（本项明令禁止）。行数上界是历史条目上限（默认 500 / 最高 999），内存稳定排序代价可忽略。**不改去重、收藏、淘汰语义**；`pick_latest_translate_text_impl` 固定走 `recent`，翻译取数不随展示偏好漂移（有专门用例）。
-- **图片高度**：`image_height_px` 16–48（默认 **24**，与改动前 `.popover-row-thumb` 硬编码一致）。**只作用于弹出面板行内缩略图**（主窗口列表的 44×32 缩略图不受影响，故设置项标签写作「弹出面板图片高度」）；经 `.popover-shell` 上的 CSS 自定义属性 `--popover-thumb-height` 下发，宽度固定、`object-fit: cover` 裁切。
-- **首次预览延迟**：`preview_first_delay_ms` 200–5000（默认 **1500**，与改动前 `PREVIEW_FIRST_DELAY_MS` 同源引用，不再两处各写一个 1500）。只作用于「面板本次打开后的首个预览」；**后续切换固定 200ms，不开放配置**。弹窗在每次开面板（焦点回调递增会话序号）与收到列表刷新事件时重读设置。
-- **命中高亮样式**：`default`（背景 + 加粗，默认，与改动前视觉一致）/ `underline` / `bold`。实现是根容器上的 `data-hit-style` 属性 + CSS 覆盖，命中区间与 `<mark class="clip-hit">` 结构不变。主窗与弹窗共用同一设置。
-- **读写与校验**：新增 5 个 IPC（`get_appearance_settings` 一次读四项 + 4 个 setter）。写路径对非法枚举与越界数值**拒收且不落盘**（错误文案列全合法值/范围）；读路径再收敛一次（`effective_*`），兜手工改坏的 settings.json。前端另有 `normalizeAppearanceSettings` 在 IPC 边界归一，任一字段坏掉只回落该字段默认值。
-- **落盘后何时生效**：排序与命中高亮落盘后发既有的 `clipboard-changed`（该事件在本工程里就是「列表需要重新取数」的信号，先例是 `set_max_history_items` 淘汰后），主窗与弹窗立刻刷新；图片高度与预览延迟**不发**，避免为纯 CSS/时序变更白传一次列表 payload。
-- **验收（实跑，2026-10-25）**：
+- **状态**：done（首轮 `07fd8f6`；**收尾按 Maccy 2.6.1 源码对齐** `cd1af1f`（高亮/范围）、`e36db71`（分组口径）、`8bb7ed1`（全部 tooltip））。**容量上限归 P4-4**（已完成，未重复做）；**弹出位置归 P2-9（blocked）**；设置页搜索归 P5-7、i18n 归 P5-6。
+- **Maccy 对照依据（源码 `/tmp/maccy-src`，tag 2.6.1，commit `dec6601`）**：
+  - 排序：`Maccy/Sorter.swift` 只有 `lastCopiedAt`（默认）/ `firstCopiedAt` / `numberOfCopies`，且是**全局排序 + pin 单独置顶**，没有日期分组。
+  - 高亮：`Maccy/HighlightMatch.swift` 就是 `color / bold / italic / underline`；`Defaults.Keys+Names.swift` 里 `highlightMatch` 默认 `.bold`；渲染在 `Observables/HistoryItemDecorator.swift:148-173`（bold→加粗、italic→斜体、underline→下划线、color→`findHighlightColor` 整段染色）。
+  - 图片高度：`Defaults.Keys+Names.swift` 的 `imageMaxHeight` 默认 40；`Settings/AppearanceSettingsPane.swift:98` 的 Stepper 范围 `1...200`（输入框 formatter 另设 30–200 软约束，本项以 Stepper 为准）。
+  - 预览延迟：`previewDelay` 默认 1500，Stepper `200...100_000`（`AppearanceSettingsPane.swift:108`）；节流逻辑 `HistoryItemDecorator.swift:26-28` 是「首次 previewDelay、之后固定 0.2s」，与我们一致。
+  - 设置存储：Maccy 用 UserDefaults **逐键**存储——一个坏键只影响它自己 → 已落地为 P5-8。
+  - tooltip：Maccy 每个设置项都有 `.help(...)`（全仓 17 处，如 `AppearanceSettingsPane.swift:97` 的 `ImageHeightTooltip`）。
+- **新增设置页子项「外观」**（6 项 → 7 项，保留；对齐 Maccy 的 Appearance 面板）：四个控件 + 默认值 tooltip。导航 / `sections.ts` 及其测试同步改成 7 项。
+- **排序方式**：`recent`（默认）/ `first_copied` 两档。**`numberOfCopies` 本轮不做，已登记为「依赖 P3-8 的 `copy_count` 列（迁移 v4）」阻塞**。默认档**逐条等同改动前顺序**（直接沿用库里 `is_favorite DESC, last_modified_utc DESC, rowid DESC`，不做任何额外排序）；`first_copied` 按 `(is_favorite DESC, created_utc DESC)` 做**稳定重排**——同 key 沿用库顺序兜底，收藏优先级仍是第一键（Maccy 的 pin 同样置顶）。**实现不在 SQL 里换 ORDER BY 列**：列表索引是 `(is_deleted, is_favorite, last_modified_utc)`，改按 `created_utc` 会退化成全表扫 + 临时 B-tree，而新建索引要动迁移/schema（本项明令禁止）。**不改去重、收藏、淘汰语义**；`pick_latest_translate_text_impl` 固定走 `recent`，翻译取数不随展示偏好漂移（有专门用例）。
+- **分组口径（收尾决定）**：Maccy **没有分组**，分组是本项目自己的设计。按「排序口径与分组口径必须一致」处理：`first_copied` 时弹窗按 **`created_utc`** 划分「今天 / 更早」，跨组全局顺序成立；`recent` 维持 `last_modified_utc`（默认行为不变）。列表 DTO 因此增加 `createdUtc`（`camelCase`；Rust 侧有「首次入库时间 ≠ 最近复制时间」的断言），列表 payload 基线 **+54,000 B**（2000 行 × 27 B；混合形态 2,105,877 → **2,159,877 B = +2.6%**，全多行 923,648 → **977,648 B = +5.8%**），`tests/search_title.rs` 的基线数字与说明已同步修订（该测试仍守「不得再加 title」）。
+- **图片高度**：`image_height_px` **1–200（默认 40）**，对齐 Maccy 的 `imageMaxHeight`。**⚠️ 默认视觉变化（有意）**：由首轮的 24px 改为 40px，弹窗行内图片会变高——**待真机确认观感**。仍**只作用于弹出面板行内缩略图**（主窗口列表的 44×32 不受影响，故标签写作「弹出面板图片高度」）；经 `.popover-shell` 上的 CSS 自定义属性 `--popover-thumb-height` 下发，宽度固定、`object-fit: cover` 裁切。
+- **首次预览延迟**：`preview_first_delay_ms` **200–100_000（默认 1500 不变）**，上限照抄 Maccy；首轮曾收紧到 5000，**收尾按 Maccy 放宽**（「等太久等于没预览」只是观感偏好，不该替用户否决）。只作用于「面板本次打开后的首个预览」；**后续切换固定 200ms，不开放配置**（与 Maccy 的 `minimumDelay = 0.2` 一致）。弹窗在每次开面板与收到列表刷新事件时重读设置。
+- **命中高亮样式**：**四档，与 Maccy 同名同默认**：`bold`（默认）/ `color` / `italic` / `underline`。**⚠️ 默认视觉变化（有意）**：由首轮的「背景 + 加粗」改为 Maccy 的「纯加粗（无背景）」——**待真机确认**；自造的 `default` 档已删除，`color` 档沿用我们原来的背景高亮视觉（Maccy 用 `findHighlightColor`，我们用 OKLch accent token）。实现是根容器上的 `data-hit-style` 属性 + CSS 四分支，命中区间与 `<mark class="clip-hit">` 结构不变，主窗与弹窗共用同一设置。
+- **tooltip（收尾补齐）**：按 Maccy 的 `.help` 约定给**全部**设置项加 tooltip 并写明默认值，默认值逐个从代码读出（`autostart.rs` 默认开 / `hotkey.rs` 三键 ⌘⇧C·⌘⇧T·⌘⇧M / `settings.rs` 各 serde 默认 / `image.rs::DEFAULT_MAX_TOTAL` 500 MiB / `providers.rs` 的 `google_free`）：通用 3 项 + 外观 4 项 + 热键 3 项 + 翻译源 1 组 + 隐私 5 项 + 存储 6 项。**一次性动作行**（立即检查更新 / 立即清理 / 备份恢复）tooltip 注明「一次性操作，无默认值」；纯状态展示行（图片占用 / 库文件体积 / 条目数）不是设置项，未加。
+- **读写与校验**：新增 5 个 IPC（`get_appearance_settings` 一次读四项 + 4 个 setter）。写路径对非法枚举与越界数值**拒收且不落盘**；读路径再收敛一次（`effective_*`），兜手工改坏的 settings.json；前端另有 `normalizeAppearanceSettings` 在 IPC 边界归一。**落盘后何时生效**：排序与命中高亮落盘后发既有的 `clipboard-changed` —— 该事件在本工程里是「列表需要重新取数」的信号（先例：`set_max_history_items` 淘汰后），**刻意不是「剪贴板内容变了」的字面语义**；图片高度与预览延迟不发，避免为纯 CSS/时序变更白传一次列表 payload。
+- **验收（实跑，收尾在 `8bb7ed1` 上）**：
   - `rtk pnpm exec tsc -b` → 退出 0。
-  - `rtk pnpm test` → **79 文件 / 853 测试全绿**（本轮新增 3 个测试文件 + 6 处既有文件补用例/补 mock）。
-  - `cd src-tauri && cargo fmt --all --check` → 退出 0；`cargo clippy --all-targets -- -D warnings` → 干净；`cargo test` → **838 passed / 0 failed**。
-  - **变异自证（三轮，均在最终树上做并还原）**：① 短路 `sort_rows_for_order` 的 `FirstCopied` 分支 → 红 3（两档排序差异、首次复制顺序、翻译取数不随排序漂移）；② `PREVIEW_SWITCH_DELAY_MS` 200→300 → 红 5（preview-delay 2、preview-defer 2、popover-appearance 1）；③ `PREVIEW_FIRST_DELAY_MS` 1500→800 → 红 5（含两处 tooltip 默认值断言）。还原后对应子集全绿，工作区无残留变异。
-- **已知边界 / 待裁决**：
-  1. **「首次复制」只在分组内严格有序**：弹窗列表仍按「收藏 / 今天 / 更早」用 `last_modified_utc` 分组，因此跨组的全局单调性不成立（一条今天被重新复制的旧条目会进「今天」组，但组内按 created 排）。是否在 `first_copied` 下改分组口径（或干脆不分组），属产品决策，本轮未改分组。
-  2. **tooltip 覆盖范围**：本轮只给四个新设置项写「默认值」tooltip。既有约 15 项设置（通用/隐私/存储/热键）**未**加，路线图 Phase 5 的「每项设置加 tooltip 写明默认值」那一行仍需逐项核对默认值后另行处理。
-  3. **枚举写坏的爆炸半径**（与 `exclude_mode` 历史行为一致，已用测试钉住）：`settings.json` 里 `sort_order` / `highlight_style` 写成非法字符串会让**整份设置**反序列化失败并回退全默认。
-- **未验证 / 待人工**：真机手感（各档预览延迟的实际体验、16/48px 缩略图与下划线/加粗的观感、长列表切排序后的滚动位置）、打包 GUI 下的实际表现、Windows（本项未新增平台相关代码，但整条链路未在 Windows 编译验证）。
-- **独立审查（lead 另派 `settings-expansion-review`，对象 `07fd8f6`）**：结论 **非 BLOCK**。默认值逐项对照 `07fd8f6^` 一致；契约（57 个命令注册、5 个新命令前后端参数名一致、枚举 snake_case、DTO camelCase）核对通过；`tsc`、设置子集 288 测试、`cargo check --all-targets` 退出 0。审查提出的既有风险 **已登记为 P5-8**（见下），不在本项修。已据审查修正 `ipc/clipboard.rs` 注释：行数 = 历史上限 + 收藏数，并无硬上界。
+  - `rtk pnpm test` → **80 文件 / 868 测试全绿**（首轮末为 79/853）。
+  - `cd src-tauri && cargo fmt --all --check` → 退出 0；`cargo clippy --all-targets -- -D warnings` → 干净；`cargo test` → **849 passed / 0 failed**（首轮末为 838）。
+  - **变异自证（收尾两轮，均在最终树上做并还原）**：① `settings.rs::DEFAULT_IMAGE_HEIGHT_PX` 40→24 → 红 2（默认值专项 + 外观读口默认值）；② 前端 `DEFAULT_HIGHLIGHT_STYLE` `"bold"`→`"color"` → 红 4（默认值断言、下拉首项、弹窗回退默认档、主窗回退默认档）。还原后子集复跑全绿、工作区无残留。
+- **已知边界（已决定，不再是待裁决）**：
+  1. 「首次复制」下分组口径已改为按 `created_utc`，**跨组全局顺序成立**；但 Maccy 本身没有分组，这套「收藏 / 今天 / 更早」仍是本项目自有设计——**真机观察项**：老条目被重新复制后不再跳组，是否符合直觉。
+  2. tooltip 已覆盖全部设置项；**默认值随代码变化时 tooltip 不会自动跟着变**（硬编码中文文案），改默认值需同步改文案——由 `settings-tooltips.test.tsx` 的逐面板断言兜住明显缺漏。
+  3. `numberOfCopies` 排序依赖 P3-8（迁移 v4），未做。
+  4. 枚举写坏的爆炸半径已由 P5-8 修掉（逐字段容错，不再整份回退）。
+- **未验证 / 待人工**：**两处默认视觉变化需真机确认**（高亮默认从「背景+加粗」变「纯加粗」；弹窗缩略图默认 24px → 40px）；各档预览延迟的实际体感；`color` 档用 accent token 替代 `findHighlightColor` 的观感差异；长列表切排序后的滚动位置；打包 GUI 下的实际表现；Windows（本项无平台相关代码，但整条链路未在 Windows 编译验证）。
+- **独立审查（lead 另派 `settings-expansion-review`，对象 `07fd8f6`）**：结论 **非 BLOCK**。默认值逐项对照 `07fd8f6^` 一致；契约（57 个命令注册、5 个新命令前后端参数名一致、枚举 snake_case、DTO camelCase）核对通过；`tsc`、设置子集 288 测试、`cargo check --all-targets` 退出 0。审查提出的既有风险 **已登记为 P5-8** 并已在收尾中修复（见下）。已据审查修正 `ipc/clipboard.rs` 注释：行数 = 历史上限 + 收藏数，并无硬上界。**收尾改动（`cd1af1f` / `e36db71` / `8bb7ed1`）尚未经独立审查。**
 ### P5-8 · settings.json 读失败后写回覆盖（既有缺陷，P5-5 审查挂号）
-- **状态**：ready（未开工；非 P5-5 引入，但 P5-5 新增的 4 个 setter 扩大了入口面）
-- **问题**：`settings.rs` `load_or_default` 对任一解析失败静默回退 `Default`（`:291-293`）；`save` 为整文件 `fs::write`（非原子，`:267-271`）。任一非法字段或 JSON 语法错 → 读回默认值 → 下一次任意 setter 把**整份默认值**写回，覆盖热键、排除应用、凭据引用等无关设置。约 20 处既有 setter 同构。
-- **做什么**：短期——`load` 失败且文件存在时，拒绝写入（返回错误）或先备份为 `settings.json.bak` 再写；中期——单字段 setter 改为读 `serde_json::Value` 后只改目标键。
-- **验收**：构造非法 settings.json 后调用任一 setter，文件内容不被默认值覆盖（或已备份）；变异可红。
+- **状态**：done（commit `03a84d0`）。**对齐 Maccy 的逐键存储语义**：Maccy 用 UserDefaults 逐键存储，一个坏键只影响它自己，不会被整体覆盖。
+- **问题（保留作背景）**：`settings.rs` 的 `load_or_default` 原先对任一解析失败静默回退 `Default`；`save` 是整文件 `fs::write`。于是任一非法字段或 JSON 语法错 → 读回默认值 → 下一次任意 setter 把**整份默认值**写回，覆盖排除应用、翻译源、历史上限等无关设置（约 20 处 setter 同构）。
+- **结果**：
+  1. **读侧字段级容错**：`AppSettings::load_lenient` 把 JSON 解析成对象后**逐字段**反序列化，坏字段只回退它自己的默认值，并返回「哪个字段、为什么」的清单；`from_json_object_lenient` 是纯函数主体。`load_or_default` 变成它的**静默**包装（入库轮询每约 500ms 读一次盘，在热路径打日志会刷屏）。缺文件仍视为正常首启动（零问题，不算损坏）。
+  2. **写侧逐键更新**：`write_setting_field` / `update_settings_value` =「读原始 JSON 对象 → 只改目标键 → 写回」，**其他字段与未知键原样保留**。16 个 setter 全部改走它；`AppSettings::save` 保留但文档标明只给测试 / 整份重写用。
+  3. **语法损坏先备份**：文件存在但 JSON 语法坏 / 根不是对象时，写前 `fs::copy` 到 `settings.json.bak`（**备份失败直接返回 Err，宁可不写**），再从空对象重建。
+  4. **写后体检留痕**：写完对已知字段跑一次宽松解析，仍有坏字段就 `eprintln` 点名，不改变文件内容（坏键留在文件里让用户修）。
+- **已知边界**：
+  - 坏字段的值**不会被自动改写**（本次没被写的坏键原样留在文件里）——刻意如此：自动"修"成默认值等于悄悄改用户设置。
+  - `.bak` 每次覆盖，不累积多份历史备份。
+  - `autostart.json`（单键）与 `hotkey.json`（三键）仍是整份读写，风险面小，**未纳入本轮**。
+  - 备份与写入不是原子对（先 copy 再 write）：极端情况下两次操作之间崩溃会留下完整 `.bak` + 未更新的原文件——**不会丢数据**。
+- **验收（实跑）**：
+  - 新增 Rust 用例：坏字段只回退自身（其余字段与 `problems` 清单）、语法坏文件回退默认并留痕、缺文件不算问题、`Default` 与 serde 缺省值逐字段一致、单字段写入保留其他字段与未知键、语法坏文件被备份且重建后只含本次键、缺文件不产生 `.bak`；IPC 层：坏字段下 setter 保留其余字段（含坏键原样）、语法坏文件先备份、读侧兄弟字段坏掉不影响别的 getter、未知键保留。
+  - `cargo test` → **849 passed / 0 failed**（P5-8 单独提交时 848；P5-5 收尾新增用例后 849）。
+  - **变异自证**：把 `write_setting_field` 改回「宽松读出整份设置 → 只改目标键 → 全量落盘」 → **红 5**（两份「保留其他字段 / 未知键」、两组「语法坏文件备份」、IPC 侧保留用例）。还原后绿、无残留。
+- **未验证**：真机上手工改坏 settings.json 后重启的表现（日志文案在打包 GUI 里是否可见——与 P4-7 同一限制）；Windows。
 
 ### P5-6 · i18n 框架 + 中英双语（namespace 分区 + 出货白名单）
 ### P5-7 · 设置页搜索
