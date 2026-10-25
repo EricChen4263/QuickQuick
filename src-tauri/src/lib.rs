@@ -620,7 +620,10 @@ fn apply_autostart_preference(app: &mut tauri::App) {
     };
 
     let pref = autostart::AutostartConfig::load_or_default(&config_path);
-    autostart::apply_to_os(&app.handle().clone(), pref.enabled);
+    if let Err(e) = autostart::apply_to_os(&app.handle().clone(), pref.enabled) {
+        // 启动期注册失败只留痕：不该因为 OS 登录项异常就起不来
+        eprintln!("[QuickQuick] 启动期应用自启动偏好失败（不影响启动）: {e}");
+    }
 }
 
 /// 启动时该用的 macOS 激活策略：恒为 `Accessory`（后台不占 Dock 图标）。

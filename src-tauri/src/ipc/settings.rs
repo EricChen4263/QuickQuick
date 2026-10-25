@@ -1086,12 +1086,16 @@ pub fn get_launch_on_login(app: AppHandle) -> Result<bool, String> {
 }
 
 /// Tauri 命令：设置开机自启（持久化 autostart.json + 应用到 OS）。
+///
+/// OS 登录项注册失败时**回滚配置并返回 Err**（而不是只 eprintln）：
+/// 否则界面显示「已开启」、系统却没注册，用户下次开机会发现没生效。
 #[tauri::command]
 pub fn set_launch_on_login(app: AppHandle, value: bool) -> Result<(), String> {
     let path = resolve_config_path(&app, "autostart.json")?;
-    set_launch_on_login_impl(value, &path)?;
-    crate::autostart::apply_to_os(&app, value);
-    Ok(())
+    crate::autostart::set_enabled_with_apply(&path, value, |enabled| {
+        crate::autostart::apply_to_os(&app, enabled)
+    })
+    .map_err(|e| e.to_string())
 }
 
 /// provider 凭据字段 DTO（返回给前端，camelCase）。

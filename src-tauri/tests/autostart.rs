@@ -3,7 +3,7 @@
 //! 验收项 V0-F1-A05：autostart 插件接入——自启动开关配置项存在、可读写、默认开。
 //! 测试策略：只测偏好配置模型（AutostartConfig），不触发真实 OS LaunchAgent 注册。
 
-use quickquick_lib::autostart::AutostartConfig;
+use quickquick_lib::autostart::{set_enabled_with_apply, AutostartConfig};
 use tempfile::NamedTempFile;
 
 /// 验证自启动偏好默认为开（V0-F1-A05）
@@ -138,5 +138,88 @@ fn save_enabled_rejects_broken_file_and_keeps_it_intact() {
         std::fs::read(&backups[0]).expect("读备份失败"),
         original,
         "备份必须是原文件完整副本"
+    );
+}
+
+/// OS 登录项注册失败：配置回滚到写入前的字节，并返回中文 Err（界面走悲观更新、值不变）。
+#[test]
+fn set_enabled_rolls_back_config_when_os_apply_fails() {
+    // Arrange：先有一份正常配置（false + 未知键），模拟用户在关闭状态下手动开启
+    let dir = tempfile::tempdir().expect("创建临时目录失败");
+    let path = dir.path().join("autostart.json");
+    let original = br#"{
+  "enabled": false,
+  "future_field": {"kept": true}
+}"#;
+    std::fs::write(&path, original).expect("写初始配置失败");
+
+    // Act：写 true 成功，但 OS 注册失败
+    let err = set_enabled_with_apply(&path, true, |_| Err("LaunchAgent 写入被拒绝".to_string()))
+        .expect_err("OS 注册失败必须返回 Err");
+
+    // Assert：错误文案可读、指向回滚结果
+    let message = err.to_string();
+    assert!(
+        message.contains("系统登录项设置失败") && message.contains("已恢复为原设置"),
+        "错误文案应说明失败并已回滚，实际：{message}"
+    );
+    assert!(
+        message.contains("LaunchAgent 写入被拒绝"),
+        "错误文案应带上底层原因，实际：{message}"
+    );
+
+    // Assert：配置文件回到写入前的值（enabled=false，未知键仍在）
+    let written: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&path).expect("读回失败"))
+            .expect("回滚后应是合法 JSON");
+    let map = written.as_object().expect("根必须是对象");
+    assert_eq!(
+        map["enabled"],
+        serde_json::Value::Bool(false),
+        "必须回滚到写入前的值"
+    );
+    assert_eq!(
+        map["future_field"],
+        serde_json::json!({"kept": true}),
+        "回滚不得丢未知键"
+    );
+    // 界面以 get_launch_on_login 为准 → 回滚后读到的仍是原值，前端悲观更新保持不动
+    assert!(
+        !AutostartConfig::load_or_default(&path).enabled,
+        "回滚后读到的值必须是原来的 false"
+    );
+}
+
+/// OS 应用成功：配置保留新值，不产生回滚。
+#[test]
+fn set_enabled_keeps_new_value_when_os_apply_succeeds() {
+    let dir = tempfile::tempdir().expect("创建临时目录失败");
+    let path = dir.path().join("autostart.json");
+    std::fs::write(&path, br#"{"enabled": false}"#).expect("写初始配置失败");
+
+    set_enabled_with_apply(&path, true, |enabled| {
+        assert!(enabled, "应把新值交给 apply");
+        Ok(())
+    })
+    .expect("OS 应用成功应返回 Ok");
+
+    assert!(
+        AutostartConfig::load_or_default(&path).enabled,
+        "成功后配置应保留新值"
+    );
+}
+
+/// 配置文件原本不存在 + OS 应用失败：回滚应把文件删掉，而不是凭空留一份配置。
+#[test]
+fn set_enabled_removes_config_when_apply_fails_and_file_was_absent() {
+    let dir = tempfile::tempdir().expect("创建临时目录失败");
+    let path = dir.path().join("autostart.json");
+
+    set_enabled_with_apply(&path, true, |_| Err("boom".to_string()))
+        .expect_err("OS 应用失败必须返回 Err");
+
+    assert!(
+        !path.exists(),
+        "写入前文件不存在时，回滚应删除文件而不是留一份凭空生成的配置"
     );
 }

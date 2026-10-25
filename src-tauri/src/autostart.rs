@@ -23,6 +23,9 @@ pub enum AutostartError {
     /// 文案直接用 `settings` 模块那条（含文件名、修复指引与备份路径），对用户最有用。
     #[error("{0}")]
     Unparsable(String),
+    /// OS 登录项注册/注销失败（配置已回滚或被尽力回滚）。
+    #[error("{0}")]
+    ApplyFailed(String),
 }
 
 impl From<crate::settings::SettingsError> for AutostartError {
@@ -107,15 +110,61 @@ impl AutostartConfig {
 /// 封装为独立函数供 `lib.rs` setup 阶段与 `ipc/settings.rs` 的 `set_launch_on_login`
 /// 命令共享，避免重复维护相同的 enable/disable 分支逻辑。
 ///
-/// 失败时仅 eprintln，不向上传播——OS autolaunch 注册失败不应中断应用功能。
-pub fn apply_to_os(handle: &tauri::AppHandle, enabled: bool) {
+/// 失败时返回错误字符串（由调用方决定怎么处理）：
+/// - 启动期（`lib.rs` setup）只 eprintln，注册失败不该中断启动；
+/// - 用户主动切换（IPC 命令）必须回滚配置并返回 Err——否则界面显示「已开启」而系统没注册。
+///
+/// # Errors
+/// OS Launcher / LaunchAgent 注册或注销失败时返回错误字符串。
+pub fn apply_to_os(handle: &tauri::AppHandle, enabled: bool) -> Result<(), String> {
     use tauri_plugin_autostart::ManagerExt as AutostartManagerExt;
     let mgr = handle.autolaunch();
     if enabled {
-        if let Err(e) = mgr.enable() {
-            eprintln!("[QuickQuick] 自启动 enable 失败（不影响启动）: {e}");
-        }
-    } else if let Err(e) = mgr.disable() {
-        eprintln!("[QuickQuick] 自启动 disable 失败（不影响启动）: {e}");
+        mgr.enable()
+            .map_err(|e| format!("启用自启动失败：{e}"))
+            .map(|_| ())
+    } else {
+        mgr.disable()
+            .map_err(|e| format!("关闭自启动失败：{e}"))
+            .map(|_| ())
     }
+}
+
+/// 用户主动切换开机自启：写配置 → 应用 OS 登录项；**应用失败则回滚配置并返回 Err**。
+///
+/// `apply` 由调用方注入（生产传 [`apply_to_os`] 的闭包，测试传假实现），
+/// 这样「OS 注册失败」这条分支不依赖真机 LaunchAgent 也能测。
+///
+/// 回滚语义：写入前文件存在就写回原字节对应的值；写入前文件不存在就把它删掉，
+/// 避免为了回滚凭空生出一份配置。
+///
+/// # Errors
+/// - 写配置失败：直接返回该错误（未改动 OS 状态）
+/// - OS 应用失败：回滚配置后返回「系统登录项设置失败：…，已恢复为原设置」
+pub fn set_enabled_with_apply(
+    path: &Path,
+    value: bool,
+    apply: impl FnOnce(bool) -> Result<(), String>,
+) -> Result<(), AutostartError> {
+    let existed_before = path.exists();
+    let previous = AutostartConfig::load_or_default(path).enabled;
+
+    AutostartConfig::save_enabled(path, value)?;
+
+    if let Err(err) = apply(value) {
+        let rollback = if existed_before {
+            AutostartConfig::save_enabled(path, previous).map_err(|e| e.to_string())
+        } else {
+            std::fs::remove_file(path).map_err(|e| e.to_string())
+        };
+        return match rollback {
+            Ok(()) => Err(AutostartError::ApplyFailed(format!(
+                "系统登录项设置失败：{err}，已恢复为原设置"
+            ))),
+            Err(rollback_err) => Err(AutostartError::ApplyFailed(format!(
+                "系统登录项设置失败：{err}；恢复原设置也失败：{rollback_err}"
+            ))),
+        };
+    }
+    Ok(())
 }
