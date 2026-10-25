@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
 import {
   checkForUpdates,
   downloadAndInstallUpdate,
@@ -114,29 +114,11 @@ function GeneralPanel() {
     setStayInTray,
     autoUpdate,
     setAutoUpdate,
-    saveErrors,
   } = useGeneralSettings();
 
-  // 开关保存失败统一走页面级错误条（后端中文原文 + **每个开关一个来源**），面板内不再自己渲染。
-  //
-  // 两个关键行为：
-  // - 只清除**本面板报过**的、由非空变空的那个来源（`reportedSources` 记录我们报过谁）；
-  //   挂载时一项都没有，因此不会误清别的面板/别的开关留下的错误（D）。
-  // - A 开关失败、B 开关成功时，只有 B 的来源被清，A 的错误仍在（C）。
-  const { reportSaveError, clearSaveError } = useSettingsSaveError();
-  const reportedSources = useRef<Set<string>>(new Set());
-  useEffect(() => {
-    for (const source of ["launchOnLogin", "stayInTray", "autoUpdate"] as const) {
-      const key = `general.${source}`;
-      const message = saveErrors[source];
-      if (message !== undefined) {
-        reportSaveError(key, message);
-        reportedSources.current.add(key);
-      } else if (reportedSources.current.delete(key)) {
-        clearSaveError(key);
-      }
-    }
-  }, [saveErrors, reportSaveError, clearSaveError]);
+  // 开关保存失败统一走页面级错误条：**在成功路径上显式清除同源错误**，
+  // 不依赖 hook 状态与组件挂载/卸载时机（卸载重挂后残留旧错误就是这么来的）。
+  const { runSave } = useSettingsSaveError();
 
   const [outcome, setOutcome] = useState<UpdateCheckOutcome | null>(null);
   const [checkMsg, setCheckMsg] = useState<string | null>(null);
@@ -169,21 +151,27 @@ function GeneralPanel() {
           description="登录系统时在后台启动 QuickQuick"
           tooltip="默认：开。登录系统时在后台启动；关闭后也可在系统设置的「登录项」里手动调整。"
           checked={launchOnLogin}
-          onChange={setLaunchOnLogin}
+          onChange={(v) => {
+            void runSave("general.launchOnLogin", () => setLaunchOnLogin(v));
+          }}
         />
         <SettingToggle
           label="托盘常驻"
           description="关闭窗口后保留托盘图标与剪贴板监听"
           tooltip="默认：开。关闭后关闭主窗口即退出应用，剪贴板监听随之停止。"
           checked={stayInTray}
-          onChange={setStayInTray}
+          onChange={(v) => {
+            void runSave("general.stayInTray", () => setStayInTray(v));
+          }}
         />
         <SettingToggle
           label="自动检查更新"
           description="通过签名清单静默拉取新版本"
           tooltip="默认：开。开启后按固定间隔静默检查更新清单，发现新版本只在就绪时提示。"
           checked={autoUpdate}
-          onChange={setAutoUpdate}
+          onChange={(v) => {
+            void runSave("general.autoUpdate", () => setAutoUpdate(v));
+          }}
         />
         <div className="set-row" title="一次性操作，无默认值。手动检查一次新版本，不影响「自动检查更新」开关。">
           <div className="grow">

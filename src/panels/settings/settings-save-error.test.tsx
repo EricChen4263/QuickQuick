@@ -39,6 +39,17 @@ vi.mock("../../ipc/ipc-client", () => ({
   setAutoUpdate: vi.fn().mockResolvedValue(undefined),
   checkForUpdates: vi.fn().mockResolvedValue({ available: false, version: "", currentVersion: "1.0.0" }),
   downloadAndInstallUpdate: vi.fn().mockResolvedValue(undefined),
+  // 外观（切到「外观」子项时会挂载 AppearancePanel）
+  getAppearanceSettings: vi.fn().mockResolvedValue({
+    sortOrder: "recent",
+    imageHeightPx: 40,
+    previewFirstDelayMs: 1500,
+    highlightStyle: "bold",
+  }),
+  setSortOrder: vi.fn().mockResolvedValue(undefined),
+  setImageHeight: vi.fn().mockResolvedValue(undefined),
+  setPreviewFirstDelay: vi.fn().mockResolvedValue(undefined),
+  setHighlightStyle: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock("@tauri-apps/api/app", () => ({
@@ -365,5 +376,25 @@ describe("各面板的保存失败都路由到页面级错误条", () => {
     await waitFor(() => expect(screen.getByRole("switch", { name: "开机自启动" })).toBeInTheDocument());
 
     expect(screen.getByRole("alert")).toHaveTextContent("图片高度被拒写");
+  });
+
+  it("通用：卸载重挂后同开关保存成功，旧错误不残留（成功路径显式清除）", async () => {
+    vi.mocked(setLaunchOnLogin).mockRejectedValueOnce(new Error("开机自启动：已拒绝写入"));
+    const user = userEvent.setup();
+    render(<SettingsPage />);
+
+    await user.click(await screen.findByRole("switch", { name: "开机自启动" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("开机自启动：已拒绝写入");
+
+    // 切到「外观」再切回「通用」：GeneralPanel 被卸载后重挂
+    await user.click(screen.getByRole("button", { name: "外观" }));
+    await waitFor(() =>
+      expect(screen.queryByRole("switch", { name: "开机自启动" })).not.toBeInTheDocument(),
+    );
+    await user.click(screen.getByRole("button", { name: "通用" }));
+
+    // 同开关这次成功：错误条应当消失（清除发生在成功路径上，不依赖挂载时机）
+    await user.click(await screen.findByRole("switch", { name: "开机自启动" }));
+    await waitFor(() => expect(screen.queryByRole("alert")).not.toBeInTheDocument());
   });
 });

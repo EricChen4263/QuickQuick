@@ -88,58 +88,18 @@ describe("useGeneralSettings", () => {
       expect(result.current.launchOnLogin).toBe(false);
     });
 
-    it("IPC setLaunchOnLogin 失败时不更新 state", async () => {
+    it("IPC setLaunchOnLogin 失败时不更新 state，并把错误抛给调用方", async () => {
       vi.mocked(setLaunchOnLogin).mockRejectedValue(new Error("IPC error"));
       const { result } = renderHook(() => useGeneralSettings());
       await waitFor(() => expect(result.current.launchOnLogin).toBe(true));
 
       await act(async () => {
-        await result.current.setLaunchOnLogin(false);
+        await expect(result.current.setLaunchOnLogin(false)).rejects.toThrow("IPC error");
       });
 
       expect(result.current.launchOnLogin).toBe(true);
     });
 
-    it("IPC 失败时把后端错误原文按来源记到 saveErrors，同来源成功后清空", async () => {
-      const backendMessage =
-        "settings.json 无法解析（JSON 语法错误），已拒绝写入以免覆盖你的设置";
-      vi.mocked(setLaunchOnLogin).mockRejectedValueOnce(new Error(backendMessage));
-
-      const { result } = renderHook(() => useGeneralSettings());
-      await waitFor(() => expect(result.current.launchOnLogin).toBe(true));
-      expect(result.current.saveErrors).toEqual({});
-
-      await act(async () => {
-        await result.current.setLaunchOnLogin(false);
-      });
-      expect(result.current.saveErrors.launchOnLogin).toBe(backendMessage);
-
-      vi.mocked(setLaunchOnLogin).mockResolvedValueOnce(undefined);
-      await act(async () => {
-        await result.current.setLaunchOnLogin(false);
-      });
-      expect(result.current.saveErrors).toEqual({});
-      expect(result.current.launchOnLogin).toBe(false);
-    });
-
-    it("另一个开关失败时不会被本开关的成功清掉（按来源隔离）", async () => {
-      const trayMessage = "托盘常驻保存失败：已拒绝写入";
-      vi.mocked(setStayInTray).mockRejectedValueOnce(new Error(trayMessage));
-
-      const { result } = renderHook(() => useGeneralSettings());
-      await waitFor(() => expect(result.current.launchOnLogin).toBe(true));
-
-      await act(async () => {
-        await result.current.setStayInTray(false);
-      });
-      expect(result.current.saveErrors.stayInTray).toBe(trayMessage);
-
-      // 开机自启动成功：不得清掉「托盘常驻」的错误
-      await act(async () => {
-        await result.current.setLaunchOnLogin(false);
-      });
-      expect(result.current.saveErrors).toEqual({ stayInTray: trayMessage });
-    });
   });
 
   describe("setStayInTray setter", () => {
@@ -155,13 +115,13 @@ describe("useGeneralSettings", () => {
       expect(result.current.stayInTray).toBe(false);
     });
 
-    it("IPC setStayInTray 失败时不更新 state", async () => {
+    it("IPC setStayInTray 失败时不更新 state，并把错误抛给调用方", async () => {
       vi.mocked(setStayInTray).mockRejectedValue(new Error("IPC error"));
       const { result } = renderHook(() => useGeneralSettings());
       await waitFor(() => expect(result.current.stayInTray).toBe(true));
 
       await act(async () => {
-        await result.current.setStayInTray(false);
+        await expect(result.current.setStayInTray(false)).rejects.toThrow("IPC error");
       });
 
       expect(result.current.stayInTray).toBe(true);
@@ -181,13 +141,13 @@ describe("useGeneralSettings", () => {
       expect(result.current.autoUpdate).toBe(false);
     });
 
-    it("IPC setAutoUpdate 失败时不更新 state", async () => {
+    it("IPC setAutoUpdate 失败时不更新 state，并把错误抛给调用方", async () => {
       vi.mocked(setAutoUpdate).mockRejectedValue(new Error("IPC error"));
       const { result } = renderHook(() => useGeneralSettings());
       await waitFor(() => expect(result.current.autoUpdate).toBe(true));
 
       await act(async () => {
-        await result.current.setAutoUpdate(false);
+        await expect(result.current.setAutoUpdate(false)).rejects.toThrow("IPC error");
       });
 
       expect(result.current.autoUpdate).toBe(true);
