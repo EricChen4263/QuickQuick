@@ -233,9 +233,16 @@ export default function ClipPopoverApp() {
     [hits],
   );
 
+  // 分组口径必须与排序口径一致，否则跨组全局顺序不成立：
+  // 「首次复制」按 created_utc 划分今天/更早，「最近复制」仍按 last_modified_utc（默认行为不变）。
   const groups = useMemo(
-    () => groupClipItems(hits.map((hit) => hit.item), Date.now()),
-    [hits],
+    () =>
+      groupClipItems(
+        hits.map((hit) => hit.item),
+        Date.now(),
+        appearance.sortOrder === "first_copied" ? "firstCopied" : "lastCopied",
+      ),
+    [hits, appearance.sortOrder],
   );
 
   const visibleFlatList = useMemo(() => buildFlatList(groups), [groups]);

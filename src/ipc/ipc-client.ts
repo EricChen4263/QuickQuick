@@ -16,6 +16,13 @@ export interface ClipItem {
   isFavorite: boolean;
   lastModifiedUtc: number;
   /**
+   * 首次入库时间（UTC epoch ms），与 Rust `ClipItemDto.createdUtc` 对齐。
+   *
+   * 「首次复制」排序下弹窗按它划分「今天/更早」，使分组口径与排序口径一致。
+   * 可选字段：旧后端 / 测试桩没有它时，分组回退 `lastModifiedUtc`（等同改动前行为）。
+   */
+  createdUtc?: number;
+  /**
    * 图片项是否带缩略图；文本项为 false。
    *
    * 缩略图字节不随列表传输（列表每次刷新都会重传一遍 base64），

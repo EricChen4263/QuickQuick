@@ -33,6 +33,11 @@ pub struct ClipItemDto {
     pub kind: String,
     pub is_favorite: bool,
     pub last_modified_utc: i64,
+    /// 首次入库时间（序列化为 `createdUtc`）。
+    ///
+    /// 弹窗在「首次复制」排序下按它划分「今天/更早」，使分组口径与排序口径一致；
+    /// 「最近复制」排序下仍按 `lastModifiedUtc` 分组（默认行为不变）。
+    pub created_utc: i64,
     /// 关联图片行是否存在非空缩略图；文本条目为 `false`。
     pub has_thumbnail: bool,
     /// 关联 clip_images 行的 id；文本条目为 `None`。
@@ -93,6 +98,7 @@ pub fn list_clip_items_ordered_impl(
             kind: r.kind,
             is_favorite: r.is_favorite,
             last_modified_utc: r.last_modified_utc,
+            created_utc: r.created_utc,
             has_thumbnail: r.has_thumbnail,
             image_id: r.image_id,
             html_content: r.html_content,
@@ -708,6 +714,24 @@ mod tests {
             3_000,
             8_000,
             false,
+        );
+    }
+
+    /// 列表 DTO 必须带出首次入库时间（弹窗「首次复制」分组依赖它），
+    /// 且它必须与 lastModified 可区分：再次复制只推进后者。
+    #[test]
+    fn list_clip_items_exposes_created_utc_distinct_from_last_modified() {
+        let conn = make_test_conn();
+        insert_item(&conn, "recopied-item", 1_000, 9_000, false);
+
+        let dtos = list_clip_items_impl(&conn).expect("列表查询不应失败");
+
+        assert_eq!(dtos[0].created_utc, 1_000, "首次入库时间应原样带出");
+        assert_eq!(dtos[0].last_modified_utc, 9_000, "最近复制时间应原样带出");
+        let json = serde_json::to_string(&dtos).expect("列表 DTO 序列化失败");
+        assert!(
+            json.contains("\"createdUtc\":1000"),
+            "createdUtc 必须以 camelCase 出现在列表 JSON 里，实际：{json}"
         );
     }
 

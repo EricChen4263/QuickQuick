@@ -95,6 +95,23 @@ function previewText(container: HTMLElement): string {
   return container.querySelector(".popover-preview")?.textContent ?? "";
 }
 
+/** 按分组标题把列表行归桶：返回「组标题 → 行文本数组」的有序 Map */
+function rowsByGroup(container: HTMLElement): Map<string, string[]> {
+  const list = container.querySelector(".popover-list");
+  if (list === null) throw new Error("找不到 .popover-list");
+  const buckets = new Map<string, string[]>();
+  let current = "";
+  for (const child of Array.from(list.children)) {
+    if (child.classList.contains("popover-group-header")) {
+      current = child.textContent ?? "";
+      buckets.set(current, []);
+      continue;
+    }
+    buckets.get(current)?.push(child.textContent ?? "");
+  }
+  return buckets;
+}
+
 describe("ClipPopoverApp 消费外观设置", () => {
   it("默认设置对齐 Maccy：加粗高亮、缩略图 40px、首个预览 1500ms", async () => {
     const container = await renderReady();
@@ -172,5 +189,57 @@ describe("ClipPopoverApp 消费外观设置", () => {
     expect(shell(container).style.getPropertyValue("--popover-thumb-height")).toBe("40px");
     expect(warn).toHaveBeenCalled();
     warn.mockRestore();
+  });
+});
+
+describe("ClipPopoverApp 分组口径跟随排序（P5-5 收尾）", () => {
+  const NOW_OFFSET = 2 * 24 * 60 * 60 * 1000;
+
+  /** 两条数据：A 今天被重新复制但 2 天前首次入库；B 今天首次入库但 2 天前复制过 */
+  function groupingFixture() {
+    return [
+      {
+        id: "created-today",
+        content: "今天首次复制",
+        kind: "text" as const,
+        isFavorite: false,
+        hasThumbnail: false,
+        lastModifiedUtc: Date.now() - NOW_OFFSET,
+        createdUtc: Date.now(),
+      },
+      {
+        id: "created-old",
+        content: "两天前首次复制",
+        kind: "text" as const,
+        isFavorite: false,
+        hasThumbnail: false,
+        lastModifiedUtc: Date.now(),
+        createdUtc: Date.now() - NOW_OFFSET,
+      },
+    ];
+  }
+
+  it("最近复制档：按 lastModified 归档——今天被重新复制的旧条目进「今天」", async () => {
+    vi.mocked(listClipItems).mockResolvedValue(groupingFixture());
+    const container = await renderReady();
+
+    const buckets = rowsByGroup(container);
+    expect(buckets.get("今天")).toEqual(["两天前首次复制"]);
+    expect(buckets.get("更早")).toEqual(["今天首次复制"]);
+  });
+
+  it("首次复制档：按 createdUtc 归档——分组口径与排序口径一致", async () => {
+    vi.mocked(listClipItems).mockResolvedValue(groupingFixture());
+    vi.mocked(getAppearanceSettings).mockResolvedValue({
+      sortOrder: "first_copied",
+      imageHeightPx: 40,
+      previewFirstDelayMs: 1500,
+      highlightStyle: "bold",
+    });
+    const container = await renderReady();
+
+    const buckets = rowsByGroup(container);
+    expect(buckets.get("今天")).toEqual(["今天首次复制"]);
+    expect(buckets.get("更早")).toEqual(["两天前首次复制"]);
   });
 });

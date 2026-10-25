@@ -295,6 +295,8 @@ struct ClipItemDtoBeforeTitle {
     kind: String,
     is_favorite: bool,
     last_modified_utc: i64,
+    /// 「首次复制」分组用；P5-5 收尾新增，两侧都带（见测试文档的数字修订说明）
+    created_utc: i64,
     has_thumbnail: bool,
     image_id: Option<String>,
     html_content: Option<String>,
@@ -404,6 +406,7 @@ fn before_dtos(items: &[ClipItemDto]) -> Vec<ClipItemDtoBeforeTitle> {
             kind: item.kind.clone(),
             is_favorite: item.is_favorite,
             last_modified_utc: item.last_modified_utc,
+            created_utc: item.created_utc,
             has_thumbnail: item.has_thumbnail,
             image_id: item.image_id.clone(),
             html_content: item.html_content.clone(),
@@ -413,10 +416,14 @@ fn before_dtos(items: &[ClipItemDto]) -> Vec<ClipItemDtoBeforeTitle> {
 
 /// 2000 条数据的列表 payload：改前/改后逐字节一致（本项不得让 payload 变大）。
 ///
-/// 数字记录（2026-10-25，本机实测）：混合形态改前 **2,105,877 B**、
-/// 全多行形态改前 **923,648 B**；两者改后与改前**完全相同**。
+/// 数字记录（2026-10-25，本机实测；**已按 P5-5 收尾的 `createdUtc` 修订**）：
+/// 混合形态 **2,159,877 B**、全多行形态 **977,648 B**；两者「带/不带 title」逐字节相同。
+/// 修订说明：P4-5a 记录的旧基线是 2,105,877 / 923,648 B；P5-5 收尾为弹窗「首次复制」
+/// 分组在列表 DTO 里加了 `createdUtc`（2000 行 × 27 B = **+54,000 B**，混合形态 +2.6%、
+/// 全多行形态 +5.8%），这是**有意的固定成本**，不是回归。
 /// 作为对照，早先「DTO 无条件下发 title」的版本在同样的数据上是 +82.8% / +62.2%，
-/// 这正是本项最终**不改 DTO** 的原因：`content` 仍全量下发，再带一份 title 只有成本。
+/// 这正是 P4-5a 最终**不改 DTO** 的原因：`content` 仍全量下发，再带一份 title 只有成本。
+/// 本测试从此守两件事：不得再加 title；**任何再增长都必须同步改这里的基线数字**。
 #[test]
 fn list_payload_is_byte_identical_to_before() {
     let (before_mixed, after_mixed, seeded_ms) = measure_payload(false);
@@ -433,13 +440,13 @@ fn list_payload_is_byte_identical_to_before() {
 
     assert_eq!(
         before_mixed.len(),
-        2_105_877,
-        "混合形态的基线字节数应与活动卡记录一致（造数脚本变了就同步更新两处）"
+        2_159_877,
+        "混合形态的基线字节数应与本测试文档记录一致（改了 DTO 或造数脚本就同步更新两处）"
     );
     assert_eq!(
         before_multi.len(),
-        923_648,
-        "全多行形态的基线字节数应与活动卡记录一致"
+        977_648,
+        "全多行形态的基线字节数应与本测试文档记录一致"
     );
     assert_eq!(
         after_mixed, before_mixed,
