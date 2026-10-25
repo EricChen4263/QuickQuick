@@ -246,12 +246,10 @@ impl HotkeyConfig {
         }
 
         match serde_json::from_str::<serde_json::Value>(&content) {
-            Ok(serde_json::Value::Object(map)) => {
-                HotkeyLoadOutcome {
-                    config: Self::from_json_object_lenient(&map),
-                    corrupt: None,
-                }
-            }
+            Ok(serde_json::Value::Object(map)) => HotkeyLoadOutcome {
+                config: Self::from_json_object_lenient(&map),
+                corrupt: None,
+            },
             Ok(other) => HotkeyLoadOutcome {
                 config: Self::default(),
                 corrupt: Some(corrupt_info(
@@ -285,7 +283,10 @@ impl HotkeyConfig {
                 Self::config_key(HotkeyAction::Translate),
                 defaults.translate_accelerator,
             ),
-            main_accelerator: read(Self::config_key(HotkeyAction::Main), defaults.main_accelerator),
+            main_accelerator: read(
+                Self::config_key(HotkeyAction::Main),
+                defaults.main_accelerator,
+            ),
         }
     }
 }

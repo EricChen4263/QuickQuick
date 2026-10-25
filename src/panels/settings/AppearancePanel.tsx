@@ -78,13 +78,13 @@ function AppearancePanel() {
 
   async function handleSortOrderChange(value: string): Promise<void> {
     setMessage(null);
-    const result = await runSave(() => setSortOrder(value as SortOrder));
+    const result = await runSave("appearance.sortOrder", () => setSortOrder(value as SortOrder));
     if (!result.ok) console.error("排序方式保存失败:", result.error);
   }
 
   async function handleHighlightStyleChange(value: string): Promise<void> {
     setMessage(null);
-    const result = await runSave(() => setHighlightStyle(value as HighlightStyle));
+    const result = await runSave("appearance.highlightStyle", () => setHighlightStyle(value as HighlightStyle));
     if (!result.ok) console.error("命中高亮样式保存失败:", result.error);
   }
 
@@ -104,7 +104,7 @@ function AppearancePanel() {
       setImageHeightInput(String(imageHeightPx));
       return;
     }
-    const result = await runSave(() => setImageHeightPx(parsed));
+    const result = await runSave("appearance.imageHeight", () => setImageHeightPx(parsed));
     if (!result.ok) {
       console.error("图片高度保存失败:", result.error);
       setImageHeightInput(String(imageHeightPx));
@@ -130,7 +130,7 @@ function AppearancePanel() {
       setPreviewDelayInput(String(previewFirstDelayMs));
       return;
     }
-    const result = await runSave(() => setPreviewFirstDelayMs(parsed));
+    const result = await runSave("appearance.previewDelay", () => setPreviewFirstDelayMs(parsed));
     if (!result.ok) {
       console.error("首次预览延迟保存失败:", result.error);
       setPreviewDelayInput(String(previewFirstDelayMs));

@@ -136,13 +136,13 @@ function HotkeyRow({
     setConflictError(null);
     try {
       await setHotkey(action, result.accelerator);
-      clearSaveError();
+      clearSaveError(`hotkey.${action}`);
       setIsRecording(false);
       setCaptured(null);
       onSaved();
     } catch (err: unknown) {
       // 键位冲突属于校验（留在本行提示），写失败统一走页面级错误条
-      reportSaveError(err);
+      reportSaveError(`hotkey.${action}`, err);
     }
   }
 

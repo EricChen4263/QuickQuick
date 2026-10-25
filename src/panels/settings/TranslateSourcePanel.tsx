@@ -116,7 +116,7 @@ function TranslateSourcePanel() {
   const [configuredIds, setConfiguredIds] = useState<Set<string>>(new Set());
   const [loadError, setLoadError] = useState<string | null>(null);
   // 写失败统一走页面级错误条（后端原文）；加载失败仍留在本地面板内
-  const { reportSaveError } = useSettingsSaveError();
+  const { reportSaveError, clearSaveError } = useSettingsSaveError();
   const isMounted = useRef(true);
 
   useEffect(() => {
@@ -234,8 +234,10 @@ function TranslateSourcePanel() {
     try {
       await setSelectedProvider(id);
       setSelectedId(id);
+      // 同来源成功才清该来源的错误（B）：别处的失败原因不能被这次成功抹掉
+      clearSaveError("translate.provider");
     } catch (err) {
-      reportSaveError(err);
+      reportSaveError("translate.provider", err);
     }
   }
 

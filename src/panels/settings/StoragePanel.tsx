@@ -66,8 +66,10 @@ function StoragePanel() {
   const [imageBytes, setImageBytes] = useState(0);
   const [fileSizeBytes, setFileSizeBytes] = useState(0);
   const [cleanupMsg, setCleanupMsg] = useState<string | null>(null);
-  // 写失败统一走页面级错误条（后端中文原文）；本地消息只留「成功/清理条数/校验」这类反馈
-  const { reportSaveError } = useSettingsSaveError();
+  // 写失败统一走页面级错误条（后端中文原文，按来源隔离）；
+  // 但**读**失败（统计/加载）不是保存失败，用本地状态在面板内提示，不污染错误条（J）。
+  const { reportSaveError, clearSaveError } = useSettingsSaveError();
+  const [statsLoadError, setStatsLoadError] = useState<string | null>(null);
   const [imageThresholdMB, setImageThresholdMB] = useState(DEFAULT_IMAGE_THRESHOLD_MB);
   // 历史条目上限：inputText 是输入框当前文本，savedItems 是后端已确认生效的值。
   // 两者分开才能允许用户自由编辑（含清空、输错），而不让「输入框显示的」和
@@ -90,10 +92,11 @@ function StoragePanel() {
       setLiveCount(stats.liveCount);
       setImageBytes(stats.imageBytes);
       setFileSizeBytes(stats.fileSizeBytes);
+      setStatsLoadError(null);
     } catch (err) {
       if (cancelled.current) return;
       console.error("存储统计加载失败:", err);
-      reportSaveError("存储统计加载失败，请稍后重试");
+      setStatsLoadError("存储统计加载失败，请稍后重试");
     }
   }, []);
 
@@ -135,9 +138,10 @@ function StoragePanel() {
     try {
       await setImageThreshold(mb * 1024 * 1024);
       setImageThresholdMB(mb);
+      clearSaveError("storage.imageThreshold");
     } catch (err) {
       console.error("设置图片阈值失败:", err);
-      reportSaveError(err);
+      reportSaveError("storage.imageThreshold", err);
     }
   }
 
@@ -168,13 +172,14 @@ function StoragePanel() {
 
     try {
       const evicted = await setMaxHistoryItems(parsed);
+      clearSaveError("storage.historyLimit");
       setSavedHistoryItems(parsed);
       setHistoryInput(String(parsed));
       setHistoryMsg(evicted > 0 ? `已按新上限清理 ${evicted} 条最旧的非收藏记录` : null);
       const cancelled = { current: false };
       await fetchStats(cancelled);
     } catch (err) {
-      reportSaveError(err);
+      reportSaveError("storage.historyLimit", err);
       setHistoryInput(String(savedHistoryItems));
     }
   }
@@ -183,11 +188,12 @@ function StoragePanel() {
     setCleanupMsg(null);
     try {
       const result = await cleanupHistory();
+      clearSaveError("storage.cleanup");
       const cancelled = { current: false };
       await fetchStats(cancelled);
       setCleanupMsg(`已清理 ${result.softDeleted + result.purged} 条`);
     } catch (err) {
-      reportSaveError(err);
+      reportSaveError("storage.cleanup", err);
     }
   }
 
@@ -199,6 +205,7 @@ function StoragePanel() {
     setIsExporting(true);
     try {
       const result = await exportBackup(passphrase);
+      clearSaveError("storage.export");
       setBackupPath(result.path);
       setBackupUsedFallbackDir(result.usedFallbackDir);
       const skippedNote =
@@ -207,7 +214,7 @@ function StoragePanel() {
           : "";
       setBackupMsg(`已导出 ${result.itemCount} 条到备份包${skippedNote}`);
     } catch (err) {
-      reportSaveError(err);
+      reportSaveError("storage.export", err);
     } finally {
       setIsExporting(false);
     }
@@ -218,8 +225,9 @@ function StoragePanel() {
     if (backupPath === null) return;
     try {
       await revealBackupInFinder(backupPath);
+      clearSaveError("storage.reveal");
     } catch (err) {
-      reportSaveError(err);
+      reportSaveError("storage.reveal", err);
     }
   }
 
@@ -246,11 +254,12 @@ function StoragePanel() {
     try {
       const bytes = await file.arrayBuffer();
       const result = await importBackup(arrayBufferToBase64(bytes), passphrase);
+      clearSaveError("storage.import");
       setBackupMsg(`导入完成：新增 ${result.inserted} 条，跳过已存在 ${result.skipped} 条`);
       const cancelled = { current: false };
       await fetchStats(cancelled);
     } catch (err) {
-      reportSaveError(err);
+      reportSaveError("storage.import", err);
     } finally {
       setIsImporting(false);
     }
@@ -262,6 +271,11 @@ function StoragePanel() {
   return (
     <div>
       <PanelHeader title="存储" subtitle="加密库 quickquick.db · 分级清理，收藏永远豁免。" />
+      {statsLoadError !== null && (
+        <div role="alert" className="set-inline-error">
+          {statsLoadError}
+        </div>
+      )}
       <SettingGroup>
         <div className="set-row">
           <div className="grow">

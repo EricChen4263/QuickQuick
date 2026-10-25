@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   checkForUpdates,
   downloadAndInstallUpdate,
@@ -114,15 +114,29 @@ function GeneralPanel() {
     setStayInTray,
     autoUpdate,
     setAutoUpdate,
-    saveError: hookSaveError,
+    saveErrors,
   } = useGeneralSettings();
 
-  // 开关保存失败统一走页面级错误条（后端中文原文），面板内不再自己渲染一条
+  // 开关保存失败统一走页面级错误条（后端中文原文 + **每个开关一个来源**），面板内不再自己渲染。
+  //
+  // 两个关键行为：
+  // - 只清除**本面板报过**的、由非空变空的那个来源（`reportedSources` 记录我们报过谁）；
+  //   挂载时一项都没有，因此不会误清别的面板/别的开关留下的错误（D）。
+  // - A 开关失败、B 开关成功时，只有 B 的来源被清，A 的错误仍在（C）。
   const { reportSaveError, clearSaveError } = useSettingsSaveError();
+  const reportedSources = useRef<Set<string>>(new Set());
   useEffect(() => {
-    if (hookSaveError === null) clearSaveError();
-    else reportSaveError(hookSaveError);
-  }, [hookSaveError, reportSaveError, clearSaveError]);
+    for (const source of ["launchOnLogin", "stayInTray", "autoUpdate"] as const) {
+      const key = `general.${source}`;
+      const message = saveErrors[source];
+      if (message !== undefined) {
+        reportSaveError(key, message);
+        reportedSources.current.add(key);
+      } else if (reportedSources.current.delete(key)) {
+        clearSaveError(key);
+      }
+    }
+  }, [saveErrors, reportSaveError, clearSaveError]);
 
   const [outcome, setOutcome] = useState<UpdateCheckOutcome | null>(null);
   const [checkMsg, setCheckMsg] = useState<string | null>(null);

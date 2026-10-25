@@ -8,17 +8,22 @@ import {
   setAutoUpdate as ipcSetAutoUpdate,
 } from "../../ipc/ipc-client";
 
+/** 通用面板里可能失败的开关（用作错误来源标识，与页面级错误条按来源隔离配合）。 */
+export type GeneralSaveSource = "launchOnLogin" | "stayInTray" | "autoUpdate";
+
+
 interface GeneralSettings {
   launchOnLogin: boolean;
   stayInTray: boolean;
   autoUpdate: boolean;
   /**
-   * 最近一次保存失败的原因（后端中文错误原文），null 表示没有未处理的失败。
+   * **按开关分别记录**的保存失败（来源 → 后端错误原文）；缺项表示该开关没有未处理的失败。
    *
-   * 设置写失败必须能被用户看到：settings.json 损坏时后端会拒写并给出修复指引，
-   * 只 console.warn 等于让开关「点了没反应」。
+   * 必须按来源分开：三个开关共用一个槽位时，A 开关失败后 B 开关成功会把 A 的失败原因
+   * 一起清掉——用户只会看到错误闪一下。设置写失败必须能被看到：settings.json 损坏时
+   * 后端会拒写并给出修复指引，只 console.warn 等于让开关「点了没反应」。
    */
-  saveError: string | null;
+  saveErrors: Partial<Record<GeneralSaveSource, string>>;
   setLaunchOnLogin: (v: boolean) => Promise<void>;
   setStayInTray: (v: boolean) => Promise<void>;
   setAutoUpdate: (v: boolean) => Promise<void>;
@@ -42,7 +47,7 @@ export function useGeneralSettings(): GeneralSettings {
   const [launchOnLogin, setLaunchOnLoginState] = useState(true);
   const [stayInTray, setStayInTrayState] = useState(true);
   const [autoUpdate, setAutoUpdateState] = useState(true);
-  const [saveError, setSaveError] = useState<string | null>(null);
+  const [saveErrors, setSaveErrors] = useState<Partial<Record<GeneralSaveSource, string>>>({});
   const cancelledRef = useRef(false);
 
   useEffect(() => {
@@ -64,13 +69,28 @@ export function useGeneralSettings(): GeneralSettings {
     };
   }, []);
 
+  /** 记录某个开关的保存失败（只覆盖它自己那一条）。 */
+  const setSourceError = useCallback((source: GeneralSaveSource, message: string): void => {
+    setSaveErrors((prev) => ({ ...prev, [source]: message }));
+  }, []);
+
+  /** 清除某个开关的保存失败（同来源成功时调用，不动别的开关的错误）。 */
+  const clearSourceError = useCallback((source: GeneralSaveSource): void => {
+    setSaveErrors((prev) => {
+      if (!(source in prev)) return prev;
+      const next = { ...prev };
+      delete next[source];
+      return next;
+    });
+  }, []);
+
   const setLaunchOnLogin = useCallback(async (v: boolean): Promise<void> => {
     try {
       await ipcSetLaunchOnLogin(v);
       setLaunchOnLoginState(v);
-      setSaveError(null);
+      clearSourceError("launchOnLogin");
     } catch (err) {
-      setSaveError(toErrorMessage(err));
+      setSourceError("launchOnLogin", toErrorMessage(err));
     }
   }, []);
 
@@ -78,9 +98,9 @@ export function useGeneralSettings(): GeneralSettings {
     try {
       await ipcSetStayInTray(v);
       setStayInTrayState(v);
-      setSaveError(null);
+      clearSourceError("stayInTray");
     } catch (err) {
-      setSaveError(toErrorMessage(err));
+      setSourceError("stayInTray", toErrorMessage(err));
     }
   }, []);
 
@@ -88,9 +108,9 @@ export function useGeneralSettings(): GeneralSettings {
     try {
       await ipcSetAutoUpdate(v);
       setAutoUpdateState(v);
-      setSaveError(null);
+      clearSourceError("autoUpdate");
     } catch (err) {
-      setSaveError(toErrorMessage(err));
+      setSourceError("autoUpdate", toErrorMessage(err));
     }
   }, []);
 
@@ -98,7 +118,7 @@ export function useGeneralSettings(): GeneralSettings {
     launchOnLogin,
     stayInTray,
     autoUpdate,
-    saveError,
+    saveErrors,
     setLaunchOnLogin,
     setStayInTray,
     setAutoUpdate,

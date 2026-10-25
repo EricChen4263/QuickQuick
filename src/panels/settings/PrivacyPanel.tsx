@@ -100,7 +100,7 @@ function PrivacyPanel() {
   const [regexInput, setRegexInput] = useState("");
   const [loadError, setLoadError] = useState<string | null>(null);
   // 写失败统一走页面级错误条（后端原文）；本地只保留「加载失败」这种读路径提示
-  const { reportSaveError } = useSettingsSaveError();
+  const { reportSaveError, clearSaveError } = useSettingsSaveError();
   const [pauseCaptureState, setPauseCaptureState] = useState(false);
   const [skipSensitiveState, setSkipSensitiveState] = useState(true);
 
@@ -149,8 +149,9 @@ function PrivacyPanel() {
       // 只切换方向：已填的应用条目与内容正则由后端一并保留，前端不动它们
       await setExcludeMode(next);
       setExcludeModeState(next);
+      clearSaveError("privacy.mode");
     } catch (err) {
-      reportSaveError(err);
+      reportSaveError("privacy.mode", err);
     }
   }
 
@@ -162,9 +163,11 @@ function PrivacyPanel() {
     try {
       await setExcludeList(newList);
       setExcludeListState(newList);
+      clearSaveError("privacy.addApp");
+      clearSaveError("privacy.removeApp");
       setInputValue("");
     } catch (err) {
-      reportSaveError(err);
+      reportSaveError("privacy.addApp", err);
     }
   }
 
@@ -173,8 +176,10 @@ function PrivacyPanel() {
     try {
       await setExcludeList(newList);
       setExcludeListState(newList);
+      clearSaveError("privacy.addApp");
+      clearSaveError("privacy.removeApp");
     } catch (err) {
-      reportSaveError(err);
+      reportSaveError("privacy.removeApp", err);
     }
   }
 
@@ -187,8 +192,10 @@ function PrivacyPanel() {
       await setIgnoreRegexes(newPatterns);
       setRegexPatterns(newPatterns);
       setRegexInput("");
+      clearSaveError("privacy.regexAdd");
+      clearSaveError("privacy.regexRemove");
     } catch (err) {
-      reportSaveError(err);
+      reportSaveError("privacy.regexAdd", err);
     }
   }
 
@@ -197,8 +204,10 @@ function PrivacyPanel() {
     try {
       await setIgnoreRegexes(newPatterns);
       setRegexPatterns(newPatterns);
+      clearSaveError("privacy.regexAdd");
+      clearSaveError("privacy.regexRemove");
     } catch (err) {
-      reportSaveError(err);
+      reportSaveError("privacy.regexRemove", err);
     }
   }
 
@@ -206,8 +215,9 @@ function PrivacyPanel() {
     try {
       await setPauseCapture(v);
       setPauseCaptureState(v);
+      clearSaveError("privacy.pauseCapture");
     } catch (err) {
-      reportSaveError(err);
+      reportSaveError("privacy.pauseCapture", err);
     }
   }
 
@@ -215,8 +225,9 @@ function PrivacyPanel() {
     try {
       await setSkipSensitive(v);
       setSkipSensitiveState(v);
+      clearSaveError("privacy.skipSensitive");
     } catch (err) {
-      reportSaveError(err);
+      reportSaveError("privacy.skipSensitive", err);
     }
   }
 
