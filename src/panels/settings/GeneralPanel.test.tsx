@@ -19,6 +19,7 @@ import {
   getAutoUpdate,
   checkForUpdates,
   downloadAndInstallUpdate,
+  setLaunchOnLogin,
 } from "../../ipc/ipc-client";
 import GeneralPanel from "./GeneralPanel";
 
@@ -100,5 +101,29 @@ describe("GeneralPanel 手动检查后下载安装", () => {
       const alert = screen.getByRole("alert");
       expect(alert).toHaveTextContent(/下载.*失败|安装失败/);
     });
+  });
+});
+
+describe("GeneralPanel 开关保存失败时把后端原文显示出来", () => {
+  it("settings.json 拒写时渲染后端中文错误（含修复指引），开关不假装已生效", async () => {
+    const backendMessage =
+      "settings.json 无法解析（JSON 语法错误），已拒绝写入以免覆盖你的设置；请先修复该文件。备份副本：settings.json.1.bak";
+    vi.mocked(setLaunchOnLogin).mockRejectedValueOnce(new Error(backendMessage));
+
+    const user = userEvent.setup();
+    render(<GeneralPanel />);
+    const toggle = await screen.findByRole("switch", { name: "开机自启动" });
+    expect(toggle).toHaveAttribute("aria-checked", "true");
+
+    await user.click(toggle);
+
+    await waitFor(() => {
+      expect(screen.getByRole("alert")).toHaveTextContent("已拒绝写入");
+    });
+    expect(screen.getByRole("alert")).toHaveTextContent("settings.json.1.bak");
+    expect(screen.getByRole("switch", { name: "开机自启动" })).toHaveAttribute(
+      "aria-checked",
+      "true",
+    );
   });
 });

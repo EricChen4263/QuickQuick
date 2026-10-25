@@ -99,6 +99,28 @@ describe("useGeneralSettings", () => {
 
       expect(result.current.launchOnLogin).toBe(true);
     });
+
+    it("IPC 失败时把后端错误原文记到 saveError（不吞错误），成功后清空", async () => {
+      const backendMessage =
+        "settings.json 无法解析（JSON 语法错误），已拒绝写入以免覆盖你的设置";
+      vi.mocked(setLaunchOnLogin).mockRejectedValueOnce(new Error(backendMessage));
+
+      const { result } = renderHook(() => useGeneralSettings());
+      await waitFor(() => expect(result.current.launchOnLogin).toBe(true));
+      expect(result.current.saveError).toBeNull();
+
+      await act(async () => {
+        await result.current.setLaunchOnLogin(false);
+      });
+      expect(result.current.saveError).toBe(backendMessage);
+
+      vi.mocked(setLaunchOnLogin).mockResolvedValueOnce(undefined);
+      await act(async () => {
+        await result.current.setLaunchOnLogin(false);
+      });
+      expect(result.current.saveError).toBeNull();
+      expect(result.current.launchOnLogin).toBe(false);
+    });
   });
 
   describe("setStayInTray setter", () => {

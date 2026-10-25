@@ -198,10 +198,12 @@ describe("AppearancePanel", () => {
     await waitFor(() => expect(mockSetPreviewFirstDelay).toHaveBeenCalledWith(800));
   });
 
-  it("后端保存失败时给出提示，且不假装已生效", async () => {
-    // Arrange
+  it("后端保存失败时把后端原文显示出来（不吞错误），且不假装已生效", async () => {
+    // Arrange：模拟「settings.json 损坏 → 后端拒写」的中文错误
     const error = vi.spyOn(console, "error").mockImplementation(() => {});
-    mockSetImageHeight.mockRejectedValue(new Error("图片高度超出范围：120px"));
+    const backendMessage =
+      "settings.json 无法解析（JSON 语法错误），已拒绝写入以免覆盖你的设置；请先修复该文件。备份副本：settings.json.1.bak";
+    mockSetImageHeight.mockRejectedValue(new Error(backendMessage));
     render(<AppearancePanel />);
     await waitFor(() => expect(imageHeightInput().value).toBe("40"));
 
@@ -209,8 +211,9 @@ describe("AppearancePanel", () => {
     fireEvent.change(imageHeightInput(), { target: { value: "120" } });
     fireEvent.blur(imageHeightInput());
 
-    // Assert
-    expect(await screen.findByRole("status")).toHaveTextContent("保存失败");
+    // Assert：文案必须透到 UI（含「已拒绝写入」与备份指引），输入框回滚到已生效值
+    expect(await screen.findByRole("status")).toHaveTextContent("已拒绝写入");
+    expect(screen.getByRole("status")).toHaveTextContent("settings.json.1.bak");
     expect(imageHeightInput().value).toBe("40");
     error.mockRestore();
   });

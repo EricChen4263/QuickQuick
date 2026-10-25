@@ -113,6 +113,7 @@ function GeneralPanel() {
     setStayInTray,
     autoUpdate,
     setAutoUpdate,
+    saveError,
   } = useGeneralSettings();
 
   const [outcome, setOutcome] = useState<UpdateCheckOutcome | null>(null);
@@ -180,6 +181,14 @@ function GeneralPanel() {
         </div>
       </SettingGroup>
 
+      {saveError !== null && (
+        <div
+          role="alert"
+          style={{ color: "var(--danger)", marginTop: 8, fontSize: 12 }}
+        >
+          {saveError}
+        </div>
+      )}
       {hasUpdate ? (
         <UpdateInstallAction version={outcome.version} />
       ) : (
