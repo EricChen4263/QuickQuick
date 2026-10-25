@@ -221,7 +221,9 @@ function HotkeyPanel() {
       setLoadError(null);
     } catch {
       if (cancelled.current) return;
-      setLoadError("热键加载失败，请稍后重试");
+      // 读取本身失败才算「加载失败」；配置文件损坏不算——那种情况后端会连键位一起返回，
+      // 并在 corrupt 里给修复指引，面板照常渲染键位行（不能整块失效）。
+      setLoadError("热键加载失败，请重启应用后再试");
     }
   }, []);
 
@@ -249,6 +251,17 @@ function HotkeyPanel() {
   return (
     <div>
       <PanelHeader title="热键" subtitle="自定义全局快捷键，与其他应用冲突时可修改" />
+      {hotkeys.corrupt != null && (
+        <div className="hotkey-corrupt" role="alert">
+          <span className="hotkey-corrupt-title">热键配置文件已损坏</span>
+          <span className="hotkey-corrupt-hint">{hotkeys.corrupt.hint}</span>
+          {hotkeys.corrupt.backupPath !== null && (
+            <span className="hotkey-corrupt-backup">
+              备份副本：<code>{hotkeys.corrupt.backupPath}</code>
+            </span>
+          )}
+        </div>
+      )}
       <SettingGroup>
         {HOTKEY_ROWS.map((row) => (
           <HotkeyRow

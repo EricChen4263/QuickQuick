@@ -49,7 +49,13 @@ vi.mock("@tauri-apps/api/event", () => ({
   listen: vi.fn().mockResolvedValue(() => {}),
 }));
 
-import { setLaunchOnLogin, setSkipSensitive, setSelectedProvider, setHotkey } from "../../ipc/ipc-client";
+import {
+  getHotkeys,
+  setLaunchOnLogin,
+  setSkipSensitive,
+  setSelectedProvider,
+  setHotkey,
+} from "../../ipc/ipc-client";
 import {
   SettingsSaveErrorBanner,
   SettingsSaveErrorProvider,
@@ -199,5 +205,43 @@ describe("各面板的保存失败都路由到页面级错误条", () => {
       "aria-checked",
       "true",
     );
+  });
+
+  it("热键：配置损坏时展示修复指引，键位行仍渲染（不整块失效）", async () => {
+    const backupPath =
+      "/Users/tester/Library/Application Support/QuickQuick/hotkey.json.1792899443151.bak";
+    vi.mocked(getHotkeys).mockResolvedValueOnce({
+      history: "CmdOrCtrl+Shift+C",
+      translate: "CmdOrCtrl+Shift+T",
+      main: "CmdOrCtrl+Shift+M",
+      corrupt: {
+        file: "hotkey.json",
+        backupPath,
+        hint: `热键配置文件已损坏（JSON 语法错误：expected value at line 1 column 1），已备份到 ${backupPath}。请修复或删除该文件后重启应用；在此之前使用默认键位。`,
+      },
+    });
+    renderWithBanner(<HotkeyPanel />);
+
+    // 修复指引可见，且指向真实备份路径
+    expect(await screen.findByText("热键配置文件已损坏")).toBeInTheDocument();
+    expect(screen.getByRole("alert")).toHaveTextContent("已备份到");
+    expect(screen.getByRole("alert")).toHaveTextContent("hotkey.json.1792899443151.bak");
+    expect(screen.getByRole("alert")).not.toHaveTextContent("稍后重试");
+
+    // 键位行照常渲染（三行都能改键），不是「加载失败」整块替换
+    await waitFor(() => expect(screen.getAllByRole("button", { name: "修改" })).toHaveLength(3));
+  });
+
+  it("热键：正常配置不显示损坏提示", async () => {
+    vi.mocked(getHotkeys).mockResolvedValueOnce({
+      history: "CmdOrCtrl+Shift+C",
+      translate: "CmdOrCtrl+Shift+T",
+      main: "CmdOrCtrl+Shift+M",
+      corrupt: null,
+    });
+    renderWithBanner(<HotkeyPanel />);
+
+    await waitFor(() => expect(screen.getAllByRole("button", { name: "修改" })).toHaveLength(3));
+    expect(screen.queryByText("热键配置文件已损坏")).not.toBeInTheDocument();
   });
 });

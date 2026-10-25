@@ -606,6 +606,29 @@ fn prune_backups(path: &Path) {
     }
 }
 
+/// 把损坏的配置文件保护性备份一份，返回备份路径（同内容会自动复用已有备份）。
+///
+/// 供**读路径**使用：启动期发现 hotkey.json 损坏时，先留痕再去展示修复指引，
+/// 这样用户点开面板时真的能找到一个 `.bak` 去对照修。
+///
+/// # Errors
+/// 备份失败（目录只读等）返回 [`SettingsError::IoError`]；调用方应降级为「无备份路径」。
+pub fn backup_corrupt_file(path: &Path, reason: &str) -> Result<PathBuf, SettingsError> {
+    backup_broken_settings(path, reason)
+}
+
+/// 校验 `path` 可以安全写入：文件不存在 / 空文件 / 可解析为 JSON 对象都算通过；
+/// 语法坏 / 根不是对象 / 读盘失败返回 Err（前者的 Err 里带已生成的备份路径）。
+///
+/// 供「本来不打算写盘」的早退分支使用——例如改热键时新旧键相同会早退，
+/// 但此时文件可能已经损坏，早退返回成功会让用户以为配置是好的。
+///
+/// # Errors
+/// 同 [`update_json_object`]。
+pub fn ensure_writable_json_object(path: &Path) -> Result<(), SettingsError> {
+    read_settings_object_for_write(path).map(|_| ())
+}
+
 /// 选一个尚未占用的备份路径：`<ms>.bak` 已存在时依次试 `<ms>-1.bak`、`<ms>-2.bak`…
 ///
 /// 同一毫秒内连续触发（例如两次坏文件写入）也不会互相覆盖。

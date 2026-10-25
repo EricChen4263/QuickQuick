@@ -869,15 +869,17 @@ pub fn register_action_shortcut(
 /// 使用户通过 set_hotkey 改键后重启仍可生效。
 /// 注册失败时仅记录警告，不阻断启动——错误在函数内部消化，永不向上传播。
 fn register_hotkeys(handle: &tauri::AppHandle) {
+    // 逐键容错读（与 get_hotkeys / 写路径同一套口径）：坏字段只回退该字段，
+    // 整份损坏时用默认键位并把指引写进日志——启动期不该因为一个坏文件就没有热键可用。
     let config = ipc::settings::resolve_config_dir(handle)
         .ok()
         .map(|dir| dir.join("hotkey.json"))
-        .and_then(|path| {
-            if path.exists() {
-                hotkey::HotkeyConfig::load(&path).ok()
-            } else {
-                None
+        .map(|path| {
+            let outcome = hotkey::HotkeyConfig::load_lenient(&path);
+            if let Some(corrupt) = &outcome.corrupt {
+                eprintln!("[QuickQuick] {}", corrupt.hint);
             }
+            outcome.config
         })
         .unwrap_or_default();
 

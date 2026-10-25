@@ -527,3 +527,40 @@ fn ipc_settings_key_level_writes_keep_unknown_keys() {
         "未知键必须原样保留"
     );
 }
+
+/// get_hotkeys 读取损坏文件：不再整体失败，而是返回默认键位 + corrupt 修复指引。
+#[test]
+fn ipc_settings_get_hotkeys_returns_corrupt_hint_instead_of_error() {
+    let dir = tempfile::tempdir().expect("创建临时目录失败");
+    let hotkey_path = dir.path().join("hotkey.json");
+    std::fs::write(&hotkey_path, "{ broken hotkey json ").expect("写入损坏配置应成功");
+
+    let dto = get_hotkeys_impl(&hotkey_path).expect("损坏不应再让读取整体失败");
+
+    assert_eq!(dto.history, "CmdOrCtrl+Shift+C", "损坏时用默认键位");
+    assert_eq!(dto.translate, "CmdOrCtrl+Shift+T");
+    assert_eq!(dto.main, "CmdOrCtrl+Shift+M");
+    let corrupt = dto.corrupt.expect("应附带修复指引");
+    assert_eq!(corrupt.file, "hotkey.json");
+    assert!(
+        corrupt.hint.contains("已备份到") && corrupt.hint.contains(".bak"),
+        "指引里应给出备份路径，实际：{}",
+        corrupt.hint
+    );
+    assert!(backup_files(dir.path()).len() >= 1, "读路径应留下保护性备份");
+}
+
+/// 正常文件读取时 corrupt 为 None。
+#[test]
+fn ipc_settings_get_hotkeys_has_no_corrupt_hint_for_valid_file() {
+    let dir = tempfile::tempdir().expect("创建临时目录失败");
+    let hotkey_path = dir.path().join("hotkey.json");
+    std::fs::write(&hotkey_path, r#"{"history_accelerator":"CmdOrCtrl+Shift+H"}"#)
+        .expect("写配置应成功");
+
+    let dto = get_hotkeys_impl(&hotkey_path).expect("get 应成功");
+
+    assert!(dto.corrupt.is_none(), "正常文件不应带损坏指引");
+    assert_eq!(dto.history, "CmdOrCtrl+Shift+H");
+    assert_eq!(dto.translate, "CmdOrCtrl+Shift+T", "缺失键取默认值");
+}

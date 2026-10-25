@@ -101,11 +101,28 @@ export interface Provider {
   isUnofficial: boolean;
 }
 
+/** 热键配置文件损坏时的修复指引，与 Rust HotkeyCorruptInfo（camelCase）对齐。 */
+export interface HotkeyCorruptInfo {
+  /** 出问题的文件名（`hotkey.json`） */
+  file: string;
+  /** 保护性备份的路径；读路径备份失败时为 null */
+  backupPath: string | null;
+  /** 给用户看的修复指引（已包含备份路径或「无法备份」的说明） */
+  hint: string;
+}
+
 /** 热键配置，与 Rust HotkeyDto（camelCase）对齐。 */
 export interface Hotkeys {
   history: string;
   translate: string;
   main: string;
+  /**
+   * 配置文件损坏时的修复指引；正常为 null。
+   *
+   * 读取容错：文件损坏时键位仍是「当前实际生效值」（默认键位），
+   * 面板据此项在键位行上方展示「已备份到 X，请修复或删除后重启」。
+   */
+  corrupt?: HotkeyCorruptInfo | null;
 }
 
 /** 热键动作类型，与 Rust HotkeyAction 的合法字符串值对齐。 */

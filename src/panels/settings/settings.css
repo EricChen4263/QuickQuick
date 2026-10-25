@@ -76,6 +76,31 @@
   border-radius: var(--r-lg);
 }
 
+/* 热键配置文件损坏提示：贴在键位行上方，说明备份在哪、怎么修。
+   与「页面级保存失败错误条」区分开——那条是写失败，这条是读到的文件已经坏了。 */
+.hotkey-corrupt {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 16px;
+  padding: 10px 12px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--danger);
+  background: color-mix(in oklch, var(--danger) 9%, transparent);
+  border: 1px solid color-mix(in oklch, var(--danger) 30%, transparent);
+  border-radius: var(--r-md);
+}
+
+.hotkey-corrupt-title {
+  font-weight: 600;
+}
+
+.hotkey-corrupt-hint,
+.hotkey-corrupt-backup {
+  overflow-wrap: anywhere;
+}
+
 /* 页面级保存失败错误条：所有面板的写失败都汇总到这里（文案是后端原文）。
    贴在内容区顶部但不 sticky —— 设置页本身不滚动整页，错误条跟着内容走即可。 */
 .set-save-error {

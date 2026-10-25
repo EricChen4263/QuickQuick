@@ -215,3 +215,78 @@ fn save_accelerator_rejects_broken_file_and_keeps_it_intact() {
         "应留一份带时间戳的备份，实际：{backups:?}"
     );
 }
+
+/// 逐键容错读：单个键写坏只回退该键，其余键照常生效，不报整体损坏。
+#[test]
+fn load_lenient_falls_back_per_key() {
+    // Arrange：history 写坏（数字）、translate 正常、main 缺失
+    let dir = tempdir().expect("创建临时目录失败");
+    let path = dir.path().join("hotkey.json");
+    std::fs::write(
+        &path,
+        r#"{"history_accelerator": 123, "translate_accelerator": "CmdOrCtrl+Shift+Y"}"#,
+    )
+    .expect("写临时配置失败");
+
+    // Act
+    let outcome = HotkeyConfig::load_lenient(&path);
+
+    // Assert
+    assert!(outcome.corrupt.is_none(), "单键写坏不算整份损坏");
+    assert_eq!(
+        outcome.config.get_accelerator(HotkeyAction::History),
+        "CmdOrCtrl+Shift+C",
+        "坏键回退默认值"
+    );
+    assert_eq!(
+        outcome.config.get_accelerator(HotkeyAction::Translate),
+        "CmdOrCtrl+Shift+Y",
+        "好键照常生效"
+    );
+    assert_eq!(
+        outcome.config.get_accelerator(HotkeyAction::Main),
+        "CmdOrCtrl+Shift+M",
+        "缺失键取默认值"
+    );
+}
+
+/// 整份损坏：仍返回可用的默认键位 + 修复指引（含真实存在的备份路径），且不改动原文件。
+#[test]
+fn load_lenient_returns_corrupt_hint_and_backup_for_broken_file() {
+    // Arrange
+    let dir = tempdir().expect("创建临时目录失败");
+    let path = dir.path().join("hotkey.json");
+    let original = b"{ broken hotkey json ";
+    std::fs::write(&path, original).expect("写临时配置失败");
+
+    // Act
+    let outcome = HotkeyConfig::load_lenient(&path);
+
+    // Assert：键位是默认值，但**不是** Err——面板还得靠它渲染
+    assert_eq!(
+        outcome.config.get_accelerator(HotkeyAction::History),
+        "CmdOrCtrl+Shift+C"
+    );
+    let corrupt = outcome.corrupt.expect("整份损坏必须带修复指引");
+    assert_eq!(corrupt.file, "hotkey.json");
+    let backup = corrupt.backup_path.expect("读路径应先做保护性备份");
+    assert!(
+        std::path::Path::new(&backup).exists(),
+        "指引里的备份路径必须真实存在：{backup}"
+    );
+    assert!(
+        corrupt.hint.contains("请修复或删除该文件后重启应用"),
+        "指引要给出可操作出路，实际：{}",
+        corrupt.hint
+    );
+    assert!(
+        !corrupt.hint.contains("稍后重试"),
+        "损坏不是「稍后重试」能解决的，措辞不得误导：{}",
+        corrupt.hint
+    );
+    assert_eq!(
+        std::fs::read(&path).expect("读回失败"),
+        original,
+        "读路径不得改动原文件"
+    );
+}

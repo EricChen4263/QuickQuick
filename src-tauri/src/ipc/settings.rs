@@ -44,7 +44,7 @@ use tauri::{AppHandle, Emitter, Manager, State};
 use std::collections::HashMap;
 
 use crate::autostart::AutostartConfig;
-use crate::hotkey::{HotkeyAction, HotkeyConfig, HotkeyError};
+use crate::hotkey::{HotkeyAction, HotkeyConfig, HotkeyCorruptInfo, HotkeyError};
 use crate::ipc::translate::resolve_provider_or_fallback;
 use crate::settings::{
     write_setting_field, AppSettings, HighlightStyle, SortOrder, MAX_HISTORY_ITEMS,
@@ -67,6 +67,11 @@ pub struct HotkeyDto {
     pub history: String,
     pub translate: String,
     pub main: String,
+    /// 配置文件损坏时的修复指引（正常为 null）。
+    ///
+    /// 读取不再因文件损坏而整体失败：键位照常返回（坏文件用默认键位），
+    /// 面板据此在键位行上方展示「已备份到 X，请修复或删除后重启」，而不是整块失效。
+    pub corrupt: Option<HotkeyCorruptInfo>,
 }
 
 /// 翻译 provider 能力 DTO（返回给前端）。
@@ -115,21 +120,28 @@ fn parse_action(action: &str) -> Result<HotkeyAction, String> {
 
 /// `get_hotkeys` 的纯函数实现，可在测试中直接调用。
 ///
-/// 从 `hotkey_path` 加载（文件不存在则用默认值），将三个动作的加速键封装为 DTO 返回。
+/// **逐键容错读**（与写路径口径一致）：坏字段只回退该字段的默认值；文件整体损坏时
+/// 仍返回默认键位，并在 `corrupt` 里给出修复指引（含保护性备份路径）。
+/// 面板因此不会整块失效——用户至少能看到当前实际生效的键位，以及该去哪儿修。
 ///
 /// # Errors
-/// 文件存在但内容不合法（JSON 损坏）时返回错误字符串。
+/// 本实现不返回 Err：损坏信息走 `corrupt` 字段（这也是「去掉『稍后重试』误导文案」的前提）。
 pub fn get_hotkeys_impl(hotkey_path: &Path) -> Result<HotkeyDto, String> {
-    let config = if hotkey_path.exists() {
-        HotkeyConfig::load(hotkey_path).map_err(|e| e.to_string())?
-    } else {
-        HotkeyConfig::default()
-    };
-
+    let outcome = HotkeyConfig::load_lenient(hotkey_path);
     Ok(HotkeyDto {
-        history: config.get_accelerator(HotkeyAction::History).to_string(),
-        translate: config.get_accelerator(HotkeyAction::Translate).to_string(),
-        main: config.get_accelerator(HotkeyAction::Main).to_string(),
+        history: outcome
+            .config
+            .get_accelerator(HotkeyAction::History)
+            .to_string(),
+        translate: outcome
+            .config
+            .get_accelerator(HotkeyAction::Translate)
+            .to_string(),
+        main: outcome
+            .config
+            .get_accelerator(HotkeyAction::Main)
+            .to_string(),
+        corrupt: outcome.corrupt,
     })
 }
 
@@ -167,9 +179,9 @@ pub fn set_hotkey_runtime_impl(
     hotkey_path: &Path,
     runtime: &dyn RuntimeHotkeyRegistrar,
 ) -> Result<(), String> {
-    // 读用容错版：hotkey.json 损坏时按默认值继续，让写路径去做「备份 + 拒写」，
-    // 这样用户拿到的是带修复指引的错误，而不是一句笼统的「序列化失败」。
-    let mut config = HotkeyConfig::load_or_default(hotkey_path);
+    // 读用容错版（与 get_hotkeys 同一函数）：hotkey.json 损坏时按默认键位继续，
+    // 让写路径去做「备份 + 拒写」，用户才能拿到带修复指引的错误。
+    let mut config = HotkeyConfig::load_lenient(hotkey_path).config;
 
     let old_accelerator = config.get_accelerator(action).to_string();
     if old_accelerator == accelerator {
