@@ -874,18 +874,6 @@ pub fn get_launch_on_login_impl(autostart_path: &Path) -> Result<bool, String> {
     Ok(config.enabled)
 }
 
-/// `set_launch_on_login` 的纯函数实现（持久化部分）：写 autostart.json。
-///
-/// OS autolaunch 的 enable/disable 由命令层在写入后调用 `autostart::apply_to_os`
-/// 完成，纯函数只负责持久化，保持可单测。
-///
-/// # Errors
-/// 文件写入失败时返回错误字符串。
-pub fn set_launch_on_login_impl(value: bool, autostart_path: &Path) -> Result<(), String> {
-    // 逐键落盘：只改 enabled，未知键原样保留；语法坏的文件先备份再拒写
-    AutostartConfig::save_enabled(autostart_path, value).map_err(|e| e.to_string())
-}
-
 /// Tauri 命令：读取当前暂停捕获状态。
 #[tauri::command]
 pub fn get_pause_capture(state: State<'_, CaptureState>) -> bool {
@@ -1413,9 +1401,9 @@ mod tests {
     #[test]
     fn set_launch_on_login_persists_value() {
         let file = NamedTempFile::new().unwrap();
-        set_launch_on_login_impl(false, file.path()).unwrap();
+        crate::autostart::set_enabled_with_apply(file.path(), false, |_| Ok(())).unwrap();
         assert!(!get_launch_on_login_impl(file.path()).unwrap());
-        set_launch_on_login_impl(true, file.path()).unwrap();
+        crate::autostart::set_enabled_with_apply(file.path(), true, |_| Ok(())).unwrap();
         assert!(get_launch_on_login_impl(file.path()).unwrap());
     }
 

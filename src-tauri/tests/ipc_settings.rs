@@ -12,7 +12,7 @@ use quickquick_lib::hotkey::HotkeyAction;
 use quickquick_lib::ipc::settings::{
     get_exclude_list_impl, get_hotkeys_impl, get_selected_provider_impl,
     get_translate_providers_impl, set_exclude_list_impl, set_hotkey_runtime_impl,
-    set_launch_on_login_impl, set_selected_provider_impl, RuntimeHotkeyRegistrar,
+    set_selected_provider_impl, RuntimeHotkeyRegistrar,
 };
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -485,11 +485,14 @@ fn ipc_settings_set_launch_on_login_rejects_broken_config_file() {
     let original = b"{ not json ";
     std::fs::write(&autostart_path, original).expect("写入损坏配置应成功");
 
-    let err = set_launch_on_login_impl(false, &autostart_path).expect_err("损坏配置必须拒写");
+    // 注入 no-op apply：本用例只关心持久化路径的拒写行为
+    let err = quickquick_lib::autostart::set_enabled_with_apply(&autostart_path, false, |_| Ok(()))
+        .expect_err("损坏配置必须拒写");
 
+    let message = err.to_string();
     assert!(
-        err.contains("autostart.json") && err.contains("已拒绝写入"),
-        "错误文案应点名文件并给出修复指引，实际：{err}"
+        message.contains("autostart.json") && message.contains("已拒绝写入"),
+        "错误文案应点名文件并给出修复指引，实际：{message}"
     );
     assert_eq!(
         std::fs::read(&autostart_path).expect("读回失败"),
@@ -510,7 +513,8 @@ fn ipc_settings_key_level_writes_keep_unknown_keys() {
     )
     .expect("写入配置应成功");
 
-    set_launch_on_login_impl(false, &autostart_path).expect("逐键写入应成功");
+    quickquick_lib::autostart::set_enabled_with_apply(&autostart_path, false, |_| Ok(()))
+        .expect("逐键写入应成功");
 
     let written: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(&autostart_path).expect("读回失败"))
