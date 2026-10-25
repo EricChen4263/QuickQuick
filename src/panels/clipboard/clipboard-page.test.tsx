@@ -639,6 +639,45 @@ describe("clipboard-page", () => {
     );
   });
 
+  it("clipboard-page: 自启失败与页面操作失败并存，两条文案都可见（P5-8）", async () => {
+    mockListClipItems.mockResolvedValue(MOCK_ITEMS);
+    localStorage.removeItem("qq-onboard-finished");
+    localStorage.removeItem("qq-onboard-dismissed");
+    vi.mocked(setLaunchOnLogin).mockRejectedValueOnce(new Error("autostart 写入失败：已拒绝写入"));
+    mockDeleteClipItem.mockRejectedValueOnce(new Error("删除失败：库被占用"));
+    // 注：删除路径目前显示的是面板通用文案（未透出后端原文），这里只验证两来源并存
+    const user = userEvent.setup();
+    render(<ClipboardPage />);
+
+    await waitForListReady();
+    for (let step = 0; step < 4; step += 1) {
+      const next = screen.queryByRole("button", { name: "下一步" });
+      if (next === null) break;
+      await user.click(next);
+    }
+
+    // 1) 自启写失败
+    await user.click(await screen.findByRole("checkbox", { name: /登录时自动启动/ }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("已拒绝写入");
+
+    // 2) 预览区删除也失败（另一个来源）
+    const previewRegion = screen.getByRole("region", { name: "预览" });
+    await user.click(within(previewRegion).getByRole("button", { name: /删除/ }));
+
+    // Assert：同一错误区里两条都在，谁也不遮谁
+    const alert = await screen.findByRole("alert");
+    await waitFor(() => expect(alert.textContent).toContain("操作失败"));
+    expect(alert).toHaveTextContent("已拒绝写入");
+    expect(within(alert).getByText(/已拒绝写入/)).toHaveAttribute(
+      "data-error-source",
+      "launch-on-login",
+    );
+    expect(within(alert).getByText(/操作失败/)).toHaveAttribute(
+      "data-error-source",
+      "page-operation",
+    );
+  });
+
   it("clipboard-page: OnboardCard「前往系统设置」调用 openAccessibilitySettings", async () => {
     mockListClipItems.mockResolvedValue(MOCK_ITEMS);
     localStorage.removeItem("qq-onboard-dismissed");

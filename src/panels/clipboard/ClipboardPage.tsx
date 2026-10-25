@@ -483,7 +483,9 @@ function ClipboardPage({ onTranslateItem }: ClipboardPageProps) {
    *
    * 与设置页通用面板一致（那边也是 `await ipc(); setState(v)`），不做「先改界面再回滚」：
    * 乐观 + 回滚需要额外的 previous 闭包，且中间那一帧界面已经撒谎（用户会看到开关闪一下）。
-   * 失败时界面保持已生效值不动，只把后端原文显示出来；成功时顺手清掉旧失败文案。
+   * 失败时界面保持已生效值不动，只把后端原文显示出来。
+   * 旧失败文案在**发起这次切换时**就清掉（不是成功后才清）：用户既然又操作了一次，
+   * 上一次的失败提示就该让位；若这次也失败，会立刻写入新的文案。
    */
   async function handleLaunchOnLoginChange(enabled: boolean): Promise<void> {
     setLaunchOnLoginError(null);
@@ -523,12 +525,14 @@ function ClipboardPage({ onTranslateItem }: ClipboardPageProps) {
 
   return (
     <div className="clip-page" data-hit-style={appearance.highlightStyle}>
-      {(launchOnLoginError ?? opError) !== null && (
+      {[launchOnLoginError, opError].filter((message): message is string => message !== null).length > 0 && (
         <div
           role="alert"
-          style={{ gridColumn: "1 / -1", padding: "8px 12px", color: "var(--danger)", background: "var(--surface)" }}
+          style={{ gridColumn: "1 / -1", display: "flex", flexDirection: "column", gap: 4, padding: "8px 12px", color: "var(--danger)", background: "var(--surface)" }}
         >
-          {launchOnLoginError ?? opError}
+          {/* 两个来源各占一行，互不覆盖：自启写失败不该把删除/粘贴的失败原因挤掉，反之亦然 */}
+          {launchOnLoginError !== null && <span data-error-source="launch-on-login">{launchOnLoginError}</span>}
+          {opError !== null && <span data-error-source="page-operation">{opError}</span>}
         </div>
       )}
       {pasteMsg !== null && (
