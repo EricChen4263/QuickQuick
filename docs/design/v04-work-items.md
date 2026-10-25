@@ -227,7 +227,7 @@
 - **补真虚拟滚动的触发信号**：用户库常态到数千条**且真机滚动掉帧**；届时需要先解决「行高可变」的测量问题（`ResizeObserver` 或测量缓存），不能靠固定行高糊过去。
 - **未验证**：真机滚动流畅度、`⌘↑`/`⌘↓` 真机键位；`PopoverList` 仍是全量渲染（分组标题 + 扁平索引是另一套模型，未做）。
 - **P5-5 审查挂号约束**：若分页落地，`first_copied` 排序（P5-5）只能在已取回页内稳定重排，跨页顺序会错乱；分页时须改为 SQL 层排序或服务端全量重排。当前全量取回无 LIMIT，不是 bug。
-- **挂载期清零（既有缺陷，P6-2 flake 的根因，未修）**：`src/panels/clipboard/ClipboardPage.tsx` 里驱动扩窗的 effect 是无条件 `setRenderCount(prev => nextRenderCount(prev, safeHighlight, filteredItems.length))`，而 `nextRenderCount` 内部先 `clampToTotal(current, total)`——**`total = 0`（挂载期条目还没取回）时窗口被压成 0**，违背它自己注释承诺的「永不小于当前窗口」。后果：数据到达后的第一个提交里列表渲染 0 行（下一提交才补齐），任何「等列表出现某条文案」的测试都可能读到中间态。**修法方向**：`total === 0` 时保持窗口不动（或只在真实过滤条件变化时复位），并先补一条 `total=0` 的单测锚定契约，再改实现。本条为独立小项，P6-2 只修了测试侧。
+- **挂载期清零（已修，commit `93ef41b`）**：`ClipboardPage` 驱动扩窗的 effect 是无条件 `setRenderCount(prev => nextRenderCount(prev, safeHighlight, filteredItems.length))`，而 `nextRenderCount` 内部先 `clampToTotal(current, total)`——原先 **`total = 0`（挂载期条目还没取回）时窗口被压成 0**，违背「永不小于当前窗口」的契约，导致数据到达后的第一个提交渲染 0 行（下一提交才补齐）。**修法**（Maccy 无对应问题：HistoryListView 用 LazyVStack 惰性渲染，没有窗口状态）：`clampToTotal` 在 `total <= 0` 时保留窗口（只把负值收敛到 0），`initialRenderCount(0)` 取首屏块，`growRenderCount(current, 0)` 不变也不清零。**验收**：`render-window` 单测三种 total=0 取值；ClipboardPage 集成用例用 MutationObserver 断言「数据到达后的首个渲染批次即全部行」（反证：把 `clampToTotal` 改回旧实现 → snapshots 变 `[0,3]` 断言红）。测试侧 `waitForListReady` 保留不回退。
 
 ### P4-3 · 缩略图移出 IPC payload（消除 base64 全量重传）
 - **状态**：done
@@ -340,12 +340,11 @@
 - **已知边界（两条失效路径必须区分清楚）**：
   - **JSON 语法错误 / 根不是对象 = 整份回退默认 + 启动期提示一次**：读路径拿不到任何字段（连哪个键都不知道），只能整份按默认运行；此时**写路径已经拒写**，所以默认值不会被写回文件——用户修好文件再重启即可。`03a84d0` 的提交描述写的是「坏字段不再连累整份设置」，那句话只覆盖**类型错误**，语法错误仍整份回退，这里更正以免误读。
   - **字段类型错误 = 字段级回退**：只有那个字段取默认值（并在写入路径体检时 `eprintln` 点名），其余字段原样生效；坏键的值**不会被自动改写**（自动"修"成默认值等于悄悄改用户设置）。
-  - **备份只增不删**：每次损坏留一份 `settings.json.<ms>.bak`，**不自动清理**旧备份——目录里会慢慢积累，属已知取舍（留痕优先）。
-    序号上限的准确表述：`-1`/`-2`… 是**同一毫秒内的重名冲突计数**（最多试 1000 个名字），**不是备份总量上限**；跨毫秒的备份各自独立命名，不会因总量触发拒写。
-  - **同内容备份不去重**：两次损坏内容相同也各留一份（文件名按时间戳）。只在用户主动操作触发写盘时才会产生、增长缓慢，暂不做内容哈希去重。
+  - **备份滚动保留最近 5 份 + 同内容去重**（`3f00c05`）：Maccy 无备份概念，按业界做法只留最近 `BACKUP_KEEP_COUNT = 5` 份（新建后删最旧，删除失败只 eprintln）；与最近一份备份**字节相同则复用**、不新建。三个配置文件（settings / hotkey / autostart）共用同一套逻辑。
+    序号上限的准确表述：`-1`/`-2`… 是**同一毫秒内的重名冲突计数**（最多试 1000 个名字），**不是备份总量上限**；跨毫秒的备份各自独立命名。
   - **备份与写入不是原子对**（先 copy 再 write）：极端情况下两次操作之间崩溃会留下完整 `.bak` + 未更新的原文件——**不会丢数据**。
-  - **写失败提示尚未全站统一**：外观 + 通用两个面板已透出后端原文（`role=status` / `role=alert`），隐私 / 存储 / 热键 / 翻译源仍用各自的通用文案或只 `console.warn`；统一成一条设置页级错误条属独立小项，未做。
-  - `autostart.json`（单键）与 `hotkey.json`（三键）仍是整份读写，风险面小，**未纳入本轮**。
+  - **写失败提示已全站统一**（`e9e73ad`，不再是边界）：Maccy 无对应逻辑（UserDefaults 写入没有失败路径）；按业界做法抽了页面级 `settings-save-error` 通道（Context + `runSave` + `SettingsSaveErrorBanner`），**六个面板全部接入**（通用 / 外观 / 隐私 / 存储 / 热键 / 翻译源），失败显示后端中文原文、成功自动清空，控件仍受控回滚（aria-checked 不撒谎）。降级说明：面板单独渲染（无 Provider）时通道走兜底实现，只 `console.warn` 不抛错。
+  - **hotkey.json / autostart.json 已改为逐键读写**（`1e5dde7`）：`AutostartConfig::save_enabled` / `HotkeyConfig::save_accelerator` 走通用 `update_json_object`，只改目标键、保留未知键与其他动作；语法坏 / 根非对象时先备份再**拒写**。热键 setter 的前置读取同步改成容错版（`HotkeyConfig::load_or_default`），否则损坏文件会在「注册新键之前」就失败，永远走不到「备份 + 拒写」分支；落盘失败仍先注销刚注册的新键。
 - **验收（实跑）**：
   - 新增 Rust 用例：坏字段只回退自身（其余字段与 `problems` 清单）、语法坏文件读路径回退默认并留痕、缺文件不算问题、`Default` 与 serde 缺省值逐字段一致、单字段写入保留其他字段与未知键、**语法坏文件被拒写且原文件逐字节不变（同时留一份备份、错误文案带备份名）**、**连续两次损坏留两份备份**、**备份失败（目录只读）返回 Err 且原文件不变**、**整份回退标记只在语法坏/根非对象时置位**、**启动提示只打一次**、**空文件允许首次写入**、缺文件不产生备份；IPC 层：坏字段下 setter 保留其余字段（含坏键原样）、语法坏文件 setter 返回中文 Err 且文件不变、读侧兄弟字段坏掉不影响别的 getter、未知键保留。
   - `cargo test` → **855 passed / 0 failed**（`902f7d5` 上实跑）；`cargo test settings` 过滤跑 **111 passed**。

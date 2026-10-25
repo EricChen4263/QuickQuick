@@ -149,3 +149,26 @@ Maccy 只有一条全局列表，没有分组，所以它的 `firstCopiedAt` 天
 - 修法：`waitForListReady()`（`findByRole("listbox")` + 在子树内等首行）替换全文 33 处同模式就绪门；首条用例三条断言并入同一 `waitFor`；筛选类断言改「行数 + 整行 `textContent`」。
 - 业务代码未改。`total=0` 时把 `renderCount` 清成 0 的缺陷本身**未修**，已登记到 P4-2（需先补 `total=0` 单测）。
 - 验收：单文件 37 passed；**14 路并发各跑一次全部通过**（14 × 37）；`tsc` 0；全量 871 passed 连跑两次。反证：把就绪门期望文本改成不存在 → 报 `Unable to find an element with the text: …`（真回归仍会红）。
+
+## 补记五：按 Maccy「有则照搬、无则业界」裁决的第二批（`93ef41b` / `e9e73ad` / `1e5dde7` / `3f00c05`）
+
+四条独立 commit，裁决依据统一：Maccy 用 UserDefaults 逐键存储、列表用 LazyVStack 惰性渲染，
+所以它既没有「窗口状态被压成 0」，也没有「整文件被覆盖」和「设置备份」这些概念——凡 Maccy 没有的，
+按业界成熟做法补。
+
+1. **挂载期窗口不清零**（`93ef41b`，P4-2 修真缺陷）：`clampToTotal` 在 `total <= 0` 时保留窗口；
+   `initialRenderCount(0)` 取首屏块；`growRenderCount(current, 0)` 不动也不清零。数据到达后的
+   第一个提交即渲染全部行。集成用例用 MutationObserver 观察「首个渲染批次的行数」——反证时把实现改回旧版
+   会看到 `[0,3]`，断言红；保留测试侧的 `waitForListReady` 不回退。
+2. **设置页级错误条**（`e9e73ad`）：新增 Context 通道（`reportSaveError` / `clearSaveError` / `runSave`）
+   + `SettingsSaveErrorBanner`，六个面板全部接入，失败显示后端中文原文、成功自动清空；控件仍受控回滚。
+   顺手消除了三处「点了没反应」：通用面板只 `console.warn`、隐私/热键/翻译源只给通用文案、存储的图片阈值失败只打日志。
+3. **hotkey/autostart 逐键读写**（`1e5dde7`）：抽出通用 `update_json_object`，两个配置各自得到
+   `save_enabled` / `save_accelerator`；损坏文件备份后拒写。关键坑：热键 setter 原本在**写之前**用严格读，
+   损坏文件根本走不到写路径 → 改成 `load_or_default` 容错读，才让「备份 + 拒写」生效（落盘失败仍注销新键）。
+   `SettingsError::Unparsable` 因此多了 `file` 字段，错误文案按实际文件名生成。
+4. **备份滚动保留 + 去重**（`3f00c05`）：只留最近 5 份，与最近一份字节相同则复用；`list_backups`
+   只认 `<文件名>.<ms>.bak` / `<文件名>.<ms>-<n>.bak`，不会误删别的配置的备份。
+
+**复核（HEAD 上实跑）**：`cargo test` 869 passed / 0 failed、子集 `cargo test settings` 见汇报；
+前端 `tsc -b` 退出 0、全量 vitest 82 files / 881 passed（设置页级错误条新增 8 条用例后）。
