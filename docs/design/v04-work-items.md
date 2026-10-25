@@ -355,9 +355,18 @@
   - **ClipboardPage 自启开关（已修，`35fabad` / `5846d5e`）**：原实现「先改界面、失败只弹通用提示」属于界面撒谎。先补了回滚（`35fabad`），随后改为**悲观更新**（`5846d5e`）：先 `await setLaunchOnLogin(enabled)`，成功才改界面，失败保持原值并显示后端原文——与设置页通用面板机制相同（**两边都是悲观更新**，不是「都是回滚」）。失败文案用独立状态 `launchOnLoginError`，**发起切换时即清**（不是成功后清，`94701c5`），与面板级 `opError` 分开存放；两者**并存渲染**（`f90ce12`，各占一行、带 `data-error-source`），不再用 `??` 互相遮挡。测试：失败保持原值 + 显示原文、后端未返回前界面不动、失败后再成功无残留文案、两来源并存可见。
      **系统登录项同步（`b8c8a57`）**：`set_launch_on_login` 原先「写 autostart.json → apply_to_os 失败只 eprintln、命令仍 Ok」，界面显示已开启而系统未注册。现在 `apply_to_os` 返回 `Result`，新增 `autostart::set_enabled_with_apply`（apply 可注入）：应用失败即回滚配置（文件原本不存在则删除）并返回「系统登录项设置失败：…，已恢复为原设置」，前端走悲观更新失败路径（界面不变 + 显示原文）。
   - **备份序号的并发前提（G，源码阅读结论）**：`register_hotkeys` 跑在 `lib.rs` 的 `.setup()` 里（同步闭包）；设置类 IPC 命令（`get_hotkeys` / `set_hotkey` / 其余 35 个）全部是**同步** `fn`，没有 `async fn`、也没有 `#[tauri::command(async)]`。**源码阅读确认**：Tauri 2.11.2 的宏默认 `ExecutionContext::Blocking`（`tauri-macros-2.6.2/src/command/wrapper.rs`），走 `body_blocking`——在 scheme 回调里**内联执行、不 spawn**。**运行时线程归属（是否主线程）待验证**：未在真机用线程 id 断言，Windows/Linux 亦未验证。
-    另一个写入者同样依赖该前提：托盘 `⌥` 点击与菜单项走 `tray.rs::toggle_pause_capture`，直接调用 `ipc::settings::set_pause_capture_impl`（`tray.rs:470`，同步回调），与设置页共用同一份「读改写」。若将来任何一侧移入异步上下文（`async fn` 命令、`spawn`、或跨线程事件回调），`seq = 磁盘最大 + 1` 就有并发写窗口，必须补互斥。
+    **settings.json 的四类写入者（已 grep 全仓核实）**：
+    1. **设置类 IPC 命令**（37 个同步 `#[tauri::command]`，含 `set_hotkey` / `set_pause_capture` / 各 setter）；
+    2. **托盘**：`tray.rs::toggle_pause_capture`（`tray.rs:470` 同步回调）→ `ipc::settings::set_pause_capture_impl`；
+    3. **翻译路径的迁移写回**：`ipc/translate.rs:381` 的 `translate_text` 调 `get_selected_provider_impl`；
+    4. **`get_selected_provider` 自身的迁移写回**：`get_selected_provider_impl`（`settings.rs:357`）在读到已移除的 provider 时用 `write_setting_field` 写回默认值。
+    **结论**：所有写入者都是**同步路径**（已 grep 核实，异步 `spawn` / `spawn_blocking` 中没有任何设置写入）；**运行时线程归属待验证**（未用线程 id 断言）。旁证（现有代码注释）：`ipc/translate.rs:66` 已论证同步命令由宏生成 `body_blocking`、回调是 wry `WKScriptMessageHandler`（`MainThreadOnly`），故 `translate_text` 在 macOS 主线程执行——**这是同一机制的另一处阅读结论，不是本条的实测**。若将来任何一侧移入异步上下文（`async fn` 命令、`spawn`、跨线程事件回调），`seq = 磁盘最大 + 1` 就有并发写窗口，必须补互斥。
   - **自启开关的「快速连点」与乱序响应（备注，未做代码防护）**：失败文案在**发起**切换时就清，所以连点两次且都失败时最终只显示最后一次的文案（探针结论，符合预期，不累积）。**未验证乱序响应**：两次写请求并发时，响应到达顺序没有保证，后到的旧响应可能把新状态或新文案覆盖回旧值——当前没有请求序号/序列化保护，属已知边界（真机上 IPC 串行执行，实际很难触发）。
   - **外来文件的归属边界（F，行为已由测试锁定）**：只有**形态严格为 `<配置文件>.<数字>.<数字>.bak`** 的文件归本应用所有（参与排序与 prune，**首次 prune 时可能被删除**，哪怕它是用户手工放进去的）；非此形态的文件（`<ms>.bak`、`<ms>-<n>.bak`、`settings.json.bak`、另一个配置的备份等）一律保留不动，也不参与「最近 5 份」的计数。测试：`foreign_backup_like_files_are_ignored_and_never_pruned`。
+  - **启动期 apply 失败对界面不可见**（G）：`lib.rs` setup 里应用登录项偏好失败只 `eprintln`（不中断启动），用户重启后界面按配置显示「已开启」、而系统条目可能没注册——**这类失败没有任何界面反馈**，只能查日志。用户主动切换时才会走「回滚 + 报错」路径。
+  - **`opError` 是单槽位**（I，既有语义，未改）：页面级操作（删除/粘贴/收藏/复制/打开系统设置）共用一条错误文案，**成功即清**（`4739507`），不分来源、不排队；同一时刻只显示最近一次失败的文案。与设置页错误条的「按来源隔离」是有意的差异：那边是持久配置项，这边是瞬时操作。
+  - **Windows 未编译验证**：`apply_with` 的「条目已不存在即幂等成功」（A）依据 `auto-launch` 0.5.0 的删除语义**源码阅读**，不是 Windows 实测；Windows 分支未编译、未运行。
+  - **测试过滤器陷阱**（F）：`cargo test autostart` 只按**测试名子串**过滤，本项目里回滚类用例名不含 `autostart`（如 `set_enabled_rolls_back_config_when_os_apply_fails`），因此该过滤器**会漏跑回滚用例**。要跑整个集成测试文件必须用 `cargo test --test autostart`（本轮起以它为准）。
   - **错误条位置**：设置页内容区顶部（页面级固定条），业界做法保留现状；**未做视觉验证**（窄窗口换行、长文案 + 备份路径的观感）——L。
   - **读路径会产生备份副作用**（A，**有意取舍，不改代码**）：热键读取发现损坏时会先做一次保护性备份（为了让「已备份到 X」指向真实文件）。同内容去重后不会无限增长；但「坏 → 读（留备份）→ 修好 → 再坏 → 再读」会再留一份（内容不同）。总量受 prune 上限（5 份）约束，可接受。
   - **同源竞态**（C）：同一来源连续两次失败时，后一次覆盖前一次的错误文案（只保留最新一条）。错误条是提示而非审计日志，未做队列/合并。
