@@ -333,10 +333,11 @@ function ClipboardPage({ onTranslateItem }: ClipboardPageProps) {
   // 若删空后不清，重新有数据时会**一次性渲染几百行**，增量渲染等于白做。
   // 用 ref 记录上一次的条数：挂载时 prev 也是 0，所以挂载不会误触发。
   //
-  // **顺序敏感**：本 effect 必须写在上面那条扩窗 effect 之后——同一个提交里两者都写
-  // renderCount，扩窗那条用 `prev => nextRenderCount(prev, …)`，数据为空时返回 prev 原样，
-  // 若排在后面就会把我们刚收回的窗口又覆盖成几百。测试
-  // 「列表删空后窗口收回首屏块」锁定这个顺序。
+  // **与扩窗 effect 的先后不影响结果**（实测把两者对调，clipboard-page 全部 39 条用例仍绿）：
+  // 扩窗那条在数据为空时返回 prev 原样，收到我们写入的 100 就是 100，不会覆盖回去。
+  // 真正承担行为的是上面那句 `setHighlightIndex(0)`——少了它，回填后 highlightIndex
+  // 还停在旧位置（例如删空前 ⌘↓ 停在 299），扩窗 effect 会为包住它把窗口一次扩回几百行。
+  // 用例「删空后清空选中并把窗口收回首屏块」同时锁住这两点。
   const prevFilteredCountRef = useRef(filteredItems.length);
   useEffect(() => {
     const prevCount = prevFilteredCountRef.current;

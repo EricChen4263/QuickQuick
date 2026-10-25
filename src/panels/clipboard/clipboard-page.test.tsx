@@ -119,7 +119,7 @@ describe("clipboard-page", () => {
     });
   });
 
-  it("clipboard-page: 列表删空后窗口收回首屏块，回填不会一次性渲染几百行（P4-2）", async () => {
+  it("clipboard-page: 删空后清空选中并把窗口收回首屏块，回填不会一次性渲染几百行（P4-2）", async () => {
     // Arrange：300 条 → 用 ⌘↓ 跳到末条把窗口扩到 300
     const manyItems: ClipItem[] = Array.from({ length: 300 }, (_, index) => ({
       id: `bulk-${index}`,
@@ -156,7 +156,9 @@ describe("clipboard-page", () => {
     clipboardChanged.fire?.();
     await waitFor(() => expect(within(listbox).queryAllByRole("option").length).toBeGreaterThan(0));
 
-    // Assert：窗口已收回首屏块（100），不是删空前扩大的 300
+    // Assert：窗口已收回首屏块（100），不是删空前扩大的 300。
+    // 这条断言同时锁两件事：删空时 setRenderCount(initialRenderCount(0)) 与 setHighlightIndex(0)
+    // ——去掉任一句都会让回填后渲染 300 行（后者通过「扩窗为包住旧 highlightIndex」实现）。
     expect(within(listbox).getAllByRole("option")).toHaveLength(100);
   });
 
