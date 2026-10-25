@@ -47,8 +47,9 @@ use crate::autostart::AutostartConfig;
 use crate::hotkey::{HotkeyAction, HotkeyConfig, HotkeyError};
 use crate::ipc::translate::resolve_provider_or_fallback;
 use crate::settings::{
-    AppSettings, HighlightStyle, SortOrder, MAX_HISTORY_ITEMS, MAX_IMAGE_HEIGHT_PX,
-    MAX_PREVIEW_FIRST_DELAY_MS, MIN_HISTORY_ITEMS, MIN_IMAGE_HEIGHT_PX, MIN_PREVIEW_FIRST_DELAY_MS,
+    write_setting_field, AppSettings, HighlightStyle, SortOrder, MAX_HISTORY_ITEMS,
+    MAX_IMAGE_HEIGHT_PX, MAX_PREVIEW_FIRST_DELAY_MS, MIN_HISTORY_ITEMS, MIN_IMAGE_HEIGHT_PX,
+    MIN_PREVIEW_FIRST_DELAY_MS,
 };
 use crate::translate::credential::{
     credential_schema, delete_credentials, load_credentials_for_display, save_credentials,
@@ -214,10 +215,8 @@ pub fn set_exclude_list_impl(
     settings_path: &Path,
     runtime_rules: Option<&RwLock<crate::privacy::IgnoreRules>>,
 ) -> Result<(), String> {
-    let mut settings = AppSettings::load_or_default(settings_path);
-    settings.excluded_apps = list;
-    settings.save(settings_path).map_err(|e| e.to_string())?;
-    rebuild_runtime_rules(runtime_rules, &settings);
+    write_setting_field(settings_path, "excluded_apps", &list).map_err(|e| e.to_string())?;
+    rebuild_runtime_rules(runtime_rules, &AppSettings::load_or_default(settings_path));
     Ok(())
 }
 
@@ -242,10 +241,8 @@ pub fn set_exclude_mode_impl(
     settings_path: &Path,
     runtime_rules: Option<&RwLock<crate::privacy::IgnoreRules>>,
 ) -> Result<(), String> {
-    let mut settings = AppSettings::load_or_default(settings_path);
-    settings.exclude_mode = mode;
-    settings.save(settings_path).map_err(|e| e.to_string())?;
-    rebuild_runtime_rules(runtime_rules, &settings);
+    write_setting_field(settings_path, "exclude_mode", &mode).map_err(|e| e.to_string())?;
+    rebuild_runtime_rules(runtime_rules, &AppSettings::load_or_default(settings_path));
     Ok(())
 }
 
@@ -271,10 +268,8 @@ pub fn set_ignore_regexes_impl(
     settings_path: &Path,
     runtime_rules: Option<&RwLock<crate::privacy::IgnoreRules>>,
 ) -> Result<(), String> {
-    let mut settings = AppSettings::load_or_default(settings_path);
-    settings.ignore_regexes = patterns;
-    settings.save(settings_path).map_err(|e| e.to_string())?;
-    rebuild_runtime_rules(runtime_rules, &settings);
+    write_setting_field(settings_path, "ignore_regexes", &patterns).map_err(|e| e.to_string())?;
+    rebuild_runtime_rules(runtime_rules, &AppSettings::load_or_default(settings_path));
     Ok(())
 }
 
@@ -332,9 +327,8 @@ pub fn get_selected_provider_impl(settings_path: &Path) -> Result<String, String
 
     // 仅当发生回退（存储值非法）时才写回，避免每次读取都触发磁盘写。
     if resolved != settings.selected_provider {
-        let mut migrated = settings;
-        migrated.selected_provider = resolved.clone();
-        migrated.save(settings_path).map_err(|e| e.to_string())?;
+        write_setting_field(settings_path, "selected_provider", &resolved)
+            .map_err(|e| e.to_string())?;
     }
 
     Ok(resolved)
@@ -355,9 +349,7 @@ pub fn set_selected_provider_impl(id: &str, settings_path: &Path) -> Result<(), 
         ));
     }
 
-    let mut settings = AppSettings::load_or_default(settings_path);
-    settings.selected_provider = id.to_string();
-    settings.save(settings_path).map_err(|e| e.to_string())
+    write_setting_field(settings_path, "selected_provider", &id).map_err(|e| e.to_string())
 }
 
 /// 从 AppHandle 解析配置目录下的指定文件路径。
@@ -560,9 +552,7 @@ pub fn set_pause_capture_impl(
     settings_path: &Path,
 ) -> Result<(), String> {
     state.paused.store(value, Ordering::Relaxed);
-    let mut settings = AppSettings::load_or_default(settings_path);
-    settings.pause_capture = value;
-    settings.save(settings_path).map_err(|e| e.to_string())
+    write_setting_field(settings_path, "pause_capture", &value).map_err(|e| e.to_string())
 }
 
 /// `get_skip_sensitive` 的纯函数实现：从 AtomicBool 读取当前敏感跳过状态。
@@ -580,9 +570,7 @@ pub fn set_skip_sensitive_impl(
     settings_path: &Path,
 ) -> Result<(), String> {
     state.skip_sensitive.store(value, Ordering::Relaxed);
-    let mut settings = AppSettings::load_or_default(settings_path);
-    settings.skip_sensitive = value;
-    settings.save(settings_path).map_err(|e| e.to_string())
+    write_setting_field(settings_path, "skip_sensitive", &value).map_err(|e| e.to_string())
 }
 
 /// `get_stay_in_tray` 的纯函数实现：从 AtomicBool 读取当前托盘驻留状态。
@@ -600,9 +588,7 @@ pub fn set_stay_in_tray_impl(
     settings_path: &Path,
 ) -> Result<(), String> {
     state.stay_in_tray.store(value, Ordering::Relaxed);
-    let mut settings = AppSettings::load_or_default(settings_path);
-    settings.stay_in_tray = value;
-    settings.save(settings_path).map_err(|e| e.to_string())
+    write_setting_field(settings_path, "stay_in_tray", &value).map_err(|e| e.to_string())
 }
 
 /// `get_auto_update` 的纯函数实现：从 settings.json 读取 auto_update 值。
@@ -620,9 +606,7 @@ pub fn get_auto_update_impl(settings_path: &Path) -> Result<bool, String> {
 /// # Errors
 /// 文件写入失败时返回错误字符串。
 pub fn set_auto_update_impl(value: bool, settings_path: &Path) -> Result<(), String> {
-    let mut settings = AppSettings::load_or_default(settings_path);
-    settings.auto_update = value;
-    settings.save(settings_path).map_err(|e| e.to_string())
+    write_setting_field(settings_path, "auto_update", &value).map_err(|e| e.to_string())
 }
 
 /// `get_theme` 的纯函数实现：从 settings.json 读取 theme 值。
@@ -647,9 +631,7 @@ pub fn set_theme_impl(theme: &str, settings_path: &Path) -> Result<(), String> {
             "非法 theme 值：{theme}，合法值为 auto / light / dark"
         ));
     }
-    let mut settings = AppSettings::load_or_default(settings_path);
-    settings.theme = theme.to_string();
-    settings.save(settings_path).map_err(|e| e.to_string())
+    write_setting_field(settings_path, "theme", &theme).map_err(|e| e.to_string())
 }
 
 /// 单张图片原图阈值合法区间下限（1 MiB）。
@@ -681,9 +663,7 @@ pub fn set_image_threshold_impl(bytes: u64, settings_path: &Path) -> Result<(), 
             "图片阈值超出范围：{bytes} 字节，合法范围为 {MIN_IMAGE_THRESHOLD}（1MiB）到 {MAX_IMAGE_THRESHOLD}（500MiB）字节"
         ));
     }
-    let mut settings = AppSettings::load_or_default(settings_path);
-    settings.max_image_bytes = bytes;
-    settings.save(settings_path).map_err(|e| e.to_string())
+    write_setting_field(settings_path, "max_image_bytes", &bytes).map_err(|e| e.to_string())
 }
 
 /// `get_max_history_items` 的纯函数实现：从 settings.json 读取历史条目上限。
@@ -725,9 +705,7 @@ pub fn set_max_history_items_impl(
         ));
     }
 
-    let mut settings = AppSettings::load_or_default(settings_path);
-    settings.max_history_items = items;
-    settings.save(settings_path).map_err(|e| e.to_string())?;
+    write_setting_field(settings_path, "max_history_items", &items).map_err(|e| e.to_string())?;
 
     let Some(conn) = conn else {
         return Ok(0);
@@ -813,9 +791,7 @@ fn parse_highlight_style(raw: &str) -> Result<HighlightStyle, String> {
 /// - 文件写入失败：返回错误字符串
 pub fn set_sort_order_impl(order: &str, settings_path: &Path) -> Result<(), String> {
     let parsed = parse_sort_order(order)?;
-    let mut settings = AppSettings::load_or_default(settings_path);
-    settings.sort_order = parsed;
-    settings.save(settings_path).map_err(|e| e.to_string())
+    write_setting_field(settings_path, "sort_order", &parsed).map_err(|e| e.to_string())
 }
 
 /// `set_image_height` 的纯函数实现：校验范围后写入 settings.json。
@@ -831,9 +807,7 @@ pub fn set_image_height_impl(px: u32, settings_path: &Path) -> Result<(), String
             "图片高度超出范围：{px}px，合法范围为 {MIN_IMAGE_HEIGHT_PX} 到 {MAX_IMAGE_HEIGHT_PX}px"
         ));
     }
-    let mut settings = AppSettings::load_or_default(settings_path);
-    settings.image_height_px = px;
-    settings.save(settings_path).map_err(|e| e.to_string())
+    write_setting_field(settings_path, "image_height_px", &px).map_err(|e| e.to_string())
 }
 
 /// `set_preview_first_delay` 的纯函数实现：校验范围后写入 settings.json。
@@ -849,9 +823,7 @@ pub fn set_preview_first_delay_impl(ms: u32, settings_path: &Path) -> Result<(),
             "首次预览延迟超出范围：{ms}ms，合法范围为 {MIN_PREVIEW_FIRST_DELAY_MS} 到 {MAX_PREVIEW_FIRST_DELAY_MS}ms"
         ));
     }
-    let mut settings = AppSettings::load_or_default(settings_path);
-    settings.preview_first_delay_ms = ms;
-    settings.save(settings_path).map_err(|e| e.to_string())
+    write_setting_field(settings_path, "preview_first_delay_ms", &ms).map_err(|e| e.to_string())
 }
 
 /// `set_highlight_style` 的纯函数实现：校验后写入 settings.json。
@@ -861,9 +833,7 @@ pub fn set_preview_first_delay_impl(ms: u32, settings_path: &Path) -> Result<(),
 /// - 文件写入失败：返回错误字符串
 pub fn set_highlight_style_impl(style: &str, settings_path: &Path) -> Result<(), String> {
     let parsed = parse_highlight_style(style)?;
-    let mut settings = AppSettings::load_or_default(settings_path);
-    settings.highlight_style = parsed;
-    settings.save(settings_path).map_err(|e| e.to_string())
+    write_setting_field(settings_path, "highlight_style", &parsed).map_err(|e| e.to_string())
 }
 
 /// `get_launch_on_login` 的纯函数实现：从 autostart.json 读取 enabled 值。
@@ -2265,5 +2235,110 @@ mod tests {
             mapped, "热键运行时注册失败: Unknown scancode for F99",
             "非占用类错误应保持原映射（含英文原文）"
         );
+    }
+
+    /// P5-8 验收：文件里有一个坏字段时，调用**任一** setter 都不得覆盖其余字段。
+    ///
+    /// 旧行为：`load_or_default` 因坏字段整份回退默认 → setter 把整份默认值写回，
+    /// 排除名单 / 翻译源 / 历史上限全被抹掉。这里用「写一个跟坏字段毫无关系的键」来验。
+    #[test]
+    fn setter_preserves_other_fields_when_one_field_is_invalid() {
+        let file = NamedTempFile::new().unwrap();
+        std::fs::write(
+            file.path(),
+            r#"{
+  "excluded_apps": ["1Password", "Terminal"],
+  "selected_provider": "deepl",
+  "max_history_items": 300,
+  "sort_order": "by_magic"
+}"#,
+        )
+        .unwrap();
+
+        set_image_height_impl(40, file.path()).unwrap();
+
+        let written: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(file.path()).unwrap()).unwrap();
+        let map = written.as_object().unwrap();
+
+        assert_eq!(
+            map["excluded_apps"],
+            serde_json::json!(["1Password", "Terminal"]),
+            "排除名单必须原样保留"
+        );
+        assert_eq!(map["selected_provider"], serde_json::json!("deepl"));
+        assert_eq!(map["max_history_items"], serde_json::json!(300));
+        assert_eq!(
+            map["sort_order"],
+            serde_json::json!("by_magic"),
+            "坏键保持原样留给用户修，不得被静默改成默认值"
+        );
+        assert_eq!(map["image_height_px"], serde_json::json!(40));
+    }
+
+    /// P5-8 验收：语法损坏的文件在写入前被备份，且新文件只含本次写入的键。
+    #[test]
+    fn setter_backs_up_syntax_broken_file_before_writing() {
+        let file = NamedTempFile::new().unwrap();
+        std::fs::write(file.path(), "{ this is not json").unwrap();
+
+        set_theme_impl("dark", file.path()).unwrap();
+
+        let backup = crate::settings::backup_path_for(file.path());
+        assert_eq!(
+            std::fs::read_to_string(&backup).unwrap(),
+            "{ this is not json",
+            "原文件内容必须完整进备份"
+        );
+        let written: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(file.path()).unwrap()).unwrap();
+        assert_eq!(written, serde_json::json!({"theme": "dark"}));
+        std::fs::remove_file(&backup).ok();
+    }
+
+    /// P5-8 读侧验收：同文件里有个坏字段时，读别的字段仍拿得到真实值。
+    ///
+    /// 之前这条会返回空列表——用户会看到「排除名单突然没了」，
+    /// 而文件里其实一个字都没丢。
+    #[test]
+    fn getters_keep_working_when_a_sibling_field_is_invalid() {
+        let file = NamedTempFile::new().unwrap();
+        std::fs::write(
+            file.path(),
+            r#"{"excluded_apps":["1Password"],"highlight_style":"rainbow"}"#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            get_exclude_list_impl(file.path()).unwrap(),
+            vec!["1Password".to_string()],
+            "坏的高亮样式不该连累排除名单"
+        );
+        assert_eq!(
+            get_appearance_settings_impl(file.path())
+                .unwrap()
+                .highlight_style,
+            crate::settings::HighlightStyle::Default,
+            "坏字段自身回退默认值"
+        );
+    }
+
+    /// P5-8：写入保留未知键——未来版本/别的工具写的字段不能被这次写抹掉。
+    #[test]
+    fn setter_keeps_unknown_keys() {
+        let file = NamedTempFile::new().unwrap();
+        std::fs::write(
+            file.path(),
+            r#"{"excluded_apps":[],"future_flag":true,"future_nested":{"a":1}}"#,
+        )
+        .unwrap();
+
+        set_theme_impl("light", file.path()).unwrap();
+
+        let written: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(file.path()).unwrap()).unwrap();
+        assert_eq!(written["future_flag"], serde_json::json!(true));
+        assert_eq!(written["future_nested"], serde_json::json!({"a": 1}));
+        assert_eq!(written["theme"], serde_json::json!("light"));
     }
 }

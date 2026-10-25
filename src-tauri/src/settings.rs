@@ -6,9 +6,15 @@
 //! - 路径解析（app_config_dir）属于命令层胶水，不在本模块处理。
 //! - 所有新字段均加 `#[serde(default)]`，保证旧 settings.json 缺字段时反序列化不失败，
 //!   向前兼容：既有 `excluded_apps` / `selected_provider` 绝不丢失。
+//! - **读写都按「逐键」语义**（对齐 Maccy 的 UserDefaults 逐键存储，见
+//!   docs/design/v04-work-items.md P5-8）：读走 [`AppSettings::load_lenient`]，
+//!   坏字段只回退它自己；写走 [`write_setting_field`] / [`update_settings_value`]，
+//!   只改目标键、其余键与未知键原样保留。整份覆盖的 [`AppSettings::save`] 只留给测试。
+//!   文件语法损坏时**先备份 `settings.json.bak` 再写**，绝不静默覆盖用户原文件。
 
 use serde::{Deserialize, Serialize};
-use std::path::Path;
+use serde_json::{Map, Value};
+use std::path::{Path, PathBuf};
 use thiserror::Error;
 
 use crate::privacy::ExcludeMode;
@@ -259,7 +265,11 @@ impl AppSettings {
             .clamp(MIN_PREVIEW_FIRST_DELAY_MS, MAX_PREVIEW_FIRST_DELAY_MS)
     }
 
-    /// 将当前设置序列化为 JSON 并写入指定路径。
+    /// 将当前设置序列化为 JSON 并写入指定路径（**整份覆盖**）。
+    ///
+    /// 只给测试 / 「整份重写」这类场景用。生产写路径必须走 [`write_setting_field`] 或
+    /// [`update_settings_value`]：本方法会把内存里的 `AppSettings` 全量落盘，
+    /// 未知键（未来版本或别的工具写的字段）与当前解析失败的字段都会被抹掉。
     ///
     /// # Errors
     /// - `SettingsError::SerdeError`：序列化失败
@@ -270,10 +280,10 @@ impl AppSettings {
         Ok(())
     }
 
-    /// 从指定路径读取 JSON 并反序列化为 `AppSettings`。
+    /// 从指定路径读取 JSON 并反序列化为 `AppSettings`（**严格**：任一字段不合法即失败）。
     ///
-    /// 文件不存在时返回 `SettingsError::IoError`；调用方应在该情形下
-    /// 回退到 `AppSettings::default()`（见 load_or_default）。
+    /// 文件不存在时返回 `SettingsError::IoError`。生产读取请用
+    /// [`AppSettings::load_or_default`]（字段级容错）而不是本方法。
     ///
     /// # Errors
     /// - `SettingsError::IoError`：读文件失败
@@ -284,12 +294,238 @@ impl AppSettings {
         Ok(settings)
     }
 
-    /// 从路径加载设置，文件不存在时静默回退到 `default()`。
+    /// 从路径加载设置：**字段级容错**，任一字段坏掉只回退该字段的默认值。
     ///
-    /// 用于命令层——首次启动时配置文件尚不存在，应使用默认值
-    /// 而不是报错。
+    /// 与旧行为的关键差别：以前任一字段/语法错都会让**整份设置**变成默认值，
+    /// 于是下一次任意 setter 把整份默认值写回，顺手覆盖掉热键、排除名单、翻译源等
+    /// 与该字段毫无关系的设置（对齐 Maccy 的逐键存储语义后，一个坏键只影响它自己）。
+    ///
+    /// 文件不存在是正常首启动，直接返回默认值；读取其它 I/O 错误也回退默认值，
+    /// 但会把原因放进返回值供调用方留痕。
+    ///
+    /// 返回的第二个元素是「被回退的字段 / 被忽略的原因」清单，空表示整份设置都解析成功。
+    pub fn load_lenient(path: &Path) -> (Self, Vec<String>) {
+        let content = match std::fs::read_to_string(path) {
+            Ok(content) => content,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                return (Self::default(), Vec::new());
+            }
+            Err(err) => return (Self::default(), vec![format!("读取设置文件失败：{err}")]),
+        };
+
+        match serde_json::from_str::<Value>(&content) {
+            Ok(Value::Object(map)) => Self::from_json_object_lenient(&map),
+            Ok(_) => (
+                Self::default(),
+                vec!["设置文件根不是 JSON 对象".to_string()],
+            ),
+            Err(err) => (
+                Self::default(),
+                vec![format!("设置文件 JSON 语法错误：{err}")],
+            ),
+        }
+    }
+
+    /// 从 JSON 对象逐字段宽松构造：坏字段回退该字段默认值，好字段照常生效。
+    ///
+    /// 缺失字段与坏字段都取 [`AppSettings::default`] 的对应值——这要求 `Default` 实现
+    /// 与 serde 的 `default = "..."` 逐字段一致（有测试锚定）。
+    pub fn from_json_object_lenient(map: &Map<String, Value>) -> (Self, Vec<String>) {
+        let defaults = Self::default();
+        let mut problems: Vec<String> = Vec::new();
+
+        let settings = Self {
+            excluded_apps: read_field(map, "excluded_apps", defaults.excluded_apps, &mut problems),
+            exclude_mode: read_field(map, "exclude_mode", defaults.exclude_mode, &mut problems),
+            ignore_regexes: read_field(
+                map,
+                "ignore_regexes",
+                defaults.ignore_regexes,
+                &mut problems,
+            ),
+            selected_provider: read_field(
+                map,
+                "selected_provider",
+                defaults.selected_provider,
+                &mut problems,
+            ),
+            pause_capture: read_field(map, "pause_capture", defaults.pause_capture, &mut problems),
+            skip_sensitive: read_field(
+                map,
+                "skip_sensitive",
+                defaults.skip_sensitive,
+                &mut problems,
+            ),
+            stay_in_tray: read_field(map, "stay_in_tray", defaults.stay_in_tray, &mut problems),
+            auto_update: read_field(map, "auto_update", defaults.auto_update, &mut problems),
+            theme: read_field(map, "theme", defaults.theme, &mut problems),
+            max_image_bytes: read_field(
+                map,
+                "max_image_bytes",
+                defaults.max_image_bytes,
+                &mut problems,
+            ),
+            max_history_items: read_field(
+                map,
+                "max_history_items",
+                defaults.max_history_items,
+                &mut problems,
+            ),
+            sort_order: read_field(map, "sort_order", defaults.sort_order, &mut problems),
+            image_height_px: read_field(
+                map,
+                "image_height_px",
+                defaults.image_height_px,
+                &mut problems,
+            ),
+            preview_first_delay_ms: read_field(
+                map,
+                "preview_first_delay_ms",
+                defaults.preview_first_delay_ms,
+                &mut problems,
+            ),
+            highlight_style: read_field(
+                map,
+                "highlight_style",
+                defaults.highlight_style,
+                &mut problems,
+            ),
+        };
+
+        (settings, problems)
+    }
+
+    /// 从路径加载设置，文件不存在时静默回退到 `default()`（字段级容错，见 [`Self::load_lenient`]）。
+    ///
+    /// 刻意**不打日志**：入库轮询每轮（约 500ms）都会读一次 settings.json，
+    /// 一个坏字段会让日志每秒刷两行。需要留痕的路径请用 [`Self::load_lenient`]。
     pub fn load_or_default(path: &Path) -> Self {
-        Self::load(path).unwrap_or_default()
+        Self::load_lenient(path).0
+    }
+}
+
+/// 同名字段宽松读取：缺失或解析失败返回 `fallback`，失败时把字段名与原因记进 `problems`。
+fn read_field<T: serde::de::DeserializeOwned>(
+    map: &Map<String, Value>,
+    key: &str,
+    fallback: T,
+    problems: &mut Vec<String>,
+) -> T {
+    let Some(raw) = map.get(key) else {
+        return fallback;
+    };
+    match serde_json::from_value::<T>(raw.clone()) {
+        Ok(value) => value,
+        Err(err) => {
+            problems.push(format!("{key}（{err}）"));
+            fallback
+        }
+    }
+}
+
+/// 与某个设置文件同目录的备份文件名：`settings.json` → `settings.json.bak`。
+pub fn backup_path_for(path: &Path) -> PathBuf {
+    let mut name = path.file_name().unwrap_or_default().to_os_string();
+    name.push(".bak");
+    path.with_file_name(name)
+}
+
+/// 读 settings.json 为 JSON 对象；文件不存在返回空对象。
+///
+/// 文件存在但**语法损坏 / 根不是对象**时：先把原文件备份为 `settings.json.bak`，
+/// 再从空对象开始。备份失败直接返回 Err——宁可不写，也不能在没有备份的情况下覆盖用户原文件。
+fn read_settings_object_for_write(path: &Path) -> Result<Map<String, Value>, SettingsError> {
+    let content = match std::fs::read_to_string(path) {
+        Ok(content) => content,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(Map::new()),
+        Err(err) => return Err(SettingsError::IoError(err)),
+    };
+
+    match serde_json::from_str::<Value>(&content) {
+        Ok(Value::Object(map)) => Ok(map),
+        Ok(other) => {
+            backup_broken_settings(
+                path,
+                &format!("根是 {} 而不是 JSON 对象", value_kind(&other)),
+            )?;
+            Ok(Map::new())
+        }
+        Err(err) => {
+            backup_broken_settings(path, &format!("JSON 语法错误（{err}）"))?;
+            Ok(Map::new())
+        }
+    }
+}
+
+/// JSON 值的类型名（只用于错误/备份日志，不求完整）。
+fn value_kind(value: &Value) -> &'static str {
+    match value {
+        Value::Null => "null",
+        Value::Bool(_) => "布尔值",
+        Value::Number(_) => "数字",
+        Value::String(_) => "字符串",
+        Value::Array(_) => "数组",
+        Value::Object(_) => "对象",
+    }
+}
+
+/// 备份损坏的 settings.json 并留痕；备份失败返回 Err 以阻止后续写入。
+fn backup_broken_settings(path: &Path, reason: &str) -> Result<(), SettingsError> {
+    let backup = backup_path_for(path);
+    std::fs::copy(path, &backup)?;
+    eprintln!(
+        "[QuickQuick] settings.json {reason}，已备份原文件到 {}，本次只写入要修改的键",
+        backup.display()
+    );
+    Ok(())
+}
+
+/// 以「读原始 JSON 对象 → 只改目标键 → 写回」的方式更新 settings.json。
+///
+/// 与 [`AppSettings::save`] 的区别就是本函数存在的理由：**未知键与其他字段原样保留**。
+/// 于是「某个字段被写坏」不再演变成「整份设置被默认值覆盖」——
+/// 写坏的键会留在文件里（用户可修），其余键一个字节都不动。
+///
+/// 写完顺手体检一次已知字段：仍有解析失败的字段就 `eprintln` 留痕。
+/// 只在写入时体检而不是每次读盘，是为了不让入库轮询（约 500ms 一轮）刷日志。
+///
+/// # Errors
+/// - `SettingsError::IoError`：读文件、备份或写文件失败（备份失败时不写）
+/// - `SettingsError::SerdeError`：目标键的值无法序列化（只可能是调用方传了非法类型）
+pub fn update_settings_value<F>(path: &Path, mutate: F) -> Result<(), SettingsError>
+where
+    F: FnOnce(&mut Map<String, Value>),
+{
+    let mut map = read_settings_object_for_write(path)?;
+    mutate(&mut map);
+    log_unparsable_fields(&map);
+    let json = serde_json::to_string_pretty(&Value::Object(map))?;
+    std::fs::write(path, json)?;
+    Ok(())
+}
+
+/// 单字段写入：把 `value` 序列化后写进 `key`，其余键原样保留。
+///
+/// # Errors
+/// 同 [`update_settings_value`]。
+pub fn write_setting_field<T: Serialize>(
+    path: &Path,
+    key: &str,
+    value: &T,
+) -> Result<(), SettingsError> {
+    let json_value = serde_json::to_value(value)?;
+    update_settings_value(path, |map| {
+        map.insert(key.to_string(), json_value);
+    })
+}
+
+/// 体检已知字段，把解析失败的字段名与原因打到 stderr（不改变文件内容）。
+fn log_unparsable_fields(map: &Map<String, Value>) {
+    let (_, problems) = AppSettings::from_json_object_lenient(map);
+    for problem in problems {
+        eprintln!(
+            "[QuickQuick] settings.json 的 {problem} 无法解析，该字段按默认值生效（其他设置不受影响）"
+        );
     }
 }
 
@@ -629,32 +865,179 @@ mod tests {
         }
     }
 
-    /// 枚举字段写坏时的爆炸半径：serde 反序列化整体失败 → `load_or_default` 回退全默认。
+    /// 枚举字段写坏时**只回退该字段**：其余字段原样生效（对齐 Maccy 的逐键存储）。
     ///
-    /// 这是与 `exclude_mode` 一致的历史行为，不是本项引入的新风险；测试把它显式钉住，
-    /// 免得日后有人以为「只坏一个字段只丢一个字段」。
+    /// 旧行为是「任一字段坏掉 → 整份设置变默认值」，于是下一次任意 setter 把整份默认值
+    /// 写回文件，顺手抹掉排除名单等无关设置。这个测试就是那条边界的分界桩。
     #[test]
-    fn invalid_sort_order_string_falls_back_to_all_defaults() {
+    fn invalid_sort_order_only_resets_that_field() {
         let dir = std::env::temp_dir().join(format!("qq-settings-enum-{}", std::process::id()));
         std::fs::create_dir_all(&dir).expect("临时目录创建失败");
         let path = dir.join("settings.json");
         std::fs::write(
             &path,
-            r#"{"sort_order":"by_magic","excluded_apps":["com.foo.app"]}"#,
+            r#"{"sort_order":"by_magic","excluded_apps":["com.foo.app"],"max_history_items":300}"#,
         )
         .expect("写临时设置文件失败");
 
-        let settings = AppSettings::load_or_default(&path);
+        let (settings, problems) = AppSettings::load_lenient(&path);
 
         assert_eq!(
             settings.sort_order,
             SortOrder::Recent,
             "未知排序方式回退默认值"
         );
-        assert!(
-            settings.excluded_apps.is_empty(),
-            "整份设置都回退默认——这正是必须写进文档的爆炸半径"
+        assert_eq!(
+            settings.excluded_apps,
+            vec!["com.foo.app".to_string()],
+            "坏字段不得连累排除名单"
         );
+        assert_eq!(settings.max_history_items, 300, "坏字段不得连累历史上限");
+        assert_eq!(problems.len(), 1, "只应报告一个坏字段，实际：{problems:?}");
+        assert!(
+            problems[0].contains("sort_order"),
+            "留痕必须点名坏字段，实际：{problems:?}"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 整份文件 JSON 语法错误：读路径回退默认并留痕（不 panic、不静默）。
+    #[test]
+    fn syntax_broken_file_falls_back_to_defaults_with_problem() {
+        let dir = std::env::temp_dir().join(format!("qq-settings-syntax-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("临时目录创建失败");
+        let path = dir.join("settings.json");
+        std::fs::write(&path, "{ not json at all ").expect("写临时设置文件失败");
+
+        let (settings, problems) = AppSettings::load_lenient(&path);
+
+        assert_eq!(settings.selected_provider, "google_free", "回退到默认设置");
+        assert_eq!(problems.len(), 1, "应报告一条问题，实际：{problems:?}");
+        assert!(
+            problems[0].contains("语法"),
+            "留痕应说明是语法错误，实际：{problems:?}"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 文件不存在是正常首启动：默认值 + **零问题**（不应被当成损坏）。
+    #[test]
+    fn missing_file_is_not_a_problem() {
+        let dir = std::env::temp_dir().join(format!("qq-settings-missing-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("临时目录创建失败");
+        let path = dir.join("missing.json");
+
+        let (settings, problems) = AppSettings::load_lenient(&path);
+
+        assert_eq!(settings.max_history_items, DEFAULT_MAX_HISTORY_ITEMS);
+        assert!(problems.is_empty(), "缺文件不算问题，实际：{problems:?}");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// `Default` 实现必须与 serde 的逐字段默认值完全一致。
+    ///
+    /// 宽松解析用 `Default` 给坏字段兜底，两者一旦分叉，
+    /// 「坏字段回退」就会悄悄变成「变成另一个默认值」。
+    #[test]
+    fn default_impl_equals_serde_defaults_field_by_field() {
+        let from_impl = serde_json::to_value(AppSettings::default()).expect("序列化失败");
+        let from_serde: AppSettings = serde_json::from_str("{}").expect("空对象反序列化失败");
+        let from_serde = serde_json::to_value(from_serde).expect("序列化失败");
+
+        assert_eq!(
+            from_impl, from_serde,
+            "AppSettings::default() 与 serde 缺省值必须逐字段相同"
+        );
+    }
+
+    /// 写入单字段时：其他字段与**未知键**必须原样保留（Maccy 逐键语义）。
+    #[test]
+    fn write_setting_field_preserves_other_fields_and_unknown_keys() {
+        let dir = std::env::temp_dir().join(format!("qq-settings-write-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("临时目录创建失败");
+        let path = dir.join("settings.json");
+        std::fs::write(
+            &path,
+            r#"{
+  "excluded_apps": ["1Password"],
+  "selected_provider": "deepl",
+  "max_history_items": 300,
+  "theme": 123,
+  "sort_order": "by_magic",
+  "future_field": {"kept": true}
+}"#,
+        )
+        .expect("写临时设置文件失败");
+
+        write_setting_field(&path, "image_height_px", &40u32).expect("写字段失败");
+
+        let written: Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).expect("读回失败"))
+                .expect("回写内容必须是合法 JSON");
+        let map = written.as_object().expect("根必须是对象");
+
+        assert_eq!(map["image_height_px"], Value::from(40));
+        assert_eq!(
+            map["excluded_apps"],
+            serde_json::json!(["1Password"]),
+            "排除名单不得被覆盖"
+        );
+        assert_eq!(map["selected_provider"], Value::from("deepl"));
+        assert_eq!(map["max_history_items"], Value::from(300));
+        assert_eq!(
+            map["future_field"],
+            serde_json::json!({"kept": true}),
+            "未知键必须原样保留（未来版本/别的工具写的字段不能被抹掉）"
+        );
+        assert_eq!(
+            map["theme"],
+            Value::from(123),
+            "本次没被写的坏字段也不该被改写——留给用户修"
+        );
+        assert_eq!(map["sort_order"], Value::from("by_magic"));
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 语法损坏的文件在写入前必须备份为 `settings.json.bak`，绝不静默覆盖。
+    #[test]
+    fn write_setting_field_backs_up_syntax_broken_file() {
+        let dir = std::env::temp_dir().join(format!("qq-settings-bak-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("临时目录创建失败");
+        let path = dir.join("settings.json");
+        let original = "{ broken json ";
+        std::fs::write(&path, original).expect("写临时设置文件失败");
+
+        write_setting_field(&path, "theme", &"dark").expect("写字段失败");
+
+        let backup = backup_path_for(&path);
+        assert_eq!(
+            std::fs::read_to_string(&backup).expect("备份文件应存在"),
+            original,
+            "备份必须是原文件的完整副本"
+        );
+        let written: Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).expect("读回失败"))
+                .expect("回写内容必须是合法 JSON");
+        assert_eq!(
+            written,
+            serde_json::json!({"theme": "dark"}),
+            "损坏文件从空对象重建，只含本次写入的键"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 文件不存在时写入：直接创建，不产生无意义的 .bak。
+    #[test]
+    fn write_setting_field_creates_file_without_backup_when_missing() {
+        let dir = std::env::temp_dir().join(format!("qq-settings-new-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("临时目录创建失败");
+        let path = dir.join("settings.json");
+
+        write_setting_field(&path, "stay_in_tray", &false).expect("写字段失败");
+
+        assert!(!backup_path_for(&path).exists(), "首次创建不该留 .bak");
+        assert!(!AppSettings::load_or_default(&path).stay_in_tray);
         std::fs::remove_dir_all(&dir).ok();
     }
 }
