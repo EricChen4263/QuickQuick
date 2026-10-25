@@ -339,3 +339,47 @@ fn enable_returns_err_when_registration_fails() {
     );
     assert_eq!(launcher.calls(), vec!["enable"], "启用路径不该先查状态");
 }
+
+/// 二阶失败：OS 注册失败、回滚写也失败 → 错误文案必须如实说明磁盘当前是新值、下次启动生效。
+///
+/// 只报「恢复原设置也失败」会让用户以为设置没变；实际磁盘上已经是新值，
+/// 下次启动会按新值生效——不说清楚，用户会以为「没变化所以不用管」。
+#[cfg(unix)]
+#[test]
+fn rollback_failure_message_states_disk_holds_new_value_and_takes_effect_next_launch() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempfile::tempdir().expect("创建临时目录失败");
+    let path = dir.path().join("autostart.json");
+    std::fs::write(&path, br#"{"enabled": false}"#).expect("写初始配置失败");
+
+    // apply 里先把文件设成只读，再返回失败 → 新值已写入，回滚写必然失败
+    let err = set_enabled_with_apply(&path, true, |_| {
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o444))
+            .expect("设置只读失败");
+        Err("LaunchAgent 写入被拒绝".to_string())
+    })
+    .expect_err("回滚失败也必须返回 Err");
+
+    // 恢复权限以便读取与清理
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).expect("恢复权限失败");
+
+    let message = err.to_string();
+    assert!(
+        message.contains("系统登录项设置失败") && message.contains("LaunchAgent 写入被拒绝"),
+        "错误应带上底层原因，实际：{message}"
+    );
+    assert!(
+        message.contains("下次启动生效"),
+        "必须告知磁盘当前是新值、将于下次启动生效，实际：{message}"
+    );
+    assert!(
+        message.contains("配置文件当前为新值") && message.contains("请检查文件权限"),
+        "必须告知磁盘真值并给出可操作建议，实际：{message}"
+    );
+    // 磁盘确实是新值（这正是文案要如实说明的那件事）
+    assert!(
+        AutostartConfig::load_or_default(&path).enabled,
+        "回滚失败时磁盘上应仍是新值 true"
+    );
+}

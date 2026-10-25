@@ -222,7 +222,7 @@ pub fn set_enabled_with_apply(
                 "系统登录项设置失败：{err}，已恢复为原设置"
             ))),
             Err(rollback_err) => Err(AutostartError::ApplyFailed(format!(
-                "系统登录项设置失败：{err}；恢复原设置也失败：{rollback_err}"
+                "系统登录项设置失败：{err}；恢复原设置也失败，配置文件当前为新值，将于下次启动生效，请检查文件权限后重试（{rollback_err}）"
             ))),
         };
     }
