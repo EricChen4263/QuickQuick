@@ -23,16 +23,24 @@ export const RENDER_BLOCK_SIZE = 100;
 export const NEAR_BOTTOM_THRESHOLD_PX = 240;
 
 /**
- * 把窗口大小收敛到 [0, total]。
- * total 为 0（空列表）时窗口为 0，避免负值向上游传播。
+ * 把窗口大小收敛到 [0, total]；**total 为 0 时保留窗口，不清零**。
+ *
+ * 窗口是「渲染上限」，不是「当前条数」：数据还没取回（或过滤后暂时为空）时把它压成 0，
+ * 会让「数据到达的第一个提交」渲染 0 行，下一提交才由 effect 补齐——多一次 0→N 的中间态，
+ * 任何「等列表出现某条文案」的判断都可能落在那一帧（P4-2 登记的 flake 根因）。
+ * 只保证非负：负值仍收敛到 0，避免向上游传播。
  */
 function clampToTotal(count: number, total: number): number {
-  if (total <= 0) return 0;
-  return Math.min(Math.max(count, 0), total);
+  const nonNegative = Math.max(count, 0);
+  if (total <= 0) return nonNegative;
+  return Math.min(nonNegative, total);
 }
 
 /**
  * 初始渲染窗口：取一块，总数不足一块时全渲染。
+ *
+ * 空数据（total = 0）时仍返回一块，而不是 0——窗口是上限，数据为空不代表上限该是 0；
+ * 这样过滤到空再清空时不需要额外一次「窗口从 0 涨回来」的提交。
  *
  * @param total - 当前过滤结果总数
  * @returns 首屏应渲染的条数
@@ -49,6 +57,8 @@ export function initialRenderCount(total: number): number {
  * @returns 追加一块后的窗口大小
  */
 export function growRenderCount(current: number, total: number): number {
+  // 空数据没有「可追加的下一块」：保持不变（也不要清零）。
+  if (total <= 0) return Math.max(current, 0);
   return clampToTotal(current + RENDER_BLOCK_SIZE, total);
 }
 
@@ -65,7 +75,7 @@ export function growRenderCount(current: number, total: number): number {
  * @param current       - 当前窗口大小
  * @param selectedIndex - 选中项在完整过滤结果中的索引（-1 表示无选中项）
  * @param total         - 当前过滤结果总数
- * @returns 能包含选中项的窗口大小，且不小于当前窗口
+ * @returns 能包含选中项的窗口大小，且不小于当前窗口；total = 0 时保持当前窗口（不清零）
  */
 export function nextRenderCount(current: number, selectedIndex: number, total: number): number {
   const clampedCurrent = clampToTotal(current, total);

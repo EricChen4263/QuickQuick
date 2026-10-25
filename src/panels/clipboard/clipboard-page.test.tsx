@@ -119,6 +119,40 @@ describe("clipboard-page", () => {
     });
   });
 
+  it("clipboard-page: 数据到达后的首个渲染批次即渲染全部行，不出现 0 行中间态（P4-2）", async () => {
+    // Arrange：IPC 用「延迟 resolve」的 promise，先拿到挂载后的 listbox 再让数据到达
+    let resolveItems!: (items: ClipItem[]) => void;
+    mockListClipItems.mockReturnValue(
+      new Promise<ClipItem[]>((resolve) => {
+        resolveItems = resolve;
+      }),
+    );
+    render(<ClipboardPage />);
+    const listbox = await screen.findByRole("listbox");
+
+    // 记录每次 DOM 变更后的行数：修复前「数据提交」那一帧渲染 0 行（窗口被压成 0），
+    // 下一个提交才由 effect 补齐，于是首个批次是 0；修复后首个批次就是全部行。
+    const snapshots: number[] = [];
+    const observer = new MutationObserver(() => {
+      snapshots.push(within(listbox).queryAllByRole("option").length);
+    });
+    observer.observe(listbox, { childList: true, subtree: true });
+
+    // Act：让数据落地（这里刻意不包 act —— 需要让「数据提交」与「effect 补窗口的提交」
+    // 分属两帧，否则两帧会被合并成一个批次，观察不到中间态）
+    const silence = vi.spyOn(console, "error").mockImplementation(() => {});
+    resolveItems(MOCK_ITEMS);
+    await waitFor(() => {
+      expect(within(listbox).getAllByRole("option")).toHaveLength(MOCK_ITEMS.length);
+    });
+    silence.mockRestore();
+    observer.disconnect();
+
+    // Assert：首个渲染批次就必须是全部行
+    expect(snapshots.length).toBeGreaterThan(0);
+    expect(snapshots[0]).toBe(MOCK_ITEMS.length);
+  });
+
   it("clipboard-page: 搜索框输入过滤词后列表只剩匹配项", async () => {
     // Arrange
     mockListClipItems.mockResolvedValue(MOCK_ITEMS);

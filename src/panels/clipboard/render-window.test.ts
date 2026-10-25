@@ -22,8 +22,8 @@ describe("initialRenderCount", () => {
     expect(initialRenderCount(30)).toBe(30);
   });
 
-  it("空列表窗口为 0", () => {
-    expect(initialRenderCount(0)).toBe(0);
+  it("空列表窗口取首屏块而不是 0（窗口是上限，不随数据为空清零）", () => {
+    expect(initialRenderCount(0)).toBe(RENDER_BLOCK_SIZE);
   });
 });
 
@@ -41,8 +41,8 @@ describe("growRenderCount", () => {
     expect(growRenderCount(250, 250)).toBe(250);
   });
 
-  it("空列表不增长", () => {
-    expect(growRenderCount(100, 0)).toBe(0);
+  it("空列表不增长也不清零", () => {
+    expect(growRenderCount(100, 0)).toBe(100);
   });
 });
 
@@ -95,6 +95,15 @@ describe("nextRenderCount", () => {
 
   it("窗口大于总数时收敛到总数，不越界", () => {
     expect(nextRenderCount(200, 5, 120)).toBe(120);
+  });
+
+  it("总数 0 时不清零窗口（P4-2：挂载期空数据不得把窗口压成 0）", () => {
+    // 无选中项、无数据 → 窗口保持
+    expect(nextRenderCount(RENDER_BLOCK_SIZE, -1, 0)).toBe(RENDER_BLOCK_SIZE);
+    // 有选中项但数据为空 → 同样保持，不收缩
+    expect(nextRenderCount(RENDER_BLOCK_SIZE, 0, 0)).toBe(RENDER_BLOCK_SIZE);
+    // 被上一步压小过的窗口也不会再被「数据为空」进一步压成 0
+    expect(nextRenderCount(3, -1, 0)).toBe(3);
   });
 
   it("块大小是窗口增长的唯一粒度", () => {
