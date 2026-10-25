@@ -326,6 +326,29 @@ function ClipboardPage({ onTranslateItem }: ClipboardPageProps) {
     setRenderCount((prev) => nextRenderCount(prev, safeHighlight, filteredItems.length));
   }, [safeHighlight, filteredItems.length]);
 
+  // 列表被删空（filteredItems 由非空变空）→ 清空选中并把窗口收回首屏块。
+  //
+  // 为什么只在「非空变空」时收：93ef41b 之后窗口不会因数据为空被压成 0（那会让数据到达的
+  // 第一个提交渲染 0 行），但反过来也有坑——窗口本来就可能被滚到底扩到几百条，
+  // 若删空后不清，重新有数据时会**一次性渲染几百行**，增量渲染等于白做。
+  // 用 ref 记录上一次的条数：挂载时 prev 也是 0，所以挂载不会误触发。
+  //
+  // **顺序敏感**：本 effect 必须写在上面那条扩窗 effect 之后——同一个提交里两者都写
+  // renderCount，扩窗那条用 `prev => nextRenderCount(prev, …)`，数据为空时返回 prev 原样，
+  // 若排在后面就会把我们刚收回的窗口又覆盖成几百。测试
+  // 「列表删空后窗口收回首屏块」锁定这个顺序。
+  const prevFilteredCountRef = useRef(filteredItems.length);
+  useEffect(() => {
+    const prevCount = prevFilteredCountRef.current;
+    prevFilteredCountRef.current = filteredItems.length;
+    if (prevCount > 0 && filteredItems.length === 0) {
+      // 列表空了就没有「选中项」可言：不清的话，回填后 highlightIndex 还停在旧位置
+      // （例如删空前 ⌘↓ 停在 299），窗口会为了包住它一次扩回几百行——增量渲染等于白做。
+      setHighlightIndex(0);
+      setRenderCount(initialRenderCount(0));
+    }
+  }, [filteredItems.length]);
+
   // 选中项变化后把高亮行滚入可视区（block:nearest 只在越界时滚动，不打断已可见项）。
   // 扩窗是异步的：选中项那一行还没进 DOM 时先记下未同步状态，等扩窗引发的
   // renderCount 变化再补一次滚动。用 ref 记录已同步索引，避免追加渲染时把列表拽回高亮行。

@@ -119,6 +119,47 @@ describe("clipboard-page", () => {
     });
   });
 
+  it("clipboard-page: 列表删空后窗口收回首屏块，回填不会一次性渲染几百行（P4-2）", async () => {
+    // Arrange：300 条 → 用 ⌘↓ 跳到末条把窗口扩到 300
+    const manyItems: ClipItem[] = Array.from({ length: 300 }, (_, index) => ({
+      id: `bulk-${index}`,
+      content: `批量条目 ${index}`,
+      kind: "text" as const,
+      isFavorite: false,
+      hasThumbnail: false,
+      lastModifiedUtc: 10_000 + index,
+    }));
+    mockListClipItems.mockResolvedValue(manyItems);
+    const clipboardChanged = { fire: null as null | (() => void) };
+    mockListen.mockImplementation((_eventName, handler) => {
+      clipboardChanged.fire = handler as () => void;
+      return Promise.resolve(() => {});
+    });
+
+    render(<ClipboardPage />);
+    const listbox = await screen.findByRole("listbox");
+    await waitFor(() => expect(within(listbox).getAllByRole("option")).toHaveLength(100));
+
+    fireEvent.keyDown(screen.getByRole("searchbox"), {
+      key: "ArrowDown",
+      metaKey: true,
+    });
+    await waitFor(() => expect(within(listbox).getAllByRole("option")).toHaveLength(300));
+
+    // Act 1：列表被删空（后端发 clipboard-changed，本次取回空列表）
+    mockListClipItems.mockResolvedValue([]);
+    clipboardChanged.fire?.();
+    await waitFor(() => expect(within(listbox).queryAllByRole("option")).toHaveLength(0));
+
+    // Act 2：回填同样的 300 条
+    mockListClipItems.mockResolvedValue(manyItems);
+    clipboardChanged.fire?.();
+    await waitFor(() => expect(within(listbox).queryAllByRole("option").length).toBeGreaterThan(0));
+
+    // Assert：窗口已收回首屏块（100），不是删空前扩大的 300
+    expect(within(listbox).getAllByRole("option")).toHaveLength(100);
+  });
+
   it("clipboard-page: 数据到达后的首个渲染批次即渲染全部行，不出现 0 行中间态（P4-2）", async () => {
     // Arrange：IPC 用「延迟 resolve」的 promise，先拿到挂载后的 listbox 再让数据到达
     let resolveItems!: (items: ClipItem[]) => void;
