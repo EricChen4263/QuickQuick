@@ -1277,6 +1277,25 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
+    /// 旧高亮值 `"default"`（本项目自造档，已删除）不做 serde alias：
+    /// 读路径按「未知枚举值」回退到默认档 `Bold`。
+    ///
+    /// 依据：v0.4 尚未发布，不存在需要兼容的存量文件；加 alias 只会让「四档」的语义含糊。
+    #[test]
+    fn legacy_highlight_default_value_falls_back_to_bold() {
+        let (settings, problems, whole) =
+            AppSettings::lenient_from_json_str(r#"{"highlight_style":"default"}"#);
+
+        assert!(!whole, "单字段坏值不算整份回退");
+        assert_eq!(
+            settings.highlight_style,
+            HighlightStyle::Bold,
+            "旧值 default 应回退到默认档 bold（不再保留自造档）"
+        );
+        assert_eq!(problems.len(), 1);
+        assert!(problems[0].contains("highlight_style"));
+    }
+
     /// 整份回退的判定：语法坏/根不是对象 → 需要提示；字段级坏值 → 不需要。
     #[test]
     fn whole_file_fallback_flag_only_set_for_unparsable_content() {
