@@ -75,6 +75,22 @@ const MOCK_ITEMS: ClipItem[] = [
   },
 ];
 
+/**
+ * 等列表区真正渲染出至少一行，返回 listbox 元素。
+ *
+ * 不要用 `screen.getAllByText("Hello World")` 当就绪信号：挂载期 `ClipboardPage` 会把
+ * renderCount 清零，列表可能在某一提交里是 0 行，而右侧预览区**已经**显示同一条内容——
+ * 谓词被预览区提前满足，后续断言就落在中间提交上，跑起来随调度抖动（P6-2 登记的 flake）。
+ * 这里把等待范围收进 listbox 子树，让「谓词」与「后续断言」在同一棵树上。
+ */
+async function waitForListReady(expectText = "Hello World"): Promise<HTMLElement> {
+  const listbox = await screen.findByRole("listbox");
+  await waitFor(() => {
+    expect(within(listbox).getAllByText(expectText).length).toBeGreaterThanOrEqual(1);
+  });
+  return listbox;
+}
+
 describe("clipboard-page", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -92,12 +108,15 @@ describe("clipboard-page", () => {
     // Act
     render(<ClipboardPage />);
 
-    // Assert：等待异步取数完成，列表区至少出现各条目文本（用 getAllBy 允许列表+预览多实例）
+    // Assert：三条断言必须放在**同一个** waitFor 里，且范围收进 listbox。
+    // 拆成「等第一条 → 断言其余两条」时，等待可能被右侧预览区提前满足
+    // （挂载期列表先提交 0 行、预览已显示 Hello World），后续断言就会读到中间提交。
+    const listbox = await screen.findByRole("listbox");
     await waitFor(() => {
-      expect(screen.getAllByText("Hello World").length).toBeGreaterThanOrEqual(1);
+      expect(within(listbox).getAllByText("Hello World").length).toBeGreaterThanOrEqual(1);
+      expect(within(listbox).getAllByText("富文本内容示例").length).toBeGreaterThanOrEqual(1);
+      expect(within(listbox).getAllByText("Another text item").length).toBeGreaterThanOrEqual(1);
     });
-    expect(screen.getAllByText("富文本内容示例").length).toBeGreaterThanOrEqual(1);
-    expect(screen.getAllByText("Another text item").length).toBeGreaterThanOrEqual(1);
   });
 
   it("clipboard-page: 搜索框输入过滤词后列表只剩匹配项", async () => {
@@ -105,19 +124,22 @@ describe("clipboard-page", () => {
     mockListClipItems.mockResolvedValue(MOCK_ITEMS);
     const user = userEvent.setup();
     render(<ClipboardPage />);
-    await waitFor(() => {
-      expect(screen.getAllByText("Hello World").length).toBeGreaterThanOrEqual(1);
-    });
+    const listbox = await waitForListReady();
 
     // Act：在搜索框输入 "Hello"
     const searchInput = screen.getByRole("searchbox");
     await user.type(searchInput, "Hello");
 
-    // Assert：富文本内容示例和 Another text item 不再出现于 DOM
+    // Assert：列表子树里只剩 Hello World 一行。
+    // 注意：搜索态下命中片段被 <mark> 切成多个文本节点，getByText("Hello World") 反而找不到，
+    // 之前那条断言能过只是因为**预览区**渲染了未切分的原文——正是 P6-2 flake 的同一类病。
+    // 所以这里断言「行数 + 整行 textContent」，既不受切分影响，也不再借预览区的光。
     await waitFor(() => {
-      expect(screen.queryByText("富文本内容示例")).not.toBeInTheDocument();
-      expect(screen.queryByText("Another text item")).not.toBeInTheDocument();
-      expect(screen.getAllByText("Hello World").length).toBeGreaterThanOrEqual(1);
+      const rows = within(listbox).getAllByRole("option");
+      expect(rows).toHaveLength(1);
+      expect(rows[0].textContent).toContain("Hello World");
+      expect(listbox.textContent).not.toContain("富文本内容示例");
+      expect(listbox.textContent).not.toContain("Another text item");
     });
   });
 
@@ -126,19 +148,19 @@ describe("clipboard-page", () => {
     mockListClipItems.mockResolvedValue(MOCK_ITEMS);
     const user = userEvent.setup();
     render(<ClipboardPage />);
-    await waitFor(() => {
-      expect(screen.getAllByText("Hello World").length).toBeGreaterThanOrEqual(1);
-    });
+    const listbox = await waitForListReady();
 
     // Act：展开类型筛选下拉并选 richtext（自定义 Select：点 trigger 再点选项）
     await user.click(screen.getByRole("button", { name: "类型筛选" }));
     await user.click(screen.getByRole("option", { name: "富文本" }));
 
-    // Assert：只剩富文本条目，纯文本条目消失
+    // Assert：列表子树里只剩富文本一条（行数 + 整行 textContent，不借预览区的光）
     await waitFor(() => {
-      expect(screen.getAllByText("富文本内容示例").length).toBeGreaterThanOrEqual(1);
-      expect(screen.queryByText("Hello World")).not.toBeInTheDocument();
-      expect(screen.queryByText("Another text item")).not.toBeInTheDocument();
+      const rows = within(listbox).getAllByRole("option");
+      expect(rows).toHaveLength(1);
+      expect(rows[0].textContent).toContain("富文本内容示例");
+      expect(listbox.textContent).not.toContain("Hello World");
+      expect(listbox.textContent).not.toContain("Another text item");
     });
   });
 
@@ -146,9 +168,7 @@ describe("clipboard-page", () => {
     // Arrange
     mockListClipItems.mockResolvedValue(MOCK_ITEMS);
     render(<ClipboardPage />);
-    await waitFor(() => {
-      expect(screen.getAllByText("Hello World").length).toBeGreaterThanOrEqual(1);
-    });
+    await waitForListReady();
 
     // 初始高亮索引 0，预览应显示第一条内容
     const previewRegion = screen.getByRole("region", { name: "预览" });
@@ -168,9 +188,7 @@ describe("clipboard-page", () => {
     // Arrange
     mockListClipItems.mockResolvedValue(MOCK_ITEMS);
     render(<ClipboardPage />);
-    await waitFor(() => {
-      expect(screen.getAllByText("Hello World").length).toBeGreaterThanOrEqual(1);
-    });
+    await waitForListReady();
 
     const searchInput = screen.getByRole("searchbox");
     const previewRegion = screen.getByRole("region", { name: "预览" });
@@ -195,9 +213,7 @@ describe("clipboard-page", () => {
     mockListClipItems.mockResolvedValue(MOCK_ITEMS);
     const user = userEvent.setup();
     render(<ClipboardPage />);
-    await waitFor(() => {
-      expect(screen.getAllByText("Hello World").length).toBeGreaterThanOrEqual(1);
-    });
+    await waitForListReady();
 
     // Act：点击 item-1 的收藏按钮（isFavorite=false，点后应变 true）
     const favoriteButtons = screen.getAllByRole("button", { name: /收藏/ });
@@ -212,9 +228,7 @@ describe("clipboard-page", () => {
     mockListClipItems.mockResolvedValue(MOCK_ITEMS);
     const user = userEvent.setup();
     render(<ClipboardPage />);
-    await waitFor(() => {
-      expect(screen.getAllByText("Hello World").length).toBeGreaterThanOrEqual(1);
-    });
+    await waitForListReady();
 
     // Act：预览区的删除按钮（初始高亮 item-1）
     const previewRegion = screen.getByRole("region", { name: "预览" });
@@ -242,9 +256,7 @@ describe("clipboard-page", () => {
     mockToggleFavoriteClip.mockRejectedValue(new Error("收藏 IPC 失败"));
     const user = userEvent.setup();
     render(<ClipboardPage />);
-    await waitFor(() => {
-      expect(screen.getAllByText("Hello World").length).toBeGreaterThanOrEqual(1);
-    });
+    await waitForListReady();
 
     // Act：点击 item-1 的收藏按钮
     const favoriteButtons = screen.getAllByRole("button", { name: /收藏/ });
@@ -263,9 +275,7 @@ describe("clipboard-page", () => {
     mockDeleteClipItem.mockRejectedValue(new Error("删除 IPC 失败"));
     const user = userEvent.setup();
     render(<ClipboardPage />);
-    await waitFor(() => {
-      expect(screen.getAllByText("Hello World").length).toBeGreaterThanOrEqual(1);
-    });
+    await waitForListReady();
 
     // Act：点击预览区的删除按钮
     const previewRegion = screen.getByRole("region", { name: "预览" });
@@ -283,9 +293,7 @@ describe("clipboard-page", () => {
     // Arrange
     mockListClipItems.mockResolvedValue(MOCK_ITEMS);
     render(<ClipboardPage />);
-    await waitFor(() => {
-      expect(screen.getAllByText("Hello World").length).toBeGreaterThanOrEqual(1);
-    });
+    await waitForListReady();
 
     // 初始高亮 0，预览显示 item-1
     const previewRegion = screen.getByRole("region", { name: "预览" });
@@ -307,9 +315,7 @@ describe("clipboard-page", () => {
     // Arrange
     mockListClipItems.mockResolvedValue(MOCK_ITEMS);
     render(<ClipboardPage />);
-    await waitFor(() => {
-      expect(screen.getAllByText("Hello World").length).toBeGreaterThanOrEqual(1);
-    });
+    await waitForListReady();
 
     const previewRegion = screen.getByRole("region", { name: "预览" });
 
@@ -330,9 +336,7 @@ describe("clipboard-page", () => {
     const user = userEvent.setup();
     render(<ClipboardPage />);
 
-    await waitFor(() => {
-      expect(screen.getAllByText("Hello World").length).toBeGreaterThanOrEqual(1);
-    });
+    await waitForListReady();
 
     const previewRegion = screen.getByRole("region", { name: "预览" });
     const pasteBtn = within(previewRegion).getByRole("button", { name: "粘贴到前台" });
@@ -350,9 +354,7 @@ describe("clipboard-page", () => {
     const user = userEvent.setup();
     render(<ClipboardPage />);
 
-    await waitFor(() => {
-      expect(screen.getAllByText("Hello World").length).toBeGreaterThanOrEqual(1);
-    });
+    await waitForListReady();
 
     const previewRegion = screen.getByRole("region", { name: "预览" });
     const pasteBtn = within(previewRegion).getByRole("button", { name: "粘贴到前台" });
@@ -369,9 +371,7 @@ describe("clipboard-page", () => {
     const user = userEvent.setup();
     render(<ClipboardPage />);
 
-    await waitFor(() => {
-      expect(screen.getAllByText("Hello World").length).toBeGreaterThanOrEqual(1);
-    });
+    await waitForListReady();
 
     // 触发 write_back_only 降级
     const previewRegion = screen.getByRole("region", { name: "预览" });
@@ -398,9 +398,7 @@ describe("clipboard-page", () => {
     const user = userEvent.setup();
     render(<ClipboardPage />);
 
-    await waitFor(() => {
-      expect(screen.getAllByText("Hello World").length).toBeGreaterThanOrEqual(1);
-    });
+    await waitForListReady();
 
     const previewRegion = screen.getByRole("region", { name: "预览" });
     const pasteBtn = within(previewRegion).getByRole("button", { name: "粘贴到前台" });
@@ -416,9 +414,7 @@ describe("clipboard-page", () => {
     const user = userEvent.setup();
     const { container } = render(<ClipboardPage />);
 
-    await waitFor(() => {
-      expect(screen.getAllByText("Hello World").length).toBeGreaterThanOrEqual(1);
-    });
+    await waitForListReady();
 
     const previewRegion = screen.getByRole("region", { name: "预览" });
     const pasteBtn = within(previewRegion).getByRole("button", { name: "粘贴到前台" });
@@ -438,9 +434,7 @@ describe("clipboard-page", () => {
     const user = userEvent.setup();
     render(<ClipboardPage />);
 
-    await waitFor(() => {
-      expect(screen.getAllByText("Hello World").length).toBeGreaterThanOrEqual(1);
-    });
+    await waitForListReady();
 
     const previewRegion = screen.getByRole("region", { name: "预览" });
     const pasteBtn = within(previewRegion).getByRole("button", { name: "粘贴到前台" });
@@ -457,9 +451,7 @@ describe("clipboard-page", () => {
     const user = userEvent.setup();
     render(<ClipboardPage />);
 
-    await waitFor(() => {
-      expect(screen.getAllByText("Hello World").length).toBeGreaterThanOrEqual(1);
-    });
+    await waitForListReady();
 
     const settingsBtn = screen.getByRole("button", { name: "前往系统设置" });
     await user.click(settingsBtn);
@@ -478,9 +470,7 @@ describe("clipboard-page", () => {
     localStorage.setItem("qq-onboard-dismissed", "true");
     render(<ClipboardPage onTranslateItem={mockOnTranslateItem} />);
 
-    await waitFor(() => {
-      expect(screen.getAllByText("Hello World").length).toBeGreaterThanOrEqual(1);
-    });
+    await waitForListReady();
 
     // 预览区高亮 item-1（text 类型）——一键翻译按钮仅非图片项可见
     const previewRegion = screen.getByRole("region", { name: "预览" });
@@ -500,9 +490,7 @@ describe("clipboard-page", () => {
     const user = userEvent.setup();
     render(<ClipboardPage />);
 
-    await waitFor(() => {
-      expect(screen.getAllByText("Hello World").length).toBeGreaterThanOrEqual(1);
-    });
+    await waitForListReady();
 
     // 初始挂载调用了一次
     expect(mockListClipItems).toHaveBeenCalledTimes(1);
@@ -526,9 +514,7 @@ describe("clipboard-page", () => {
     const user = userEvent.setup();
     render(<ClipboardPage />);
 
-    await waitFor(() => {
-      expect(screen.getAllByText("Hello World").length).toBeGreaterThanOrEqual(1);
-    });
+    await waitForListReady();
 
     expect(mockListClipItems).toHaveBeenCalledTimes(1);
 
@@ -585,9 +571,7 @@ describe("clipboard-page: 主窗键盘流", () => {
     // Arrange：初始高亮第一条 item-1
     mockListClipItems.mockResolvedValue(MOCK_ITEMS);
     render(<ClipboardPage />);
-    await waitFor(() => {
-      expect(screen.getAllByText("Hello World").length).toBeGreaterThanOrEqual(1);
-    });
+    await waitForListReady();
 
     // Act
     fireEvent.keyDown(screen.getByRole("searchbox"), { key: "Enter" });
@@ -602,9 +586,7 @@ describe("clipboard-page: 主窗键盘流", () => {
     // Arrange
     mockListClipItems.mockResolvedValue(MOCK_ITEMS);
     render(<ClipboardPage />);
-    await waitFor(() => {
-      expect(screen.getAllByText("Hello World").length).toBeGreaterThanOrEqual(1);
-    });
+    await waitForListReady();
     const searchInput = screen.getByRole("searchbox");
 
     // Act
@@ -621,9 +603,7 @@ describe("clipboard-page: 主窗键盘流", () => {
     // Arrange
     mockListClipItems.mockResolvedValue(MOCK_ITEMS);
     render(<ClipboardPage />);
-    await waitFor(() => {
-      expect(screen.getAllByText("Hello World").length).toBeGreaterThanOrEqual(1);
-    });
+    await waitForListReady();
 
     // Act
     fireEvent.keyDown(screen.getByRole("searchbox"), { key: "3", metaKey: true });
@@ -638,9 +618,7 @@ describe("clipboard-page: 主窗键盘流", () => {
     // Arrange：列表只有 3 条
     mockListClipItems.mockResolvedValue(MOCK_ITEMS);
     render(<ClipboardPage />);
-    await waitFor(() => {
-      expect(screen.getAllByText("Hello World").length).toBeGreaterThanOrEqual(1);
-    });
+    await waitForListReady();
 
     // Act
     fireEvent.keyDown(screen.getByRole("searchbox"), { key: "5", metaKey: true });
@@ -673,9 +651,7 @@ describe("clipboard-page: 主窗键盘流", () => {
     mockListClipItems.mockResolvedValue(MOCK_ITEMS);
     mockPasteToFront.mockResolvedValue({ outcome: "write_back_only" });
     render(<ClipboardPage />);
-    await waitFor(() => {
-      expect(screen.getAllByText("Hello World").length).toBeGreaterThanOrEqual(1);
-    });
+    await waitForListReady();
 
     // Act
     fireEvent.keyDown(screen.getByRole("searchbox"), { key: "Enter" });
@@ -691,9 +667,7 @@ describe("clipboard-page: 主窗键盘流", () => {
     // Arrange
     mockListClipItems.mockResolvedValue(MOCK_ITEMS);
     render(<ClipboardPage />);
-    await waitFor(() => {
-      expect(screen.getAllByText("Hello World").length).toBeGreaterThanOrEqual(1);
-    });
+    await waitForListReady();
 
     // Act
     const notCancelled = fireEvent.keyDown(screen.getByRole("searchbox"), {
@@ -716,9 +690,7 @@ describe("clipboard-page: 主窗键盘流", () => {
     mockListClipItems.mockResolvedValue(MOCK_ITEMS);
     mockCopyClipToClipboard.mockRejectedValue(new Error("copy IPC 失败"));
     render(<ClipboardPage />);
-    await waitFor(() => {
-      expect(screen.getAllByText("Hello World").length).toBeGreaterThanOrEqual(1);
-    });
+    await waitForListReady();
 
     // Act
     fireEvent.keyDown(screen.getByRole("searchbox"), { key: "Enter", altKey: true });
@@ -734,9 +706,7 @@ describe("clipboard-page: 主窗键盘流", () => {
     // Arrange
     mockListClipItems.mockResolvedValue(MOCK_ITEMS);
     render(<ClipboardPage />);
-    await waitFor(() => {
-      expect(screen.getAllByText("Hello World").length).toBeGreaterThanOrEqual(1);
-    });
+    await waitForListReady();
     const input = screen.getByRole("searchbox");
 
     // Act & Assert：dispatchEvent 返回 false 表示 preventDefault 已生效
@@ -760,9 +730,7 @@ describe("clipboard-page: 输入法防御", () => {
     // Arrange
     mockListClipItems.mockResolvedValue(MOCK_ITEMS);
     render(<ClipboardPage />);
-    await waitFor(() => {
-      expect(screen.getAllByText("Hello World").length).toBeGreaterThanOrEqual(1);
-    });
+    await waitForListReady();
     const previewRegion = screen.getByRole("region", { name: "预览" });
 
     // Act：组词中按方向键
@@ -776,9 +744,7 @@ describe("clipboard-page: 输入法防御", () => {
     // Arrange
     mockListClipItems.mockResolvedValue(MOCK_ITEMS);
     render(<ClipboardPage />);
-    await waitFor(() => {
-      expect(screen.getAllByText("Hello World").length).toBeGreaterThanOrEqual(1);
-    });
+    await waitForListReady();
     const previewRegion = screen.getByRole("region", { name: "预览" });
 
     // Act
@@ -792,9 +758,7 @@ describe("clipboard-page: 输入法防御", () => {
     // Arrange
     mockListClipItems.mockResolvedValue(MOCK_ITEMS);
     render(<ClipboardPage />);
-    await waitFor(() => {
-      expect(screen.getAllByText("Hello World").length).toBeGreaterThanOrEqual(1);
-    });
+    await waitForListReady();
     const searchInput = screen.getByRole("searchbox");
     const previewRegion = screen.getByRole("region", { name: "预览" });
 
@@ -829,9 +793,7 @@ describe("clipboard-page: 边界探测 - 横幅 DOM 顺序", () => {
     const user = userEvent.setup();
     const { container } = render(<ClipboardPage />);
 
-    await waitFor(() => {
-      expect(screen.getAllByText("Hello World").length).toBeGreaterThanOrEqual(1);
-    });
+    await waitForListReady();
 
     // 先触发 opError
     const favoriteButtons = screen.getAllByRole("button", { name: /收藏/ });
@@ -865,9 +827,7 @@ describe("clipboard-page: 边界探测 - 横幅 DOM 顺序", () => {
     mockPasteToFront.mockResolvedValue({ outcome: "full_paste" });
     render(<ClipboardPage />);
 
-    await waitFor(() => {
-      expect(screen.getAllByText("Hello World").length).toBeGreaterThanOrEqual(1);
-    });
+    await waitForListReady();
 
     expect(screen.queryByText(/已复制到剪贴板/)).not.toBeInTheDocument();
   });
