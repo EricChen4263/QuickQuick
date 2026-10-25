@@ -203,7 +203,7 @@ describe("AppearancePanel", () => {
     // Arrange：模拟「settings.json 损坏 → 后端拒写」的中文错误
     const error = vi.spyOn(console, "error").mockImplementation(() => {});
     const backendMessage =
-      "settings.json 无法解析（JSON 语法错误），已拒绝写入以免覆盖你的设置；请先修复该文件。备份副本：settings.json.1.bak";
+      "settings.json 无法解析（JSON 语法错误），已拒绝写入以免覆盖你的设置；请先修复该文件。备份副本：settings.json.1.1792899443151.bak";
     mockSetImageHeight.mockRejectedValue(new Error(backendMessage));
     render(
       <SettingsSaveErrorProvider>
@@ -219,7 +219,7 @@ describe("AppearancePanel", () => {
 
     // Assert：文案必须透到**页面级错误条**（含「已拒绝写入」与备份指引），输入框回滚到已生效值
     expect(await screen.findByRole("alert")).toHaveTextContent("已拒绝写入");
-    expect(screen.getByRole("alert")).toHaveTextContent("settings.json.1.bak");
+    expect(screen.getByRole("alert")).toHaveTextContent("settings.json.1.1792899443151.bak");
     expect(imageHeightInput().value).toBe("40");
     error.mockRestore();
   });

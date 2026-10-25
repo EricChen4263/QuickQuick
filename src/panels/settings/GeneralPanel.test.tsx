@@ -108,7 +108,7 @@ describe("GeneralPanel 手动检查后下载安装", () => {
 describe("GeneralPanel 开关保存失败时把后端原文显示出来", () => {
   it("settings.json 拒写时渲染后端中文错误（含修复指引），开关不假装已生效", async () => {
     const backendMessage =
-      "settings.json 无法解析（JSON 语法错误），已拒绝写入以免覆盖你的设置；请先修复该文件。备份副本：settings.json.1.bak";
+      "settings.json 无法解析（JSON 语法错误），已拒绝写入以免覆盖你的设置；请先修复该文件。备份副本：settings.json.1.1792899443151.bak";
     vi.mocked(setLaunchOnLogin).mockRejectedValueOnce(new Error(backendMessage));
 
     const user = userEvent.setup();
@@ -126,7 +126,7 @@ describe("GeneralPanel 开关保存失败时把后端原文显示出来", () => 
     await waitFor(() => {
       expect(screen.getByRole("alert")).toHaveTextContent("已拒绝写入");
     });
-    expect(screen.getByRole("alert")).toHaveTextContent("settings.json.1.bak");
+    expect(screen.getByRole("alert")).toHaveTextContent("settings.json.1.1792899443151.bak");
     expect(screen.getByRole("switch", { name: "开机自启动" })).toHaveAttribute(
       "aria-checked",
       "true",

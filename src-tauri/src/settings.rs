@@ -538,10 +538,33 @@ fn read_field<T: serde::de::DeserializeOwned>(
 /// 与某个设置文件同目录的备份文件名：`settings.json` → `settings.json.<unix_ms>.bak`。
 ///
 /// 带时间戳是为了**不覆盖已有备份**：连续两次损坏应当留下两份留痕，而不是后一份把前一份顶掉。
-pub fn backup_path_for(path: &Path, unix_ms: i64) -> PathBuf {
+pub fn backup_path_for(path: &Path, seq: u64, unix_ms: i64) -> PathBuf {
     let mut name = path.file_name().unwrap_or_default().to_os_string();
-    name.push(format!(".{unix_ms}.bak"));
+    name.push(format!(".{seq}.{unix_ms}.bak"));
     path.with_file_name(name)
+}
+
+/// 解析备份文件名 → `(是否新格式, 写入序号, 时间戳)`。
+///
+/// - 新格式 `<文件名>.<seq>.<ms>.bak`：`seq` 是单调写入序号，`ms` 只用于展示。
+/// - 旧格式 `<文件名>.<ms>.bak`（以及中间实验格式 `<文件名>.<ms>-<n>.bak`）：没有序号，
+///   一律视为「比所有新格式更早」，彼此之间按 `ms` 排。
+fn parse_backup_name(file_name: &str, prefix: &str) -> Option<(bool, u64, i64)> {
+    let rest = file_name.strip_prefix(prefix)?.strip_suffix(".bak")?;
+    if let Some((seq_part, ms_part)) = rest.split_once('.') {
+        let seq: u64 = seq_part.parse().ok()?;
+        let ms: i64 = ms_part.parse().ok()?;
+        return Some((true, seq, ms));
+    }
+    let ms_part = rest.split_once('-').map(|(ms, _)| ms).unwrap_or(rest);
+    let ms: i64 = ms_part.parse().ok()?;
+    Some((false, 0, ms))
+}
+
+/// 目标文件对应的备份前缀：`settings.json` → `settings.json.`。
+fn backup_prefix(path: &Path) -> Option<String> {
+    let file_name = path.file_name().and_then(|name| name.to_str())?;
+    Some(format!("{file_name}."))
 }
 
 /// 当前 unix 毫秒时间戳（只用于备份文件名；取不到时间时退化为 0，仍能生成备份）。
@@ -558,55 +581,60 @@ fn now_unix_ms() -> i64 {
 /// 只增不删会让目录里堆出几十上百个 `.bak`，反而没人愿意去找。
 pub const BACKUP_KEEP_COUNT: usize = 5;
 
-/// 某个配置文件的既有备份，按「时间戳 → 同毫秒序号」升序（最旧在前）。
+/// 某个配置文件的既有备份，按**写入次序**升序（最旧在前）。
 ///
-/// 只认 `<文件名>.<ms>.bak` / `<文件名>.<ms>-<n>.bak` 两种形态，
-/// 别的文件（例如另一个配置的备份）不会被误删。
+/// 排序键：新格式 `<seq>.<ms>.bak` 一律排在旧格式（无 seq）之后，新格式内部只按 `seq`；
+/// 旧格式内部按 `ms`。别的文件（例如另一个配置的备份）不会被误删。
 fn list_backups(path: &Path) -> Vec<PathBuf> {
-    let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
+    let Some(prefix) = backup_prefix(path) else {
         return Vec::new();
     };
     let Some(dir) = path.parent() else {
         return Vec::new();
     };
-    let prefix = format!("{file_name}.");
 
-    let mut found: Vec<(i64, i64, PathBuf)> = std::fs::read_dir(dir)
+    let mut found: Vec<((u8, u64, i64), PathBuf)> = std::fs::read_dir(dir)
         .into_iter()
         .flatten()
         .filter_map(|entry| entry.ok())
         .filter_map(|entry| {
             let name = entry.file_name().to_str()?.to_string();
-            let rest = name.strip_prefix(&prefix)?.strip_suffix(".bak")?;
-            // rest 形如 "1792899443151" 或 "1792899443151-2"
-            let (ms_part, seq_part) = match rest.split_once('-') {
-                Some((ms, seq)) => (ms, seq),
-                None => (rest, "0"),
-            };
-            let ms: i64 = ms_part.parse().ok()?;
-            let seq: i64 = seq_part.parse().ok()?;
-            Some((ms, seq, entry.path()))
+            let (is_new, seq, ms) = parse_backup_name(&name, &prefix)?;
+            let key = if is_new { (1, seq, ms) } else { (0, 0, ms) };
+            Some((key, entry.path()))
         })
         .collect();
-    found.sort_by_key(|(ms, seq, _)| (*ms, *seq));
-    found.into_iter().map(|(_, _, path)| path).collect()
+    found.sort_by_key(|(key, _)| *key);
+    found.into_iter().map(|(_, path)| path).collect()
 }
 
-/// 既有备份里最大的时间戳（无备份返回 None）。
-fn newest_backup_ms(path: &Path) -> Option<i64> {
-    let file_name = path.file_name().and_then(|name| name.to_str())?;
-    let prefix = format!("{file_name}.");
-    std::fs::read_dir(path.parent()?)
+/// 下一个备份写入序号：磁盘上已有新格式备份的最大 seq + 1（无备份时为 1）。
+///
+/// 取「磁盘上已有的最大 seq」而不是进程内计数器，是为了**跨重启仍然递增**；
+/// 也正因为它只看磁盘，墙钟回拨不会让序号倒退。
+fn next_backup_seq(path: &Path) -> u64 {
+    let Some(prefix) = backup_prefix(path) else {
+        return 1;
+    };
+    let Some(dir) = path.parent() else {
+        return 1;
+    };
+    std::fs::read_dir(dir)
         .into_iter()
         .flatten()
         .filter_map(|entry| entry.ok())
         .filter_map(|entry| {
             let name = entry.file_name().to_str()?.to_string();
-            let rest = name.strip_prefix(&prefix)?.strip_suffix(".bak")?;
-            let ms_part = rest.split_once('-').map(|(ms, _)| ms).unwrap_or(rest);
-            ms_part.parse::<i64>().ok()
+            let (is_new, seq, _) = parse_backup_name(&name, &prefix)?;
+            if is_new {
+                Some(seq)
+            } else {
+                None
+            }
         })
         .max()
+        .map(|max| max.saturating_add(1))
+        .unwrap_or(1)
 }
 
 /// 只保留最近 [`BACKUP_KEEP_COUNT`] 份备份，更旧的删掉。
@@ -656,22 +684,20 @@ pub fn ensure_writable_json_object(path: &Path) -> Result<(), SettingsError> {
     read_settings_object_for_write(path).map(|_| ())
 }
 
-/// 选一个尚未占用的备份路径：`<ms>.bak` 已存在时依次试 `<ms>-1.bak`、`<ms>-2.bak`…
+/// 选一个尚未占用的备份路径：`<seq>.<ms>.bak`，`seq` 从磁盘最大值 +1 起递增。
 ///
-/// 同一毫秒内连续触发（例如两次坏文件写入）也不会互相覆盖。
-/// 时间戳由调用方给（生产用 [`now_unix_ms`]，测试用它模拟时钟回拨）。
+/// 同一毫秒内连续触发也不会互相覆盖——区分靠的是 seq，不是时间戳，
+/// 所以不需要旧实现里那种 `-1`/`-2` 后缀（那条分支已删除）。
+/// 时间戳由调用方给（生产用 [`now_unix_ms`]，测试用它模拟时钟回拨），
+/// 它**只用于展示**，不参与排序。
 fn unique_backup_path_at(path: &Path, now_ms: i64) -> Result<PathBuf, SettingsError> {
-    let first = backup_path_for(path, now_ms);
-    if !first.exists() {
-        return Ok(first);
-    }
-    for suffix in 1..1000 {
-        let mut name = path.file_name().unwrap_or_default().to_os_string();
-        name.push(format!(".{now_ms}-{suffix}.bak"));
-        let candidate = path.with_file_name(name);
+    let mut seq = next_backup_seq(path);
+    for _ in 0..1000 {
+        let candidate = backup_path_for(path, seq, now_ms);
         if !candidate.exists() {
             return Ok(candidate);
         }
+        seq = seq.saturating_add(1);
     }
     Err(SettingsError::IoError(std::io::Error::new(
         std::io::ErrorKind::AlreadyExists,
@@ -775,17 +801,14 @@ fn backup_broken_settings_at(
         }
     }
 
-    // **写入次序单调化**：文件名里的时间戳取 `max(now_ms, 既有备份最大时间戳 + 1)`。
+    // 文件名是 `<seq>.<ms>.bak`：**排序只看 seq（写入次序），ms 是真实墙钟、只用于展示**。
     //
-    // 为什么不能直接用墙钟：系统时钟回拨时，新备份的时间戳会小于旧备份，按名字排序
-    // 就会被当成「最旧的」——连续两次回拨时，第二次甚至会把第一次刚创建的备份挤出保留名额。
-    // 也不用文件 mtime：`fs::copy` 把 mtime 设成「当前时间」，与墙钟同源，回拨时一样不可靠。
-    // 把「写入次序」直接编进文件名，是唯一只依赖我们自己写入顺序的做法，且跨重启有效
-    // （既有备份的名字里已带着各自的时间戳，取 max+1 即接在最后）。
-    let monotonic_ms = newest_backup_ms(path)
-        .map(|newest| newest.saturating_add(1).max(now_ms))
-        .unwrap_or(now_ms);
-    let backup = unique_backup_path_at(path, monotonic_ms)?;
+    // 为什么不用墙钟排序：系统时钟回拨时新备份的时间戳会小于旧备份，按名字排就成了「最旧的」，
+    // 连续两次回拨会把上一次刚创建的备份挤出保留名额。为什么不用 mtime 排序（另一个候选）：
+    // macOS 上 `fs::copy` **保留源文件 mtime**（实测：源设 2001 年，目标也是 2001 年），
+    // 且 mtime 可被外部工具（`touch`、`cp -p`、归档还原）任意设定，不代表本进程的写入次序
+    // （Linux 行为未验证）。把写入次序编进文件名里的 seq，才是只依赖本进程写入顺序的做法。
+    let backup = unique_backup_path_at(path, now_ms)?;
     std::fs::copy(path, &backup)?;
     prune_backups(path, &backup);
     eprintln!(
@@ -1445,6 +1468,126 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
+    /// 备份文件名里的 `ms` 必须是**真实墙钟**：既有的未来时间戳旧备份不得把新备份的时间戳顶到未来。
+    ///
+    /// 旧实现用 `max(now, newest+1)` 保序，一次未来时间戳会永久传染——新备份的时间戳再也不是真实时间，
+    /// 用户按时间找「今天改坏的那份」会找不到。现在顺序交给 seq，ms 只用于展示。
+    #[test]
+    fn new_backup_keeps_real_wall_clock_when_legacy_backup_is_in_the_future() {
+        let dir = std::env::temp_dir().join(format!("qq-settings-future-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("临时目录创建失败");
+        let path = dir.join("settings.json");
+        std::fs::write(&path, "{ broken now ").expect("写临时设置文件失败");
+
+        // 旧格式备份，时间戳设成 2100 年
+        let future_ms: i64 = 4_102_444_800_000;
+        let legacy = path.with_file_name(format!("settings.json.{future_ms}.bak"));
+        std::fs::write(&legacy, "legacy 2100 backup").expect("写旧格式备份失败");
+
+        let now_ms = 1_600_000_000_000;
+        let created =
+            backup_broken_settings_at(&path, "JSON 语法错误（测试）", now_ms).expect("备份应成功");
+
+        let name = created
+            .file_name()
+            .and_then(|name| name.to_str())
+            .expect("备份文件名非法 UTF-8")
+            .to_string();
+        let (is_new, seq, ms) =
+            parse_backup_name(&name, "settings.json.").expect("新备份名应可解析");
+        assert!(is_new, "新备份必须是新格式 <seq>.<ms>.bak，实际：{name}");
+        assert_eq!(
+            ms, now_ms,
+            "新备份的 ms 必须是真实墙钟（注入值），不能被旧备份的 2100 年传染，实际：{name}"
+        );
+        assert_eq!(seq, 1, "旧格式不占序号，新备份从 1 开始，实际：{name}");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 连续写入 7 次：只保留最新 5 份，且它们的 seq 严格递增。
+    #[test]
+    fn backup_sequence_is_strictly_increasing_and_capped() {
+        let dir = std::env::temp_dir().join(format!("qq-settings-seq-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("临时目录创建失败");
+        let path = dir.join("settings.json");
+
+        for round in 1..=7 {
+            std::fs::write(&path, format!("{{ broken {round} ")).expect("写临时设置文件失败");
+            write_setting_field(&path, "theme", &"dark").expect_err("每轮都应拒写");
+        }
+
+        let backups = backup_files(&dir);
+        assert_eq!(
+            backups.len(),
+            BACKUP_KEEP_COUNT,
+            "只应保留 {BACKUP_KEEP_COUNT} 份"
+        );
+
+        let seqs: Vec<u64> = backups
+            .iter()
+            .map(|path| {
+                let name = path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .expect("文件名非法");
+                let (is_new, seq, _) = parse_backup_name(name, "settings.json.").expect("应可解析");
+                assert!(is_new, "保留的应是新格式备份：{name}");
+                seq
+            })
+            .collect();
+        assert!(
+            seqs.windows(2).all(|pair| pair[0] < pair[1]),
+            "保留的备份 seq 必须严格递增，实际：{seqs:?}"
+        );
+        assert_eq!(seqs.last().copied(), Some(7), "最新的 seq 应是第 7 次写入");
+
+        // 内容对应第 3–7 轮（第 1、2 轮已被淘汰）
+        let contents: Vec<String> = backups
+            .iter()
+            .map(|path| std::fs::read_to_string(path).expect("读备份失败"))
+            .collect();
+        for round in 3..=7 {
+            assert!(
+                contents.contains(&format!("{{ broken {round} ")),
+                "缺第 {round} 轮"
+            );
+        }
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 同一毫秒内连续写入：靠 seq 区分，文件名不冲突（旧的 `-1`/`-2` 后缀分支已删除）。
+    #[test]
+    fn same_millisecond_backups_do_not_collide() {
+        let dir = std::env::temp_dir().join(format!("qq-settings-samems-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("临时目录创建失败");
+        let path = dir.join("settings.json");
+        let now_ms = 1_600_000_000_000;
+
+        std::fs::write(&path, "{ first ").expect("写临时设置文件失败");
+        let first = backup_broken_settings_at(&path, "测试", now_ms).expect("第一次备份应成功");
+        std::fs::write(&path, "{ second ").expect("写临时设置文件失败");
+        let second = backup_broken_settings_at(&path, "测试", now_ms).expect("第二次备份应成功");
+
+        assert_ne!(first, second, "同一毫秒的两次备份不能共用同一个文件名");
+        assert!(first.exists() && second.exists(), "两份备份都应存在");
+        let backups = backup_files(&dir);
+        assert_eq!(backups.len(), 2, "应有两份备份，实际：{backups:?}");
+        // 两份都带同一个真实墙钟，只是 seq 不同
+        for backup in &backups {
+            let name = backup
+                .file_name()
+                .and_then(|n| n.to_str())
+                .expect("文件名非法");
+            let (is_new, _, ms) = parse_backup_name(name, "settings.json.").expect("应可解析");
+            assert!(is_new, "应是新格式：{name}");
+            assert_eq!(ms, now_ms, "ms 仍是真实墙钟：{name}");
+        }
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
     /// 连续两次时钟回拨：第一次创建的备份不能被第二次挤掉，总数不超过保留上限。
     ///
     /// 旧实现按墙钟时间戳排序：第二次回拨（更小的 now）生成的备份排在更前，
@@ -1460,7 +1603,7 @@ mod tests {
         // 5 份「未来」备份占满保留名额
         let future_ms = 4_102_444_800_000; // 2100-01-01
         for offset in 0..BACKUP_KEEP_COUNT as i64 {
-            let backup = backup_path_for(&path, future_ms + offset);
+            let backup = backup_path_for(&path, offset as u64 + 1, future_ms + offset);
             std::fs::write(&backup, format!("old-{offset}")).expect("写旧备份失败");
         }
 
@@ -1517,7 +1660,7 @@ mod tests {
         // 5 份「未来」备份（时间戳远大于本次使用的 now）
         let future_ms = 4_102_444_800_000; // 2100-01-01
         for offset in 0..BACKUP_KEEP_COUNT as i64 {
-            let backup = backup_path_for(&path, future_ms + offset);
+            let backup = backup_path_for(&path, offset as u64 + 1, future_ms + offset);
             std::fs::write(&backup, format!("old-{offset}")).expect("写旧备份失败");
         }
 

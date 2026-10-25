@@ -83,7 +83,7 @@ import SettingsPage from "./SettingsPage";
 import GeneralPanel from "./GeneralPanel";
 
 const BACKEND_MESSAGE =
-  "settings.json 无法解析（JSON 语法错误），已拒绝写入以免覆盖你的设置；请先修复该文件。备份副本：settings.json.1.bak";
+  "settings.json 无法解析（JSON 语法错误），已拒绝写入以免覆盖你的设置；请先修复该文件。备份副本：settings.json.1.1792899443151.bak";
 
 function renderWithBanner(ui: React.ReactElement) {
   return render(
@@ -160,7 +160,7 @@ describe("SettingsSaveErrorChannel（按来源隔离）", () => {
       );
     });
     expect(result).toEqual({ ok: false, error: BACKEND_MESSAGE });
-    expect(await screen.findByRole("alert")).toHaveTextContent("settings.json.1.bak");
+    expect(await screen.findByRole("alert")).toHaveTextContent("settings.json.1.1792899443151.bak");
 
     await act(async () => {
       result = await channel.runSave("appearance.imageHeight", () => Promise.resolve("done"));
@@ -232,7 +232,7 @@ describe("各面板的保存失败都路由到页面级错误条", () => {
     await user.click(toggle);
 
     expect(await screen.findByRole("alert")).toHaveTextContent("已拒绝写入");
-    expect(screen.getByRole("alert")).toHaveTextContent("settings.json.1.bak");
+    expect(screen.getByRole("alert")).toHaveTextContent("settings.json.1.1792899443151.bak");
     expect(screen.getByRole("switch", { name: "跳过敏感内容" })).toHaveAttribute(
       "aria-checked",
       "true",
@@ -280,7 +280,7 @@ describe("各面板的保存失败都路由到页面级错误条", () => {
     await user.click(toggle);
 
     expect(await screen.findByRole("alert")).toHaveTextContent("已拒绝写入");
-    expect(screen.getByRole("alert")).toHaveTextContent("settings.json.1.bak");
+    expect(screen.getByRole("alert")).toHaveTextContent("settings.json.1.1792899443151.bak");
     expect(screen.getByRole("switch", { name: "开机自启动" })).toHaveAttribute(
       "aria-checked",
       "true",
@@ -289,7 +289,7 @@ describe("各面板的保存失败都路由到页面级错误条", () => {
 
   it("热键：配置损坏时展示修复指引，键位行仍渲染（不整块失效）", async () => {
     const backupPath =
-      "/Users/tester/Library/Application Support/QuickQuick/hotkey.json.1792899443151.bak";
+      "/Users/tester/Library/Application Support/QuickQuick/hotkey.json.1.1792899443151.bak";
     vi.mocked(getHotkeys).mockResolvedValueOnce({
       history: "CmdOrCtrl+Shift+C",
       translate: "CmdOrCtrl+Shift+T",
@@ -307,7 +307,7 @@ describe("各面板的保存失败都路由到页面级错误条", () => {
     expect(screen.getByRole("alert")).toHaveTextContent("已备份到");
     // 路径只出现一次（就在 hint 文案里），不再单独渲染一行「备份副本：X」
     const alertText = screen.getByRole("alert").textContent ?? "";
-    expect(alertText.match(/hotkey\.json\.1792899443151\.bak/g) ?? []).toHaveLength(1);
+    expect(alertText.match(/hotkey\.json\.1\.1792899443151\.bak/g) ?? []).toHaveLength(1);
     expect(alertText).not.toContain("备份副本：");
     expect(screen.getByRole("alert")).not.toHaveTextContent("稍后重试");
 
