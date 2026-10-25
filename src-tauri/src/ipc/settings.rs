@@ -167,11 +167,9 @@ pub fn set_hotkey_runtime_impl(
     hotkey_path: &Path,
     runtime: &dyn RuntimeHotkeyRegistrar,
 ) -> Result<(), String> {
-    let mut config = if hotkey_path.exists() {
-        HotkeyConfig::load(hotkey_path).map_err(|e| e.to_string())?
-    } else {
-        HotkeyConfig::default()
-    };
+    // 读用容错版：hotkey.json 损坏时按默认值继续，让写路径去做「备份 + 拒写」，
+    // 这样用户拿到的是带修复指引的错误，而不是一句笼统的「序列化失败」。
+    let mut config = HotkeyConfig::load_or_default(hotkey_path);
 
     let old_accelerator = config.get_accelerator(action).to_string();
     if old_accelerator == accelerator {
@@ -181,7 +179,9 @@ pub fn set_hotkey_runtime_impl(
     runtime.register_action_shortcut(action, accelerator)?;
 
     config.set_accelerator(action, accelerator);
-    if let Err(e) = config.save(hotkey_path) {
+    // 逐键落盘：只改这个动作的键，其余动作与未知键原样保留；
+    // hotkey.json 语法坏时先备份再拒写（见 settings::update_json_object）
+    if let Err(e) = HotkeyConfig::save_accelerator(hotkey_path, action, accelerator) {
         let _ = runtime.unregister(accelerator);
         return Err(e.to_string());
     }
@@ -855,9 +855,8 @@ pub fn get_launch_on_login_impl(autostart_path: &Path) -> Result<bool, String> {
 /// # Errors
 /// 文件写入失败时返回错误字符串。
 pub fn set_launch_on_login_impl(value: bool, autostart_path: &Path) -> Result<(), String> {
-    let mut config = AutostartConfig::load_or_default(autostart_path);
-    config.enabled = value;
-    config.save(autostart_path).map_err(|e| e.to_string())
+    // 逐键落盘：只改 enabled，未知键原样保留；语法坏的文件先备份再拒写
+    AutostartConfig::save_enabled(autostart_path, value).map_err(|e| e.to_string())
 }
 
 /// Tauri 命令：读取当前暂停捕获状态。

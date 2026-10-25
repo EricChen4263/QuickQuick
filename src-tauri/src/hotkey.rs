@@ -32,6 +32,20 @@ pub enum HotkeyError {
     /// 文件 I/O 失败
     #[error("热键配置文件读写失败：{0}")]
     IoError(#[from] std::io::Error),
+    /// 配置文件存在但无法解析为 JSON 对象：**拒绝写入**（已先备份留痕）。
+    #[error("{0}")]
+    Unparsable(String),
+}
+
+impl From<crate::settings::SettingsError> for HotkeyError {
+    fn from(err: crate::settings::SettingsError) -> Self {
+        use crate::settings::SettingsError;
+        match err {
+            SettingsError::SerdeError(inner) => Self::SerdeError(inner),
+            SettingsError::IoError(inner) => Self::IoError(inner),
+            SettingsError::Unparsable { .. } => Self::Unparsable(err.to_string()),
+        }
+    }
 }
 
 fn default_history_accelerator() -> String {
@@ -99,6 +113,38 @@ impl HotkeyConfig {
         }
     }
 
+    /// 逐键写入某个动作的加速键（对齐 settings.json 的策略，见 [`crate::settings::update_json_object`]）。
+    ///
+    /// 与 [`HotkeyConfig::save`] 的差别：只改目标动作的那一个键，另两个动作与任何未知键原样保留；
+    /// 文件语法坏 / 根不是对象时先备份为 `hotkey.json.<ms>.bak`，然后**拒写**并返回 Err。
+    ///
+    /// # Errors
+    /// - `HotkeyError::Unparsable`：文件无法解析（已备份，原文件未改动）
+    /// - `HotkeyError::IoError` / `SerdeError`：读写或序列化失败
+    pub fn save_accelerator(
+        path: &Path,
+        action: HotkeyAction,
+        accelerator: &str,
+    ) -> Result<(), HotkeyError> {
+        let key = Self::config_key(action);
+        crate::settings::update_json_object(path, |map| {
+            map.insert(
+                key.to_string(),
+                serde_json::Value::String(accelerator.to_string()),
+            );
+        })?;
+        Ok(())
+    }
+
+    /// 动作对应的 JSON 键名（与 serde 字段名保持一致）。
+    fn config_key(action: HotkeyAction) -> &'static str {
+        match action {
+            HotkeyAction::History => "history_accelerator",
+            HotkeyAction::Translate => "translate_accelerator",
+            HotkeyAction::Main => "main_accelerator",
+        }
+    }
+
     /// 将当前配置序列化为 JSON 并写入指定路径。
     ///
     /// # Errors
@@ -119,5 +165,14 @@ impl HotkeyConfig {
         let content = std::fs::read_to_string(path)?;
         let config = serde_json::from_str(&content)?;
         Ok(config)
+    }
+
+    /// 容错读取：文件不存在 / 读失败 / 内容损坏时一律回退 [`HotkeyConfig::default`]。
+    ///
+    /// 语义与 [`crate::autostart::AutostartConfig::load_or_default`] 对齐。
+    /// 写路径（[`Self::save_accelerator`]）另有「备份 + 拒写」保护，所以这里静默回退
+    /// 不会把坏文件覆盖掉——它只是让本次比较/展示有个可用的基准值。
+    pub fn load_or_default(path: &Path) -> Self {
+        Self::load(path).unwrap_or_default()
     }
 }

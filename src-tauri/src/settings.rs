@@ -34,9 +34,13 @@ pub enum SettingsError {
     /// `Display` 就是要给用户看的文案：它经命令层 `to_string()` 原样传到前端。
     /// `backup` 是留痕副本的路径（带时间戳），提示里带上，方便用户去修。
     #[error(
-        "settings.json 无法解析（{reason}），已拒绝写入以免覆盖你的设置；请先修复该文件，本次未改动原文件。备份副本：{backup}"
+        "{file} 无法解析（{reason}），已拒绝写入以免覆盖你的设置；请先修复该文件，本次未改动原文件。备份副本：{backup}"
     )]
-    Unparsable { reason: String, backup: PathBuf },
+    Unparsable {
+        file: String,
+        reason: String,
+        backup: PathBuf,
+    },
 }
 
 fn default_selected_provider() -> String {
@@ -579,6 +583,12 @@ fn unique_backup_path(path: &Path) -> Result<PathBuf, SettingsError> {
 ///
 /// 备份失败（目录只读等）同样返回 Err，且原文件一个字节都不动。
 fn read_settings_object_for_write(path: &Path) -> Result<Map<String, Value>, SettingsError> {
+    let file = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("配置文件")
+        .to_string();
+
     let content = match std::fs::read_to_string(path) {
         Ok(content) => content,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(Map::new()),
@@ -596,12 +606,20 @@ fn read_settings_object_for_write(path: &Path) -> Result<Map<String, Value>, Set
         Ok(other) => {
             let reason = format!("根是 {} 而不是 JSON 对象", value_kind(&other));
             let backup = backup_broken_settings(path, &reason)?;
-            Err(SettingsError::Unparsable { reason, backup })
+            Err(SettingsError::Unparsable {
+                file,
+                reason,
+                backup,
+            })
         }
         Err(err) => {
             let reason = format!("JSON 语法错误：{err}");
             let backup = backup_broken_settings(path, &reason)?;
-            Err(SettingsError::Unparsable { reason, backup })
+            Err(SettingsError::Unparsable {
+                file,
+                reason,
+                backup,
+            })
         }
     }
 }
@@ -655,9 +673,27 @@ pub fn update_settings_value<F>(path: &Path, mutate: F) -> Result<(), SettingsEr
 where
     F: FnOnce(&mut Map<String, Value>),
 {
+    update_json_object(path, |map| {
+        mutate(map);
+        // settings.json 专属体检：写完顺手看一眼已知字段，坏字段点名但不改文件
+        log_unparsable_fields(map);
+    })
+}
+
+/// 任意「单文件 JSON 对象」配置的逐键更新（`hotkey.json` / `autostart.json` 也走这里）。
+///
+/// 语义与 settings.json 完全一致：读原始对象 → 只改目标键 → 写回，
+/// **未知键与其他字段原样保留**；文件语法坏 / 根不是对象时先备份再**拒写**（[`SettingsError::Unparsable`]）。
+/// 与 [`update_settings_value`] 的唯一差别是**不做 settings 专属的字段体检**。
+///
+/// # Errors
+/// 同 [`update_settings_value`]。
+pub fn update_json_object<F>(path: &Path, mutate: F) -> Result<(), SettingsError>
+where
+    F: FnOnce(&mut Map<String, Value>),
+{
     let mut map = read_settings_object_for_write(path)?;
     mutate(&mut map);
-    log_unparsable_fields(&map);
     let json = serde_json::to_string_pretty(&Value::Object(map))?;
     std::fs::write(path, json)?;
     Ok(())

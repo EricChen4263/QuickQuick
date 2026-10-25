@@ -128,3 +128,90 @@ fn hotkey_load_legacy_config_without_main_uses_default_main() {
         "旧配置缺 main 时应补默认值"
     );
 }
+
+/// 逐键写入：只改目标动作的键，其他动作与未知键原样保留。
+#[test]
+fn save_accelerator_only_touches_target_key() {
+    // Arrange
+    let dir = tempdir().expect("创建临时目录失败");
+    let path = dir.path().join("hotkey.json");
+    std::fs::write(
+        &path,
+        r#"{
+  "history_accelerator": "CmdOrCtrl+Shift+H",
+  "translate_accelerator": "CmdOrCtrl+Shift+Y",
+  "main_accelerator": "CmdOrCtrl+Shift+M",
+  "future_field": [1, 2, 3]
+}"#,
+    )
+    .expect("写临时配置失败");
+
+    // Act
+    HotkeyConfig::save_accelerator(&path, HotkeyAction::Translate, "CmdOrCtrl+Shift+L")
+        .expect("逐键写入应成功");
+
+    // Assert
+    let written: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&path).expect("读回失败"))
+            .expect("回写必须是合法 JSON");
+    let map = written.as_object().expect("根必须是对象");
+    assert_eq!(
+        map["translate_accelerator"],
+        serde_json::Value::from("CmdOrCtrl+Shift+L")
+    );
+    assert_eq!(
+        map["history_accelerator"],
+        serde_json::Value::from("CmdOrCtrl+Shift+H"),
+        "其他动作的热键不得被改动"
+    );
+    assert_eq!(
+        map["main_accelerator"],
+        serde_json::Value::from("CmdOrCtrl+Shift+M")
+    );
+    assert_eq!(
+        map["future_field"],
+        serde_json::json!([1, 2, 3]),
+        "未知键必须原样保留"
+    );
+}
+
+/// 语法损坏的 hotkey.json：备份留痕后拒写，原文件逐字节不变。
+#[test]
+fn save_accelerator_rejects_broken_file_and_keeps_it_intact() {
+    // Arrange
+    let dir = tempdir().expect("创建临时目录失败");
+    let path = dir.path().join("hotkey.json");
+    let original = b"{ broken hotkey json ";
+    std::fs::write(&path, original).expect("写临时配置失败");
+
+    // Act
+    let err = HotkeyConfig::save_accelerator(&path, HotkeyAction::History, "CmdOrCtrl+Shift+K")
+        .expect_err("损坏文件必须拒写");
+
+    // Assert
+    let message = err.to_string();
+    assert!(
+        message.contains("hotkey.json") && message.contains("已拒绝写入"),
+        "错误文案应点名文件并说明拒写，实际：{message}"
+    );
+    assert_eq!(
+        std::fs::read(&path).expect("读回失败"),
+        original,
+        "拒写后原文件必须逐字节不变"
+    );
+    let backups: Vec<_> = std::fs::read_dir(dir.path())
+        .expect("读目录失败")
+        .filter_map(|entry| entry.ok())
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with("hotkey.json.") && name.ends_with(".bak"))
+        })
+        .collect();
+    assert_eq!(
+        backups.len(),
+        1,
+        "应留一份带时间戳的备份，实际：{backups:?}"
+    );
+}

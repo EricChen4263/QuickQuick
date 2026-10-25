@@ -18,6 +18,22 @@ pub enum AutostartError {
     /// 文件 I/O 失败
     #[error("自启动配置文件读写失败：{0}")]
     IoError(#[from] std::io::Error),
+    /// 配置文件存在但无法解析为 JSON 对象：**拒绝写入**（已先备份留痕）。
+    ///
+    /// 文案直接用 `settings` 模块那条（含文件名、修复指引与备份路径），对用户最有用。
+    #[error("{0}")]
+    Unparsable(String),
+}
+
+impl From<crate::settings::SettingsError> for AutostartError {
+    fn from(err: crate::settings::SettingsError) -> Self {
+        use crate::settings::SettingsError;
+        match err {
+            SettingsError::SerdeError(inner) => Self::SerdeError(inner),
+            SettingsError::IoError(inner) => Self::IoError(inner),
+            SettingsError::Unparsable { .. } => Self::Unparsable(err.to_string()),
+        }
+    }
 }
 
 /// 自启动偏好配置：是否在登录时自动启动 QuickQuick
@@ -43,6 +59,23 @@ impl AutostartConfig {
     pub fn save(&self, path: &Path) -> Result<(), AutostartError> {
         let json = serde_json::to_string_pretty(self)?;
         std::fs::write(path, json)?;
+        Ok(())
+    }
+
+    /// 逐键写入 `enabled`（对齐 settings.json 的策略，见 [`crate::settings::update_json_object`]）。
+    ///
+    /// 与 [`AutostartConfig::save`] 的差别：
+    /// - 只改 `enabled` 一个键，**未来版本 / 别的工具写进来的未知键原样保留**；
+    /// - 文件语法坏 / 根不是对象时先备份为 `autostart.json.<ms>.bak`，然后**拒写**并返回 Err——
+    ///   绝不把用户原文件覆盖成只剩一个键的新文件。
+    ///
+    /// # Errors
+    /// - `AutostartError::Unparsable`：文件无法解析（已备份，原文件未改动）
+    /// - `AutostartError::IoError` / `SerdeError`：读写或序列化失败
+    pub fn save_enabled(path: &Path, enabled: bool) -> Result<(), AutostartError> {
+        crate::settings::update_json_object(path, |map| {
+            map.insert("enabled".to_string(), serde_json::Value::Bool(enabled));
+        })?;
         Ok(())
     }
 

@@ -12,7 +12,7 @@ use quickquick_lib::hotkey::HotkeyAction;
 use quickquick_lib::ipc::settings::{
     get_exclude_list_impl, get_hotkeys_impl, get_selected_provider_impl,
     get_translate_providers_impl, set_exclude_list_impl, set_hotkey_runtime_impl,
-    set_selected_provider_impl, RuntimeHotkeyRegistrar,
+    set_launch_on_login_impl, set_selected_provider_impl, RuntimeHotkeyRegistrar,
 };
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -420,5 +420,110 @@ fn ipc_settings_get_selected_provider_migrates_legacy_mymemory_to_default() {
     assert_eq!(
         loaded, "google_free",
         "旧值 mymemory 应迁移回退为默认源 google_free"
+    );
+}
+
+/// 备份文件列表（`<name>.<ms>.bak`），用于断言「拒写时留痕」。
+fn backup_files(dir: &std::path::Path) -> Vec<PathBuf> {
+    let mut found: Vec<PathBuf> = std::fs::read_dir(dir)
+        .expect("读目录失败")
+        .filter_map(|entry| entry.ok())
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.contains(".json.") && name.ends_with(".bak"))
+        })
+        .collect();
+    found.sort();
+    found
+}
+
+/// 语法坏的 hotkey.json：setter 返回中文 Err（含修复指引）、原文件逐字节不变、留一份备份，
+/// 且刚注册的新键被回滚（不留未持久化的临时绑定）。
+#[test]
+fn ipc_settings_set_hotkey_rejects_broken_config_file() {
+    let dir = tempfile::tempdir().expect("创建临时目录失败");
+    let hotkey_path = dir.path().join("hotkey.json");
+    let original = b"{ broken hotkey json ";
+    std::fs::write(&hotkey_path, original).expect("写入损坏配置应成功");
+    let runtime = RecordingRuntimeRegistrar::default();
+
+    let err = set_hotkey_runtime_impl(
+        HotkeyAction::History,
+        "CmdOrCtrl+Shift+H",
+        &hotkey_path,
+        &runtime,
+    )
+    .expect_err("损坏的 hotkey.json 必须拒写");
+
+    assert!(
+        err.contains("hotkey.json") && err.contains("已拒绝写入"),
+        "错误文案应点名文件并给出修复指引，实际：{err}"
+    );
+    assert_eq!(
+        std::fs::read(&hotkey_path).expect("读回失败"),
+        original,
+        "拒写后原文件必须逐字节不变"
+    );
+    assert_eq!(backup_files(dir.path()).len(), 1, "应留一份备份");
+    assert_eq!(
+        runtime.events(),
+        vec![
+            "register:History:CmdOrCtrl+Shift+H".to_string(),
+            "unregister:CmdOrCtrl+Shift+H".to_string(),
+        ],
+        "落盘失败必须注销刚注册的新键"
+    );
+}
+
+/// 语法坏的 autostart.json：setter 返回中文 Err、原文件逐字节不变、留一份备份。
+#[test]
+fn ipc_settings_set_launch_on_login_rejects_broken_config_file() {
+    let dir = tempfile::tempdir().expect("创建临时目录失败");
+    let autostart_path = dir.path().join("autostart.json");
+    let original = b"{ not json ";
+    std::fs::write(&autostart_path, original).expect("写入损坏配置应成功");
+
+    let err = set_launch_on_login_impl(false, &autostart_path).expect_err("损坏配置必须拒写");
+
+    assert!(
+        err.contains("autostart.json") && err.contains("已拒绝写入"),
+        "错误文案应点名文件并给出修复指引，实际：{err}"
+    );
+    assert_eq!(
+        std::fs::read(&autostart_path).expect("读回失败"),
+        original,
+        "拒写后原文件必须逐字节不变"
+    );
+    assert_eq!(backup_files(dir.path()).len(), 1, "应留一份备份");
+}
+
+/// 正常文件：setter 逐键写入，未知键与其他字段原样保留。
+#[test]
+fn ipc_settings_key_level_writes_keep_unknown_keys() {
+    let dir = tempfile::tempdir().expect("创建临时目录失败");
+    let autostart_path = dir.path().join("autostart.json");
+    std::fs::write(
+        &autostart_path,
+        r#"{"enabled":true,"future_field":{"kept":true}}"#,
+    )
+    .expect("写入配置应成功");
+
+    set_launch_on_login_impl(false, &autostart_path).expect("逐键写入应成功");
+
+    let written: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&autostart_path).expect("读回失败"))
+            .expect("回写必须是合法 JSON");
+    let map = written.as_object().expect("根必须是对象");
+    assert_eq!(
+        map["enabled"],
+        serde_json::Value::Bool(false),
+        "enabled 应已改"
+    );
+    assert_eq!(
+        map["future_field"],
+        serde_json::json!({"kept": true}),
+        "未知键必须原样保留"
     );
 }
