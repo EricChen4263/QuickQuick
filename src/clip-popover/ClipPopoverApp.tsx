@@ -185,7 +185,8 @@ export default function ClipPopoverApp() {
   }, []);
 
   // 每次窗口获得焦点时：聚焦输入框、重置搜索、选中回第一项
-  // 同时递增面板会话序号：本次打开的首个预览要重新走 1500ms 档，而不是沿用上次的 200ms
+  // 同时递增面板会话序号：本次打开的首个预览要重新走首个预览档（默认 1500ms，可在设置中改），
+  // 而不是沿用上次的 200ms
   useEffect(() => {
     const win = getCurrentWindow();
     let unlisten: (() => void) | null = null;

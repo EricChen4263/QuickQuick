@@ -205,10 +205,11 @@ body {
 }
 
 /* 图片行的缩略图：高度由外观设置下发（--popover-thumb-height），
-   缺省 24px 与默认设置一致；宽度固定，超高时 object-fit: cover 裁切不撑行 */
+   缺省 40px 与默认设置（Maccy 的 imageMaxHeight 默认值）一致；宽度固定，
+   超高时 object-fit: cover 裁切不撑行 */
 .popover-row-thumb {
   width: 36px;
-  height: var(--popover-thumb-height, 24px);
+  height: var(--popover-thumb-height, 40px);
   border-radius: 4px;
   object-fit: cover;
   border: 1px solid color-mix(in oklch, var(--border) 72%, transparent);
