@@ -386,3 +386,31 @@ fn rollback_failure_message_states_disk_holds_new_value_and_takes_effect_next_la
         "回滚失败时磁盘上应仍是新值 true"
     );
 }
+
+/// 读取状态失败 + 删除也失败：错误串必须同时包含删除原因与读取原因。
+///
+/// 只报「关闭失败」会让排查断在半路：到底是「状态查不到」还是「删不掉」，
+/// 两条原因都要留在文案里。
+#[test]
+fn disable_error_includes_both_delete_and_state_read_reasons() {
+    use quickquick_lib::autostart::apply_with;
+
+    let launcher = FakeLauncher::new(Err("读注册表失败".into()), Ok(()), Err("拒绝访问".into()));
+
+    let err = apply_with(&launcher, false).expect_err("删除失败必须报错");
+
+    assert!(
+        err.contains("关闭自启动失败"),
+        "错误应说明关闭失败，实际：{err}"
+    );
+    assert!(
+        err.contains("拒绝访问"),
+        "错误应包含删除失败的底层原因，实际：{err}"
+    );
+    assert!(
+        err.contains("读注册表失败"),
+        "错误应同时包含读取状态失败的原因，实际：{err}"
+    );
+    assert_eq!(launcher.calls(), vec!["is_enabled", "disable"]);
+}
+
