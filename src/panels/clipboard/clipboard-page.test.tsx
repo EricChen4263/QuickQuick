@@ -24,11 +24,21 @@ vi.mock("../../ipc/ipc-client", () => ({
   pasteToFront: vi.fn(),
   copyClipToClipboard: vi.fn(),
   openAccessibilitySettings: vi.fn(),
+  // 首次引导用到的三个入口（自启偏好 / 历史热键 / 引导状态）
+  getLaunchOnLogin: vi.fn().mockResolvedValue(true),
+  setLaunchOnLogin: vi.fn().mockResolvedValue(undefined),
+  getHotkeys: vi.fn().mockResolvedValue({
+    history: "CmdOrCtrl+Shift+C",
+    translate: "CmdOrCtrl+Shift+T",
+    main: "CmdOrCtrl+Shift+M",
+  }),
+  getOnboardingStatus: vi.fn().mockResolvedValue({ action: "proceed", capability: "full_paste" }),
 }));
 
 import { listen } from "@tauri-apps/api/event";
 import { CLIPBOARD_CHANGED_EVENT } from "../../ipc/events";
 import {
+  setLaunchOnLogin,
   listClipItems,
   deleteClipItem,
   toggleFavoriteClip,
@@ -534,6 +544,35 @@ describe("clipboard-page", () => {
     await waitFor(() => {
       expect(screen.getByRole("alert")).toBeInTheDocument();
     });
+  });
+
+  it("clipboard-page: 自启开关写盘失败时回滚界面并显示后端原文（P5-8）", async () => {
+    mockListClipItems.mockResolvedValue(MOCK_ITEMS);
+    localStorage.removeItem("qq-onboard-finished");
+    localStorage.removeItem("qq-onboard-dismissed");
+    const backendMessage = "autostart.json 无法解析（JSON 语法错误），已拒绝写入以免覆盖你的设置";
+    vi.mocked(setLaunchOnLogin).mockRejectedValueOnce(new Error(backendMessage));
+    const user = userEvent.setup();
+    render(<ClipboardPage />);
+
+    await waitForListReady();
+
+    // 走到自启确认步骤：一路点「下一步」直到该按钮消失
+    // （辅助功能步骤在已授权时会被自动跳过，具体点几次取决于授权状态，所以不写死次数）
+    for (let step = 0; step < 4; step += 1) {
+      const next = screen.queryByRole("button", { name: "下一步" });
+      if (next === null) break;
+      await user.click(next);
+    }
+    const toggle = await screen.findByRole("checkbox", { name: /登录时自动启动/ });
+    expect(toggle).toBeChecked();
+
+    // Act：点掉自启（后端拒写）
+    await user.click(toggle);
+
+    // Assert：界面回滚到已生效值（不再显示成已关闭），并展示后端原文
+    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("已拒绝写入"));
+    expect(screen.getByRole("checkbox", { name: /登录时自动启动/ })).toBeChecked();
   });
 
   it("clipboard-page: OnboardCard「前往系统设置」调用 openAccessibilitySettings", async () => {
