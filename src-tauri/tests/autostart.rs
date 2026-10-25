@@ -353,16 +353,19 @@ fn rollback_failure_message_states_disk_holds_new_value_and_takes_effect_next_la
     let path = dir.path().join("autostart.json");
     std::fs::write(&path, br#"{"enabled": false}"#).expect("写初始配置失败");
 
-    // apply 里先把文件设成只读，再返回失败 → 新值已写入，回滚写必然失败
+    // apply 里把**目录**设成只读再返回失败 → 新值已写入，回滚写（临时文件 + rename）必然失败。
+    // 不能只设文件只读：原子写走 rename 覆盖，POSIX 上覆盖只读文件是允许的（权限在目录上）。
+    let dir_path = dir.path().to_path_buf();
     let err = set_enabled_with_apply(&path, true, |_| {
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o444))
-            .expect("设置只读失败");
+        std::fs::set_permissions(&dir_path, std::fs::Permissions::from_mode(0o555))
+            .expect("设置目录只读失败");
         Err("LaunchAgent 写入被拒绝".to_string())
     })
     .expect_err("回滚失败也必须返回 Err");
 
     // 恢复权限以便读取与清理
-    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).expect("恢复权限失败");
+    std::fs::set_permissions(&dir_path, std::fs::Permissions::from_mode(0o755))
+        .expect("恢复目录权限失败");
 
     let message = err.to_string();
     assert!(

@@ -853,8 +853,35 @@ where
     let mut map = read_settings_object_for_write(path)?;
     mutate(&mut map);
     let json = serde_json::to_string_pretty(&Value::Object(map))?;
-    std::fs::write(path, json)?;
+    write_json_atomically(path, &json)?;
     Ok(())
+}
+
+/// 原子写：同目录临时文件 → `fs::rename` 覆盖目标。
+///
+/// 为什么不用裸 `fs::write`：截断+写入不是原子的，写一半崩溃/磁盘写满会留下**半份 JSON**——
+/// 下次启动读到语法错误，整份设置按默认值生效（用户看到的是「设置全丢了」）。
+/// rename 在同一文件系统内是原子的，读侧要么看到旧内容、要么看到新内容，不存在中间态。
+/// 与 `ipc/portable.rs::write_backup_file` 的落盘模式一致。
+///
+/// 临时文件名固定为 `<文件名>.tmp`（同目录）：本工程的写路径都在主线程串行执行
+/// （见台账「并发前提」），不存在两个写者抢同一个临时文件；失败时尽力删掉临时文件。
+/// 这也让测试可以用「预先在临时文件位置放一个目录」来制造写入失败，验证原文件不被截断。
+fn write_json_atomically(path: &Path, contents: &str) -> Result<(), SettingsError> {
+    let mut tmp_name = path.file_name().unwrap_or_default().to_os_string();
+    tmp_name.push(".tmp");
+    let temp_path = path.with_file_name(tmp_name);
+
+    if let Err(err) = std::fs::write(&temp_path, contents) {
+        // 写临时文件就失败：原文件一个字节都没动
+        let _ = std::fs::remove_file(&temp_path);
+        return Err(SettingsError::IoError(err));
+    }
+
+    std::fs::rename(&temp_path, path).map_err(|err| {
+        let _ = std::fs::remove_file(&temp_path);
+        SettingsError::IoError(err)
+    })
 }
 
 /// 单字段写入：把 `value` 序列化后写进 `key`，其余键原样保留。
@@ -1351,6 +1378,70 @@ mod tests {
             "本次没被写的坏字段也不该被改写——留给用户修"
         );
         assert_eq!(map["sort_order"], Value::from("by_magic"));
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 写入是原子的：临时文件写失败时**原文件一个字节都不动**，且不留残留临时文件。
+    ///
+    /// 制造失败的方式：在 `<文件名>.tmp` 的位置预先放一个**目录**——`fs::write` 打开该路径会失败，
+    /// 于是「写临时文件」这一步就退出，正是我们要验证的「半途失败不截断原文件」。
+    #[test]
+    fn atomic_write_leaves_original_intact_when_temp_write_fails() {
+        let dir =
+            std::env::temp_dir().join(format!("qq-settings-atomic-fail-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("临时目录创建失败");
+        let path = dir.join("settings.json");
+        let original = br#"{"theme":"light"}"#;
+        std::fs::write(&path, original).expect("写临时设置文件失败");
+        // 占住临时文件位置（目录不能用 fs::write 覆盖）
+        let blocker = dir.join("settings.json.tmp");
+        std::fs::create_dir(&blocker).expect("创建占位目录失败");
+
+        let err =
+            write_setting_field(&path, "theme", &"dark").expect_err("临时文件写不进去时必须失败");
+        assert!(
+            matches!(err, SettingsError::IoError(_)),
+            "应是 I/O 错误，实际：{err:?}"
+        );
+
+        assert_eq!(
+            std::fs::read(&path).expect("读回失败"),
+            original,
+            "写失败时原文件必须逐字节不变（不能先截断再写入）"
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 写入成功：内容是新的，且不残留临时文件。
+    #[test]
+    fn atomic_write_leaves_no_temp_file_on_success() {
+        let dir =
+            std::env::temp_dir().join(format!("qq-settings-atomic-ok-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("临时目录创建失败");
+        let path = dir.join("settings.json");
+        std::fs::write(&path, br#"{"theme":"light","max_history_items":300}"#)
+            .expect("写临时设置文件失败");
+
+        write_setting_field(&path, "theme", &"dark").expect("写入应成功");
+
+        let written: Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).expect("读回失败"))
+                .expect("回写内容必须是合法 JSON");
+        assert_eq!(written["theme"], Value::from("dark"));
+        assert_eq!(
+            written["max_history_items"],
+            Value::from(300),
+            "其他字段必须保留"
+        );
+
+        let temp_path = dir.join("settings.json.tmp");
+        assert!(
+            !temp_path.exists(),
+            "rename 成功后不得残留临时文件：{}",
+            temp_path.display()
+        );
 
         std::fs::remove_dir_all(&dir).ok();
     }
