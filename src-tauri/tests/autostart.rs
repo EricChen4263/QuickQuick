@@ -223,3 +223,119 @@ fn set_enabled_removes_config_when_apply_fails_and_file_was_absent() {
         "写入前文件不存在时，回滚应删除文件而不是留一份凭空生成的配置"
     );
 }
+
+/// 假登录项实现：记录调用并返回预设结果，用来覆盖「条目已不存在」等平台差异。
+struct FakeLauncher {
+    is_enabled: Result<bool, String>,
+    enable: Result<(), String>,
+    disable: Result<(), String>,
+    calls: std::cell::RefCell<Vec<&'static str>>,
+}
+
+impl FakeLauncher {
+    fn new(
+        is_enabled: Result<bool, String>,
+        enable: Result<(), String>,
+        disable: Result<(), String>,
+    ) -> Self {
+        Self {
+            is_enabled,
+            enable,
+            disable,
+            calls: std::cell::RefCell::new(Vec::new()),
+        }
+    }
+
+    fn calls(&self) -> Vec<&'static str> {
+        self.calls.borrow().clone()
+    }
+}
+
+impl quickquick_lib::autostart::AutostartLauncher for FakeLauncher {
+    fn is_enabled(&self) -> Result<bool, String> {
+        self.calls.borrow_mut().push("is_enabled");
+        self.is_enabled.clone()
+    }
+
+    fn enable(&self) -> Result<(), String> {
+        self.calls.borrow_mut().push("enable");
+        self.enable.clone()
+    }
+
+    fn disable(&self) -> Result<(), String> {
+        self.calls.borrow_mut().push("disable");
+        self.disable.clone()
+    }
+}
+
+/// 关闭自启时条目已不存在：视为成功（幂等），且配置写入 false。
+///
+/// Windows 上删除不存在的注册表项会报错，若不做这一步判断，用户会看到「关闭失败」却永远关不掉。
+#[test]
+fn disable_is_noop_success_when_entry_already_absent() {
+    use quickquick_lib::autostart::apply_with;
+
+    let dir = tempfile::tempdir().expect("创建临时目录失败");
+    let path = dir.path().join("autostart.json");
+    std::fs::write(&path, br#"{"enabled": true}"#).expect("写初始配置失败");
+
+    // 条目已不存在；disable 若被调用会返回错误（用它来证明根本没调用）
+    let launcher = FakeLauncher::new(Ok(false), Ok(()), Err("条目不存在，删除失败".into()));
+
+    set_enabled_with_apply(&path, false, |enabled| apply_with(&launcher, enabled))
+        .expect("条目已不存在时应幂等成功");
+
+    assert_eq!(
+        launcher.calls(),
+        vec!["is_enabled"],
+        "条目不存在就不该再调 disable"
+    );
+    assert!(
+        !AutostartConfig::load_or_default(&path).enabled,
+        "配置应写入 false"
+    );
+}
+
+/// 条目仍在但删除失败：必须返回 Err（否则界面显示已关闭、系统仍会自启）。
+#[test]
+fn disable_returns_err_when_entry_still_exists_and_delete_fails() {
+    use quickquick_lib::autostart::apply_with;
+
+    let launcher = FakeLauncher::new(Ok(true), Ok(()), Err("拒绝访问".into()));
+
+    let err = apply_with(&launcher, false).expect_err("条目仍在且删除失败必须报错");
+
+    assert!(
+        err.contains("关闭自启动失败") && err.contains("拒绝访问"),
+        "错误应说明关闭失败并带底层原因，实际：{err}"
+    );
+    assert_eq!(launcher.calls(), vec!["is_enabled", "disable"]);
+}
+
+/// 读取当前状态失败时保守处理：仍尝试删除，并把读取失败写进错误。
+#[test]
+fn disable_still_tries_when_state_read_fails() {
+    use quickquick_lib::autostart::apply_with;
+
+    let launcher = FakeLauncher::new(Err("读注册表失败".into()), Ok(()), Ok(()));
+
+    apply_with(&launcher, false).expect("读取失败但删除成功仍算成功");
+
+    assert_eq!(launcher.calls(), vec!["is_enabled", "disable"]);
+}
+
+/// 启用失败直接返回 Err（启用没有「已达成」的省事路径）。
+#[test]
+fn enable_returns_err_when_registration_fails() {
+    use quickquick_lib::autostart::apply_with;
+
+    let launcher = FakeLauncher::new(Ok(false), Err("写注册表失败".into()), Ok(()));
+
+    let err = apply_with(&launcher, true).expect_err("启用失败必须报错");
+
+    assert!(
+        err.contains("启用自启动失败") && err.contains("写注册表失败"),
+        "错误应说明启用失败并带底层原因，实际：{err}"
+    );
+    assert_eq!(launcher.calls(), vec!["enable"], "启用路径不该先查状态");
+}

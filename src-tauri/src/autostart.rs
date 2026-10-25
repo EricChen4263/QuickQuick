@@ -110,24 +110,84 @@ impl AutostartConfig {
 /// 封装为独立函数供 `lib.rs` setup 阶段与 `ipc/settings.rs` 的 `set_launch_on_login`
 /// 命令共享，避免重复维护相同的 enable/disable 分支逻辑。
 ///
+/// 平台登录项操作（可注入：生产用 tauri 插件实现，测试用假实现）。
+///
+/// 抽成 trait 是为了让「条目已不存在」「删除失败」这类平台差异可测——
+/// Windows 上删除一个不存在的注册表项会报错，Mac 上则是幂等的。
+pub trait AutostartLauncher {
+    /// 当前系统里是否已注册登录项。
+    fn is_enabled(&self) -> Result<bool, String>;
+    /// 注册登录项。
+    fn enable(&self) -> Result<(), String>;
+    /// 注销登录项。
+    fn disable(&self) -> Result<(), String>;
+}
+
+/// [`AutostartLauncher`] 的真实实现：`tauri-plugin-autostart`。
+struct TauriLauncher<'a> {
+    handle: &'a tauri::AppHandle,
+}
+
+impl AutostartLauncher for TauriLauncher<'_> {
+    fn is_enabled(&self) -> Result<bool, String> {
+        use tauri_plugin_autostart::ManagerExt as AutostartManagerExt;
+        self.handle
+            .autolaunch()
+            .is_enabled()
+            .map_err(|e| e.to_string())
+    }
+
+    fn enable(&self) -> Result<(), String> {
+        use tauri_plugin_autostart::ManagerExt as AutostartManagerExt;
+        self.handle.autolaunch().enable().map_err(|e| e.to_string())
+    }
+
+    fn disable(&self) -> Result<(), String> {
+        use tauri_plugin_autostart::ManagerExt as AutostartManagerExt;
+        self.handle
+            .autolaunch()
+            .disable()
+            .map_err(|e| e.to_string())
+    }
+}
+
+/// 按目标状态**幂等**应用登录项设置。
+///
+/// 关闭时先查当前状态：条目已不存在说明目标状态已达成，直接算成功——
+/// 否则 Windows 上会出现「条目本来就没有，删除报错 → 永久失败」的死路
+/// （依据：`auto-launch` 0.5.0 删除不存在的注册表项会返回错误，属源码阅读结论，未在 Windows 实测）。
+/// 只有「条目仍在、删除真的失败」才返回 Err；读不到状态时保守地仍尝试 delete，
+/// 并把读取失败一并写进错误，便于定位。
+///
+/// # Errors
+/// 注册失败、或条目仍在却注销失败时返回错误字符串。
+pub fn apply_with(launcher: &dyn AutostartLauncher, enabled: bool) -> Result<(), String> {
+    if enabled {
+        return launcher
+            .enable()
+            .map_err(|e| format!("启用自启动失败：{e}"));
+    }
+    match launcher.is_enabled() {
+        Ok(false) => Ok(()),
+        Ok(true) => launcher
+            .disable()
+            .map_err(|e| format!("关闭自启动失败：{e}")),
+        Err(read_err) => launcher
+            .disable()
+            .map_err(|e| format!("关闭自启动失败：{e}（读取当前状态失败：{read_err}）")),
+    }
+}
+
+/// 把登录项设置应用到当前系统。
+///
 /// 失败时返回错误字符串（由调用方决定怎么处理）：
 /// - 启动期（`lib.rs` setup）只 eprintln，注册失败不该中断启动；
 /// - 用户主动切换（IPC 命令）必须回滚配置并返回 Err——否则界面显示「已开启」而系统没注册。
 ///
 /// # Errors
-/// OS Launcher / LaunchAgent 注册或注销失败时返回错误字符串。
+/// 同 [`apply_with`]。
 pub fn apply_to_os(handle: &tauri::AppHandle, enabled: bool) -> Result<(), String> {
-    use tauri_plugin_autostart::ManagerExt as AutostartManagerExt;
-    let mgr = handle.autolaunch();
-    if enabled {
-        mgr.enable()
-            .map_err(|e| format!("启用自启动失败：{e}"))
-            .map(|_| ())
-    } else {
-        mgr.disable()
-            .map_err(|e| format!("关闭自启动失败：{e}"))
-            .map(|_| ())
-    }
+    apply_with(&TauriLauncher { handle }, enabled)
 }
 
 /// 用户主动切换开机自启：写配置 → 应用 OS 登录项；**应用失败则回滚配置并返回 Err**。
