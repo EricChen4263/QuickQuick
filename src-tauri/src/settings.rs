@@ -332,11 +332,9 @@ impl AppSettings {
         };
 
         let (settings, problems, whole_file_fallback) = Self::lenient_from_json_str(&content);
-        if whole_file_fallback {
-            // 整份回退 = 用户的设置这一轮全部按默认值生效，必须留痕；
-            // 但读盘可能每约 500ms 一次，所以只提示一次（见 warn_corrupt_settings_once）。
-            warn_corrupt_settings_once(&CORRUPT_SETTINGS_WARNED, &problems);
-        }
+        // 整份回退 = 用户的设置这一轮全部按默认值生效，必须留痕；
+        // 但读盘可能每约 500ms 一次，所以同一份损坏只提示一次；解析成功后复位，修复后再坏可再提示。
+        apply_corrupt_warning(&CORRUPT_SETTINGS_WARNED, whole_file_fallback, &problems);
         (settings, problems)
     }
 
@@ -346,6 +344,13 @@ impl AppSettings {
     /// 此时所有字段都取了默认值——读路径据此决定要不要打「启动期一次性提示」。
     /// 字段级坏值不算整份回退（只有那个字段回默认）。
     fn lenient_from_json_str(content: &str) -> (Self, Vec<String>, bool) {
+        // 空文件（0 字节 / 只有空白）与写路径保持同一口径：按「还没有任何设置」处理，
+        // 不算损坏、不整份回退、不消耗「已提示过损坏」的标记——
+        // 否则 `touch settings.json` 就会被当成语法错误并吃掉那唯一一次提示。
+        if content.trim().is_empty() {
+            return (Self::default(), Vec::new(), false);
+        }
+
         match serde_json::from_str::<Value>(content) {
             Ok(Value::Object(map)) => {
                 let (settings, problems) = Self::from_json_object_lenient(&map);
@@ -447,12 +452,24 @@ impl AppSettings {
 /// 读盘在入库轮询里每约 500ms 发生一次；没有它，一个坏文件会把 stderr 刷成每秒两行。
 static CORRUPT_SETTINGS_WARNED: AtomicBool = AtomicBool::new(false);
 
-/// 整份回退时打一次提示（同一进程只打一次）。
+/// 根据本次读取结果维护「已提示过损坏」标记：损坏 → 只提示一次；解析成功 → 复位。
+///
+/// 复位是让「修复后再坏」还能再提示一次：否则用户修好过一次之后，
+/// 同一进程里再遇到坏文件就完全静默了。
 ///
 /// `flag` 由调用方注入：生产传进程级 [`CORRUPT_SETTINGS_WARNED`]，
-/// 测试可传局部标记来验证「第一次 true、第二次 false」而不受其它用例影响。
-/// 返回本次是否真的打印了。
-fn warn_corrupt_settings_once(flag: &AtomicBool, problems: &[String]) -> bool {
+/// 测试可传局部标记验证完整时序，而不受其它用例干扰。
+/// 返回本次是否真的打印了提示。
+fn apply_corrupt_warning(
+    flag: &AtomicBool,
+    whole_file_fallback: bool,
+    problems: &[String],
+) -> bool {
+    if !whole_file_fallback {
+        // 成功解析为 JSON 对象（哪怕有字段级坏值）：文件已经不是「打不开」的状态了。
+        flag.store(false, Ordering::Relaxed);
+        return false;
+    }
     if flag.swap(true, Ordering::Relaxed) {
         return false;
     }
@@ -461,7 +478,7 @@ fn warn_corrupt_settings_once(flag: &AtomicBool, problems: &[String]) -> bool {
         .map(String::as_str)
         .unwrap_or("内容无法解析");
     eprintln!(
-        "[QuickQuick] settings.json {reason}；本次按默认设置运行（该提示只打一次）。请修复该文件后重启应用。"
+        "[QuickQuick] settings.json {reason}；本次按默认设置运行（同一份损坏只提示一次）。请修复该文件后重启应用。"
     );
     true
 }
@@ -1320,10 +1337,87 @@ mod tests {
         let flag = AtomicBool::new(false);
         let problems = vec!["设置文件 JSON 语法错误".to_string()];
 
-        assert!(warn_corrupt_settings_once(&flag, &problems), "第一次应打印");
         assert!(
-            !warn_corrupt_settings_once(&flag, &problems),
+            apply_corrupt_warning(&flag, true, &problems),
+            "第一次应打印"
+        );
+        assert!(
+            !apply_corrupt_warning(&flag, true, &problems),
             "第二次必须被去重（读盘每约 500ms 一轮，不能刷屏）"
         );
+    }
+
+    /// 完整时序：损坏 → 提示一次 → 修复成功（复位）→ 再损坏 → 再次提示。
+    #[test]
+    fn corrupt_warning_resets_after_successful_parse() {
+        let flag = AtomicBool::new(false);
+        let problems = vec!["设置文件 JSON 语法错误".to_string()];
+
+        // 1) 损坏：提示
+        assert!(
+            apply_corrupt_warning(&flag, true, &problems),
+            "首次损坏应提示"
+        );
+        // 2) 仍损坏：去重
+        assert!(
+            !apply_corrupt_warning(&flag, true, &problems),
+            "同一份损坏不重复"
+        );
+        // 3) 读成功（哪怕有字段级坏值，whole_file_fallback=false）：复位且不打印
+        assert!(
+            !apply_corrupt_warning(&flag, false, &[]),
+            "解析成功不该打印提示"
+        );
+        // 4) 再损坏：能重新提示
+        assert!(
+            apply_corrupt_warning(&flag, true, &problems),
+            "修复后再次损坏必须能重新提示，否则同一进程里此后永久静默"
+        );
+    }
+
+    /// 空文件不在读路径触发「整份回退」，也不消耗那唯一一次提示。
+    ///
+    /// 与写路径（`read_settings_object_for_write` 的空文件例外）保持同一口径。
+    #[test]
+    fn empty_file_is_not_a_corruption_and_does_not_consume_warning() {
+        let (settings, problems, whole) = AppSettings::lenient_from_json_str("");
+        assert!(!whole, "空文件不算整份回退");
+        assert!(problems.is_empty(), "空文件不该产生问题清单");
+        assert_eq!(settings.max_history_items, DEFAULT_MAX_HISTORY_ITEMS);
+
+        let (_, problems_ws, whole_ws) = AppSettings::lenient_from_json_str("  \n\t ");
+        assert!(!whole_ws, "只有空白的文件同样不算损坏");
+        assert!(problems_ws.is_empty());
+
+        // 空文件读取后，真实损坏仍能提示一次
+        let flag = AtomicBool::new(false);
+        assert!(
+            !apply_corrupt_warning(&flag, whole, &problems),
+            "空文件读取不该打印损坏提示"
+        );
+        assert!(
+            apply_corrupt_warning(&flag, true, &["设置文件 JSON 语法错误".to_string()]),
+            "空文件不该消耗提示机会：随后真实损坏仍要提示"
+        );
+    }
+
+    /// `load_lenient` 走完整链路：空文件 → 零问题；随后损坏 → 有问题且整份回退。
+    #[test]
+    fn load_lenient_treats_empty_file_as_no_settings() {
+        let dir =
+            std::env::temp_dir().join(format!("qq-settings-empty-read-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("临时目录创建失败");
+        let path = dir.join("settings.json");
+        std::fs::write(&path, "").expect("写空文件失败");
+
+        let (settings, problems) = AppSettings::load_lenient(&path);
+        assert!(problems.is_empty(), "空文件不该有问题，实际：{problems:?}");
+        assert_eq!(settings.highlight_style, HighlightStyle::Bold);
+
+        std::fs::write(&path, "{ broken ").expect("写损坏文件失败");
+        let (_, problems_broken) = AppSettings::load_lenient(&path);
+        assert_eq!(problems_broken.len(), 1, "随后损坏应被报告");
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 }
