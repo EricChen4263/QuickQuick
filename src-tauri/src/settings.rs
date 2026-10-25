@@ -318,8 +318,9 @@ impl AppSettings {
     /// 于是下一次任意 setter 把整份默认值写回，顺手覆盖掉热键、排除名单、翻译源等
     /// 与该字段毫无关系的设置（对齐 Maccy 的逐键存储语义后，一个坏键只影响它自己）。
     ///
-    /// 文件不存在是正常首启动，直接返回默认值；读取其它 I/O 错误也回退默认值，
-    /// 但会把原因放进返回值供调用方留痕。
+    /// 文件不存在是正常首启动，直接返回默认值；读取其它 I/O 错误也回退默认值
+    /// （**行为不变**），但会走与「文件损坏」同一套一次性留痕：读盘失败只提示一次，
+    /// 一旦某次真的读到了内容就复位标记——否则入库轮询每约 500ms 一轮会把 stderr 刷屏。
     ///
     /// 返回的第二个元素是「被回退的字段 / 被忽略的原因」清单，空表示整份设置都解析成功。
     pub fn load_lenient(path: &Path) -> (Self, Vec<String>) {
@@ -328,7 +329,11 @@ impl AppSettings {
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
                 return (Self::default(), Vec::new());
             }
-            Err(err) => return (Self::default(), vec![format!("读取设置文件失败：{err}")]),
+            Err(err) => {
+                let reason = format!("读取设置文件失败：{err}");
+                warn_read_failure_once(&CORRUPT_SETTINGS_WARNED, &err.to_string());
+                return (Self::default(), vec![reason]);
+            }
         };
 
         let (settings, problems, whole_file_fallback) = Self::lenient_from_json_str(&content);
@@ -452,6 +457,18 @@ impl AppSettings {
 /// 读盘在入库轮询里每约 500ms 发生一次；没有它，一个坏文件会把 stderr 刷成每秒两行。
 static CORRUPT_SETTINGS_WARNED: AtomicBool = AtomicBool::new(false);
 
+/// 一次性留痕的公共实现：标记已置位就跳过，否则置位并执行 `print`。
+///
+/// 损坏提示与读盘失败提示共用同一个 [`CORRUPT_SETTINGS_WARNED`]：
+/// 一个打不开的 settings.json 无论以哪种形式坏，都只值得提醒用户一次。
+fn warn_once(flag: &AtomicBool, print: impl FnOnce()) -> bool {
+    if flag.swap(true, Ordering::Relaxed) {
+        return false;
+    }
+    print();
+    true
+}
+
 /// 根据本次读取结果维护「已提示过损坏」标记：损坏 → 只提示一次；解析成功 → 复位。
 ///
 /// 复位是让「修复后再坏」还能再提示一次：否则用户修好过一次之后，
@@ -470,17 +487,29 @@ fn apply_corrupt_warning(
         flag.store(false, Ordering::Relaxed);
         return false;
     }
-    if flag.swap(true, Ordering::Relaxed) {
-        return false;
-    }
     let reason = problems
         .first()
         .map(String::as_str)
-        .unwrap_or("内容无法解析");
-    eprintln!(
-        "[QuickQuick] settings.json {reason}；本次按默认设置运行（同一份损坏只提示一次）。请修复该文件后重启应用。"
-    );
-    true
+        .unwrap_or("内容无法解析")
+        .to_string();
+    warn_once(flag, || {
+        eprintln!(
+            "[QuickQuick] settings.json {reason}；本次按默认设置运行（同一份损坏只提示一次）。请修复该文件后重启应用。"
+        );
+    })
+}
+
+/// 读盘失败（权限、I/O 等；「文件不存在」不算失败）时的一次性留痕。
+///
+/// 与 [`apply_corrupt_warning`] 共用同一个去重标记：后者在「读到并能解析」时会把它复位，
+/// 所以「读取失败 → 修好权限 → 再次失败」仍能再提示一次。
+/// **不改变**回退行为本身（调用方继续按默认值跑）。
+fn warn_read_failure_once(flag: &AtomicBool, error: &str) -> bool {
+    warn_once(flag, || {
+        eprintln!(
+            "[QuickQuick] settings.json 读取失败（{error}），本次使用默认设置（该提示只打一次）。请检查文件权限后重启应用。"
+        );
+    })
 }
 
 /// 同名字段宽松读取：缺失或解析失败返回 `fallback`，失败时把字段名与原因记进 `problems`。
@@ -1373,6 +1402,63 @@ mod tests {
             apply_corrupt_warning(&flag, true, &problems),
             "修复后再次损坏必须能重新提示，否则同一进程里此后永久静默"
         );
+    }
+
+    /// 读盘失败（非「文件不存在」）也只提示一次，且复用同一标记：解析成功后复位再失败可再提示。
+    #[test]
+    fn read_failure_warning_is_emitted_only_once_and_resets() {
+        let flag = AtomicBool::new(false);
+
+        assert!(
+            warn_read_failure_once(&flag, "Permission denied (os error 13)"),
+            "首次读失败应提示"
+        );
+        assert!(
+            !warn_read_failure_once(&flag, "Permission denied (os error 13)"),
+            "同一份读失败不得重复刷屏（读盘每约 500ms 一轮）"
+        );
+
+        // 某次真的读到了内容（非整份回退）→ 复位
+        assert!(
+            !apply_corrupt_warning(&flag, false, &[]),
+            "解析成功不该打印提示"
+        );
+        assert!(
+            warn_read_failure_once(&flag, "Permission denied (os error 13)"),
+            "复位后再次读失败应能重新提示"
+        );
+    }
+
+    /// 读盘失败时行为不变：仍回退默认值，只把原因放进问题清单。
+    #[cfg(unix)]
+    #[test]
+    fn load_lenient_reports_io_failure_with_defaults() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = std::env::temp_dir().join(format!("qq-settings-iofail-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("临时目录创建失败");
+        let path = dir.join("settings.json");
+        std::fs::write(&path, r#"{"max_history_items":300}"#).expect("写临时设置文件失败");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o000))
+            .expect("设置文件只读失败");
+
+        let (settings, problems) = AppSettings::load_lenient(&path);
+
+        // 恢复权限后再断言/清理
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644))
+            .expect("恢复文件权限失败");
+
+        assert_eq!(
+            settings.max_history_items, DEFAULT_MAX_HISTORY_ITEMS,
+            "读失败必须回退默认值（行为不变）"
+        );
+        assert_eq!(problems.len(), 1, "应报告一条读取失败，实际：{problems:?}");
+        assert!(
+            problems[0].contains("读取设置文件失败"),
+            "问题清单应说明是读取失败，实际：{problems:?}"
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     /// 空文件不在读路径触发「整份回退」，也不消耗那唯一一次提示。
