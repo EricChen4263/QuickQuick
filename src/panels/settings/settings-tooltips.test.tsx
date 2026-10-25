@@ -132,28 +132,39 @@ function tooltipOfRowContaining(text: string): string | null {
 }
 
 describe("全部设置项都有 tooltip（对齐 Maccy 的 .help 约定）", () => {
-  it("通用：三个开关 + 立即检查更新都写明默认值/无默认值", async () => {
+  it("通用：三个开关写明字面默认值「开」，动作行写明无默认值", async () => {
     render(<GeneralPanel />);
     await waitFor(() => expect(getLaunchOnLogin).toHaveBeenCalled());
 
-    for (const label of ["开机自启动", "托盘常驻", "自动检查更新"]) {
-      expect(tooltipOfRowContaining(label)).toMatch(/^默认：/);
+    // 三个开关的默认值都是「开」（AutostartConfig::default / AppSettings 的 stay_in_tray、auto_update），
+    // 这里按字面断言，改默认值时测试必须跟着改——不允许只匹配「默认：」前缀蒙过去。
+    const expected: Array<[string, string]> = [
+      ["开机自启动", "默认：开。登录系统时在后台启动"],
+      ["托盘常驻", "默认：开。关闭后关闭主窗口即退出应用"],
+      ["自动检查更新", "默认：开。开启后按固定间隔静默检查更新清单"],
+    ];
+    for (const [label, literal] of expected) {
+      expect(tooltipOfRowContaining(label)).toContain(literal);
     }
-    expect(tooltipOfRowContaining("立即检查更新")).toContain("无默认值");
+    expect(tooltipOfRowContaining("立即检查更新")).toContain("一次性操作，无默认值");
   });
 
-  it("外观：四项 tooltip 都写明默认值", async () => {
+  it("外观：四项 tooltip 写明字面默认值（最近复制 / 加粗 / 40px / 1500ms）", async () => {
     render(<AppearancePanel />);
     await waitFor(() => expect(getAppearanceSettings).toHaveBeenCalled());
 
-    for (const label of ["排序方式", "命中高亮样式"]) {
-      expect(tooltipOfRowContaining(label)).toMatch(/^默认：/);
-    }
-    for (const label of ["弹出面板图片高度", "首次预览延迟"]) {
-      const input = screen.getByLabelText(label);
-      const row = input.closest(".set-row");
-      expect(row?.getAttribute("title")).toMatch(/^默认：/);
-    }
+    // 字面值来源：DEFAULT_SORT_ORDER="recent"（显示为「最近复制」）、
+    // DEFAULT_HIGHLIGHT_STYLE="bold"、DEFAULT_IMAGE_HEIGHT_PX=40、
+    // DEFAULT_PREVIEW_FIRST_DELAY_MS=1500。写死字面量是有意的：
+    // 默认值改了而文案没改，必须在这里红。
+    expect(tooltipOfRowContaining("排序方式")).toContain("默认：最近复制");
+    expect(tooltipOfRowContaining("命中高亮样式")).toContain("默认：加粗");
+    expect(
+      screen.getByLabelText("弹出面板图片高度").closest(".set-row")?.getAttribute("title"),
+    ).toContain("默认：40px（范围 1–200px）");
+    expect(
+      screen.getByLabelText("首次预览延迟").closest(".set-row")?.getAttribute("title"),
+    ).toContain("默认：1500ms（范围 200–100000ms）");
   });
 
   it("热键：三行都写明默认键位", async () => {
