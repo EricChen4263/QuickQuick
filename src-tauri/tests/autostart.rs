@@ -414,3 +414,39 @@ fn disable_error_includes_both_delete_and_state_read_reasons() {
     assert_eq!(launcher.calls(), vec!["is_enabled", "disable"]);
 }
 
+/// 回滚失败 + 原本不存在：删除回滚也失败时，文案同样要说明「下次启动生效」，且磁盘是新值。
+#[cfg(unix)]
+#[test]
+fn rollback_failure_when_file_was_absent_reports_next_launch_and_keeps_new_value() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempfile::tempdir().expect("创建临时目录失败");
+    let path = dir.path().join("autostart.json");
+    assert!(!path.exists(), "前置条件：配置文件原本不存在");
+
+    // apply 里把目录设成只读 → 新值已写入，回滚的「删除文件」也会失败
+    let dir_path = dir.path().to_path_buf();
+    let err = set_enabled_with_apply(&path, true, |_| {
+        std::fs::set_permissions(&dir_path, std::fs::Permissions::from_mode(0o555))
+            .expect("设置目录只读失败");
+        Err("LaunchAgent 写入被拒绝".to_string())
+    })
+    .expect_err("回滚失败也必须返回 Err");
+
+    std::fs::set_permissions(&dir_path, std::fs::Permissions::from_mode(0o755))
+        .expect("恢复目录权限失败");
+
+    let message = err.to_string();
+    assert!(
+        message.contains("将于下次启动生效") || message.contains("下次启动生效"),
+        "文案必须说明新值将于下次启动生效，实际：{message}"
+    );
+    assert!(
+        message.contains("配置文件当前为新值") && message.contains("请检查文件权限"),
+        "文案必须说明磁盘真值并给出可操作建议，实际：{message}"
+    );
+    assert!(
+        path.exists() && AutostartConfig::load_or_default(&path).enabled,
+        "回滚失败时磁盘上应仍是新值 true"
+    );
+}
