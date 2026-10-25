@@ -356,15 +356,34 @@
      **系统登录项同步（`b8c8a57`）**：`set_launch_on_login` 原先「写 autostart.json → apply_to_os 失败只 eprintln、命令仍 Ok」，界面显示已开启而系统未注册。现在 `apply_to_os` 返回 `Result`，新增 `autostart::set_enabled_with_apply`（apply 可注入）：应用失败即回滚配置（文件原本不存在则删除）并返回「系统登录项设置失败：…，已恢复为原设置」，前端走悲观更新失败路径（界面不变 + 显示原文）。
   - **备份序号的并发前提（G，源码阅读结论）**：`register_hotkeys` 跑在 `lib.rs` 的 `.setup()` 里（同步闭包）；设置类 IPC 命令（`get_hotkeys` / `set_hotkey` / 其余 35 个）全部是**同步** `fn`，没有 `async fn`、也没有 `#[tauri::command(async)]`。**源码阅读确认**：Tauri 2.11.2 的宏默认 `ExecutionContext::Blocking`（`tauri-macros-2.6.2/src/command/wrapper.rs`），走 `body_blocking`——在 scheme 回调里**内联执行、不 spawn**。**运行时线程归属（是否主线程）待验证**：未在真机用线程 id 断言，Windows/Linux 亦未验证。
     **settings.json 的四类写入者（已 grep 全仓核实）**：
-    1. **设置类 IPC 命令**（37 个同步 `#[tauri::command]`，含 `set_hotkey` / `set_pause_capture` / 各 setter）；
+    1. **设置类 IPC 命令**（37 个同步 `#[tauri::command]`，**不含** `get_selected_provider`——它的写回单列在第 4 类；含 `set_hotkey` / `set_pause_capture` / 各 setter）；
     2. **托盘**：`tray.rs::toggle_pause_capture`（`tray.rs:470` 同步回调）→ `ipc::settings::set_pause_capture_impl`；
-    3. **翻译路径的迁移写回**：`ipc/translate.rs:381` 的 `translate_text` 调 `get_selected_provider_impl`；
+    3. **翻译路径的迁移写回**：`ipc/translate.rs:381` 的调用者是 `translate_text_with_runtime`（由 `translate_text` 直接调用），它调 `get_selected_provider_impl`；
     4. **`get_selected_provider` 自身的迁移写回**：`get_selected_provider_impl`（`settings.rs:357`）在读到已移除的 provider 时用 `write_setting_field` 写回默认值。
-    **结论**：所有写入者都是**同步路径**（已 grep 核实，异步 `spawn` / `spawn_blocking` 中没有任何设置写入）；**运行时线程归属待验证**（未用线程 id 断言）。旁证（现有代码注释）：`ipc/translate.rs:66` 已论证同步命令由宏生成 `body_blocking`、回调是 wry `WKScriptMessageHandler`（`MainThreadOnly`），故 `translate_text` 在 macOS 主线程执行——**这是同一机制的另一处阅读结论，不是本条的实测**。若将来任何一侧移入异步上下文（`async fn` 命令、`spawn`、跨线程事件回调），`seq = 磁盘最大 + 1` 就有并发写窗口，必须补互斥。
+    **结论**：所有写入者都是**同步路径**（已 grep 核实，异步 `spawn` / `spawn_blocking` 中没有任何设置写入）；**运行时线程归属待验证**（未用线程 id 断言）。
+    **核实命令（可复现）**：
+    ```bash
+    # 1) 写入口（每个文件截断到 #[cfg(test)] 之前，避免把测试里的调用算进去）
+    grep -rn 'write_setting_field(\|update_settings_value(\|update_json_object(\|save_accelerator(\|save_enabled(\|set_enabled_with_apply(\|set_[a-z_]*_impl(\|get_selected_provider_impl(\|\.save(' src-tauri/src
+    # 2) 落盘原语（应只出现在 settings.rs 的 write_json_atomically 与 portable.rs 的 write_backup_file）
+    grep -rn 'fs::write\|fs::rename\|fs::copy\|File::create\|OpenOptions' src-tauri/src
+    # 3) 命令计数与 async 计数
+    grep -c '#\[tauri::command\]' src-tauri/src/ipc/settings.rs   # 37
+    grep -rn 'async fn' src-tauri/src/ipc/settings.rs              # 0
+    ```
+    **跨线程读取者**：后台剪贴板轮询线程（`lib.rs:508` 起的 `std::thread::spawn`）经
+    `resolve_ingest_limits`（`lib.rs:595`）读 `settings.json` 取入库限额。它是**读**不是写，
+    但在此之前「截断+写入」会让它读到半份文件 → 解析失败 → 临时回退默认限额（淘汰策略短暂变宽）。
+    `f7a507a` 改为「临时文件 + rename」原子替换后，读侧只会看到旧快照或新快照，**撕裂读取风险消除**。旁证（现有代码注释）：`ipc/translate.rs:62-70` 论证同步命令由宏生成 `body_blocking`；回调**默认走 Tauri 自己的 `ipc://` 自定义协议（wry `WKURLSchemeHandler`，`objc2-web-kit` 声明 `MainThreadOnly`），回退路径才是 `WKScriptMessageHandler`**——两条通道的绑定层都要求主线程。**这是同一机制的另一处阅读结论，不是本条的实测**。若将来任何一侧移入异步上下文（`async fn` 命令、`spawn`、跨线程事件回调），`seq = 磁盘最大 + 1` 就有并发写窗口，必须补互斥。
   - **自启开关的「快速连点」与乱序响应（备注，未做代码防护）**：失败文案在**发起**切换时就清，所以连点两次且都失败时最终只显示最后一次的文案（探针结论，符合预期，不累积）。**未验证乱序响应**：两次写请求并发时，响应到达顺序没有保证，后到的旧响应可能把新状态或新文案覆盖回旧值——当前没有请求序号/序列化保护，属已知边界（真机上 IPC 串行执行，实际很难触发）。
   - **外来文件的归属边界（F，行为已由测试锁定）**：只有**形态严格为 `<配置文件>.<数字>.<数字>.bak`** 的文件归本应用所有（参与排序与 prune，**首次 prune 时可能被删除**，哪怕它是用户手工放进去的）；非此形态的文件（`<ms>.bak`、`<ms>-<n>.bak`、`settings.json.bak`、另一个配置的备份等）一律保留不动，也不参与「最近 5 份」的计数。测试：`foreign_backup_like_files_are_ignored_and_never_pruned`。
   - **启动期 apply 失败对界面不可见**（G）：`lib.rs` setup 里应用登录项偏好失败只 `eprintln`（不中断启动），用户重启后界面按配置显示「已开启」、而系统条目可能没注册——**这类失败没有任何界面反馈**，只能查日志。用户主动切换时才会走「回滚 + 报错」路径。
   - **`opError` 是单槽位**（I，既有语义，未改）：页面级操作（删除/粘贴/收藏/复制/打开系统设置）共用一条错误文案，**成功即清**（`4739507`），不分来源、不排队；同一时刻只显示最近一次失败的文案。与设置页错误条的「按来源隔离」是有意的差异：那边是持久配置项，这边是瞬时操作。
+  - **Windows 残留登录项**（不修代码）：Windows 上若用户在「任务管理器 → 启动」里禁用过 QuickQuick，
+    Run 值仍存在但 `is_enabled()` 返回 `false`；应用内关闭自启会因「条目已不存在即幂等成功」
+    而短路，**不会清除那个残留的 Run 值**（后续若修，需要直接读/清 Run 键本身，而不是只看 `is_enabled`）。
+    依据：`auto-launch` 0.5.0 `windows.rs:72-82` 的源码阅读；未验证（本机无法验证 Windows 注册表行为，
+    故不做猜测性修法）。
   - **Windows 未编译验证**：`apply_with` 的「条目已不存在即幂等成功」（A）依据 `auto-launch` 0.5.0 的删除语义**源码阅读**，不是 Windows 实测；Windows 分支未编译、未运行。
   - **测试过滤器陷阱**（F）：`cargo test autostart` 只按**测试名子串**过滤，本项目里回滚类用例名不含 `autostart`（如 `set_enabled_rolls_back_config_when_os_apply_fails`），因此该过滤器**会漏跑回滚用例**。要跑整个集成测试文件必须用 `cargo test --test autostart`（本轮起以它为准）。
   - **错误条位置**：设置页内容区顶部（页面级固定条），业界做法保留现状；**未做视觉验证**（窄窗口换行、长文案 + 备份路径的观感）——L。

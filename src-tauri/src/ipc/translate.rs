@@ -63,11 +63,12 @@ const TRANSLATE_CANCELLED_MESSAGE: &str = "翻译请求已被更新的请求取�
 ///
 /// 这条休眠落在**既有阻塞缺陷之内**，不是新增的界面影响面：同步 `#[tauri::command]`
 /// 由 tauri-macros 生成为 `body_blocking`，命令体在回调线程上直接执行（没有
-/// `spawn_blocking`，也无运行时线程跳转）；而该回调是 wry 的
-/// `WKScriptMessageHandler::userContentController:didReceiveScriptMessage:`，
-/// 该协议在 `objc2-web-kit` 中声明为 `MainThreadOnly`。
-/// 也就是说 `translate_text` 与既有的同步网络 I/O 一样运行在 macOS **主线程**上，
-/// 同样会冻结界面；本函数是在这个既有缺陷之上再叠加最多 1.5s 的阻塞
+/// `spawn_blocking`，也无运行时线程跳转）；而该回调来自 IPC 通道——**默认是 Tauri 自己的
+/// `ipc://` 自定义协议（wry 的 `WKURLSchemeHandler`，`objc2-web-kit` 中声明为
+/// `MainThreadOnly`），回退路径才是 `WKScriptMessageHandler`**（同样 `MainThreadOnly`）。
+/// 两条通道的绑定层都要求主线程，因此命令体运行在 macOS **主线程**上，
+/// `translate_text` 与既有的同步网络 I/O 一样会冻结界面；本函数是在这个既有缺陷之上
+/// 再叠加最多 1.5s 的阻塞
 /// （3 次尝试的退避 500ms + 1000ms），叠加在既有的 10s 网络超时之上。
 ///
 /// 根治方向（超出本次改动范围，需动 `lib.rs` 的命令注册装配，已登记 follow-up）：
