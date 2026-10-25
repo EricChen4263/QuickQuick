@@ -241,19 +241,24 @@ function PrivacyPanel() {
         <SettingToggle
           label="暂停剪贴板监听"
           description="临时停止记录所有剪贴板内容"
+          tooltip="默认：关。开启期间不记录任何剪贴板内容；状态会持久化，重启后沿用。"
           checked={pauseCaptureState}
           onChange={(v) => { void handlePauseCaptureChange(v); }}
         />
         <SettingToggle
           label="跳过敏感内容"
           description="自动过滤密码管理器等敏感数据"
+          tooltip="默认：开。命中平台敏感标记（concealed / transient）的内容不入库。"
           checked={skipSensitiveState}
           onChange={(v) => { void handleSkipSensitiveChange(v); }}
         />
       </SettingGroup>
 
       <SettingGroup>
-        <div className="set-row">
+        <div
+          className="set-row"
+          title="默认：黑名单（名单内的应用不记录）。白名单则只记录名单内的应用；切换模式不会清空已填的名单。"
+        >
           <div className="grow">
             <div className="label">App 名单模式</div>
             <div className="desc">{MODE_DESCRIPTION[excludeMode]}</div>
@@ -272,7 +277,10 @@ function PrivacyPanel() {
           </div>
         </div>
 
-        <div className="set-row">
+        <div
+          className="set-row"
+          title="默认：空名单。黑名单模式下空名单等于不排除任何应用；白名单模式下空名单等于不记录任何应用。"
+        >
           <div className="grow">
             <div className="label">App 名单</div>
             <div className="desc">{LIST_DESCRIPTION[excludeMode]}</div>
@@ -309,7 +317,10 @@ function PrivacyPanel() {
       </SettingGroup>
 
       <SettingGroup>
-        <div className="set-row">
+        <div
+          className="set-row"
+          title="默认：空（不启用内容过滤）。任一正则命中文本内容即不入库；写错的正则只让该条失效，不影响其它条目。"
+        >
           <div className="grow">
             <div className="label">内容忽略正则</div>
             <div className="desc">{REGEX_DESCRIPTION}</div>

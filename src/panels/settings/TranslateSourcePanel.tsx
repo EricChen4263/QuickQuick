@@ -285,7 +285,7 @@ function TranslateSourcePanel() {
   return (
     <div>
       <PanelHeader title="翻译源" subtitle="选择用于划词翻译的服务商" />
-      <SettingGroup>
+      <SettingGroup tooltip="默认：Google（免费）（免 key 源 google_free，与 Rust default_selected_provider 一致）。带凭据的源需要先配置才能使用；已失效的历史源会自动回退到默认源。">
         {providers.map((provider) => (
           <div key={provider.id}>
             <ProviderCard

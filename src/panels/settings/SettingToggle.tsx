@@ -3,6 +3,8 @@ import SettingRow from "./SettingRow";
 interface SettingToggleProps {
   label: string;
   description?: string;
+  /** 悬停 tooltip：**必须写明该项默认值**（约定见 SettingRow） */
+  tooltip?: string;
   checked: boolean;
   onChange: (checked: boolean) => void;
   disabled?: boolean;
@@ -12,12 +14,13 @@ interface SettingToggleProps {
 function SettingToggle({
   label,
   description,
+  tooltip,
   checked,
   onChange,
   disabled,
 }: SettingToggleProps) {
   return (
-    <SettingRow label={label} description={description}>
+    <SettingRow label={label} description={description} tooltip={tooltip}>
       <button
         className="switch"
         role="switch"

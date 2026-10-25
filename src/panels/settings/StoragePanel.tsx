@@ -292,7 +292,10 @@ function StoragePanel() {
             <div className="desc">{liveCount} 条活跃记录（不含软删）</div>
           </div>
         </div>
-        <div className="set-row">
+        <div
+          className="set-row"
+          title={`默认：${DEFAULT_HISTORY_ITEMS} 条。超过此数量的非收藏条目会在入库时自动淘汰最旧的；收藏项不计数也不删除。`}
+        >
           <div className="grow">
             <label className="label" htmlFor="history-limit">
               历史条目上限
@@ -323,7 +326,10 @@ function StoragePanel() {
             }}
           />
         </div>
-        <div className="set-row">
+        <div
+          className="set-row"
+          title="默认：500 MB，固定不可配置（与后端 image::CleanupPolicy::default 同源）。超出后按分级清理：先删大图原图保缩略图，再整条清最旧非收藏。"
+        >
           <div className="grow">
             <div className="label">图片占用上限</div>
             <div className="desc">超出按分级清理：先删大图原图保缩略图，再整条清最旧非收藏</div>
@@ -332,7 +338,10 @@ function StoragePanel() {
             <kbd>500 MB</kbd>
           </span>
         </div>
-        <div className="set-row">
+        <div
+          className="set-row"
+          title={`默认：${DEFAULT_IMAGE_THRESHOLD_MB} MB。超过此大小的图片只保留缩略图，原图标记为过大未存；可选档位 ${IMAGE_THRESHOLD_OPTIONS.join(" / ")} MB。`}
+        >
           <div className="grow">
             <div className="label">单张图片阈值</div>
             <div className="desc">超过此大小的图片只保留缩略图，原图标记为过大未存</div>
@@ -344,7 +353,10 @@ function StoragePanel() {
             onChange={(value) => { void handleThresholdChange(Number(value)); }}
           />
         </div>
-        <div className="set-row">
+        <div
+          className="set-row"
+          title="一次性操作，无默认值。当场清理非收藏条目；收藏项永远豁免。"
+        >
           <div className="grow">
             <div className="label">立即清理非收藏历史</div>
             <div className="desc">物理清除已软删条目（墓碑 GC）</div>
@@ -356,7 +368,10 @@ function StoragePanel() {
       </SettingGroup>
 
       <SettingGroup>
-        <div className="set-row">
+        <div
+          className="set-row"
+          title="一次性操作，无默认值。导出为口令加密的可移植包（含条目与图片）；导入时会跳过已存在的条目。"
+        >
           <div className="grow">
             <div className="label">备份 / 恢复</div>
             <div className="desc">
@@ -405,7 +420,10 @@ function StoragePanel() {
           </div>
         </div>
         {backupPath !== null && (
-          <div className="set-row">
+          <div
+            className="set-row"
+            title="默认：优先「文稿」目录，其次「下载」目录；两者都不可用时回退到应用数据目录。"
+          >
             <div className="grow">
               <div className="label">备份位置</div>
               <div className="desc" style={{ wordBreak: "break-all" }}>

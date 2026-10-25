@@ -9,12 +9,16 @@ interface HotkeyRowConfig {
   action: HotkeyAction;
   label: string;
   description: string;
+  /** 出厂默认键位（与 Rust HotkeyConfig::default 逐字一致），用于 tooltip 的「默认：」 */
+  defaultAccelerator: string;
 }
 
 interface HotkeyRowProps {
   action: HotkeyAction;
   label: string;
   description: string;
+  /** 悬停 tooltip（含默认键位） */
+  tooltip: string;
   currentValue: string;
   occupiedValues: string[];
   onSaved: () => void;
@@ -25,18 +29,26 @@ const HOTKEY_ROWS: HotkeyRowConfig[] = [
     action: "history",
     label: "剪贴板历史",
     description: "唤出剪贴板历史面板",
+    defaultAccelerator: "CmdOrCtrl+Shift+C",
   },
   {
     action: "translate",
     label: "翻译选中",
     description: "翻译当前选中文字",
+    defaultAccelerator: "CmdOrCtrl+Shift+T",
   },
   {
     action: "main",
     label: "应用主界面",
     description: "打开并聚焦 QuickQuick 主窗口",
+    defaultAccelerator: "CmdOrCtrl+Shift+M",
   },
 ];
+
+/** 默认键位的 tooltip 文案（Maccy 的每个设置项都有 .help，我们逐项写明默认值）。 */
+function hotkeyTooltip(config: HotkeyRowConfig): string {
+  return `默认：${config.defaultAccelerator.replace("CmdOrCtrl", "⌘")}。修改后立即生效；与其它动作重复的键会被拒绝。`;
+}
 
 function occupiedValuesFor(action: HotkeyAction, hotkeys: Hotkeys): string[] {
   return HOTKEY_ROWS.filter((row) => row.action !== action).map(
@@ -60,6 +72,7 @@ function HotkeyRow({
   action,
   label,
   description,
+  tooltip,
   currentValue,
   occupiedValues,
   onSaved,
@@ -137,7 +150,7 @@ function HotkeyRow({
 
   if (isRecording) {
     return (
-      <div className="set-row column">
+      <div className="set-row column" title={tooltip}>
         <div className="hotkey-row-inner">
           <div className="grow">
             <div className="label">{label}</div>
@@ -175,7 +188,7 @@ function HotkeyRow({
   }
 
   return (
-    <div className="set-row column">
+    <div className="set-row column" title={tooltip}>
       <div className="hotkey-row-inner">
         <div className="grow">
           <div className="label">{label}</div>
@@ -242,6 +255,7 @@ function HotkeyPanel() {
             key={row.action}
             action={row.action}
             label={row.label}
+            tooltip={hotkeyTooltip(row)}
             description={row.description}
             currentValue={hotkeys[row.action]}
             occupiedValues={occupiedValuesFor(row.action, hotkeys)}

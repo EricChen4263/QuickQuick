@@ -144,22 +144,25 @@ function GeneralPanel() {
         <SettingToggle
           label="开机自启动"
           description="登录系统时在后台启动 QuickQuick"
+          tooltip="默认：开。登录系统时在后台启动；关闭后也可在系统设置的「登录项」里手动调整。"
           checked={launchOnLogin}
           onChange={setLaunchOnLogin}
         />
         <SettingToggle
           label="托盘常驻"
           description="关闭窗口后保留托盘图标与剪贴板监听"
+          tooltip="默认：开。关闭后关闭主窗口即退出应用，剪贴板监听随之停止。"
           checked={stayInTray}
           onChange={setStayInTray}
         />
         <SettingToggle
           label="自动检查更新"
           description="通过签名清单静默拉取新版本"
+          tooltip="默认：开。开启后按固定间隔静默检查更新清单，发现新版本只在就绪时提示。"
           checked={autoUpdate}
           onChange={setAutoUpdate}
         />
-        <div className="set-row">
+        <div className="set-row" title="一次性操作，无默认值。手动检查一次新版本，不影响「自动检查更新」开关。">
           <div className="grow">
             <div className="label">立即检查更新</div>
             <div className="desc">手动检查新版本</div>
