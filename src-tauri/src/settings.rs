@@ -535,9 +535,10 @@ fn read_field<T: serde::de::DeserializeOwned>(
     }
 }
 
-/// 与某个设置文件同目录的备份文件名：`settings.json` → `settings.json.<unix_ms>.bak`。
+/// 与某个设置文件同目录的备份文件名：`settings.json` → `settings.json.<seq>.<unix_ms>.bak`。
 ///
-/// 带时间戳是为了**不覆盖已有备份**：连续两次损坏应当留下两份留痕，而不是后一份把前一份顶掉。
+/// `seq` 是单调写入序号（排序依据），`unix_ms` 是真实墙钟（只用于展示）。
+/// 两个字段都在名字里，是为了既不覆盖已有备份，又能让人一眼看出「第几次、什么时候」。
 pub fn backup_path_for(path: &Path, seq: u64, unix_ms: i64) -> PathBuf {
     let mut name = path.file_name().unwrap_or_default().to_os_string();
     name.push(format!(".{seq}.{unix_ms}.bak"));
@@ -546,9 +547,7 @@ pub fn backup_path_for(path: &Path, seq: u64, unix_ms: i64) -> PathBuf {
 
 /// 解析备份文件名 → `(是否新格式, 写入序号, 时间戳)`。
 ///
-/// - 新格式 `<文件名>.<seq>.<ms>.bak`：`seq` 是单调写入序号，`ms` 只用于展示。
-/// - 旧格式 `<文件名>.<ms>.bak`（以及中间实验格式 `<文件名>.<ms>-<n>.bak`）：没有序号，
-///   一律视为「比所有新格式更早」，彼此之间按 `ms` 排。
+/// 备份名形如 `<文件名>.<seq>.<ms>.bak`：`seq` 是单调写入序号，`ms` 只用于展示。
 fn parse_backup_name(file_name: &str, prefix: &str) -> Option<(bool, u64, i64)> {
     let rest = file_name.strip_prefix(prefix)?.strip_suffix(".bak")?;
     if let Some((seq_part, ms_part)) = rest.split_once('.') {
@@ -686,8 +685,7 @@ pub fn ensure_writable_json_object(path: &Path) -> Result<(), SettingsError> {
 
 /// 选一个尚未占用的备份路径：`<seq>.<ms>.bak`，`seq` 从磁盘最大值 +1 起递增。
 ///
-/// 同一毫秒内连续触发也不会互相覆盖——区分靠的是 seq，不是时间戳，
-/// 所以不需要旧实现里那种 `-1`/`-2` 后缀（那条分支已删除）。
+/// 同一毫秒内连续触发也不会互相覆盖——区分靠的是 seq，不是时间戳。
 /// 时间戳由调用方给（生产用 [`now_unix_ms`]，测试用它模拟时钟回拨），
 /// 它**只用于展示**，不参与排序。
 fn unique_backup_path_at(path: &Path, now_ms: i64) -> Result<PathBuf, SettingsError> {
@@ -1557,7 +1555,7 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
-    /// 同一毫秒内连续写入：靠 seq 区分，文件名不冲突（旧的 `-1`/`-2` 后缀分支已删除）。
+    /// 同一毫秒内连续写入：两份备份都保留，由 seq 区分文件名。
     #[test]
     fn same_millisecond_backups_do_not_collide() {
         let dir = std::env::temp_dir().join(format!("qq-settings-samems-{}", std::process::id()));
@@ -1574,7 +1572,7 @@ mod tests {
         assert!(first.exists() && second.exists(), "两份备份都应存在");
         let backups = backup_files(&dir);
         assert_eq!(backups.len(), 2, "应有两份备份，实际：{backups:?}");
-        // 两份都带同一个真实墙钟，只是 seq 不同
+        // 两份都保留、由 seq 区分（同一毫秒只体现在 ms 相同上，不参与命名唯一性）
         for backup in &backups {
             let name = backup
                 .file_name()
