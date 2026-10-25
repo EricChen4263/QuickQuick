@@ -28,9 +28,9 @@
 //! - `get_appearance_settings`  — 一次返回排序方式 / 图片高度 / 首次预览延迟 / 命中高亮样式
 //!   （两个数值已收敛到合法区间）
 //! - `set_sort_order`           — 校验 ∈{recent, first_copied}，合法才写入
-//! - `set_image_height`         — 校验 16..=48 px，合法才写入
-//! - `set_preview_first_delay`  — 校验 200..=5000 ms，合法才写入
-//! - `set_highlight_style`      — 校验 ∈{default, underline, bold}，合法才写入
+//! - `set_image_height`         — 校验 1..=200 px，合法才写入
+//! - `set_preview_first_delay`  — 校验 200..=100000 ms，合法才写入
+//! - `set_highlight_style`      — 校验 ∈{color, bold, italic, underline}，合法才写入
 //! - `get_launch_on_login`      — 读 autostart.json enabled
 //! - `set_launch_on_login`      — 写 autostart.json + 调用 OS autolaunch
 
@@ -722,7 +722,8 @@ pub fn set_max_history_items_impl(
 /// 外观设置 DTO（返回给前端）。
 ///
 /// 四个字段一次性返回：弹窗每次打开都要读其中三个，分四次 IPC 只会让打开变慢。
-/// 枚举以 snake_case 字符串下发（`recent` / `first_copied` / `default` / `underline` / `bold`）。
+/// 枚举以 snake_case 字符串下发（`recent` / `first_copied` /
+/// `color` / `bold` / `italic` / `underline`）。
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppearanceSettingsDto {
@@ -730,7 +731,7 @@ pub struct AppearanceSettingsDto {
     pub sort_order: SortOrder,
     /// 弹出面板图片缩略图高度（px，已收敛到 16..=48）
     pub image_height_px: u32,
-    /// 首次预览延迟（毫秒，已收敛到 200..=5000）
+    /// 首次预览延迟（毫秒，已收敛到 200..=100000）
     pub preview_first_delay_ms: u32,
     /// 搜索命中高亮样式
     pub highlight_style: HighlightStyle,
@@ -772,14 +773,15 @@ fn parse_sort_order(raw: &str) -> Result<SortOrder, String> {
     }
 }
 
-/// 把前端传来的高亮样式字符串解析成枚举（`default` / `underline` / `bold`）。
+/// 把前端传来的高亮样式字符串解析成枚举（四档，与 Maccy 的 `HighlightMatch` 同名）。
 fn parse_highlight_style(raw: &str) -> Result<HighlightStyle, String> {
     match raw {
-        "default" => Ok(HighlightStyle::Default),
-        "underline" => Ok(HighlightStyle::Underline),
+        "color" => Ok(HighlightStyle::Color),
         "bold" => Ok(HighlightStyle::Bold),
+        "italic" => Ok(HighlightStyle::Italic),
+        "underline" => Ok(HighlightStyle::Underline),
         other => Err(format!(
-            "非法命中高亮样式：{other}，合法值为 default / underline / bold"
+            "非法命中高亮样式：{other}，合法值为 color / bold / italic / underline"
         )),
     }
 }
@@ -796,7 +798,7 @@ pub fn set_sort_order_impl(order: &str, settings_path: &Path) -> Result<(), Stri
 
 /// `set_image_height` 的纯函数实现：校验范围后写入 settings.json。
 ///
-/// 合法区间 `MIN_IMAGE_HEIGHT_PX..=MAX_IMAGE_HEIGHT_PX`（16..=48 px）。
+/// 合法区间 `MIN_IMAGE_HEIGHT_PX..=MAX_IMAGE_HEIGHT_PX`（1..=200 px，对齐 Maccy）。
 ///
 /// # Errors
 /// - 越界值：返回说明合法范围的错误字符串（不写文件）
@@ -812,7 +814,7 @@ pub fn set_image_height_impl(px: u32, settings_path: &Path) -> Result<(), String
 
 /// `set_preview_first_delay` 的纯函数实现：校验范围后写入 settings.json。
 ///
-/// 合法区间 `MIN_PREVIEW_FIRST_DELAY_MS..=MAX_PREVIEW_FIRST_DELAY_MS`（200..=5000 ms）。
+/// 合法区间 `MIN_PREVIEW_FIRST_DELAY_MS..=MAX_PREVIEW_FIRST_DELAY_MS`（200..=100000 ms，对齐 Maccy）。
 ///
 /// # Errors
 /// - 越界值：返回说明合法范围的错误字符串（不写文件）
@@ -1009,7 +1011,7 @@ pub fn set_sort_order(app: AppHandle, order: String) -> Result<(), String> {
     Ok(())
 }
 
-/// Tauri 命令：设置弹出面板图片缩略图高度（px，16–48）。
+/// Tauri 命令：设置弹出面板图片缩略图高度（px，1–200，对齐 Maccy 的 imageMaxHeight）。
 ///
 /// 不发刷新事件：高度是纯 CSS 尺寸，列表数据与顺序都没变，重取一次只会白传 payload。
 #[tauri::command]
@@ -1018,7 +1020,7 @@ pub fn set_image_height(app: AppHandle, px: u32) -> Result<(), String> {
     set_image_height_impl(px, &path)
 }
 
-/// Tauri 命令：设置首次预览延迟（毫秒，200–5000）。
+/// Tauri 命令：设置首次预览延迟（毫秒，200–100000，对齐 Maccy）。
 ///
 /// 不发刷新事件：它只影响面板打开后的等待时长，下一次开面板自然读到新值。
 #[tauri::command]
@@ -1987,12 +1989,15 @@ mod tests {
         let appearance = get_appearance_settings_impl(&missing).unwrap();
 
         assert_eq!(appearance.sort_order, SortOrder::Recent, "默认最近复制优先");
-        assert_eq!(appearance.image_height_px, 24, "默认缩略图高度 24px");
+        assert_eq!(
+            appearance.image_height_px, 40,
+            "默认缩略图高度 40px（对齐 Maccy）"
+        );
         assert_eq!(
             appearance.preview_first_delay_ms, 1500,
             "默认首个预览延迟 1500ms（与改动前一致）"
         );
-        assert_eq!(appearance.highlight_style, HighlightStyle::Default);
+        assert_eq!(appearance.highlight_style, HighlightStyle::Bold);
     }
 
     /// 读路径兜底：手写越界的图片高度/预览延迟要收敛到区间内，而不是原样透出。
@@ -2060,14 +2065,14 @@ mod tests {
     #[test]
     fn set_image_height_rejects_out_of_range_without_touching_file() {
         let file = NamedTempFile::new().unwrap();
-        set_image_height_impl(24, file.path()).unwrap();
+        set_image_height_impl(40, file.path()).unwrap();
 
-        for bad in [0u32, 15, 49, 999] {
+        for bad in [0u32, 201, 999] {
             let err = set_image_height_impl(bad, file.path()).unwrap_err();
             assert!(err.contains("范围"), "错误信息应说明范围：{err}");
             assert!(
-                err.contains("16") && err.contains("48"),
-                "错误信息应点明 16 到 48：{err}"
+                err.contains("1") && err.contains("200"),
+                "错误信息应点明 1 到 200：{err}"
             );
         }
 
@@ -2075,7 +2080,7 @@ mod tests {
             get_appearance_settings_impl(file.path())
                 .unwrap()
                 .image_height_px,
-            24,
+            40,
             "非法值不得落盘（文件应保留上一次的合法值）"
         );
     }
@@ -2086,12 +2091,12 @@ mod tests {
         let file = NamedTempFile::new().unwrap();
         set_preview_first_delay_impl(1500, file.path()).unwrap();
 
-        for bad in [0u32, 199, 5001, 60_000] {
+        for bad in [0u32, 199, 100_001] {
             let err = set_preview_first_delay_impl(bad, file.path()).unwrap_err();
             assert!(err.contains("范围"), "错误信息应说明范围：{err}");
             assert!(
-                err.contains("200") && err.contains("5000"),
-                "错误信息应点明 200 到 5000：{err}"
+                err.contains("200") && err.contains("100000"),
+                "错误信息应点明 200 到 100000：{err}"
             );
         }
 
@@ -2126,16 +2131,16 @@ mod tests {
         );
     }
 
-    /// 非法高亮样式被拒收，且错误文案列全三档。
+    /// 非法高亮样式被拒收，且错误文案列全四档（与 Maccy 的 HighlightMatch 同名）。
     #[test]
     fn set_highlight_style_rejects_unknown_value_without_touching_file() {
         let file = NamedTempFile::new().unwrap();
-        set_highlight_style_impl("bold", file.path()).unwrap();
+        set_highlight_style_impl("underline", file.path()).unwrap();
 
         let err = set_highlight_style_impl("rainbow", file.path()).unwrap_err();
 
         assert!(err.contains("rainbow"), "错误信息应回显非法值：{err}");
-        for allowed in ["default", "underline", "bold"] {
+        for allowed in ["color", "bold", "italic", "underline"] {
             assert!(
                 err.contains(allowed),
                 "错误信息应列出合法值 {allowed}：{err}"
@@ -2145,7 +2150,7 @@ mod tests {
             get_appearance_settings_impl(file.path())
                 .unwrap()
                 .highlight_style,
-            HighlightStyle::Bold,
+            HighlightStyle::Underline,
             "非法值不得落盘"
         );
     }
@@ -2318,8 +2323,8 @@ mod tests {
             get_appearance_settings_impl(file.path())
                 .unwrap()
                 .highlight_style,
-            crate::settings::HighlightStyle::Default,
-            "坏字段自身回退默认值"
+            crate::settings::HighlightStyle::Bold,
+            "坏字段自身回退默认值（对齐 Maccy 的 bold）"
         );
     }
 

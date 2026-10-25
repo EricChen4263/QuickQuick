@@ -4,12 +4,12 @@ import ClipPopoverApp from "./ClipPopoverApp";
 
 vi.mock("../ipc/ipc-client", () => ({
   getClipThumbnail: vi.fn().mockResolvedValue(null),
-  // 外观设置读取桩：默认值即生产默认（最近复制 / 24px / 1500ms / 背景高亮）
+  // 外观设置读取桩：默认值即生产默认（最近复制 / 40px / 1500ms / 加粗高亮）
   getAppearanceSettings: vi.fn().mockResolvedValue({
     sortOrder: "recent",
-    imageHeightPx: 24,
+    imageHeightPx: 40,
     previewFirstDelayMs: 1500,
-    highlightStyle: "default",
+    highlightStyle: "bold",
   }),
   listClipItems: vi.fn(),
   pasteToFront: vi.fn(),

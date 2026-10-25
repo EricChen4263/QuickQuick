@@ -63,9 +63,9 @@ beforeEach(() => {
   vi.mocked(copyClipToClipboard).mockResolvedValue(undefined);
   vi.mocked(getAppearanceSettings).mockResolvedValue({
     sortOrder: "recent",
-    imageHeightPx: 24,
+    imageHeightPx: 40,
     previewFirstDelayMs: 1500,
-    highlightStyle: "default",
+    highlightStyle: "bold",
   });
 });
 
@@ -96,11 +96,11 @@ function previewText(container: HTMLElement): string {
 }
 
 describe("ClipPopoverApp 消费外观设置", () => {
-  it("默认设置下视觉与改动前一致：背景高亮、缩略图 24px、首个预览 1500ms", async () => {
+  it("默认设置对齐 Maccy：加粗高亮、缩略图 40px、首个预览 1500ms", async () => {
     const container = await renderReady();
 
-    expect(shell(container).getAttribute("data-hit-style")).toBe("default");
-    expect(shell(container).style.getPropertyValue("--popover-thumb-height")).toBe("24px");
+    expect(shell(container).getAttribute("data-hit-style")).toBe("bold");
+    expect(shell(container).style.getPropertyValue("--popover-thumb-height")).toBe("40px");
 
     // 首个预览仍然等满 1500ms
     act(() => {
@@ -113,10 +113,10 @@ describe("ClipPopoverApp 消费外观设置", () => {
     expect(previewText(container)).toContain("first item");
   });
 
-  it("自定义设置生效：下划线高亮、缩略图 40px、首个预览 300ms", async () => {
+  it("自定义设置生效：下划线高亮、缩略图 120px、首个预览 300ms", async () => {
     vi.mocked(getAppearanceSettings).mockResolvedValue({
       sortOrder: "first_copied",
-      imageHeightPx: 40,
+      imageHeightPx: 120,
       previewFirstDelayMs: 300,
       highlightStyle: "underline",
     });
@@ -124,7 +124,7 @@ describe("ClipPopoverApp 消费外观设置", () => {
     const container = await renderReady();
 
     expect(shell(container).getAttribute("data-hit-style")).toBe("underline");
-    expect(shell(container).style.getPropertyValue("--popover-thumb-height")).toBe("40px");
+    expect(shell(container).style.getPropertyValue("--popover-thumb-height")).toBe("120px");
 
     act(() => {
       vi.advanceTimersByTime(299);
@@ -139,7 +139,7 @@ describe("ClipPopoverApp 消费外观设置", () => {
   it("首个预览档可配，但首个之后切换仍固定 200ms", async () => {
     vi.mocked(getAppearanceSettings).mockResolvedValue({
       sortOrder: "recent",
-      imageHeightPx: 24,
+      imageHeightPx: 40,
       previewFirstDelayMs: 300,
       highlightStyle: "bold",
     });
@@ -168,8 +168,8 @@ describe("ClipPopoverApp 消费外观设置", () => {
     const container = await renderReady();
 
     expect(screen.getAllByRole("option")).toHaveLength(2);
-    expect(shell(container).getAttribute("data-hit-style")).toBe("default");
-    expect(shell(container).style.getPropertyValue("--popover-thumb-height")).toBe("24px");
+    expect(shell(container).getAttribute("data-hit-style")).toBe("bold");
+    expect(shell(container).style.getPropertyValue("--popover-thumb-height")).toBe("40px");
     expect(warn).toHaveBeenCalled();
     warn.mockRestore();
   });

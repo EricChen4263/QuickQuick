@@ -115,18 +115,20 @@ export type SortOrder = "recent" | "first_copied";
 /**
  * 搜索命中高亮样式，与 Rust `HighlightStyle` 的 snake_case 序列化值对齐。
  *
- * - `default`：背景染色 + 加粗（默认，与既有视觉一致）
- * - `underline`：去掉背景，命中片段加下划线
- * - `bold`：去掉背景，只加字重
+ * 四档与 Maccy 2.6.1 的 `HighlightMatch`（color/bold/italic/underline）同名同默认：
+ * - `bold`：加粗（**默认**，Maccy 的默认档）
+ * - `color`：命中片段整段染色
+ * - `italic`：斜体
+ * - `underline`：下划线
  */
-export type HighlightStyle = "default" | "underline" | "bold";
+export type HighlightStyle = "color" | "bold" | "italic" | "underline";
 
 /** 外观设置四项，与 Rust AppearanceSettingsDto（camelCase）对齐。 */
 export interface AppearanceSettings {
   sortOrder: SortOrder;
-  /** 弹出面板行内缩略图高度（px，16–48，默认 24） */
+  /** 弹出面板行内缩略图高度（px，1–200，默认 40；对齐 Maccy 的 imageMaxHeight） */
   imageHeightPx: number;
-  /** 首次预览延迟（毫秒，200–5000，默认 1500） */
+  /** 首次预览延迟（毫秒，200–100000，默认 1500；对齐 Maccy 的 previewDelay） */
   previewFirstDelayMs: number;
   highlightStyle: HighlightStyle;
 }
@@ -538,7 +540,7 @@ export async function setSortOrder(order: SortOrder): Promise<void> {
   }
 }
 
-/** 设置弹出面板行内缩略图高度（px，合法 16–48）。 */
+/** 设置弹出面板行内缩略图高度（px，合法 1–200，对齐 Maccy 的 imageMaxHeight）。 */
 export async function setImageHeight(px: number): Promise<void> {
   try {
     await invoke<void>("set_image_height", { px });
@@ -547,7 +549,7 @@ export async function setImageHeight(px: number): Promise<void> {
   }
 }
 
-/** 设置首次预览延迟（毫秒，合法 200–5000）。 */
+/** 设置首次预览延迟（毫秒，合法 200–100000，对齐 Maccy 的 previewDelay）。 */
 export async function setPreviewFirstDelay(ms: number): Promise<void> {
   try {
     await invoke<void>("set_preview_first_delay", { ms });
@@ -556,7 +558,7 @@ export async function setPreviewFirstDelay(ms: number): Promise<void> {
   }
 }
 
-/** 设置搜索命中高亮样式（合法值：default / underline / bold）。 */
+/** 设置搜索命中高亮样式（合法值：color / bold / italic / underline，与 Maccy 同名）。 */
 export async function setHighlightStyle(style: HighlightStyle): Promise<void> {
   try {
     await invoke<void>("set_highlight_style", { style });

@@ -68,36 +68,43 @@ pub enum SortOrder {
     FirstCopied,
 }
 
-/// 搜索命中高亮样式。
+/// 搜索命中高亮样式（四档，对齐 Maccy 2.6.1 的 `HighlightMatch`）。
 ///
-/// 三档都是纯视觉：命中区间不变、<mark> 结构不变，只换 CSS 呈现。
+/// Maccy 源码 `Maccy/HighlightMatch.swift` 就是 `color / bold / italic / underline`，
+/// 默认 `.bold`（`Defaults.Keys+Names.swift` 的 `highlightMatch` 键）。四档都是纯视觉：
+/// 命中区间不变、<mark> 结构不变，只换 CSS 呈现。
+///
+/// 注意：默认由本项目的「背景+加粗」改为 Maccy 的 `bold`（纯加粗、无背景），
+/// 这是**有意的默认视觉变化**，见 docs/design/v04-work-items.md P5-5 的登记。
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum HighlightStyle {
-    /// 默认：背景染色 + 加粗（与既有视觉一致）
+    /// 背景高亮（对齐 Maccy 的 `.color`：命中片段整段染色）
+    Color,
+    /// 纯加粗（Maccy 默认档）
     #[default]
-    Default,
-    /// 下划线：去掉背景，只在命中片段下划一条 accent 线
-    Underline,
-    /// 纯加粗：去掉背景，只加字重
     Bold,
+    /// 斜体
+    Italic,
+    /// 下划线
+    Underline,
 }
 
-/// 弹出面板行内图片缩略图高度的合法区间下限（px）。
+/// 弹出面板行内图片缩略图高度的合法区间下限与上限（px）。
 ///
-/// 比 16px 更矮就只剩一条缝，既看不出图也点不准行。
-pub const MIN_IMAGE_HEIGHT_PX: u32 = 16;
+/// 对齐 Maccy 2.6.1：`imageMaxHeight` 键默认 40，Stepper 范围 `1...200`
+/// （`Defaults.Keys+Names.swift` / `Settings/AppearanceSettingsPane.swift`）。
+/// Maccy 的输入框 formatter 另有 30–200 的软约束，但 Stepper 允许 1，故本项以 Stepper 为准。
+pub const MIN_IMAGE_HEIGHT_PX: u32 = 1;
 
-/// 弹出面板行内图片缩略图高度的合法区间上限（px）。
-///
-/// 上限压在 48px：一行缩略图再高就会把列表挤成一屏只放得下几条，
-/// 弹窗本体高度固定，超出部分只能靠滚动补。
-pub const MAX_IMAGE_HEIGHT_PX: u32 = 48;
+/// 见 [`MIN_IMAGE_HEIGHT_PX`]（Maccy Stepper 上限 200）。
+pub const MAX_IMAGE_HEIGHT_PX: u32 = 200;
 
 /// 弹出面板行内图片缩略图高度的默认值（px）。
 ///
-/// 与改动前 `.popover-row-thumb` 的硬编码高度一致，升级后默认视觉不变。
-pub const DEFAULT_IMAGE_HEIGHT_PX: u32 = 24;
+/// 取 Maccy 的默认 40（本项目此前为 24）。这是**有意的默认视觉变化**：
+/// 升级后弹窗行内图片会更高，见 docs/design/v04-work-items.md P5-5 的登记。
+pub const DEFAULT_IMAGE_HEIGHT_PX: u32 = 40;
 
 /// 首次预览延迟的合法区间下限（毫秒）。
 ///
@@ -106,8 +113,10 @@ pub const MIN_PREVIEW_FIRST_DELAY_MS: u32 = 200;
 
 /// 首次预览延迟的合法区间上限（毫秒）。
 ///
-/// 5 秒是「等太久就等于没预览」的上界；再长用户会以为预览坏了。
-pub const MAX_PREVIEW_FIRST_DELAY_MS: u32 = 5000;
+/// 对齐 Maccy 2.6.1：`previewDelay` Stepper 范围 `200...100_000`，默认 1500。
+/// 上限放宽到 100 秒是照抄 Maccy 的选择——「等太久等于没预览」只是观感偏好，
+/// 不该由我们替用户否决。
+pub const MAX_PREVIEW_FIRST_DELAY_MS: u32 = 100_000;
 
 /// 首次预览延迟的默认值（毫秒）。
 ///
@@ -199,13 +208,13 @@ pub struct AppSettings {
     /// 手工写出的 1 或 999 会让缩略图小到看不见 / 大到挤爆一行。
     #[serde(default = "default_image_height_px")]
     pub image_height_px: u32,
-    /// 弹出面板首个行内预览的等待时长（毫秒，200..=5000，默认 1500）
+    /// 弹出面板首个行内预览的等待时长（毫秒，200..=100000，默认 1500）
     ///
     /// 只作用于「面板本次打开后的首个预览」；后续切换固定 200ms 不开放配置，
     /// 因为那一档的取值只影响翻页时中间项闪不闪，没有第二种合理值。
     #[serde(default = "default_preview_first_delay_ms")]
     pub preview_first_delay_ms: u32,
-    /// 搜索命中高亮样式（默认 `Default`：背景 + 加粗）
+    /// 搜索命中高亮样式（四档，默认 `Bold`；对齐 Maccy 的 `HighlightMatch`）
     #[serde(default)]
     pub highlight_style: HighlightStyle,
 }
@@ -576,7 +585,7 @@ mod tests {
         assert_eq!(d.sort_order, SortOrder::Recent);
         assert_eq!(d.image_height_px, DEFAULT_IMAGE_HEIGHT_PX);
         assert_eq!(d.preview_first_delay_ms, DEFAULT_PREVIEW_FIRST_DELAY_MS);
-        assert_eq!(d.highlight_style, HighlightStyle::Default);
+        assert_eq!(d.highlight_style, HighlightStyle::Bold);
     }
 
     /// 序列化后再反序列化，值不变（round-trip）。
@@ -740,8 +749,11 @@ mod tests {
         }
     }
 
-    /// 旧 JSON（无四个外观字段）反序列化后取默认值：排序=最近复制、缩略图 24px、
-    /// 首次预览 1500ms、高亮=默认。这四个值必须与改动前代码里的硬编码一致。
+    /// 旧 JSON（无四个外观字段）反序列化后取默认值：排序=最近复制、缩略图 40px、
+    /// 首次预览 1500ms、高亮=加粗。
+    ///
+    /// 缩略图 40px 与高亮 bold 是**对齐 Maccy 后有意改掉的默认视觉**（此前 24px / 背景+加粗），
+    /// 见 docs/design/v04-work-items.md P5-5 登记；排序与预览延迟的默认值未变。
     #[test]
     fn legacy_json_missing_appearance_fields_uses_pre_change_defaults() {
         let json = r#"{"excluded_apps":["1Password"],"max_history_items":300}"#;
@@ -753,8 +765,8 @@ mod tests {
             "默认排序必须是最近复制"
         );
         assert_eq!(
-            settings.image_height_px, 24,
-            "默认缩略图高度必须等于改动前的 24px"
+            settings.image_height_px, 40,
+            "默认缩略图高度对齐 Maccy imageMaxHeight 的 40"
         );
         assert_eq!(
             settings.preview_first_delay_ms, 1500,
@@ -762,8 +774,8 @@ mod tests {
         );
         assert_eq!(
             settings.highlight_style,
-            HighlightStyle::Default,
-            "默认高亮样式必须等于改动前的背景+加粗"
+            HighlightStyle::Bold,
+            "默认高亮对齐 Maccy highlightMatch 的 bold"
         );
     }
 
@@ -787,19 +799,19 @@ mod tests {
         );
     }
 
-    /// 读路径兜底：手写 1px 会被收敛到下限 16px（否则缩略图小到看不见）。
+    /// 读路径兜底：手写 0px 会被收敛到下限 1px（Maccy Stepper 下限）。
     #[test]
     fn effective_image_height_px_clamps_below_min() {
         let settings = AppSettings {
-            image_height_px: 1,
+            image_height_px: 0,
             ..AppSettings::default()
         };
 
         assert_eq!(settings.effective_image_height_px(), MIN_IMAGE_HEIGHT_PX);
-        assert_eq!(settings.effective_image_height_px(), 16);
+        assert_eq!(settings.effective_image_height_px(), 1);
     }
 
-    /// 读路径兜底：手写 999px 会被收敛到上限 48px（否则一行挤爆弹窗）。
+    /// 读路径兜底：手写 999px 会被收敛到上限 200px（Maccy Stepper 上限）。
     #[test]
     fn effective_image_height_px_clamps_above_max() {
         let settings = AppSettings {
@@ -808,13 +820,13 @@ mod tests {
         };
 
         assert_eq!(settings.effective_image_height_px(), MAX_IMAGE_HEIGHT_PX);
-        assert_eq!(settings.effective_image_height_px(), 48);
+        assert_eq!(settings.effective_image_height_px(), 200);
     }
 
     /// 缩略图高度区间内的值原样透出（含两端）。
     #[test]
     fn effective_image_height_px_keeps_boundary_values_intact() {
-        for value in [MIN_IMAGE_HEIGHT_PX, 24, MAX_IMAGE_HEIGHT_PX] {
+        for value in [MIN_IMAGE_HEIGHT_PX, 40, MAX_IMAGE_HEIGHT_PX] {
             let settings = AppSettings {
                 image_height_px: value,
                 ..AppSettings::default()
@@ -838,11 +850,11 @@ mod tests {
         assert_eq!(settings.effective_preview_first_delay_ms(), 200);
     }
 
-    /// 读路径兜底：手写 60_000ms 会被收敛到上限 5000ms（否则等于关掉预览）。
+    /// 读路径兜底：手写 200_000ms 会被收敛到上限 100_000ms（Maccy 的上限）。
     #[test]
     fn effective_preview_first_delay_ms_clamps_above_max() {
         let settings = AppSettings {
-            preview_first_delay_ms: 60_000,
+            preview_first_delay_ms: 200_000,
             ..AppSettings::default()
         };
 
@@ -850,7 +862,7 @@ mod tests {
             settings.effective_preview_first_delay_ms(),
             MAX_PREVIEW_FIRST_DELAY_MS
         );
-        assert_eq!(settings.effective_preview_first_delay_ms(), 5000);
+        assert_eq!(settings.effective_preview_first_delay_ms(), 100_000);
     }
 
     /// 首次预览延迟区间内的值原样透出（含两端）。

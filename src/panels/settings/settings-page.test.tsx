@@ -168,9 +168,9 @@ describe("settings-page", () => {
     mockSetMaxHistoryItems.mockResolvedValue(0);
     mockGetAppearanceSettings.mockResolvedValue({
       sortOrder: "recent",
-      imageHeightPx: 24,
+      imageHeightPx: 40,
       previewFirstDelayMs: 1500,
-      highlightStyle: "default",
+      highlightStyle: "bold",
     });
     mockSetSortOrder.mockResolvedValue(undefined);
     mockSetImageHeight.mockResolvedValue(undefined);
@@ -209,9 +209,9 @@ describe("settings-page", () => {
     expect(screen.getByLabelText("首次预览延迟")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "命中高亮样式" })).toBeInTheDocument();
     expect(screen.getByTitle(/默认：最近复制/)).toBeInTheDocument();
-    expect(screen.getByTitle(/默认：24px/)).toBeInTheDocument();
+    expect(screen.getByTitle(/默认：40px/)).toBeInTheDocument();
     expect(screen.getByTitle(/默认：1500ms/)).toBeInTheDocument();
-    expect(screen.getByTitle(/默认：背景高亮/)).toBeInTheDocument();
+    expect(screen.getByTitle(/默认：加粗/)).toBeInTheDocument();
   });
 
   it("settings-page: 外观面板切换排序方式调用 setSortOrder(first_copied)", async () => {

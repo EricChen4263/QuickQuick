@@ -17,10 +17,13 @@ import { PREVIEW_FIRST_DELAY_MS } from "../../clip-popover/preview-delay";
  * `MIN/MAX/DEFAULT_PREVIEW_FIRST_DELAY_MS` 逐值对齐：前端只做输入拦截
  * （min/max + 提交前校验），真正生效的拒收在后端——输入框可以被脚本绕过，
  * 边界只有一处可信。
+ *
+ * 取值对齐 Maccy 2.6.1：`imageMaxHeight` 默认 40、Stepper 1…200；
+ * `previewDelay` 默认 1500、Stepper 200…100_000。
  */
-export const MIN_IMAGE_HEIGHT_PX = 16;
-export const MAX_IMAGE_HEIGHT_PX = 48;
-export const DEFAULT_IMAGE_HEIGHT_PX = 24;
+export const MIN_IMAGE_HEIGHT_PX = 1;
+export const MAX_IMAGE_HEIGHT_PX = 200;
+export const DEFAULT_IMAGE_HEIGHT_PX = 40;
 
 /**
  * 首次预览延迟（毫秒）的区间与默认值。
@@ -29,14 +32,19 @@ export const DEFAULT_IMAGE_HEIGHT_PX = 24;
  * 若两处各写一个 1500，改一处就会让「设置里的默认」与「实际手感」分叉。
  */
 export const MIN_PREVIEW_FIRST_DELAY_MS = 200;
-export const MAX_PREVIEW_FIRST_DELAY_MS = 5000;
+export const MAX_PREVIEW_FIRST_DELAY_MS = 100_000;
 export const DEFAULT_PREVIEW_FIRST_DELAY_MS = PREVIEW_FIRST_DELAY_MS;
 
 /** 默认排序方式：最近复制优先（与引入本设置之前的列表顺序一致）。 */
 export const DEFAULT_SORT_ORDER: SortOrder = "recent";
 
-/** 默认命中高亮样式：背景染色 + 加粗（与既有视觉一致）。 */
-export const DEFAULT_HIGHLIGHT_STYLE: HighlightStyle = "default";
+/**
+ * 默认命中高亮样式：`bold`（对齐 Maccy `highlightMatch` 的默认档）。
+ *
+ * 这是**有意改掉的默认视觉**：本项之前默认是「背景染色 + 加粗」，
+ * 对齐 Maccy 后默认只加粗、不再染色。见 docs/design/v04-work-items.md P5-5 登记。
+ */
+export const DEFAULT_HIGHLIGHT_STYLE: HighlightStyle = "bold";
 
 /** 全部取默认值的外观设置，供读取失败 / 首帧占位使用。 */
 export const DEFAULT_APPEARANCE_SETTINGS: AppearanceSettings = {
@@ -52,11 +60,12 @@ export const SORT_ORDER_OPTIONS: SelectOption[] = [
   { value: "first_copied", label: "首次复制" },
 ];
 
-/** 命中高亮样式下拉选项；三档只影响 <mark> 的呈现，不改变命中区间。 */
+/** 命中高亮样式下拉选项：四档，顺序与 Maccy 的 HighlightMatch 一致（默认 bold）。 */
 export const HIGHLIGHT_STYLE_OPTIONS: SelectOption[] = [
-  { value: "default", label: "背景高亮" },
+  { value: "bold", label: "加粗" },
+  { value: "color", label: "背景色" },
+  { value: "italic", label: "斜体" },
   { value: "underline", label: "下划线" },
-  { value: "bold", label: "纯加粗" },
 ];
 
 /**
@@ -82,9 +91,9 @@ export function isSortOrder(value: unknown): value is SortOrder {
   return value === "recent" || value === "first_copied";
 }
 
-/** 命中高亮样式的类型守卫。 */
+/** 命中高亮样式的类型守卫（四档，与 Maccy 的 HighlightMatch 同名）。 */
 export function isHighlightStyle(value: unknown): value is HighlightStyle {
-  return value === "default" || value === "underline" || value === "bold";
+  return value === "color" || value === "bold" || value === "italic" || value === "underline";
 }
 
 /** 把任意输入收敛成区间内的整数；非数字回退 fallback。 */

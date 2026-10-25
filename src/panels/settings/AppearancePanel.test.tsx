@@ -45,9 +45,9 @@ describe("AppearancePanel", () => {
     vi.clearAllMocks();
     mockGetAppearanceSettings.mockResolvedValue({
       sortOrder: "recent",
-      imageHeightPx: 24,
+      imageHeightPx: 40,
       previewFirstDelayMs: 1500,
-      highlightStyle: "default",
+      highlightStyle: "bold",
     });
     mockSetSortOrder.mockResolvedValue(undefined);
     mockSetImageHeight.mockResolvedValue(undefined);
@@ -59,7 +59,7 @@ describe("AppearancePanel", () => {
     // Arrange
     mockGetAppearanceSettings.mockResolvedValue({
       sortOrder: "first_copied",
-      imageHeightPx: 40,
+      imageHeightPx: 120,
       previewFirstDelayMs: 800,
       highlightStyle: "underline",
     });
@@ -71,7 +71,7 @@ describe("AppearancePanel", () => {
     await waitFor(() => {
       expect(screen.getByRole("button", { name: "排序方式" })).toHaveTextContent("首次复制");
       expect(screen.getByRole("button", { name: "命中高亮样式" })).toHaveTextContent("下划线");
-      expect(imageHeightInput().value).toBe("40");
+      expect(imageHeightInput().value).toBe("120");
       expect(previewDelayInput().value).toBe("800");
     });
   });
@@ -80,13 +80,13 @@ describe("AppearancePanel", () => {
     // Arrange
     render(<AppearancePanel />);
     // 等首帧的读取落地，避免在 act 之外断言状态更新后的 DOM
-    await waitFor(() => expect(imageHeightInput().value).toBe("24"));
+    await waitFor(() => expect(imageHeightInput().value).toBe("40"));
 
     // Assert：默认值必须出现在 title 文案里（抄 Maccy 的文案约定）
     expect(screen.getByTitle(/默认：最近复制/)).toBeInTheDocument();
-    expect(screen.getByTitle(/默认：24px/)).toBeInTheDocument();
+    expect(screen.getByTitle(/默认：40px/)).toBeInTheDocument();
     expect(screen.getByTitle(/默认：1500ms/)).toBeInTheDocument();
-    expect(screen.getByTitle(/默认：背景高亮/)).toBeInTheDocument();
+    expect(screen.getByTitle(/默认：加粗/)).toBeInTheDocument();
   });
 
   it("切换排序方式调用 setSortOrder(first_copied) 并回填新值", async () => {
@@ -113,7 +113,7 @@ describe("AppearancePanel", () => {
     const user = userEvent.setup();
     render(<AppearancePanel />);
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: "命中高亮样式" })).toHaveTextContent("背景高亮");
+      expect(screen.getByRole("button", { name: "命中高亮样式" })).toHaveTextContent("加粗");
     });
 
     // Act
@@ -130,47 +130,47 @@ describe("AppearancePanel", () => {
   it("图片高度越界时拒收：不调后端、提示范围、输入框回滚到已生效值", async () => {
     // Arrange
     render(<AppearancePanel />);
-    await waitFor(() => expect(imageHeightInput().value).toBe("24"));
+    await waitFor(() => expect(imageHeightInput().value).toBe("40"));
 
     // Act
     fireEvent.change(imageHeightInput(), { target: { value: "999" } });
     fireEvent.blur(imageHeightInput());
 
     // Assert
-    expect(await screen.findByRole("status")).toHaveTextContent("16–48");
+    expect(await screen.findByRole("status")).toHaveTextContent("1–200");
     expect(mockSetImageHeight).not.toHaveBeenCalled();
-    expect(imageHeightInput().value).toBe("24");
+    expect(imageHeightInput().value).toBe("40");
   });
 
   it("图片高度非整数输入同样拒收（不做「悄悄取整」）", async () => {
     // Arrange
     render(<AppearancePanel />);
-    await waitFor(() => expect(imageHeightInput().value).toBe("24"));
+    await waitFor(() => expect(imageHeightInput().value).toBe("40"));
 
     // Act
-    fireEvent.change(imageHeightInput(), { target: { value: "24.5" } });
+    fireEvent.change(imageHeightInput(), { target: { value: "40.5" } });
     fireEvent.blur(imageHeightInput());
 
     // Assert
     expect(mockSetImageHeight).not.toHaveBeenCalled();
-    expect(imageHeightInput().value).toBe("24");
-  });
-
-  it("图片高度合法值提交后调用 setImageHeight(40)", async () => {
-    // Arrange
-    render(<AppearancePanel />);
-    await waitFor(() => expect(imageHeightInput().value).toBe("24"));
-
-    // Act
-    fireEvent.change(imageHeightInput(), { target: { value: "40" } });
-    fireEvent.blur(imageHeightInput());
-
-    // Assert
-    await waitFor(() => expect(mockSetImageHeight).toHaveBeenCalledWith(40));
     expect(imageHeightInput().value).toBe("40");
   });
 
-  it("首次预览延迟越界时拒收：不调后端并提示 200–5000", async () => {
+  it("图片高度合法值提交后调用 setImageHeight(120)", async () => {
+    // Arrange
+    render(<AppearancePanel />);
+    await waitFor(() => expect(imageHeightInput().value).toBe("40"));
+
+    // Act
+    fireEvent.change(imageHeightInput(), { target: { value: "120" } });
+    fireEvent.blur(imageHeightInput());
+
+    // Assert
+    await waitFor(() => expect(mockSetImageHeight).toHaveBeenCalledWith(120));
+    expect(imageHeightInput().value).toBe("120");
+  });
+
+  it("首次预览延迟越界时拒收：不调后端并提示 200–100000", async () => {
     // Arrange
     render(<AppearancePanel />);
     await waitFor(() => expect(previewDelayInput().value).toBe("1500"));
@@ -180,7 +180,7 @@ describe("AppearancePanel", () => {
     fireEvent.blur(previewDelayInput());
 
     // Assert
-    expect(await screen.findByRole("status")).toHaveTextContent("200–5000");
+    expect(await screen.findByRole("status")).toHaveTextContent("200–100000");
     expect(mockSetPreviewFirstDelay).not.toHaveBeenCalled();
     expect(previewDelayInput().value).toBe("1500");
   });
@@ -201,17 +201,17 @@ describe("AppearancePanel", () => {
   it("后端保存失败时给出提示，且不假装已生效", async () => {
     // Arrange
     const error = vi.spyOn(console, "error").mockImplementation(() => {});
-    mockSetImageHeight.mockRejectedValue(new Error("图片高度超出范围：40px"));
+    mockSetImageHeight.mockRejectedValue(new Error("图片高度超出范围：120px"));
     render(<AppearancePanel />);
-    await waitFor(() => expect(imageHeightInput().value).toBe("24"));
+    await waitFor(() => expect(imageHeightInput().value).toBe("40"));
 
     // Act
-    fireEvent.change(imageHeightInput(), { target: { value: "40" } });
+    fireEvent.change(imageHeightInput(), { target: { value: "120" } });
     fireEvent.blur(imageHeightInput());
 
     // Assert
     expect(await screen.findByRole("status")).toHaveTextContent("保存失败");
-    expect(imageHeightInput().value).toBe("24");
+    expect(imageHeightInput().value).toBe("40");
     error.mockRestore();
   });
 });

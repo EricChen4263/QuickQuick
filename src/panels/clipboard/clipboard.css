@@ -52,29 +52,35 @@
   color: var(--muted);
 }
 
-/* 搜索命中高亮：只改背景与字重，不动字号/行高，避免两行截断的高度跳动 */
+/* 搜索命中高亮：四档（对齐 Maccy 的 HighlightMatch：color/bold/italic/underline，默认 bold）。
+   基础规则只保留不影响排版的公共属性，具体强调交给 data-hit-style 分支。 */
 .clip-hit {
-  background: color-mix(in oklch, var(--accent) 26%, transparent);
   color: inherit;
-  font-weight: 600;
   border-radius: 3px;
   padding: 0 1px;
 }
 
-/* 命中高亮的可选样式：默认档即上面那条（背景 + 加粗）。
-   另两档去掉背景，只留一种强调；属性挂在外观设置驱动的 .clip-page 上，
-   不逐条给 <mark> 加类名，命中区间与渲染结构保持唯一。 */
+/* 加粗（默认档）：Maccy 的 .bold —— 只加字重，无背景 */
+.clip-page[data-hit-style="bold"] .clip-hit {
+  font-weight: 700;
+}
+
+/* 背景色：Maccy 的 .color 用 findHighlightColor 整段染色，这里用项目的 OKLch accent token */
+.clip-page[data-hit-style="color"] .clip-hit {
+  background: color-mix(in oklch, var(--accent) 26%, transparent);
+  font-weight: 600;
+}
+
+/* 斜体：Maccy 的 .italic */
+.clip-page[data-hit-style="italic"] .clip-hit {
+  font-style: italic;
+}
+
+/* 下划线：Maccy 的 .underline */
 .clip-page[data-hit-style="underline"] .clip-hit {
-  background: none;
-  font-weight: inherit;
   text-decoration: underline;
   text-decoration-color: color-mix(in oklch, var(--accent) 80%, transparent);
   text-underline-offset: 2px;
-}
-
-.clip-page[data-hit-style="bold"] .clip-hit {
-  background: none;
-  font-weight: 700;
 }
 
 /* 搜索框外层：相对定位容器，内嵌 SVG 图标 */

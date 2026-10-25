@@ -164,29 +164,36 @@ body {
   font-size: 11.5px;
 }
 
-/* 搜索命中高亮：只改背景与字重，不动字号/行高，避免行高跳动 */
+/* 搜索命中高亮：四档（对齐 Maccy 的 HighlightMatch：color/bold/italic/underline，默认 bold）。
+   基础规则只保留不影响排版的公共属性——具体强调交给 data-hit-style 分支，
+   这样「默认档」与「可选档」不会各写一份可能漂移的基线。 */
 .popover-row-text .clip-hit {
-  background: color-mix(in oklch, var(--accent) 32%, transparent);
   color: inherit;
-  font-weight: 600;
   border-radius: 3px;
   padding: 0 1px;
 }
 
-/* 命中高亮的可选样式：默认档即上面那条（背景 + 加粗）。
-   另两档都去掉背景，只留一种强调，靠 .popover-shell 上的 data-hit-style 切换——
-   属性由外观设置下发，不给每个 <mark> 挂类名，命中区间与渲染结构保持唯一。 */
+/* 加粗（默认档）：Maccy 的 .bold —— 只加字重，无背景 */
+.popover-shell[data-hit-style="bold"] .clip-hit {
+  font-weight: 700;
+}
+
+/* 背景色：Maccy 的 .color 用 findHighlightColor 整段染色，这里用项目的 OKLch accent token */
+.popover-shell[data-hit-style="color"] .clip-hit {
+  background: color-mix(in oklch, var(--accent) 32%, transparent);
+  font-weight: 600;
+}
+
+/* 斜体：Maccy 的 .italic */
+.popover-shell[data-hit-style="italic"] .clip-hit {
+  font-style: italic;
+}
+
+/* 下划线：Maccy 的 .underline */
 .popover-shell[data-hit-style="underline"] .clip-hit {
-  background: none;
-  font-weight: inherit;
   text-decoration: underline;
   text-decoration-color: color-mix(in oklch, var(--accent) 80%, transparent);
   text-underline-offset: 2px;
-}
-
-.popover-shell[data-hit-style="bold"] .clip-hit {
-  background: none;
-  font-weight: 700;
 }
 
 /* 搜索模式提示（如非法正则已降级为文本搜索）：贴在搜索框下方，弱化显示 */

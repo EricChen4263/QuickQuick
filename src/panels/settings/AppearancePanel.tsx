@@ -42,7 +42,7 @@ const PREVIEW_DELAY_TOOLTIP = `默认：${DEFAULT_PREVIEW_FIRST_DELAY_MS}ms（�
 
 /** 命中高亮 tooltip：必须含默认值。 */
 const HIGHLIGHT_STYLE_TOOLTIP =
-  "默认：背景高亮。下划线与纯加粗都会去掉背景色。只改命中片段的呈现，命中区间与搜索行为不变。";
+  "默认：加粗（对齐 Maccy 的默认档）。可选 加粗 / 背景色 / 斜体 / 下划线，四档都只改命中片段的呈现，命中区间与搜索行为不变。";
 
 /** 外观子项面板 */
 function AppearancePanel() {
@@ -167,7 +167,7 @@ function AppearancePanel() {
 
         <SettingRow
           label="弹出面板图片高度"
-          description={`行内缩略图高度，范围 ${MIN_IMAGE_HEIGHT_PX}–${MAX_IMAGE_HEIGHT_PX}px`}
+          description={`行内缩略图高度，范围 ${MIN_IMAGE_HEIGHT_PX}–${MAX_IMAGE_HEIGHT_PX}px（对齐 Maccy）`}
           tooltip={IMAGE_HEIGHT_TOOLTIP}
         >
           <input

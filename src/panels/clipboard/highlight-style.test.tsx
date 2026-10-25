@@ -61,9 +61,9 @@ beforeEach(() => {
   });
   vi.mocked(getAppearanceSettings).mockResolvedValue({
     sortOrder: "recent",
-    imageHeightPx: 24,
+    imageHeightPx: 40,
     previewFirstDelayMs: 1500,
-    highlightStyle: "default",
+    highlightStyle: "bold",
   });
 });
 
@@ -75,20 +75,20 @@ function clipPage(container: HTMLElement): HTMLElement {
 }
 
 describe("ClipboardPage 消费命中高亮样式", () => {
-  it("默认档与改动前一致：data-hit-style=default", async () => {
+  it("默认档对齐 Maccy：data-hit-style=bold", async () => {
     // Arrange & Act
     const { container } = render(<ClipboardPage />);
 
     // Assert
     await waitFor(() => expect(clipPage(container)).toBeInTheDocument());
-    expect(clipPage(container).getAttribute("data-hit-style")).toBe("default");
+    expect(clipPage(container).getAttribute("data-hit-style")).toBe("bold");
   });
 
   it("设置为下划线时把 data-hit-style 下发到列表根（CSS 据此换 <mark> 呈现）", async () => {
     // Arrange
     vi.mocked(getAppearanceSettings).mockResolvedValue({
       sortOrder: "recent",
-      imageHeightPx: 24,
+      imageHeightPx: 40,
       previewFirstDelayMs: 1500,
       highlightStyle: "underline",
     });
@@ -112,7 +112,7 @@ describe("ClipboardPage 消费命中高亮样式", () => {
 
     // Assert
     await waitFor(() => expect(clipPage(container)).toBeInTheDocument());
-    expect(clipPage(container).getAttribute("data-hit-style")).toBe("default");
+    expect(clipPage(container).getAttribute("data-hit-style")).toBe("bold");
     warn.mockRestore();
   });
 
@@ -124,12 +124,12 @@ describe("ClipboardPage 消费命中高亮样式", () => {
       return Promise.resolve(() => {});
     });
     const { container } = render(<ClipboardPage />);
-    await waitFor(() => expect(clipPage(container).getAttribute("data-hit-style")).toBe("default"));
+    await waitFor(() => expect(clipPage(container).getAttribute("data-hit-style")).toBe("bold"));
     expect(vi.mocked(listen)).toHaveBeenCalledWith(CLIPBOARD_CHANGED_EVENT, expect.any(Function));
 
     vi.mocked(getAppearanceSettings).mockResolvedValue({
       sortOrder: "recent",
-      imageHeightPx: 24,
+      imageHeightPx: 40,
       previewFirstDelayMs: 1500,
       highlightStyle: "underline",
     });

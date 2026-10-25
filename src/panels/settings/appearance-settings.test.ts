@@ -19,11 +19,11 @@ import {
 import { PREVIEW_FIRST_DELAY_MS } from "../../clip-popover/preview-delay";
 
 describe("外观设置默认值", () => {
-  it("默认值与改动前行为一致：最近复制 / 24px / 1500ms / 背景高亮", () => {
+  it("默认值对齐 Maccy：最近复制 / 40px / 1500ms / 加粗高亮", () => {
     expect(DEFAULT_SORT_ORDER).toBe("recent");
-    expect(DEFAULT_IMAGE_HEIGHT_PX).toBe(24);
+    expect(DEFAULT_IMAGE_HEIGHT_PX).toBe(40);
     expect(DEFAULT_PREVIEW_FIRST_DELAY_MS).toBe(1500);
-    expect(DEFAULT_HIGHLIGHT_STYLE).toBe("default");
+    expect(DEFAULT_HIGHLIGHT_STYLE).toBe("bold");
   });
 
   it("首次预览默认值与弹窗硬编码默认值同源（不允许两处各写 1500）", () => {
@@ -39,27 +39,27 @@ describe("外观设置默认值", () => {
     });
   });
 
-  it("区间常量与 Rust 侧对齐：图片高度 16–48、首次预览 200–5000", () => {
-    expect([MIN_IMAGE_HEIGHT_PX, MAX_IMAGE_HEIGHT_PX]).toEqual([16, 48]);
-    expect([MIN_PREVIEW_FIRST_DELAY_MS, MAX_PREVIEW_FIRST_DELAY_MS]).toEqual([200, 5000]);
+  it("区间常量对齐 Maccy：图片高度 1–200、首次预览 200–100000", () => {
+    expect([MIN_IMAGE_HEIGHT_PX, MAX_IMAGE_HEIGHT_PX]).toEqual([1, 200]);
+    expect([MIN_PREVIEW_FIRST_DELAY_MS, MAX_PREVIEW_FIRST_DELAY_MS]).toEqual([200, 100_000]);
   });
 });
 
 describe("parseIntInRange", () => {
   it("区间内整数原样返回（含两端）", () => {
-    expect(parseIntInRange("16", 16, 48)).toBe(16);
-    expect(parseIntInRange("40", 16, 48)).toBe(40);
-    expect(parseIntInRange("48", 16, 48)).toBe(48);
+    expect(parseIntInRange("1", 1, 200)).toBe(1);
+    expect(parseIntInRange("40", 1, 200)).toBe(40);
+    expect(parseIntInRange("200", 1, 200)).toBe(200);
   });
 
   it("前后空白被忽略", () => {
-    expect(parseIntInRange("  24 ", 16, 48)).toBe(24);
+    expect(parseIntInRange("  24 ", 1, 200)).toBe(24);
   });
 
   it("越界返回 null（拒收而不是悄悄收敛）", () => {
-    expect(parseIntInRange("15", 16, 48)).toBeNull();
-    expect(parseIntInRange("49", 16, 48)).toBeNull();
-    expect(parseIntInRange("0", 16, 48)).toBeNull();
+    expect(parseIntInRange("0", 1, 200)).toBeNull();
+    expect(parseIntInRange("201", 1, 200)).toBeNull();
+    expect(parseIntInRange("999", 1, 200)).toBeNull();
   });
 
   it("非纯整数字面量一律 null（含小数、科学计数、空串、全角数字）", () => {
@@ -77,10 +77,11 @@ describe("类型守卫", () => {
     expect(isSortOrder(undefined)).toBe(false);
   });
 
-  it("isHighlightStyle 只认 default / underline / bold", () => {
-    for (const value of ["default", "underline", "bold"]) {
+  it("isHighlightStyle 只认 color / bold / italic / underline（Maccy 四档）", () => {
+    for (const value of ["color", "bold", "italic", "underline"]) {
       expect(isHighlightStyle(value)).toBe(true);
     }
+    expect(isHighlightStyle("default")).toBe(false);
     expect(isHighlightStyle("rainbow")).toBe(false);
     expect(isHighlightStyle(1)).toBe(false);
   });
@@ -90,9 +91,9 @@ describe("normalizeAppearanceSettings", () => {
   it("合法输入原样透传", () => {
     const input = {
       sortOrder: "first_copied",
-      imageHeightPx: 40,
+      imageHeightPx: 120,
       previewFirstDelayMs: 800,
-      highlightStyle: "bold",
+      highlightStyle: "italic",
     };
 
     expect(normalizeAppearanceSettings(input)).toEqual(input);
@@ -143,12 +144,14 @@ describe("下拉选项", () => {
     expect(SORT_ORDER_OPTIONS[0].value).toBe(DEFAULT_SORT_ORDER);
   });
 
-  it("命中高亮三档、第一项为默认档", () => {
+  it("命中高亮四档（与 Maccy HighlightMatch 同名）、第一项为默认档", () => {
     expect(HIGHLIGHT_STYLE_OPTIONS.map((option) => option.value)).toEqual([
-      "default",
-      "underline",
       "bold",
+      "color",
+      "italic",
+      "underline",
     ]);
     expect(HIGHLIGHT_STYLE_OPTIONS[0].value).toBe(DEFAULT_HIGHLIGHT_STYLE);
+    expect(DEFAULT_HIGHLIGHT_STYLE).toBe("bold");
   });
 });
