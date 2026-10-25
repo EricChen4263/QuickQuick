@@ -1505,21 +1505,21 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
-    /// 备份文件名里的 `ms` 必须是**真实墙钟**：目录里的未来时间戳文件不得把新备份的时间戳顶到未来。
+    /// 备份文件名里的 `ms` 必须是**真实墙钟**：已有的未来时间戳备份不得把新备份的时间戳顶到未来。
     ///
     /// 旧实现用 `max(now, newest+1)` 保序，一次未来时间戳会永久传染——新备份的时间戳再也不是真实时间，
     /// 用户按时间找「今天改坏的那份」会找不到。现在顺序交给 seq，ms 只用于展示。
     #[test]
-    fn new_backup_keeps_real_wall_clock_when_legacy_backup_is_in_the_future() {
+    fn new_backup_keeps_real_wall_clock_when_existing_backup_is_in_the_future() {
         let dir = std::env::temp_dir().join(format!("qq-settings-future-{}", std::process::id()));
         std::fs::create_dir_all(&dir).expect("临时目录创建失败");
         let path = dir.join("settings.json");
         std::fs::write(&path, "{ broken now ").expect("写临时设置文件失败");
 
-        // 非本应用备份格式的文件，时间戳设成 2100 年（旧版遗留/手工放置都可能这样）
+        // 本应用格式的既有备份，时间戳设成 2100 年（系统时钟错乱/手工放置都可能这样）
         let future_ms: i64 = 4_102_444_800_000;
-        let legacy = path.with_file_name(format!("settings.json.{future_ms}.bak"));
-        std::fs::write(&legacy, "2100 future file").expect("写未来时间戳文件失败");
+        let existing = path.with_file_name(format!("settings.json.1.{future_ms}.bak"));
+        std::fs::write(&existing, "2100 future backup").expect("写未来时间戳备份失败");
 
         let now_ms = 1_600_000_000_000;
         let created =
@@ -1533,16 +1533,13 @@ mod tests {
         let (seq, ms) = parse_backup_name(&name, "settings.json.").expect("新备份名应可解析");
         assert_eq!(
             ms, now_ms,
-            "新备份的 ms 必须是真实墙钟（注入值），不能被旧备份的 2100 年传染，实际：{name}"
+            "新备份的 ms 必须是真实墙钟（注入值），不能被既有备份的 2100 年传染，实际：{name}"
         );
-        assert_eq!(
-            seq, 1,
-            "非本格式文件不占序号，新备份从 1 开始，实际：{name}"
-        );
+        assert_eq!(seq, 2, "既有备份占 seq 1，新备份应是 seq 2，实际：{name}");
         assert!(
-            legacy.exists(),
-            "非本格式文件不参与清理，必须原样留着：{}",
-            legacy.display()
+            existing.exists(),
+            "既有备份不参与本轮清理（总量未超上限），必须原样留着：{}",
+            existing.display()
         );
 
         std::fs::remove_dir_all(&dir).ok();
