@@ -592,6 +592,23 @@ fn list_backups(path: &Path) -> Vec<PathBuf> {
     found.into_iter().map(|(_, _, path)| path).collect()
 }
 
+/// 既有备份里最大的时间戳（无备份返回 None）。
+fn newest_backup_ms(path: &Path) -> Option<i64> {
+    let file_name = path.file_name().and_then(|name| name.to_str())?;
+    let prefix = format!("{file_name}.");
+    std::fs::read_dir(path.parent()?)
+        .into_iter()
+        .flatten()
+        .filter_map(|entry| entry.ok())
+        .filter_map(|entry| {
+            let name = entry.file_name().to_str()?.to_string();
+            let rest = name.strip_prefix(&prefix)?.strip_suffix(".bak")?;
+            let ms_part = rest.split_once('-').map(|(ms, _)| ms).unwrap_or(rest);
+            ms_part.parse::<i64>().ok()
+        })
+        .max()
+}
+
 /// 只保留最近 [`BACKUP_KEEP_COUNT`] 份备份，更旧的删掉。
 ///
 /// `keep` 是**刚创建的那份**，永远不参与淘汰：备份名按时间戳排序，
@@ -758,7 +775,17 @@ fn backup_broken_settings_at(
         }
     }
 
-    let backup = unique_backup_path_at(path, now_ms)?;
+    // **写入次序单调化**：文件名里的时间戳取 `max(now_ms, 既有备份最大时间戳 + 1)`。
+    //
+    // 为什么不能直接用墙钟：系统时钟回拨时，新备份的时间戳会小于旧备份，按名字排序
+    // 就会被当成「最旧的」——连续两次回拨时，第二次甚至会把第一次刚创建的备份挤出保留名额。
+    // 也不用文件 mtime：`fs::copy` 把 mtime 设成「当前时间」，与墙钟同源，回拨时一样不可靠。
+    // 把「写入次序」直接编进文件名，是唯一只依赖我们自己写入顺序的做法，且跨重启有效
+    // （既有备份的名字里已带着各自的时间戳，取 max+1 即接在最后）。
+    let monotonic_ms = newest_backup_ms(path)
+        .map(|newest| newest.saturating_add(1).max(now_ms))
+        .unwrap_or(now_ms);
+    let backup = unique_backup_path_at(path, monotonic_ms)?;
     std::fs::copy(path, &backup)?;
     prune_backups(path, &backup);
     eprintln!(
@@ -1414,6 +1441,64 @@ mod tests {
                 "第 {round} 轮应已被淘汰，实际：{contents:?}"
             );
         }
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 连续两次时钟回拨：第一次创建的备份不能被第二次挤掉，总数不超过保留上限。
+    ///
+    /// 旧实现按墙钟时间戳排序：第二次回拨（更小的 now）生成的备份排在更前，
+    /// 会把「第一次刚创建的备份」当成最旧的删掉。现在文件名时间戳单调化
+    /// （取 max(now, 既有最大值 + 1)），新写的永远排最后，`keep` 之外只按写入次序淘汰。
+    #[test]
+    fn consecutive_clock_rollbacks_keep_both_new_backups() {
+        let dir =
+            std::env::temp_dir().join(format!("qq-settings-rollback2-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("临时目录创建失败");
+        let path = dir.join("settings.json");
+
+        // 5 份「未来」备份占满保留名额
+        let future_ms = 4_102_444_800_000; // 2100-01-01
+        for offset in 0..BACKUP_KEEP_COUNT as i64 {
+            let backup = backup_path_for(&path, future_ms + offset);
+            std::fs::write(&backup, format!("old-{offset}")).expect("写旧备份失败");
+        }
+
+        // 第一次回拨：now = 1600000000000
+        std::fs::write(&path, "{ rollback one ").expect("写临时设置文件失败");
+        let first =
+            backup_broken_settings_at(&path, "JSON 语法错误（第一次回拨）", 1_600_000_000_000)
+                .expect("第一次备份应成功");
+
+        // 第二次回拨：now 只比第一次大 1ms，仍远小于既有备份的时间戳
+        std::fs::write(&path, "{ rollback two ").expect("写临时设置文件失败");
+        let second =
+            backup_broken_settings_at(&path, "JSON 语法错误（第二次回拨）", 1_600_000_000_001)
+                .expect("第二次备份应成功");
+
+        assert!(
+            first.exists(),
+            "第一次创建的备份不得被第二次回拨挤掉：{}",
+            first.display()
+        );
+        assert!(
+            second.exists(),
+            "第二次创建的备份必须存在：{}",
+            second.display()
+        );
+        let backups = backup_files(&dir);
+        assert!(
+            backups.len() <= BACKUP_KEEP_COUNT,
+            "总份数不得超过保留上限 {BACKUP_KEEP_COUNT}，实际：{backups:?}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&first).expect("读备份失败"),
+            "{ rollback one "
+        );
+        assert_eq!(
+            std::fs::read_to_string(&second).expect("读备份失败"),
+            "{ rollback two "
+        );
 
         std::fs::remove_dir_all(&dir).ok();
     }
