@@ -678,6 +678,26 @@ describe("clipboard-page", () => {
     );
   });
 
+  it("clipboard-page: 删除失败后再次删除成功，陈旧错误文案消失（P5-8）", async () => {
+    mockListClipItems.mockResolvedValue(MOCK_ITEMS);
+    mockDeleteClipItem.mockRejectedValueOnce(new Error("删除失败：库被占用"));
+    const user = userEvent.setup();
+    render(<ClipboardPage />);
+    await waitForListReady();
+
+    const previewRegion = screen.getByRole("region", { name: "预览" });
+    const deleteButton = within(previewRegion).getByRole("button", { name: /删除/ });
+
+    // 第一次删除失败 → 出错
+    await user.click(deleteButton);
+    expect(await screen.findByRole("alert")).toHaveTextContent("操作失败");
+
+    // 第二次删除成功 → 陈旧错误必须消失（单槽位语义：成功即清）
+    mockDeleteClipItem.mockResolvedValueOnce(undefined);
+    await user.click(screen.getByRole("region", { name: "预览" }).querySelector("button[aria-label*='删除']") as HTMLElement);
+    await waitFor(() => expect(screen.queryByRole("alert")).not.toBeInTheDocument());
+  });
+
   it("clipboard-page: OnboardCard「前往系统设置」调用 openAccessibilitySettings", async () => {
     mockListClipItems.mockResolvedValue(MOCK_ITEMS);
     localStorage.removeItem("qq-onboard-dismissed");
@@ -1019,28 +1039,27 @@ describe("clipboard-page: 边界探测 - 横幅 DOM 顺序", () => {
   });
 
   it("边界：opError 和 pasteMsg 同时出现时，两者均在 listCol 之前，opError 在 pasteMsg 之前", async () => {
-    // 通过先触发 toggleFavoriteClip reject（产生 opError），再触发 write_back_only（产生 pasteMsg）
+    // 顺序刻意是「先 pasteMsg、后 opError」：粘贴成功会清 opError（单槽位语义：成功即清），
+    // 所以只能先造出降级提示，再让后续操作失败产生 opError。
     mockListClipItems.mockResolvedValue(MOCK_ITEMS);
-    mockToggleFavoriteClip.mockRejectedValue(new Error("IPC 失败"));
     mockPasteToFront.mockResolvedValue({ outcome: "write_back_only" });
+    mockToggleFavoriteClip.mockRejectedValue(new Error("IPC 失败"));
     const user = userEvent.setup();
     const { container } = render(<ClipboardPage />);
 
     await waitForListReady();
 
-    // 先触发 opError
+    // 先触发 pasteMsg（写入成功但只回写剪贴板 → 降级提示）
+    const previewRegion = screen.getByRole("region", { name: "预览" });
+    await user.click(within(previewRegion).getByRole("button", { name: "粘贴到前台" }));
+    await screen.findByText(/已复制到剪贴板/);
+
+    // 再触发 opError（收藏失败）
     const favoriteButtons = screen.getAllByRole("button", { name: /收藏/ });
     await user.click(favoriteButtons[0]);
     await waitFor(() => {
       expect(screen.getByRole("alert")).toBeInTheDocument();
     });
-
-    // 再触发 pasteMsg（需要 toggleFavoriteClip 改回成功以便 paste 按钮可操作）
-    mockToggleFavoriteClip.mockResolvedValue(undefined);
-    mockPasteToFront.mockResolvedValue({ outcome: "write_back_only" });
-    const previewRegion = screen.getByRole("region", { name: "预览" });
-    const pasteBtn = within(previewRegion).getByRole("button", { name: "粘贴到前台" });
-    await user.click(pasteBtn);
 
     const pasteMsgEl = await screen.findByText(/已复制到剪贴板/);
     const opErrorEl = screen.getByRole("alert");

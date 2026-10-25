@@ -396,9 +396,14 @@ function ClipboardPage({ onTranslateItem }: ClipboardPageProps) {
    */
   function copyItemById(id: string | null): void {
     if (id === null) return;
-    copyClipToClipboard(id).catch(() => {
-      setOpError("复制失败，请稍后重试");
-    });
+    copyClipToClipboard(id)
+      .then(() => {
+        // 成功后清掉上一次操作的陈旧错误（单槽位语义：最近一次操作的结果说了算）
+        setOpError(null);
+      })
+      .catch(() => {
+        setOpError("复制失败，请稍后重试");
+      });
   }
 
   function handleKeyDown(event: React.KeyboardEvent) {
@@ -449,6 +454,7 @@ function ClipboardPage({ onTranslateItem }: ClipboardPageProps) {
     try {
       await toggleFavoriteClip(item.id, !item.isFavorite);
       await loadItems(cancelledRef);
+      setOpError(null);
     } catch {
       setOpError("操作失败，请稍后重试");
     }
@@ -458,6 +464,7 @@ function ClipboardPage({ onTranslateItem }: ClipboardPageProps) {
     try {
       await deleteClipItem(item.id);
       await loadItems(cancelledRef);
+      setOpError(null);
     } catch {
       setOpError("操作失败，请稍后重试");
     }
@@ -501,6 +508,7 @@ function ClipboardPage({ onTranslateItem }: ClipboardPageProps) {
     setPasteMsg(null);
     try {
       const result = await pasteToFront(item.id);
+      setOpError(null);
       if (result.outcome === "write_back_only") {
         setPasteMsg(
           "已复制到剪贴板，请手动粘贴。未获辅助功能授权；若已授权（如刚更新过版本），请重新授权后重试。",
@@ -514,6 +522,7 @@ function ClipboardPage({ onTranslateItem }: ClipboardPageProps) {
   async function handleOpenSystemSettings(): Promise<void> {
     try {
       await openAccessibilitySettings();
+      setOpError(null);
     } catch {
       setOpError("打开系统设置失败，请稍后重试");
     }
