@@ -547,7 +547,10 @@ fn ipc_settings_get_hotkeys_returns_corrupt_hint_instead_of_error() {
         "指引里应给出备份路径，实际：{}",
         corrupt.hint
     );
-    assert!(backup_files(dir.path()).len() >= 1, "读路径应留下保护性备份");
+    assert!(
+        backup_files(dir.path()).len() >= 1,
+        "读路径应留下保护性备份"
+    );
 }
 
 /// 正常文件读取时 corrupt 为 None。
@@ -555,12 +558,76 @@ fn ipc_settings_get_hotkeys_returns_corrupt_hint_instead_of_error() {
 fn ipc_settings_get_hotkeys_has_no_corrupt_hint_for_valid_file() {
     let dir = tempfile::tempdir().expect("创建临时目录失败");
     let hotkey_path = dir.path().join("hotkey.json");
-    std::fs::write(&hotkey_path, r#"{"history_accelerator":"CmdOrCtrl+Shift+H"}"#)
-        .expect("写配置应成功");
+    std::fs::write(
+        &hotkey_path,
+        r#"{"history_accelerator":"CmdOrCtrl+Shift+H"}"#,
+    )
+    .expect("写配置应成功");
 
     let dto = get_hotkeys_impl(&hotkey_path).expect("get 应成功");
 
     assert!(dto.corrupt.is_none(), "正常文件不应带损坏指引");
     assert_eq!(dto.history, "CmdOrCtrl+Shift+H");
     assert_eq!(dto.translate, "CmdOrCtrl+Shift+T", "缺失键取默认值");
+}
+
+/// 同键早退不得绕过拒写：文件已损坏时，即使请求等于默认键，也必须返回 Err 并留备份。
+///
+/// 早退原本是为了「重复设置同一键不触发注册/注销」，但它同时跳过了落盘——
+/// 文件已损坏时早退返回成功会让用户以为配置是好的，且损坏文件得不到备份留痕。
+#[test]
+fn ipc_settings_set_hotkey_same_key_still_rejects_broken_file() {
+    let dir = tempfile::tempdir().expect("创建临时目录失败");
+    let hotkey_path = dir.path().join("hotkey.json");
+    let original = b"{ broken hotkey json ";
+    std::fs::write(&hotkey_path, original).expect("写入损坏配置应成功");
+    let runtime = RecordingRuntimeRegistrar::default();
+
+    // 请求的就是默认 history 键 → 与容错读出的旧值相同，会走同键早退分支
+    let err = set_hotkey_runtime_impl(
+        HotkeyAction::History,
+        "CmdOrCtrl+Shift+C",
+        &hotkey_path,
+        &runtime,
+    )
+    .expect_err("损坏文件即使请求同键也必须拒写");
+
+    assert!(
+        err.contains("hotkey.json") && err.contains("已拒绝写入"),
+        "错误文案应点名文件并给出修复指引，实际：{err}"
+    );
+    assert_eq!(
+        std::fs::read(&hotkey_path).expect("读回失败"),
+        original,
+        "拒写后原文件必须逐字节不变"
+    );
+    assert_eq!(backup_files(dir.path()).len(), 1, "应留下备份");
+    assert!(
+        runtime.events().is_empty(),
+        "早退分支不该触碰运行时注册/注销，实际：{:?}",
+        runtime.events()
+    );
+}
+
+/// 同键但文件正常：早退照旧返回 Ok，不触发注册/注销。
+#[test]
+fn ipc_settings_set_hotkey_same_key_is_noop_for_valid_file() {
+    let dir = tempfile::tempdir().expect("创建临时目录失败");
+    let hotkey_path = dir.path().join("hotkey.json");
+    std::fs::write(
+        &hotkey_path,
+        r#"{"history_accelerator":"CmdOrCtrl+Shift+H"}"#,
+    )
+    .expect("写配置应成功");
+    let runtime = RecordingRuntimeRegistrar::default();
+
+    set_hotkey_runtime_impl(
+        HotkeyAction::History,
+        "CmdOrCtrl+Shift+H",
+        &hotkey_path,
+        &runtime,
+    )
+    .expect("同键应早退成功");
+
+    assert!(runtime.events().is_empty(), "同键不该触发注册/注销");
 }

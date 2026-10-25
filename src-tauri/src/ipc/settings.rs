@@ -185,6 +185,9 @@ pub fn set_hotkey_runtime_impl(
 
     let old_accelerator = config.get_accelerator(action).to_string();
     if old_accelerator == accelerator {
+        // 同键早退也必须先确认文件可写/可解析：文件已损坏时早退返回成功，
+        // 用户会以为改键成功（而下次启动仍是旧行为），且损坏文件得不到备份留痕。
+        crate::settings::ensure_writable_json_object(hotkey_path).map_err(|e| e.to_string())?;
         return Ok(());
     }
 
@@ -194,11 +197,23 @@ pub fn set_hotkey_runtime_impl(
     // 逐键落盘：只改这个动作的键，其余动作与未知键原样保留；
     // hotkey.json 语法坏时先备份再拒写（见 settings::update_json_object）
     if let Err(e) = HotkeyConfig::save_accelerator(hotkey_path, action, accelerator) {
-        let _ = runtime.unregister(accelerator);
+        if let Err(rollback) = runtime.unregister(accelerator) {
+            // 回滚失败只留痕、不改返回值：对用户来说本次改键已经失败，
+            // 但日志里要能看出「新键可能仍处于注册状态」，便于排查残留。
+            eprintln!(
+                "[QuickQuick] 热键落盘失败后回滚注销新键失败（{accelerator}）：{rollback}；该键可能仍处于注册状态"
+            );
+        }
         return Err(e.to_string());
     }
 
-    let _ = runtime.unregister(&old_accelerator);
+    if let Err(err) = runtime.unregister(&old_accelerator) {
+        // 注销旧键失败不影响本次改键结果（新键已生效并落盘），但旧键可能仍被占用，
+        // 表现为「两个键都能唤起面板」，需要日志可追踪。
+        eprintln!(
+            "[QuickQuick] 热键改键后注销旧键失败（{old_accelerator}）：{err}；该键可能仍处于注册状态"
+        );
+    }
     Ok(())
 }
 
