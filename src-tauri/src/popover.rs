@@ -59,6 +59,56 @@ const MAIN_THREAD_WAIT_TIMEOUT: Duration = Duration::from_millis(500);
 #[cfg(target_os = "macos")]
 static CLIP_PANEL_HOLDS_KEY: AtomicBool = AtomicBool::new(false);
 
+/// 面板隐藏**正在执行中**的标记（重入守卫）。
+///
+/// 为什么必须有：`hide` 之前要先 `resign_key_window` 把键焦点交还前台，而
+/// `NSWindow::resignKeyWindow` 会**同步** post `NSWindowDidResignKeyNotification`，
+/// 我们的观察者回调（`observe_resign_key_hide`）又会调回隐藏逻辑——通知在主线程投递，
+/// `on_main_thread_blocking` 发现自己已在主线程就直接内联执行，于是
+/// `hide → resign → 通知 → hide → resign → 通知 → …` 无限递归，栈溢出后 SIGABRT。
+/// 崩溃报告（`quickquick-*.ips`，EXC_BAD_ACCESS / 栈溢出）里的调用链就是这个环。
+static PANEL_HIDING: AtomicBool = AtomicBool::new(false);
+
+/// `PANEL_HIDING` 的 RAII 复位：任何退出路径（正常返回 / 提前 return / panic）都会复位。
+///
+/// 只在**真正执行隐藏的那一层**创建——重入的那一层不能复位，否则会把外层的标记清掉，
+/// 让第三次重入又跑一遍隐藏逻辑。
+struct PanelHidingGuard<'a> {
+    flag: &'a AtomicBool,
+}
+
+impl<'a> PanelHidingGuard<'a> {
+    fn new(flag: &'a AtomicBool) -> Self {
+        Self { flag }
+    }
+}
+
+impl Drop for PanelHidingGuard<'_> {
+    fn drop(&mut self) {
+        self.flag.store(false, Ordering::SeqCst);
+    }
+}
+
+/// 单次隐藏的执行骨架：**外层执行、内层直接返回成功**。
+///
+/// `resign` / `hide` 以闭包注入，使「resign 同步回调重入」这条路径可以在单测里精确复现，
+/// 不必真的建 NSPanel。
+///
+/// 返回值：真正完成隐藏或确认「外层已在隐藏」都算 `true`；`hide` 自身的返回值原样透出。
+fn hide_once<R, H>(guard: &AtomicBool, mut resign: R, mut hide: H) -> bool
+where
+    R: FnMut(),
+    H: FnMut() -> bool,
+{
+    if guard.swap(true, Ordering::SeqCst) {
+        // 重入：外层正在隐藏，隐藏动作已在进行中，不重复执行、也不复位外层的标记
+        return true;
+    }
+    let _reset = PanelHidingGuard::new(guard);
+    resign();
+    hide()
+}
+
 /// Popover 窗口规格：统一描述一个 popover 所需的全部参数，避免重复硬编码。
 struct PopoverSpec {
     label: &'static str,
@@ -548,6 +598,7 @@ fn hide_clip_panel_now(app: &tauri::AppHandle) -> bool {
 
     CLIP_PANEL_HOLDS_KEY.store(false, Ordering::SeqCst);
 
+    // 前置检查放在守卫之外：这两条早退不会 resign、也不会 post 通知，没有重入风险。
     if !panel_registered(app) {
         eprintln!("[QuickQuick] 面板插件未注册，无法让 clip-popover 让出 key");
         return false;
@@ -557,10 +608,17 @@ fn hide_clip_panel_now(app: &tauri::AppHandle) -> bool {
         return false;
     };
 
-    panel.resign_key_window();
-    panel.hide();
-    panel.set_collection_behavior(hidden_space_behavior());
-    true
+    // resign_key_window 会同步 post resign 通知 → 观察者回调重入本函数；
+    // 由 hide_once 的重入守卫把内层变成「外层已在隐藏」的快速返回，避免无限递归。
+    hide_once(
+        &PANEL_HIDING,
+        || panel.resign_key_window(),
+        || {
+            panel.hide();
+            panel.set_collection_behavior(hidden_space_behavior());
+            true
+        },
+    )
 }
 
 /// 在主线程上同步执行 `f`，返回 `f` 的结果；无法确认已完成时返回 `false`。
@@ -623,6 +681,109 @@ mod tests {
     // NSApplication（sharedApplication 在无 NSApp 时行为未定义）。
     // 此处验证的是：函数签名存在、可被引用、cfg 门控正确——即"编译即通过"的结构测试。
     // 运行时激活行为需通过手动集成测试（全局热键触发 + 键盘输入验证）验证。
+
+    /// 重入守卫：resign 同步回调里再次触发隐藏时，内层只快速返回，不重复执行隐藏。
+    ///
+    /// 这条对应真机崩溃链：hide → resign_key_window → 同步 post 通知 → 观察者回调 → hide。
+    /// 没有守卫时内层会再跑一遍 resign + hide（真机上就是无限递归 → 栈溢出 SIGABRT）。
+    #[test]
+    fn hide_once_ignores_reentrant_hide_from_resign_callback() {
+        use std::cell::Cell;
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        let guard = AtomicBool::new(false);
+        let resign_calls = Cell::new(0);
+        let hide_calls = Cell::new(0);
+        // 回调里的第二次隐藏是否已经跑过（用它避免「守卫失效时」真的无限递归，
+        // 让变异能给出干净的红，而不是把测试进程跑崩）
+        let reentered = Cell::new(false);
+
+        let outer = {
+            let guard = &guard;
+            let resign_calls = &resign_calls;
+            let hide_calls = &hide_calls;
+            let reentered = &reentered;
+            let mut resign = || {
+                resign_calls.set(resign_calls.get() + 1);
+                // 模拟 AppKit：resign 内同步派发通知，观察者回调重入隐藏
+                if !reentered.get() {
+                    reentered.set(true);
+                    let inner = super::hide_once(
+                        guard,
+                        || resign_calls.set(resign_calls.get() + 1),
+                        || {
+                            hide_calls.set(hide_calls.get() + 1);
+                            true
+                        },
+                    );
+                    assert!(
+                        inner,
+                        "重入调用必须返回 true（隐藏已在外层进行中，视为完成）"
+                    );
+                }
+            };
+            let mut hide = || {
+                hide_calls.set(hide_calls.get() + 1);
+                true
+            };
+            super::hide_once(guard, &mut resign, &mut hide)
+        };
+
+        assert!(outer, "外层隐藏应返回 true");
+        assert_eq!(
+            resign_calls.get(),
+            1,
+            "resign 只应执行 1 次（内层不得重复 resign）"
+        );
+        assert_eq!(
+            hide_calls.get(),
+            1,
+            "hide 只应执行 1 次（内层不得重复隐藏）"
+        );
+        assert!(!guard.load(Ordering::SeqCst), "守卫退出后必须复位为 false");
+    }
+
+    /// 守卫复位：正常隐藏结束后，下一次隐藏仍会真正执行（否则之后再也隐藏不了）。
+    #[test]
+    fn hide_once_allows_subsequent_hides_after_guard_resets() {
+        use std::cell::Cell;
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        let guard = AtomicBool::new(false);
+        let hide_calls = Cell::new(0);
+
+        for _ in 0..3 {
+            let done = {
+                let hide_calls = &hide_calls;
+                let mut hide = || {
+                    hide_calls.set(hide_calls.get() + 1);
+                    true
+                };
+                super::hide_once(&guard, || {}, &mut hide)
+            };
+            assert!(done);
+            assert!(!guard.load(Ordering::SeqCst), "每次隐藏后都必须复位");
+        }
+
+        assert_eq!(hide_calls.get(), 3, "三次独立隐藏都应真正执行");
+    }
+
+    /// 异常路径复位：resign 里 panic 时守卫也要复位（否则之后再也隐藏不了）。
+    #[test]
+    fn hide_once_resets_guard_when_resign_panics() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        let guard = AtomicBool::new(false);
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            super::hide_once(&guard, || panic!("resign 抛错"), || true)
+        }));
+
+        assert!(result.is_err(), "resign panic 应向上传播");
+        assert!(
+            !guard.load(Ordering::SeqCst),
+            "panic 之后守卫必须复位，否则此后再也不会隐藏面板"
+        );
+    }
 
     #[cfg(target_os = "macos")]
     #[test]
