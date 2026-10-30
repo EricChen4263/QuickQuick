@@ -166,9 +166,13 @@ body {
 
 /* 搜索命中高亮：四档（对齐 Maccy 的 HighlightMatch：color/bold/italic/underline，默认 bold）。
    基础规则只保留不影响排版的公共属性——具体强调交给 data-hit-style 分支，
-   这样「默认档」与「可选档」不会各写一份可能漂移的基线。 */
+   这样「默认档」与「可选档」不会各写一份可能漂移的基线。
+
+   `background: transparent` 必须显式写：`<mark>` 自带 UA 的 `background-color: mark`（黄底），
+   不覆盖的话 bold/italic/underline 三档都会残留黄底，只有 color 档因为自带 background 才正常。 */
 .popover-row-text .clip-hit {
   color: inherit;
+  background: transparent;
   border-radius: 3px;
   padding: 0 1px;
 }
