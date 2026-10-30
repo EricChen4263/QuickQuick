@@ -149,6 +149,7 @@
 - **验收**：clip-popover 164 通过；全量 `pnpm test` 75 文件 804 通过；`tsc -b` 0；变异（去掉悬停守卫）→ 仲裁测试 4 条红。
 - **未验证 / 待人工**：真机长列表上键盘翻页时静止鼠标的手感；**未做独立 reviewer 审查**（自检 + 变异自证）。
 - **来源**：roadmap Phase 2「悬停与键盘仲裁」，原台账无条目，本轮登记。
+- **NSPanel 失焦隐藏重入回归（已修，commit `7edc63d`）**：`9719c88`（clip-popover 改用非激活 NSPanel）引入——`hide_clip_panel_now` 先 `resign_key_window()` 把键焦点交还前台，而该方法会**同步** post `NSWindowDidResignKeyNotification`，`observe_resign_key_hide` 的回调又调回隐藏逻辑（通知在主线程投递，`on_main_thread_blocking` 发现已在主线程就内联执行），形成 `hide → resign → 通知 → hide → …` 无限递归，栈溢出 → SIGABRT（真机崩溃报告 `quickquick-2026-10-31-010436.ips`，EXC_BAD_ACCESS）。v0.3.8 不含此代码，属 v0.4 面板回归。**修法**：`static PANEL_HIDING: AtomicBool` + `hide_once(guard, resign, hide)`——入口 `swap(true)` 命中即视为「外层正在隐藏」直接返回 true；真正执行的那一层用 RAII `PanelHidingGuard` 保证正常返回 / 提前 return / panic 都复位（重入层不复位，否则会清掉外层标记）。**验证**：`cargo test popover` 13 passed（重入只 resign/hide 各 1 次、守卫复位、panic 复位 3 条）；变异（去掉 `swap` 短路）→ 重入用例红（`resign` 计数 2≠1）；`cargo test` 896 passed。**未验证**：真机重跑失焦隐藏的稳定性（修复后未在新构建上实测长时使用）。
 
 ### Phase 2 遗留挂号（本轮记录，未立项）
 - 主窗 `⌘0` 取不到第 10 条（`quickSelectIndex` 只认 1–9）。
