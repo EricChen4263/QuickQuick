@@ -11,7 +11,7 @@ import type { TranslateResult, TransSourcePayload } from "../ipc/ipc-client";
 import { writeToClipboard, speakText } from "../panels/translate/browser-api";
 import { pickLatestText } from "./source-text";
 import { asTransSourcePayload } from "./trans-source-payload";
-import { ROUTE_EVENT, TRANS_SOURCE_EVENT } from "../ipc/events";
+import { ROUTE_EVENT, TRANS_SOURCE_EVENT, TRANSLATE_SEED_EVENT } from "../ipc/events";
 import MiniTranslate, { fallbackHint } from "./MiniTranslate";
 
 type Status = "loading" | "empty" | "translating" | "done" | "error";
@@ -175,9 +175,14 @@ function TransPopoverApp(): React.ReactElement {
     speakText(result.translated);
   }
 
-  // v1 仅跳转翻译页，不预填文本（主窗翻译输入预填为后续增强）
+  // 展开：把当前原文带到主窗翻译页预填并自动翻译，再切到翻译页。
+  // 先 emit seed 再 emit route：主窗两个监听都在同一轮事件里处理，顺序与切页一致。
   async function handleExpand(): Promise<void> {
     try {
+      const text = sourceInfo?.text ?? null;
+      if (text) {
+        await emit(TRANSLATE_SEED_EVENT, { text });
+      }
       await emit(ROUTE_EVENT, "translate");
       const main = await WebviewWindow.getByLabel("main");
       await main?.show();

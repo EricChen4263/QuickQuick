@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { act, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { listen } from "@tauri-apps/api/event";
-import { ROUTE_EVENT, TRAY_CLEAR_UNPINNED_REQUEST_EVENT } from "./ipc/events";
+import { ROUTE_EVENT, TRANSLATE_SEED_EVENT, TRAY_CLEAR_UNPINNED_REQUEST_EVENT } from "./ipc/events";
 import { clearUnpinnedHistory } from "./ipc/ipc-client";
 import App from "./App";
 
@@ -242,5 +242,47 @@ describe("app-shell", () => {
     // 与 ROUTE_EVENT 同理：Rust 侧 clear_unpinned_request_event_matches_frontend_contract
     // 钉同一字面量，两侧任一改动都会变红，避免「点了没反应」。
     expect(TRAY_CLEAR_UNPINNED_REQUEST_EVENT).toBe("tray-clear-unpinned-request");
+  });
+});
+
+describe("app-shell: 浮窗展开的待译文本（translate-seed）", () => {
+  /** 从 listen mock 的调用记录里取出指定事件的处理器（App 注册监听后才有）。 */
+  function listenerFor(eventName: string): (payload: unknown) => void {
+    const registration = vi
+      .mocked(listen)
+      .mock.calls.find(([event]) => event === eventName);
+    if (registration === undefined) {
+      throw new Error(`App 未注册 ${eventName} 事件监听，展开按钮会静默失效`);
+    }
+    return registration[1] as unknown as (payload: unknown) => void;
+  }
+
+  it("app-shell: 收到 translate-seed 后切到翻译页（不依赖路由事件）", async () => {
+    render(<App />);
+    const handler = listenerFor(TRANSLATE_SEED_EVENT);
+
+    await act(async () => {
+      handler({ payload: { text: "Hello world" } });
+    });
+
+    expect(screen.getByTestId("page-translate")).toBeVisible();
+    expect(screen.getByTestId("page-clipboard")).not.toBeVisible();
+  });
+
+  it("app-shell: translate-seed 的空白文本被忽略，不切页", async () => {
+    render(<App />);
+    const handler = listenerFor(TRANSLATE_SEED_EVENT);
+
+    await act(async () => {
+      handler({ payload: { text: "   " } });
+    });
+
+    expect(screen.getByTestId("page-clipboard")).toBeVisible();
+    expect(screen.getByTestId("page-translate")).not.toBeVisible();
+  });
+
+  it("app-shell: translate-seed 事件名与前端常量保持稳定", () => {
+    // 纯前端事件无 Rust 侧同名常量，这条断言把字面量钉住，改名时测试会红。
+    expect(TRANSLATE_SEED_EVENT).toBe("translate-seed");
   });
 });

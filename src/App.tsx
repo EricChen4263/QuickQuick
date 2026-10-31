@@ -3,7 +3,7 @@ import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { type TopLevel } from "./main-window/nav";
 import { type RoutePayload } from "./shell/windowRoute";
-import { ROUTE_EVENT, TRAY_CLEAR_UNPINNED_REQUEST_EVENT } from "./ipc/events";
+import { ROUTE_EVENT, TRANSLATE_SEED_EVENT, TRAY_CLEAR_UNPINNED_REQUEST_EVENT } from "./ipc/events";
 import { clearUnpinnedHistory } from "./ipc/ipc-client";
 import { AppShell } from "./shell/AppShell";
 import ClipboardPage from "./panels/clipboard/ClipboardPage";
@@ -48,6 +48,33 @@ function App() {
     setTranslateSeed((prev) => ({ text: content, nonce: (prev?.nonce ?? 0) + 1 }));
     setActiveTop((_prev) => "translate");
   }
+
+  // 浮窗「展开」带来的待译文本：与剪贴板页一键翻译走同一条预填路径（填入 seed 并切到翻译页）。
+  // 监听取消标记同 route 监听，防止卸载后 Promise 回写造成监听泄漏。
+  useEffect(() => {
+    let cancelled = false;
+    let unlisten: (() => void) | undefined;
+
+    listen<{ text: string }>(TRANSLATE_SEED_EVENT, (event) => {
+      const text = event.payload?.text;
+      if (typeof text === "string" && text.trim() !== "") {
+        handleTranslateFromClip(text);
+      }
+    }).then((fn) => {
+      if (cancelled) {
+        fn();
+      } else {
+        unlisten = fn;
+      }
+    }).catch((err: unknown) => {
+      console.error("[QuickQuick] translate-seed 监听注册失败:", err);
+    });
+
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, []);
 
   // 监听后端路由事件，切换一级页（热键 history/translate + 托盘「打开设置」）
   // cancelled flag 防止组件卸载后 Promise resolve 造成监听器泄漏

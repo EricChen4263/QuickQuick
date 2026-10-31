@@ -251,7 +251,7 @@ describe("TransPopoverApp", () => {
     expect(mocks.speakText).toHaveBeenCalledWith("你好，世界");
   });
 
-  it("点展开 → emit('route','translate')、main.show、main.setFocus、当前窗口 hide 依序调用", async () => {
+  it("点展开 → 先 emit translate-seed（带原文）再 emit route，main.show、main.setFocus、当前窗口 hide 依序调用", async () => {
     mocks.listClipItems.mockResolvedValue([MOCK_TEXT_ITEM]);
     mocks.translateText.mockResolvedValue(MOCK_RESULT);
 
@@ -261,6 +261,7 @@ describe("TransPopoverApp", () => {
     const expandBtn = screen.getByRole("button", { name: /展开/ });
     await userEvent.click(expandBtn);
 
+    expect(mocks.emit).toHaveBeenCalledWith("translate-seed", { text: "Hello world" });
     expect(mocks.emit).toHaveBeenCalledWith("route", "translate");
     expect(mocks.mainShow).toHaveBeenCalled();
     expect(mocks.mainSetFocus).toHaveBeenCalled();

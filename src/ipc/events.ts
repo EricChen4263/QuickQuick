@@ -36,3 +36,8 @@ export const TRAY_CLEAR_UNPINNED_REQUEST_EVENT = "tray-clear-unpinned-request" a
 // 免去前端 listClipItems 往返；payload 为 TransSourcePayload（见 ipc-client.ts），
 // 含文本、来源与降级原因。Tauri 事件名跨语言无法编译期共享，改动需两端同步。
 export const TRANS_SOURCE_EVENT = "trans-source" as const;
+
+// 浮窗「展开」时把当前待译文本带到主窗翻译页的事件名（payload 为 TranslateSeedPayload）。
+// 主窗收到后复用剪贴板页「一键翻译」的同一条预填路径，不新增翻译入口。
+// 与前端 App.tsx 的监听、trans-popover 的 emit 共用本常量；纯前端事件，无需后端同名常量。
+export const TRANSLATE_SEED_EVENT = "translate-seed" as const;
