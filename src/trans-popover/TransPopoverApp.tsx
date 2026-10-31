@@ -2,12 +2,17 @@ import React, { useEffect, useRef, useState } from "react";
 import { emit } from "@tauri-apps/api/event";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { listClipItems, translateText } from "../ipc/ipc-client";
-import type { TranslateResult } from "../ipc/ipc-client";
+import {
+  getTransPopoverSource,
+  listClipItems,
+  translateText,
+} from "../ipc/ipc-client";
+import type { TranslateResult, TransSourcePayload } from "../ipc/ipc-client";
 import { writeToClipboard, speakText } from "../panels/translate/browser-api";
 import { pickLatestText } from "./source-text";
+import { asTransSourcePayload } from "./trans-source-payload";
 import { ROUTE_EVENT, TRANS_SOURCE_EVENT } from "../ipc/events";
-import MiniTranslate from "./MiniTranslate";
+import MiniTranslate, { fallbackHint } from "./MiniTranslate";
 
 type Status = "loading" | "empty" | "translating" | "done" | "error";
 
@@ -30,33 +35,38 @@ function collectUnlisten(
 /**
  * 翻译 popover 主体。
  *
- * 取词方案：
- * - 冷启动：挂载时自读 listClipItems()[0]，避免 Rust emit 事件在前端监听
- *   就绪前丢失的竞态（沿用 Batch C1 决策）。
- * - 暖触发：热键再次唤起时由 Rust 在 window.show() 后推送 trans-source 事件
- *   携带待译文本，前端无需再 listClipItems() 往返查加密 DB（消除可见延迟 Bug 1）。
+ * 取词方案（取词全在 Rust 侧、窗口显示之前完成——本进程一旦激活，源应用的选区就没了）：
+ * - 冷启动：挂载时用 `getTransPopoverSource()` 补读 Rust 存的来源快照。窗口首次挂载晚于
+ *   Rust 的推送事件，自己查剪贴板补位会把「选中」错标成「剪贴板」。
+ * - 暖触发：热键再次唤起时由 Rust 在 window.show() 后推送 trans-source 事件，payload 与
+ *   快照同源（文本 + 来源 + 降级原因），前端据此直接重译，无需 listClipItems 往返。
+ * - 兜底：快照为空（非热键路径直接打开本窗口）时才回退 listClipItems，并如实标「剪贴板」。
  * - blur 复位：窗口隐藏时把视图复位为中性「翻译中…」，确保下次 show 画的是干净
  *   帧而非上次旧译文残影（Bug 2）；缓存的 lastText/lastResult 保留供秒级还原。
  */
 function TransPopoverApp(): React.ReactElement {
   const [status, setStatus] = useState<Status>("loading");
   const [result, setResult] = useState<TranslateResult | null>(null);
+  const [sourceInfo, setSourceInfo] = useState<TransSourcePayload | null>(null);
   const [errorMsg, setErrorMsg] = useState<string>("");
   const lastTextRef = useRef<string | null>(null);
   const lastResultRef = useRef<TranslateResult | null>(null);
   const translatingRef = useRef(false);
 
   /**
-   * 处理一次「待译文本」输入：null=无可译内容；与上次同文本且有缓存则秒级还原；
-   * 新文本则先清旧结果再联网翻译。翻译中再来事件直接忽略（互斥防重入）。
+   * 处理一次「待译文本 + 来源」输入：text 为 null=无可译内容；与上次同文本且有缓存则
+   * 秒级还原；新文本则先清旧结果再联网翻译。翻译中再来输入直接忽略（互斥防重入）。
    *
    * 失败后不更新 lastText/lastResult，保证同文本可重试（保住 M-1 回归意图）。
    */
   async function handleSource(
-    text: string | null,
+    payload: TransSourcePayload,
     cancelledRef: { value: boolean },
   ): Promise<void> {
     if (translatingRef.current) return;
+
+    setSourceInfo(payload);
+    const text = payload.text;
 
     if (text === null) {
       setResult(null);
@@ -64,7 +74,7 @@ function TransPopoverApp(): React.ReactElement {
       return;
     }
 
-    // 同剪贴板不重复联网：直接还原上次成功译文
+    // 同文本不重复联网：直接还原上次成功译文
     if (text === lastTextRef.current && lastResultRef.current !== null) {
       setResult(lastResultRef.current);
       setStatus("done");
@@ -95,12 +105,26 @@ function TransPopoverApp(): React.ReactElement {
     const cancelledRef = { value: false };
     const unlisteners: Array<() => void> = [];
 
-    // 冷启动自读（沿用 C1：避免推送事件早于监听就绪丢失）
+    // 冷启动补读 Rust 的来源快照（含选中文字与来源标签），读不到再退回剪贴板自读
     void (async () => {
       try {
+        const stored = await getTransPopoverSource();
+        if (cancelledRef.value) return;
+        if (stored !== null) {
+          await handleSource(stored, cancelledRef);
+          return;
+        }
+
         const items = await listClipItems();
         if (cancelledRef.value) return;
-        await handleSource(pickLatestText(items), cancelledRef);
+        await handleSource(
+          {
+            text: pickLatestText(items),
+            source: "clipboard",
+            fallbackReason: null,
+          },
+          cancelledRef,
+        );
       } catch {
         if (!cancelledRef.value) {
           setErrorMsg("翻译失败，请稍后重试");
@@ -114,7 +138,7 @@ function TransPopoverApp(): React.ReactElement {
     win
       .listen(TRANS_SOURCE_EVENT, (e) => {
         if (cancelledRef.value) return;
-        void handleSource(e.payload as string | null, cancelledRef);
+        void handleSource(asTransSourcePayload(e.payload), cancelledRef);
       })
       .then((fn) => collectUnlisten(fn, cancelledRef, unlisteners))
       .catch((err: unknown) => {
@@ -173,9 +197,14 @@ function TransPopoverApp(): React.ReactElement {
   }
 
   if (status === "empty") {
+    // 取词通道不可用（未授权 / 平台不支持）时也要说清原因，否则用户会以为是自己没选中
+    const degradedHint = fallbackHint(sourceInfo?.fallbackReason ?? null);
     return (
-      <div className="mini-status">
-        <span className="mini-hint">请先复制文字再按 ⌘⇧T</span>
+      <div className="mini-status mini-empty">
+        <span className="mini-hint">请先选中或复制文字再按 ⌘⇧T</span>
+        {degradedHint !== undefined && (
+          <span className="mini-degrade">{degradedHint}</span>
+        )}
       </div>
     );
   }
@@ -191,6 +220,8 @@ function TransPopoverApp(): React.ReactElement {
   return (
     <MiniTranslate
       result={result!}
+      source={sourceInfo?.source ?? "clipboard"}
+      fallbackReason={sourceInfo?.fallbackReason ?? null}
       onCopy={handleCopy}
       onSpeak={handleSpeak}
       onExpand={() => void handleExpand()}

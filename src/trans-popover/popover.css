@@ -29,10 +29,32 @@ body {
 }
 
 .mini-dir {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
   font-size: 11px;
   color: var(--muted);
   flex-shrink: 0;
   letter-spacing: 0.02em;
+}
+
+/* 来源标签：与方向行同排右端，弱化但不隐藏——它是「译的是不是选中文字」的唯一凭据 */
+.mini-source {
+  flex-shrink: 0;
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: 10px;
+  color: var(--muted);
+  background: color-mix(in oklch, var(--glass-border) 40%, transparent);
+}
+
+/* 降级说明：只在取词通道不可用时出现，一行小字，不与译文抢视觉重心 */
+.mini-degrade {
+  flex-shrink: 0;
+  font-size: 10px;
+  color: var(--muted);
+  line-height: 1.3;
 }
 
 .mini-body {
@@ -57,6 +79,12 @@ body {
   height: 100%;
   padding: 12px;
   box-sizing: border-box;
+}
+
+/* 「无可译内容」态除了提示语还可能带一行降级说明，纵向排列 */
+.mini-empty {
+  flex-direction: column;
+  gap: 6px;
 }
 
 .mini-hint {

@@ -13,6 +13,7 @@ import {
   toggleFavoriteClip,
   translateText,
   listTranslateHistory,
+  getTransPopoverSource,
   getHotkeys,
   setHotkey,
   getExcludeList,
@@ -40,6 +41,7 @@ import type {
   ClipItem,
   TranslateResult,
   TranslateHistoryItem,
+  TransSourcePayload,
   Provider,
   Hotkeys,
   ExportBackupResult,
@@ -191,6 +193,39 @@ describe("listTranslateHistory", () => {
 
     expect(mockInvoke).toHaveBeenCalledWith("list_translate_history");
     expect(result).toEqual(history);
+  });
+});
+
+describe("getTransPopoverSource", () => {
+  it("使用正确命令名调用 invoke 并透传来源快照", async () => {
+    const payload: TransSourcePayload = {
+      text: "Hello world",
+      source: "selection",
+      fallbackReason: null,
+    };
+    mockInvoke.mockResolvedValueOnce(payload);
+
+    const result = await getTransPopoverSource();
+
+    expect(mockInvoke).toHaveBeenCalledWith("get_trans_popover_source");
+    expect(result).toEqual(payload);
+  });
+
+  it("从未唤起过时后端返回 null，前端保持 null（走剪贴板兜底）", async () => {
+    mockInvoke.mockResolvedValueOnce(null);
+
+    const result = await getTransPopoverSource();
+
+    expect(result).toBeNull();
+  });
+
+  it("invoke 失败时抛出带原始文案的 Error", async () => {
+    mockInvoke.mockRejectedValueOnce("状态不可用");
+
+    const err = await getTransPopoverSource().catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).message).toContain("状态不可用");
   });
 });
 

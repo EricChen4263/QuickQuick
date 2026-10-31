@@ -57,6 +57,10 @@ tempfile = "3"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 core-graphics = "0.25"
+# 取词通道（selection.rs）读取 AXSelectedText：AXUIElementCopyAttributeValue 的返回值是
+# 无类型 CFTypeRef，需要 core-foundation 做 CFString 类型校验与所有权包装（create rule）。
+# 版本对齐 Cargo.lock 已锁定的 core-foundation 0.10.1（core-graphics 的传递依赖），不新增下载。
+core-foundation = "0.10"
 objc2 = "0.6"
 objc2-app-kit = { version = "0.3", features = [
     "NSPasteboard",

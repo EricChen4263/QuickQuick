@@ -5,6 +5,7 @@ import userEvent from "@testing-library/user-event";
 const mocks = vi.hoisted(() => ({
   listClipItems: vi.fn(),
   translateText: vi.fn(),
+  getTransPopoverSource: vi.fn(),
   speakText: vi.fn(),
   writeToClipboard: vi.fn().mockResolvedValue(undefined),
   hide: vi.fn().mockResolvedValue(undefined),
@@ -17,6 +18,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock("../ipc/ipc-client", () => ({
   listClipItems: mocks.listClipItems,
   translateText: mocks.translateText,
+  getTransPopoverSource: mocks.getTransPopoverSource,
 }));
 
 vi.mock("../panels/translate/browser-api", () => ({
@@ -47,6 +49,7 @@ vi.mock("@tauri-apps/api/event", () => ({
 }));
 
 import TransPopoverApp from "./TransPopoverApp";
+import type { TransSourcePayload } from "../ipc/ipc-client";
 
 const MOCK_TEXT_ITEM = {
   id: "clip-1",
@@ -70,12 +73,26 @@ const RESULT_B = {
   targetLang: "zh",
 };
 
+/** 选中来源快照：热键唤起时 Rust 取到选中文字后存下的那一份。 */
+const SELECTION_SOURCE: TransSourcePayload = {
+  text: "Hello world",
+  source: "selection",
+  fallbackReason: null,
+};
+
+/** 剪贴板来源快照：取词没拿到时的降级结果。 */
+const CLIPBOARD_SOURCE: TransSourcePayload = {
+  text: "Hello world",
+  source: "clipboard",
+  fallbackReason: "noSelection",
+};
+
 /**
  * 按事件名分发的 listen mock：组件用 getCurrentWindow().listen 分别订阅
  * "trans-source" 与 "tauri://blur"，此 helper 把各自回调缓存供测试触发。
  */
 function installListenDispatcher(): {
-  fireTransSource: (payload: string | null) => void;
+  fireTransSource: (payload: unknown) => void;
   fireBlur: () => void;
 } {
   const handlers: Record<string, (e: { payload: unknown }) => void> = {};
@@ -86,7 +103,7 @@ function installListenDispatcher(): {
     },
   );
   return {
-    fireTransSource: (payload: string | null) =>
+    fireTransSource: (payload: unknown) =>
       handlers["trans-source"]?.({ payload }),
     fireBlur: () => handlers["tauri://blur"]?.({ payload: null }),
   };
@@ -95,6 +112,8 @@ function installListenDispatcher(): {
 describe("TransPopoverApp", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // 默认无来源快照：冷启动走 listClipItems 兜底路径（等同引入取词之前的行为）
+    mocks.getTransPopoverSource.mockResolvedValue(null);
     mocks.writeToClipboard.mockResolvedValue(undefined);
     mocks.hide.mockResolvedValue(undefined);
     mocks.listen.mockResolvedValue(() => undefined);
@@ -103,7 +122,7 @@ describe("TransPopoverApp", () => {
     mocks.mainSetFocus.mockResolvedValue(undefined);
   });
 
-  it("剪贴板有文本 → 调 translateText 并渲染译文", async () => {
+  it("剪贴板有文本 → 调 translateText 并渲染译文，来源标「剪贴板」", async () => {
     mocks.listClipItems.mockResolvedValue([MOCK_TEXT_ITEM]);
     mocks.translateText.mockResolvedValue(MOCK_RESULT);
 
@@ -112,6 +131,7 @@ describe("TransPopoverApp", () => {
     const translated = await screen.findByText("你好，世界");
     expect(translated).toBeDefined();
     expect(mocks.translateText).toHaveBeenCalledWith("Hello world");
+    expect(screen.getByText("来源：剪贴板")).toBeDefined();
   });
 
   it("剪贴板为空 → 渲染降级文案", async () => {
@@ -120,7 +140,7 @@ describe("TransPopoverApp", () => {
 
     render(<TransPopoverApp />);
 
-    const fallback = await screen.findByText(/请先复制文字/);
+    const fallback = await screen.findByText(/请先选中或复制文字/);
     expect(fallback).toBeDefined();
     expect(mocks.translateText).not.toHaveBeenCalled();
   });
@@ -133,6 +153,76 @@ describe("TransPopoverApp", () => {
 
     const errMsg = await screen.findByText(/翻译失败/);
     expect(errMsg).toBeDefined();
+  });
+
+  it("冷启动读到选中来源快照 → 译选中文字、标「选中」，且不再自读剪贴板", async () => {
+    mocks.getTransPopoverSource.mockResolvedValue(SELECTION_SOURCE);
+    mocks.translateText.mockResolvedValue(MOCK_RESULT);
+
+    render(<TransPopoverApp />);
+
+    await screen.findByText("你好，世界");
+    expect(mocks.translateText).toHaveBeenCalledWith("Hello world");
+    expect(screen.getByText("来源：选中")).toBeDefined();
+    expect(
+      mocks.listClipItems,
+    ).not.toHaveBeenCalled();
+  });
+
+  it("冷启动读到剪贴板来源快照 → 标「剪贴板」", async () => {
+    mocks.getTransPopoverSource.mockResolvedValue(CLIPBOARD_SOURCE);
+    mocks.translateText.mockResolvedValue(MOCK_RESULT);
+
+    render(<TransPopoverApp />);
+
+    await screen.findByText("你好，世界");
+    expect(screen.getByText("来源：剪贴板")).toBeDefined();
+  });
+
+  it("冷启动读到未授权降级 → 显示降级说明", async () => {
+    mocks.getTransPopoverSource.mockResolvedValue({
+      text: "Hello world",
+      source: "clipboard",
+      fallbackReason: "untrusted",
+    });
+    mocks.translateText.mockResolvedValue(MOCK_RESULT);
+
+    render(<TransPopoverApp />);
+
+    await screen.findByText("你好，世界");
+    expect(
+      screen.getByText("未授权辅助功能，已改为译剪贴板内容"),
+    ).toBeDefined();
+    expect(screen.getByText("来源：剪贴板")).toBeDefined();
+  });
+
+  it("冷启动快照为无文本 → 给出提示且不发起翻译", async () => {
+    mocks.getTransPopoverSource.mockResolvedValue({
+      text: null,
+      source: "clipboard",
+      fallbackReason: "noSelection",
+    });
+    mocks.translateText.mockResolvedValue(MOCK_RESULT);
+
+    render(<TransPopoverApp />);
+
+    await screen.findByText(/请先选中或复制文字/);
+    expect(mocks.translateText).not.toHaveBeenCalled();
+  });
+
+  it("无文本且未授权 → 空态也说明降级原因（不让用户误以为没选中）", async () => {
+    mocks.getTransPopoverSource.mockResolvedValue({
+      text: null,
+      source: "clipboard",
+      fallbackReason: "untrusted",
+    });
+
+    render(<TransPopoverApp />);
+
+    await screen.findByText(/请先选中或复制文字/);
+    expect(
+      screen.getByText("未授权辅助功能，已改为译剪贴板内容"),
+    ).toBeDefined();
   });
 
   it("点复制 → writeToClipboard 以译文调用", async () => {
@@ -177,19 +267,36 @@ describe("TransPopoverApp", () => {
     expect(mocks.hide).toHaveBeenCalled();
   });
 
-  it("收到 trans-source 事件（新文本）→ 调 translateText 并渲染新译文", async () => {
+  it("收到 trans-source 事件（选中来源）→ 译选中文字并标「选中」", async () => {
     const dispatcher = installListenDispatcher();
     mocks.listClipItems.mockResolvedValue([]);
     mocks.translateText.mockResolvedValue(MOCK_RESULT);
 
     render(<TransPopoverApp />);
-    await screen.findByText(/请先复制文字/);
+    await screen.findByText(/请先选中或复制文字/);
 
-    dispatcher.fireTransSource("Hello world");
+    dispatcher.fireTransSource(SELECTION_SOURCE);
 
     const translated = await screen.findByText("你好，世界");
     expect(translated).toBeDefined();
     expect(mocks.translateText).toHaveBeenCalledWith("Hello world");
+    expect(screen.getByText("来源：选中")).toBeDefined();
+  });
+
+  it("收到结构异常的 trans-source payload → 退化为「无文本」而不是拿 undefined 去翻译", async () => {
+    const dispatcher = installListenDispatcher();
+    mocks.listClipItems.mockResolvedValue([]);
+    mocks.translateText.mockResolvedValue(MOCK_RESULT);
+
+    render(<TransPopoverApp />);
+    await screen.findByText(/请先选中或复制文字/);
+
+    // 旧格式（裸字符串）或损坏对象都不得被当成待译文本
+    dispatcher.fireTransSource("Hello world");
+    dispatcher.fireTransSource({ text: 42, source: "bogus" });
+
+    await screen.findByText(/请先选中或复制文字/);
+    expect(mocks.translateText).not.toHaveBeenCalled();
   });
 
   it("残影修复：blur 复位后再收 trans-source 新文本 pending 时查不到旧结果A", async () => {
@@ -215,7 +322,7 @@ describe("TransPopoverApp", () => {
     expect(screen.queryByText("你好，世界")).toBeNull();
 
     // 再发新文本（pending），沿用原有断言确认仍维持「翻译中…」、旧译文不回归
-    dispatcher.fireTransSource("Second source");
+    dispatcher.fireTransSource({ ...CLIPBOARD_SOURCE, text: "Second source" });
     await screen.findByText("翻译中…");
     expect(screen.queryByText("你好，世界")).toBeNull();
 
@@ -232,7 +339,7 @@ describe("TransPopoverApp", () => {
     expect(mocks.translateText).toHaveBeenCalledTimes(1);
 
     dispatcher.fireBlur();
-    dispatcher.fireTransSource("Hello world");
+    dispatcher.fireTransSource(CLIPBOARD_SOURCE);
 
     const restored = await screen.findByText("你好，世界");
     expect(restored).toBeDefined();
@@ -255,7 +362,7 @@ describe("TransPopoverApp", () => {
 
     expect(mocks.translateText).toHaveBeenCalledTimes(1);
 
-    dispatcher.fireTransSource("Hello world");
+    dispatcher.fireTransSource(CLIPBOARD_SOURCE);
     await screen.findByText("你好，世界");
 
     expect(mocks.translateText).toHaveBeenCalledTimes(2);

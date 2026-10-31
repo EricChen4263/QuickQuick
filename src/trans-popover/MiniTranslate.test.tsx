@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import MiniTranslate from "./MiniTranslate";
+import MiniTranslate, { fallbackHint, sourceLabel } from "./MiniTranslate";
 import type { TranslateResult } from "../ipc/ipc-client";
 
 const RESULT: TranslateResult = {
@@ -16,6 +16,7 @@ describe("MiniTranslate 渲染", () => {
     render(
       <MiniTranslate
         result={RESULT}
+        source="selection"
         onCopy={vi.fn()}
         onSpeak={vi.fn()}
         onExpand={vi.fn()}
@@ -29,6 +30,7 @@ describe("MiniTranslate 渲染", () => {
     render(
       <MiniTranslate
         result={RESULT}
+        source="selection"
         onCopy={vi.fn()}
         onSpeak={vi.fn()}
         onExpand={vi.fn()}
@@ -38,12 +40,90 @@ describe("MiniTranslate 渲染", () => {
     expect(screen.getByText("你好，世界")).toBeDefined();
   });
 
+  it("选中来源 → 显示「来源：选中」标签（D4）", () => {
+    render(
+      <MiniTranslate
+        result={RESULT}
+        source="selection"
+        onCopy={vi.fn()}
+        onSpeak={vi.fn()}
+        onExpand={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText("来源：选中")).toBeDefined();
+  });
+
+  it("剪贴板来源 → 显示「来源：剪贴板」标签（D4）", () => {
+    render(
+      <MiniTranslate
+        result={RESULT}
+        source="clipboard"
+        onCopy={vi.fn()}
+        onSpeak={vi.fn()}
+        onExpand={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText("来源：剪贴板")).toBeDefined();
+  });
+
+  it("未授权降级 → 显示「未授权辅助功能，已改为译剪贴板内容」", () => {
+    render(
+      <MiniTranslate
+        result={RESULT}
+        source="clipboard"
+        fallbackReason="untrusted"
+        onCopy={vi.fn()}
+        onSpeak={vi.fn()}
+        onExpand={vi.fn()}
+      />,
+    );
+
+    expect(
+      screen.getByText("未授权辅助功能，已改为译剪贴板内容"),
+    ).toBeDefined();
+  });
+
+  it("平台不支持取词 → 显示「当前系统不支持选中取词」说明", () => {
+    render(
+      <MiniTranslate
+        result={RESULT}
+        source="clipboard"
+        fallbackReason="unsupported"
+        onCopy={vi.fn()}
+        onSpeak={vi.fn()}
+        onExpand={vi.fn()}
+      />,
+    );
+
+    expect(
+      screen.getByText("当前系统不支持选中取词，已改为译剪贴板内容"),
+    ).toBeDefined();
+  });
+
+  it("无选中（常态）→ 不渲染降级说明，避免噪音", () => {
+    render(
+      <MiniTranslate
+        result={RESULT}
+        source="clipboard"
+        fallbackReason="noSelection"
+        onCopy={vi.fn()}
+        onSpeak={vi.fn()}
+        onExpand={vi.fn()}
+      />,
+    );
+
+    expect(screen.queryByText(/已改为译剪贴板内容/)).toBeNull();
+  });
+
   it("点复制按钮调 onCopy 回调", async () => {
     const onCopy = vi.fn();
 
     render(
       <MiniTranslate
         result={RESULT}
+        source="selection"
         onCopy={onCopy}
         onSpeak={vi.fn()}
         onExpand={vi.fn()}
@@ -61,6 +141,7 @@ describe("MiniTranslate 渲染", () => {
     render(
       <MiniTranslate
         result={RESULT}
+        source="selection"
         onCopy={vi.fn()}
         onSpeak={onSpeak}
         onExpand={vi.fn()}
@@ -78,6 +159,7 @@ describe("MiniTranslate 渲染", () => {
     render(
       <MiniTranslate
         result={RESULT}
+        source="selection"
         onCopy={vi.fn()}
         onSpeak={vi.fn()}
         onExpand={onExpand}
@@ -87,5 +169,21 @@ describe("MiniTranslate 渲染", () => {
     await userEvent.click(screen.getByRole("button", { name: "展开" }));
 
     expect(onExpand).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("来源与降级文案映射", () => {
+  it("sourceLabel 覆盖两个来源", () => {
+    expect(sourceLabel("selection")).toBe("选中");
+    expect(sourceLabel("clipboard")).toBe("剪贴板");
+  });
+
+  it("fallbackHint 只为取词通道不可用给文案，无选中与空值不给", () => {
+    expect(fallbackHint("untrusted")).toBe("未授权辅助功能，已改为译剪贴板内容");
+    expect(fallbackHint("unsupported")).toBe(
+      "当前系统不支持选中取词，已改为译剪贴板内容",
+    );
+    expect(fallbackHint("noSelection")).toBeUndefined();
+    expect(fallbackHint(null)).toBeUndefined();
   });
 });

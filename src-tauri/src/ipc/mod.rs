@@ -7,12 +7,14 @@
 //! - `clipboard`：剪贴板取数/管理命令（list/delete/toggle_favorite）
 //! - `translate`：翻译命令（translate_text / list_translate_history）
 //! - `settings`：设置命令（get/set_hotkeys / exclude_list / translate_providers）
+//! - `trans_popover`：trans-popover 待译文本来源（结构体 payload + 冷启动补读命令）
 //! - `portable`：备份/恢复命令（export_backup / import_backup / reveal_backup_in_finder）
 
 pub mod clipboard;
 pub mod portable;
 pub mod settings;
 pub mod system;
+pub mod trans_popover;
 pub mod translate;
 pub mod update;
 

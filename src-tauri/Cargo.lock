@@ -3197,6 +3197,7 @@ dependencies = [
  "argon2",
  "base64 0.22.1",
  "block2",
+ "core-foundation",
  "core-graphics",
  "hmac",
  "image",

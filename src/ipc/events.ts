@@ -32,6 +32,7 @@ export const TRAY_CLEAR_UNPINNED_REQUEST_EVENT = "tray-clear-unpinned-request" a
 
 // trans-popover 待译文本推送事件名。
 // 注意：与后端 src-tauri/src/popover.rs 的 TRANS_SOURCE_EVENT 常量必须保持一致。
-// 触发热键时 Rust 就地取词后推给 trans-popover 窗口，免去前端 listClipItems 往返；
-// Tauri 事件名跨语言无法编译期共享，改动需两端同步。
+// 触发热键时 Rust 先取词（选中文字优先，失败降级剪贴板）再推给 trans-popover 窗口，
+// 免去前端 listClipItems 往返；payload 为 TransSourcePayload（见 ipc-client.ts），
+// 含文本、来源与降级原因。Tauri 事件名跨语言无法编译期共享，改动需两端同步。
 export const TRANS_SOURCE_EVENT = "trans-source" as const;

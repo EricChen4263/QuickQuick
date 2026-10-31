@@ -85,6 +85,27 @@ export interface TranslateHistoryItem {
   createdUtc: number;
 }
 
+/** 待译文本的实际来源，与 Rust TransSourceKind（camelCase）对齐。 */
+export type TransSourceKind = "selection" | "clipboard";
+
+/**
+ * 取词失败、降级到剪贴板的原因，与 Rust FallbackReason（camelCase）对齐。
+ *
+ * `noSelection` 是常态（用户没选中任何东西），浮窗不额外提示；
+ * 另两种是「取词通道本身不可用」，必须如实告诉用户为什么译的是剪贴板内容。
+ */
+export type TransFallbackReason = "noSelection" | "unsupported" | "untrusted";
+
+/** 一次热键唤起的待译文本与来源，与 Rust TransSource（camelCase）对齐。 */
+export interface TransSourcePayload {
+  /** 待译文本；null 表示选中与剪贴板都没有可译内容，浮窗给出「请先选中或复制文字」提示。 */
+  text: string | null;
+  /** 文本实际来自哪里，浮窗据此显示「来源：选中 / 来源：剪贴板」。 */
+  source: TransSourceKind;
+  /** 降级到剪贴板的原因；来源为选中时为 null。 */
+  fallbackReason: TransFallbackReason | null;
+}
+
 /** 翻译 Provider 描述，与 Rust ProviderDto（camelCase）对齐。 */
 export interface Provider {
   id: string;
@@ -223,6 +244,22 @@ export async function translateText(
 export async function listTranslateHistory(): Promise<TranslateHistoryItem[]> {
   try {
     return await invoke<TranslateHistoryItem[]>("list_translate_history");
+  } catch (err) {
+    throw toError(err);
+  }
+}
+
+/**
+ * 读取最近一次热键唤起的待译文本与来源（冷启动补读）。
+ *
+ * 热键唤起时 Rust 在窗口显示之前就取好了词，并把快照留在状态里；窗口首次挂载晚于
+ * Rust 的推送事件，故冷启动靠这个命令拿同一份数据，来源标签才不会标错。
+ *
+ * @returns 最近一次唤起的来源快照；从未唤起过时为 null
+ */
+export async function getTransPopoverSource(): Promise<TransSourcePayload | null> {
+  try {
+    return await invoke<TransSourcePayload | null>("get_trans_popover_source");
   } catch (err) {
     throw toError(err);
   }

@@ -30,6 +30,7 @@ pub mod pipeline;
 mod popover;
 pub mod portable;
 pub mod privacy;
+pub mod selection;
 pub mod settings;
 pub mod translate;
 mod tray;
@@ -170,6 +171,7 @@ pub fn run() {
             ipc::clipboard::get_clip_thumbnail,
             ipc::translate::translate_text,
             ipc::translate::list_translate_history,
+            ipc::trans_popover::get_trans_popover_source,
             ipc::settings::get_hotkeys,
             ipc::settings::set_hotkey,
             ipc::settings::get_exclude_list,
@@ -224,6 +226,9 @@ pub fn run() {
         .setup(|app| {
             setup_app_db(app);
             setup_ecdict_db(app);
+            // 热键唤起 trans-popover 时写入的来源快照：前端窗口首次挂载晚于那次推送事件，
+            // 靠它补读同一份数据，冷启动与暖触发的来源标签才一致。
+            app.manage(ipc::trans_popover::TransSourceStore::default());
             let capture_state = init_capture_state(app);
             // 提前克隆 Arc，让 capture_state 的所有权移交 manage 之前完成
             let paused = Arc::clone(&capture_state.paused);
@@ -847,21 +852,26 @@ pub fn register_action_shortcut(
     accelerator: &str,
 ) -> Result<(), tauri_plugin_global_shortcut::Error> {
     let handle_cb = handle.clone();
+    // 只响应按下，忽略松开：插件对每个 GlobalHotKeyEvent（按下与松开各一次）都会调用回调。
+    // 不过滤的话，松开事件会在第一次触发已激活本进程之后再跑一遍取词，焦点已不在源应用，
+    // 读到的是空选区并回退剪贴板，覆盖掉刚才正确的「选中」快照。
     match popover_label_for_action(action) {
         Some(label) => {
             handle
                 .global_shortcut()
-                .on_shortcut(accelerator, move |_app, _shortcut, _event| {
-                    popover::trigger_popover(&handle_cb, label);
+                .on_shortcut(accelerator, move |_app, _shortcut, event| {
+                    if event.state == tauri_plugin_global_shortcut::ShortcutState::Pressed {
+                        popover::trigger_popover(&handle_cb, label);
+                    }
                 })
         }
-        None => {
-            handle
-                .global_shortcut()
-                .on_shortcut(accelerator, move |_app, _shortcut, _event| {
+        None => handle
+            .global_shortcut()
+            .on_shortcut(accelerator, move |_app, _shortcut, event| {
+                if event.state == tauri_plugin_global_shortcut::ShortcutState::Pressed {
                     tray::show_and_focus_window(&handle_cb);
-                })
-        }
+                }
+            }),
     }
 }
 

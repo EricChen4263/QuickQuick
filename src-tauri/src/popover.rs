@@ -15,7 +15,9 @@
 use tauri::{Emitter, Manager, WebviewWindow, WindowEvent};
 
 use crate::ipc::clipboard::pick_latest_translate_text_impl;
+use crate::ipc::trans_popover::{build_trans_source, TransSource, TransSourceStore};
 use crate::ipc::{with_db, AppDb};
+use crate::selection::{self, SelectionOutcome};
 use crate::window_pos::compute_window_position_for_width;
 
 #[cfg(target_os = "macos")]
@@ -25,6 +27,7 @@ use std::time::Duration;
 
 /// trans-popover 待译文本推送事件名。
 /// 与前端 src/ipc/events.ts 的 TRANS_SOURCE_EVENT 必须一致；
+/// payload 为 [`TransSource`]（含文本、来源与降级原因），前端 `TransSourcePayload` 与之对齐。
 /// Tauri 事件名跨语言无法编译期共享，改动需两端同步。
 const TRANS_SOURCE_EVENT: &str = "trans-source";
 
@@ -239,6 +242,11 @@ pub fn trigger_popover(handle: &tauri::AppHandle, label: &str) {
         return;
     };
 
+    // 取词必须发生在任何 show / 激活之前：QuickQuick 一旦成为前台应用，键盘焦点就离开了
+    // 源应用，AX 读到的选中文字只会是空。故先把「译什么 + 来源」定下来，后面只负责展示。
+    let pending_source =
+        (spec.label == TRANS_POPOVER_LABEL).then(|| prepare_translate_source(handle));
+
     let Some(window) = get_or_create_popover(handle, spec) else {
         return;
     };
@@ -262,10 +270,12 @@ pub fn trigger_popover(handle: &tauri::AppHandle, label: &str) {
         eprintln!("[QuickQuick] {label} show 失败: {e}");
         return;
     }
-    // show 后立即就地取词并推给 trans-popover：让前端无需再 listClipItems()
+    // show 后立即把取好的内容推给 trans-popover：让前端无需再 listClipItems()
     // 往返查加密 DB（去掉可见延迟），并由 Rust 主动推送驱动重译（消除旧译文残影）。
     // 推送安排在激活之前：先让内容就位，再让窗口接住键盘焦点。
-    push_translate_source(handle, &window);
+    if let Some(source) = pending_source {
+        push_translate_source(&window, source);
+    }
     // trans-popover 仍是普通窗口：先激活 app，再聚焦窗口。
     // 顺序说明：macOS 要求进程本身处于"活跃"(active)状态后，
     // 窗口的 makeKeyAndOrderFront 才能拿到 key 状态。
@@ -304,24 +314,48 @@ fn show_clip_popover(handle: &tauri::AppHandle, window: &WebviewWindow) {
     }
 }
 
-/// 就地查 DB 取待译文本并推给 trans-popover 窗口。
+/// 定下本次热键该翻译什么，并把来源快照留给前端冷启动补读。
 ///
-/// payload 为 `Option<String>`（None 序列化为 null）：前端据此直接重译，
-/// 不再 listClipItems() 往返。取 state / 查 DB / emit 任一失败都 eprintln
-/// 降级、不 panic、不向上抛，与本文件其他可失败操作的错误处理风格一致。
-fn push_translate_source(handle: &tauri::AppHandle, window: &WebviewWindow) {
+/// 顺序是「先取选中文字，再决定要不要查库」：命中选中文字时省掉一次解密 DB 往返，
+/// 热键路径的可见延迟主要就花在那里。取词失败（未授权 / 无焦点 / 平台不支持）一律
+/// 降级为剪贴板最新一条，并把**原因**带在 payload 里，由浮窗如实标注来源。
+fn prepare_translate_source(handle: &tauri::AppHandle) -> TransSource {
+    let selection = selection::read_selection();
+    let clipboard = match &selection {
+        SelectionOutcome::Text(_) => None,
+        _ => read_latest_clipboard_text(handle),
+    };
+    let source = build_trans_source(selection, clipboard);
+
+    // 快照必须在窗口显示之前写入：前端首次挂载时 emit 已经过去，只能补读这一份。
+    // 状态未注册（测试环境或未来重构）时只降级成「冷启动走前端兜底」，不让热键路径 panic。
+    match handle.try_state::<TransSourceStore>() {
+        Some(store) => store.remember(source.clone()),
+        None => eprintln!("[QuickQuick] trans-popover 来源快照未注册，冷启动将退回前端自读"),
+    }
+    source
+}
+
+/// 读剪贴板历史里「当前该翻译的那一条」；库不可用/查询失败时记录原因并返回 None。
+fn read_latest_clipboard_text(handle: &tauri::AppHandle) -> Option<String> {
     let state = handle.state::<AppDb>();
-    let text = match with_db(&state, |conn| {
+    match with_db(&state, |conn| {
         pick_latest_translate_text_impl(conn).map_err(|e| e.to_string())
     }) {
         Ok(text) => text,
         Err(e) => {
-            eprintln!("[QuickQuick] trans-popover 取待译文本失败: {e}");
-            return;
+            eprintln!("[QuickQuick] trans-popover 取剪贴板待译文本失败: {e}");
+            None
         }
-    };
+    }
+}
 
-    if let Err(e) = window.emit(TRANS_SOURCE_EVENT, text) {
+/// 把本次唤起的待译文本与来源推给 trans-popover 窗口。
+///
+/// emit 失败只记日志、不向上抛：前端挂载后仍可用 `get_trans_popover_source` 补读同一份
+/// 快照，最坏结果是多一次 IPC，而不是浮窗空白。与本文件其他可失败操作的处理风格一致。
+fn push_translate_source(window: &WebviewWindow, source: TransSource) {
+    if let Err(e) = window.emit(TRANS_SOURCE_EVENT, source) {
         eprintln!("[QuickQuick] trans-popover emit {TRANS_SOURCE_EVENT} 失败: {e}");
     }
 }
@@ -423,6 +457,13 @@ fn register_focus_lost_hide(window: &WebviewWindow) {
         if let WindowEvent::Focused(false) = event {
             if let Err(e) = window_clone.hide() {
                 eprintln!("[QuickQuick] popover hide 失败: {e}");
+            }
+            // trans-popover 隐藏后清掉来源快照：选中的文字不应在窗口关闭后继续留在内存里。
+            // 只在失焦隐藏时清：挂载补读发生在用户能看到窗口之前，不会被这里清掉。
+            if window_clone.label() == TRANS_POPOVER_LABEL {
+                if let Some(store) = window_clone.app_handle().try_state::<TransSourceStore>() {
+                    store.clear();
+                }
             }
         }
     });
