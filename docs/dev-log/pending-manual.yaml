@@ -221,3 +221,43 @@ pending:
     confirmed_at: 2026-06-07T12:50:00Z
     status: 已确认
     note: "真机往返确认通过：① 捕获+预览保真（QuickQuick 预览红色/绿色文字、绿色超链接、红色行内代码、表格、代码块全显示，证明带色 HTML 完整捕获/存储/渲染）；② 粘贴到富文本编辑器保留格式；③ 链接点击经 RT1-F2-S03 修复后在系统浏览器打开（opener allow-default-urls scope）；④ 纯文本编辑器(VSCode)退纯文本兜底正确。文字颜色在备忘录/Obsidian 粘贴时丢失=目标 app 接收限制（备忘录规范化、Obsidian→Markdown 无色），对照测试已证直接浏览器→备忘录同样丢色，非 QuickQuick 缺陷，已忠实搬运（honor HTML 色的 Mail/Docs/浏览器可正常显色）。"
+
+  - acceptance_id: TP0-M01
+    version: TP0
+    assertion: "真机：在 Safari、Notes、TextEdit、Terminal（外加 Chrome 网页 / VS Code / 一个 Electron 应用）选中文字后按 Cmd+Shift+T，浮窗译的是选中文字且来源标签显示「选中」；目标应用无响应时热键不卡死（0.3s AX 超时后降级）"
+    source_anchor: docs/design/translate-interaction-alignment.md§2.P0 验收 + §5.D4
+    collect_env: real_device
+    evidence_ref: 真机目测（无自动化证据位）
+    added_at: 2026-10-31T00:00:00Z
+    status: 待确认
+    note: "取词链路（AXUIElementCopyAttributeValue 读 AXSelectedText）与降级分支已单测覆盖 classify/build_trans_source；但「AX 在真实应用里能否读到选区」只有真机可验：网页内容与 Electron 默认不暴露 AX 选区（设计文档§4 风险1），预期这两类降级为剪贴板并标「剪贴板」。headless 环境无法执行 `npx tauri dev` 做此验证。"
+
+  - acceptance_id: TP0-M02
+    version: TP0
+    assertion: "真机：撤销本应用的辅助功能授权后按 Cmd+Shift+T，应用不崩溃、不弹新窗，浮窗显示「未授权辅助功能，已改为译剪贴板内容」且来源标签为「剪贴板」；重新授权后恢复取词"
+    source_anchor: docs/design/translate-interaction-alignment.md§2.P0 验收 + §5.D3/D4
+    collect_env: real_device
+    evidence_ref: 真机目测（无自动化证据位）
+    added_at: 2026-10-31T00:00:00Z
+    status: 待确认
+    note: "未授权分支的判定（SelectionOutcome::Untrusted → fallbackReason=untrusted → 降级文案）已由 Rust/前端单测锚定；真实 TCC 授权撤销后的进程内行为（AXIsProcessTrusted 变 false 的时机）需真机确认，无法在测试里模拟。"
+
+  - acceptance_id: TP0-M03
+    version: TP0
+    assertion: "真机：多屏与全屏 Space 下热键取词与浮窗唤起正常（浮窗出现在光标所在屏、取词不受显示器影响），深色/浅色模式下来源标签与降级文案可读"
+    source_anchor: docs/design/translate-interaction-alignment.md§2.P0 + §6 验证策略
+    collect_env: real_device
+    evidence_ref: 真机目测（无自动化证据位）
+    added_at: 2026-10-31T00:00:00Z
+    status: 待确认
+    note: "取词走 system-wide AX 元素，与显示器无关；此项主要回归浮窗定位与视觉呈现（来源标签为本次新增 DOM），headless 只能断言文本渲染，不能断言落点与观感。"
+
+  - acceptance_id: TP0-M04
+    version: TP0
+    assertion: "真机：（a）按住 Cmd+Shift+T 不放或快速按下松开，trans-popover 只唤起一次且来源标签仍为「选中」（Released 事件不得覆盖选中快照）；（b）浮窗已开、QuickQuick 处于前台时再按热键，热键不卡顿（不等待 AX 超时），来源降级为「剪贴板」；（c）浮窗失焦隐藏后再次唤起，译的是新选中的文字"
+    source_anchor: docs/design/translate-interaction-alignment.md§5 审查待办处理结果
+    collect_env: real_device
+    evidence_ref: 真机目测（无自动化证据位）
+    added_at: 2026-10-31T00:00:00Z
+    status: 待确认
+    note: "Pressed 过滤与焦点应用 pid 比对均为运行时行为：单测只能锚定 classify/build_trans_source/Store.clear 的纯逻辑，无法模拟全局热键的 Released 事件或前台应用切换。"
