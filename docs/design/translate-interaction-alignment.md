@@ -4,7 +4,15 @@ document_kind: plan
 
 # QuickQuick 翻译交互对齐方案
 
-- 状态：已确认（2026-10-31，D1–D4 全部按推荐方案定）；P0 实施中
+- 状态：已确认（2026-10-31，D1–D4 全部按推荐方案定）；P0、P1、P3 已实现，P2 暂缓，P4 不在本期
+
+| 阶段 | 状态 | 提交 / 说明 |
+|---|---|---|
+| P0 取词通道 | 已实现，已过独立审查 | `1988610`；真机见 TP0-M01..M04 |
+| P1 光标旁定位 | 已实现，已过独立审查（三轮） | 本次提交；真机见 TP1-M01..M02；Windows 编译未验证（按用户要求搁置） |
+| P2 选中图标 | 暂缓 | D2：待 P0/P1 真机结果后再决定 |
+| P3 固定面板 | 已实现 | `1709efc`：展开时经 `translate-seed` 把原文预填到主窗翻译页并自动翻译 |
+| P4 词典视图 | 不在本期 | 浮窗译文区只读 `translated`，词典类结果回退为纯文本摘要；结构化词典视图已在主窗 `DictEntryView` 中，浮窗不另做 |
 - 日期：2026-10-31
 - 依据：`docs/STRATEGY.md` G2/G3、`docs/QuickQuick-设计文档.md` §四 4.3、`docs/dev-log/v5/REMAINING-TODO.md` §二.6、`docs/design/translation-sources-pot.md`
 

@@ -12,13 +12,15 @@
 //! 窗口不写进 tauri.conf.json，首次触发时按需创建，复用时直接定位并显示。
 //! 所有可失败操作均用 eprintln 记录并优雅降级，不 panic、不向上抛错。
 
-use tauri::{Emitter, Manager, WebviewWindow, WindowEvent};
+use tauri::{Emitter, LogicalPosition, Manager, WebviewWindow, WindowEvent};
 
 use crate::ipc::clipboard::pick_latest_translate_text_impl;
 use crate::ipc::trans_popover::{build_trans_source, TransSource, TransSourceStore};
 use crate::ipc::{with_db, AppDb};
-use crate::selection::{self, SelectionOutcome};
-use crate::window_pos::compute_window_position_for_width;
+use crate::selection::{self, ScreenRect, SelectionOutcome};
+use crate::window_pos::{
+    monitor_specs, place_for_platform, placement_for_width, placement_near_rect,
+};
 
 #[cfg(target_os = "macos")]
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -37,13 +39,13 @@ const CLIP_POPOVER_LABEL: &str = "clip-popover";
 /// trans-popover 窗口 label，用于区分仅对翻译 popover 推送待译文本。
 const TRANS_POPOVER_LABEL: &str = "trans-popover";
 
-/// clip-popover 窗口宽度（物理像素）
+/// clip-popover 窗口宽度（逻辑点：`inner_size` 按逻辑尺寸创建窗口，物理像素为逻辑 × 屏幕缩放比）
 const CLIP_WIDTH: i32 = 720;
-/// clip-popover 窗口高度（物理像素）
+/// clip-popover 窗口高度（逻辑点）
 const CLIP_HEIGHT: f64 = 480.0;
-/// trans-popover 窗口宽度（物理像素）
+/// trans-popover 窗口宽度（逻辑点）
 const TRANS_WIDTH: i32 = 320;
-/// trans-popover 窗口高度（物理像素）
+/// trans-popover 窗口高度（逻辑点）
 const TRANS_HEIGHT: f64 = 200.0;
 
 /// 把主线程任务派发出去后等待其完成的上限。
@@ -242,17 +244,35 @@ pub fn trigger_popover(handle: &tauri::AppHandle, label: &str) {
         return;
     };
 
-    // 取词必须发生在任何 show / 激活之前：QuickQuick 一旦成为前台应用，键盘焦点就离开了
-    // 源应用，AX 读到的选中文字只会是空。故先把「译什么 + 来源」定下来，后面只负责展示。
-    let pending_source =
-        (spec.label == TRANS_POPOVER_LABEL).then(|| prepare_translate_source(handle));
+    // 取词与取选区边界都必须发生在任何 show / 激活之前：QuickQuick 一旦成为前台应用，
+    // 键盘焦点就离开了源应用，AX 读到的选中文字与选区边界都只会是空。故先把「译什么 +
+    // 来源 + 浮窗该放哪儿」一次定下来，后面只负责展示。
+    let prepared = (spec.label == TRANS_POPOVER_LABEL).then(|| prepare_translate(handle));
 
     let Some(window) = get_or_create_popover(handle, spec) else {
         return;
     };
 
     // 定位放在 show 之前：面板 order front 时就已经落在目标位置，避免可见的跳动。
-    let position = compute_window_position_for_width(&window, spec.width);
+    // 优先级：选区边界（有且落在某显示器内）→ 光标所在屏居中靠上。
+    // 两条路径都先算出逻辑点与目标屏，再由平台出口决定交逻辑点（macOS）还是按目标屏换算的物理点（Windows）。
+    // clip-popover 没有取词，走的是后者。注意：回退路径的位置在 macOS 单屏 2x 下相对改动前
+    // 有意改变（改动前偏右窗口宽/4，现为真正居中），见 window_pos 模块头与 TP1-M02。
+    // Windows 上两条路径都按目标屏的 scale 换算物理点，不依赖窗口当前所在屏。
+    let (logical, target) = match prepared.as_ref().and_then(|p| p.selection_bounds) {
+        Some(bounds) => translate_popover_placement(&window, spec, bounds),
+        None => fallback_popover_placement(&window, spec),
+    };
+    // 没有目标屏（显示器列表为空）时无从做平台换算，直接交逻辑点原点兜底。
+    let position = target.map_or_else(
+        || {
+            tauri::Position::Logical(tauri::LogicalPosition::new(
+                f64::from(logical.x),
+                f64::from(logical.y),
+            ))
+        },
+        |monitor| place_for_platform(logical, monitor),
+    );
     if let Err(e) = window.set_position(position) {
         eprintln!("[QuickQuick] {label} set_position 失败: {e}");
     }
@@ -273,8 +293,8 @@ pub fn trigger_popover(handle: &tauri::AppHandle, label: &str) {
     // show 后立即把取好的内容推给 trans-popover：让前端无需再 listClipItems()
     // 往返查加密 DB（去掉可见延迟），并由 Rust 主动推送驱动重译（消除旧译文残影）。
     // 推送安排在激活之前：先让内容就位，再让窗口接住键盘焦点。
-    if let Some(source) = pending_source {
-        push_translate_source(&window, source);
+    if let Some(prepared) = prepared {
+        push_translate_source(&window, prepared.source);
     }
     // trans-popover 仍是普通窗口：先激活 app，再聚焦窗口。
     // 顺序说明：macOS 要求进程本身处于"活跃"(active)状态后，
@@ -314,18 +334,33 @@ fn show_clip_popover(handle: &tauri::AppHandle, window: &WebviewWindow) {
     }
 }
 
-/// 定下本次热键该翻译什么，并把来源快照留给前端冷启动补读。
+/// 一次热键唤起所需的两样结果：译什么（含来源）+ 选区落在哪儿（用于定位）。
+///
+/// 两者必须来自**同一次** AX 读取：本进程 show 之后源应用不再有键盘焦点，补读只能拿到空选区。
+/// 合成一个结构体而不是返回元组，是为了让调用点自己说清「这两项同源」。
+struct TranslatePreparation {
+    /// 待译文本与来源，同时也是推给前端的 payload。
+    source: TransSource,
+    /// 选区边界（逻辑点）；没读到选中文字时为 `None`。
+    selection_bounds: Option<ScreenRect>,
+}
+
+/// 定下本次热键该翻译什么、浮窗贴近哪里，并把来源快照留给前端冷启动补读。
 ///
 /// 顺序是「先取选中文字，再决定要不要查库」：命中选中文字时省掉一次解密 DB 往返，
 /// 热键路径的可见延迟主要就花在那里。取词失败（未授权 / 无焦点 / 平台不支持）一律
 /// 降级为剪贴板最新一条，并把**原因**带在 payload 里，由浮窗如实标注来源。
-fn prepare_translate_source(handle: &tauri::AppHandle) -> TransSource {
-    let selection = selection::read_selection();
-    let clipboard = match &selection {
+fn prepare_translate(handle: &tauri::AppHandle) -> TranslatePreparation {
+    let snapshot = selection::read_selection_snapshot();
+    // 先取边界再移动 outcome：只有读到选中文字时 bounds 才可信（见 SelectionSnapshot::usable_bounds）。
+    let selection_bounds = snapshot.usable_bounds();
+
+    // 命中选中文字时省掉一次解密 DB 往返；只有取词失败才读剪贴板降级。
+    let clipboard = match &snapshot.outcome {
         SelectionOutcome::Text(_) => None,
         _ => read_latest_clipboard_text(handle),
     };
-    let source = build_trans_source(selection, clipboard);
+    let source = build_trans_source(snapshot.outcome, clipboard);
 
     // 快照必须在窗口显示之前写入：前端首次挂载时 emit 已经过去，只能补读这一份。
     // 状态未注册（测试环境或未来重构）时只降级成「冷启动走前端兜底」，不让热键路径 panic。
@@ -333,7 +368,40 @@ fn prepare_translate_source(handle: &tauri::AppHandle) -> TransSource {
         Some(store) => store.remember(source.clone()),
         None => eprintln!("[QuickQuick] trans-popover 来源快照未注册，冷启动将退回前端自读"),
     }
-    source
+
+    TranslatePreparation {
+        source,
+        selection_bounds,
+    }
+}
+
+/// trans-popover 贴近选区的落点；选区不在任何显示器内时回退到光标定位。
+///
+/// 出口是**逻辑点**（tauri 的 `LogicalPosition`）：`set_outer_position` 会先用窗口自身的
+/// scale 把位置转成逻辑点，窗口隐藏时那个 scale 还是上次所在屏的值——交物理坐标会在
+/// 1x/2x 混合布局里被除错、落到别的屏上；逻辑点在 tao 侧原样透传。
+///
+/// `compute_position_near_rect` 返回 `None` 就等于「这份 bounds 不可用」——那是显示器
+/// 坐标空间对不上或显示器列表为空的信号，此时回退比硬算一个可能跑出屏幕的坐标安全。
+fn translate_popover_placement(
+    window: &WebviewWindow,
+    spec: &PopoverSpec,
+    bounds: ScreenRect,
+) -> (LogicalPosition<i32>, Option<crate::window_pos::MonitorSpec>) {
+    let monitors = monitor_specs(window);
+    let window_size = (spec.width, spec.height.round() as i32);
+    match placement_near_rect(bounds, window_size, &monitors) {
+        Some((position, monitor)) => (position, Some(monitor)),
+        None => fallback_popover_placement(window, spec),
+    }
+}
+
+/// 回退落点：光标所在屏居中靠上（逻辑点 + 目标屏）。
+fn fallback_popover_placement(
+    window: &WebviewWindow,
+    spec: &PopoverSpec,
+) -> (LogicalPosition<i32>, Option<crate::window_pos::MonitorSpec>) {
+    placement_for_width(window, spec.width)
 }
 
 /// 读剪贴板历史里「当前该翻译的那一条」；库不可用/查询失败时记录原因并返回 None。

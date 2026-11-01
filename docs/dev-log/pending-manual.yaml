@@ -261,3 +261,23 @@ pending:
     added_at: 2026-10-31T00:00:00Z
     status: 待确认
     note: "Pressed 过滤与焦点应用 pid 比对均为运行时行为：单测只能锚定 classify/build_trans_source/Store.clear 的纯逻辑，无法模拟全局热键的 Released 事件或前台应用切换。"
+
+  - acceptance_id: TP1-M01
+    version: TP1
+    assertion: "真机：在 Safari、Notes、TextEdit 中选中文字后按 Cmd+Shift+T，trans-popover 出现在选区正下方且水平居中，不遮挡选中文字；选区贴近屏幕底部时浮窗翻到选区上方仍完整可见；**多行大选区（选区比可用高度还高）时浮窗直接夹紧、允许盖住选区的一部分，但必须完整可见**；在 Chrome 网页 / VS Code / Electron 中（AX 读不到选区边界）浮窗回退到光标所在屏居中靠上，且来源标签仍如实显示"
+    source_anchor: docs/design/translate-interaction-alignment.md§2.P1 验收
+    collect_env: real_device
+    evidence_ref: 真机目测（无自动化证据位）
+    added_at: 2026-10-31T00:00:00Z
+    status: 待确认
+    note: "定位纯函数（选区下方居中 / 下方越界上翻 / 水平夹紧 / 副屏归属 / 混合缩放逻辑点 / 极端 bounds 不 panic / 无匹配显示器回退）已由 window_pos 单测锚定；但「AX 在真实应用里是否给出可用的 AXBoundsForRange」「浮窗与选区的视觉贴合度」只有真机可验。headless 环境无法执行 `npx tauri dev`，也无法模拟真实选区。已知限制（不在本次修）：夹紧范围是整块显示器，包含菜单栏与 Dock 所占区域，未按可见工作区（visibleFrame）扣除；故选区极贴屏幕顶/底边时，浮窗可能压住菜单栏或 Dock。多行大选区上下都放不下时按『浮窗完整可见、允许遮挡选区』处理，属有意取舍。"
+
+  - acceptance_id: TP1-M02
+    version: TP1
+    assertion: "真机：多屏（含不同缩放比的副屏）与 Retina 2x 屏下按热键，浮窗出现在选区所在的那块屏上且位置正确（不偏移半个窗口宽）；全屏 Space 中热键唤起同样贴选区；浅色/深色模式下浮窗观感正常。**新增：macOS 单屏 2x 下 clip-popover（⌘⇧C）应真正水平居中，改动前偏右窗口宽/4；Windows 混合 DPI（如主屏 150%、副屏 100%，窗口上次在主屏）下 trans-popover 与 clip-popover 都必须落在目标屏内，不得跑到屏外**"
+    source_anchor: docs/design/translate-interaction-alignment.md§2.P1 验收 + §4 风险（多屏 / 缩放）
+    collect_env: real_device
+    evidence_ref: 真机目测（无自动化证据位）
+    added_at: 2026-10-31T00:00:00Z
+    status: 待确认
+    note: "AX 返回逻辑点、显示器/窗口使用物理像素，换算按「物理 = 逻辑点 × 所在屏 scale_factor」实现并有 scale=2.0 单测；但混合缩放的多屏组合（1x 主屏 + 2x 副屏）下显示器归属与换算只有真机能验。另注：回退路径 `compute_window_position_for_width` 的既有单位不一致（窗口逻辑宽度 vs 显示器物理像素）未在本次修，若真机发现回退落点偏右/偏左属该既有问题。"
