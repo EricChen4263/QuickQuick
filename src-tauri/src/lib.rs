@@ -728,6 +728,8 @@ fn setup_frontmost_tracking(app: &tauri::App) -> Arc<pasteboard_meta::LastExtern
     let shared = Arc::new(frontmost::LastExternalApp::new());
     let source_app = Arc::new(pasteboard_meta::LastExternalSourceApp::new());
     register_frontmost_observer(Arc::clone(&shared), Arc::clone(&source_app));
+    // 启动时若已有前台应用（它早于 QuickQuick 启动，不会再触发激活通知），也要预热一次。
+    selection::warm_focused_application_in_background();
     app.manage(shared);
     app.manage(Arc::clone(&source_app));
 
@@ -776,6 +778,8 @@ fn register_frontmost_observer(
         if frontmost::should_record_pid(pid, self_pid) {
             shared.set(pid);
             source_app.set(identity);
+            // 切到新应用就提前开启它的无障碍树（Electron 网页选区需要），后台执行不阻塞主线程。
+            selection::warm_application_in_background(pid);
         }
     });
 

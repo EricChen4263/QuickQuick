@@ -144,12 +144,33 @@ pub fn read_selection_snapshot() -> SelectionSnapshot {
     }
 }
 
+/// 后台预热指定 pid 的无障碍树（见 macOS 实现的说明）。非 macOS 为空操作。
+///
+/// 放在后台线程里做：调用方多在主线程（前台应用切换通知），而目标应用无响应时
+/// AX 写入会等到超时，不能拖住主线程。
+pub fn warm_application_in_background(pid: i32) {
+    #[cfg(target_os = "macos")]
+    macos::warm_application_in_background(pid);
+
+    #[cfg(not(target_os = "macos"))]
+    let _ = pid;
+}
+
+/// 后台预热当前前台应用（启动时调用，覆盖「应用早于 QuickQuick 启动、之后不再切换」的情况）。
+pub fn warm_focused_application_in_background() {
+    #[cfg(target_os = "macos")]
+    macos::warm_focused_application_in_background();
+}
+
 #[cfg(target_os = "macos")]
 mod macos {
+    use std::collections::BTreeSet;
     use std::ffi::c_void;
     use std::ptr;
+    use std::sync::{Mutex, PoisonError};
 
     use core_foundation::base::{CFType, CFTypeID, CFTypeRef, TCFType};
+    use core_foundation::boolean::CFBoolean;
     use core_foundation::string::{CFString, CFStringRef};
 
     use super::{classify, ScreenRect, SelectionSnapshot};
@@ -187,6 +208,20 @@ mod macos {
 
     /// `kAXErrorSuccess`：AX 调用成功的返回码。
     const AX_ERROR_SUCCESS: i32 = 0;
+
+    /// `kAXErrorAttributeUnsupported`：应用不认识这个属性（原生应用对 `AXManualAccessibility` 的常态回应）。
+    const AX_ERROR_ATTRIBUTE_UNSUPPORTED: i32 = -25205;
+
+    /// Electron / Chromium 的开关属性：置为 true 后才构建网页内容的无障碍树。
+    ///
+    /// 为什么需要：这些应用默认不构建无障碍树，于是焦点元素读不到（`kAXErrorNoValue`），
+    /// 网页里选中的文字对 AX 完全不可见——TextEdit 之类原生应用不受影响，所以只有 DSH 这类
+    /// Electron 应用会「选中了却译不了」。原生应用不认识这个属性，回应 unsupported，无副作用。
+    const MANUAL_ACCESSIBILITY_ATTRIBUTE: &str = "AXManualAccessibility";
+
+    /// 已完成预热（成功开启或确认不支持）的 pid。只增不减：同一进程只需开启一次，
+    /// 进程退出后 pid 可能被复用，复用时最坏是少预热一次，不影响正确性。
+    static WARMED_PIDS: Mutex<BTreeSet<i32>> = Mutex::new(BTreeSet::new());
 
     /// CoreGraphics 的点。手写 `#[repr(C)]` 而不是引 `core-graphics` 的同名类型：
     /// 这里只需要一个 ABI 布局，不值得为它把该 crate 从传递依赖提升为显式依赖。
@@ -246,6 +281,12 @@ mod macos {
             result: *mut CFTypeRef,
         ) -> i32;
         fn AXUIElementGetPid(element: CFTypeRef, pid: *mut i32) -> i32;
+        fn AXUIElementCreateApplication(pid: i32) -> CFTypeRef;
+        fn AXUIElementSetAttributeValue(
+            element: CFTypeRef,
+            attribute: CFStringRef,
+            value: CFTypeRef,
+        ) -> i32;
         fn AXValueCreate(the_type: i32, value_ptr: *const c_void) -> CFTypeRef;
         fn AXValueGetValue(value: CFTypeRef, the_type: i32, value_ptr: *mut c_void) -> u8;
         fn AXValueGetTypeID() -> CFTypeID;
@@ -310,8 +351,14 @@ mod macos {
 
         let focused_app =
             copy_attribute(system_wide.as_CFTypeRef(), FOCUSED_APPLICATION_ATTRIBUTE)?;
-        if application_pid(focused_app.as_CFTypeRef()) == Some(std::process::id() as i32) {
+        let app_pid = application_pid(focused_app.as_CFTypeRef());
+        if app_pid == Some(std::process::id() as i32) {
             return None;
+        }
+        // 热键路径也顺带预热：已预热的 pid 只是一次查表；新出现的 pid 这一次可能尚未就绪，
+        // 由前台切换时的后台预热提前完成，这里不等待。
+        if let Some(pid) = app_pid {
+            warm_web_accessibility(pid);
         }
 
         let focused = copy_attribute(focused_app.as_CFTypeRef(), FOCUSED_ELEMENT_ATTRIBUTE)?;
@@ -322,6 +369,88 @@ mod macos {
             return None;
         }
         Some(focused)
+    }
+
+    /// 让目标应用构建无障碍树，使其网页内容的选区对 AX 可见（见 [`MANUAL_ACCESSIBILITY_ATTRIBUTE`]）。
+    ///
+    /// 成功开启或确认不支持都记入 [`WARMED_PIDS`]，之后同一 pid 直接返回；超时等瞬时错误
+    /// 不记入，下次仍会尝试。
+    ///
+    /// 注意：Chromium 首次开启后，焦点元素需要约 2 秒才可见（实测），所以热键路径不等待，
+    /// 只在前台切换时由后台线程提前开启——用户切到 DSH、选中、按热键时通常已经就绪。
+    fn warm_web_accessibility(pid: i32) {
+        if pid < 0 || pid == std::process::id() as i32 {
+            return;
+        }
+        {
+            let warmed = WARMED_PIDS.lock().unwrap_or_else(PoisonError::into_inner);
+            if warmed.contains(&pid) {
+                return;
+            }
+        }
+
+        // SAFETY: 返回 +1 引用的应用元素；立刻交给 create rule 包装，由 Drop 释放。
+        let raw = unsafe { AXUIElementCreateApplication(pid) };
+        if raw.is_null() {
+            return;
+        }
+        // SAFETY: raw 为刚拿到的非空 +1 引用；create rule 接管所有权。
+        let app = unsafe { CFType::wrap_under_create_rule(raw) };
+        ensure_messaging_timeout(app.as_CFTypeRef(), MANUAL_ACCESSIBILITY_ATTRIBUTE);
+
+        let name = CFString::new(MANUAL_ACCESSIBILITY_ATTRIBUTE);
+        let value = CFBoolean::true_value();
+        // SAFETY: app 是有效应用元素；name / value 是存活的 CF 对象，调用期间有效。
+        let error = unsafe {
+            AXUIElementSetAttributeValue(
+                app.as_CFTypeRef(),
+                name.as_concrete_TypeRef(),
+                value.as_CFTypeRef(),
+            )
+        };
+        match error {
+            AX_ERROR_SUCCESS => {
+                eprintln!("[QuickQuick] 取词: 已为 pid {pid} 开启无障碍树（网页选区可见）");
+                record_warmed(pid);
+            }
+            // 原生应用的常态回应：不记日志，记入已处理以免每次热键重复探测。
+            AX_ERROR_ATTRIBUTE_UNSUPPORTED => record_warmed(pid),
+            other => eprintln!(
+                "[QuickQuick] 取词: 为 pid {pid} 开启无障碍树失败，返回码 {other}，下次再试"
+            ),
+        }
+    }
+
+    fn record_warmed(pid: i32) {
+        WARMED_PIDS
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(pid);
+    }
+
+    /// 后台线程预热指定 pid。调用方可能在主线程（前台切换通知），AX 写入可能等到超时，不能阻塞它。
+    pub(super) fn warm_application_in_background(pid: i32) {
+        std::thread::spawn(move || warm_web_accessibility(pid));
+    }
+
+    /// 后台线程预热当前前台应用，覆盖「应用早于 QuickQuick 启动、之后不再切换」的情况。
+    pub(super) fn warm_focused_application_in_background() {
+        std::thread::spawn(|| {
+            let raw = unsafe { AXUIElementCreateSystemWide() };
+            if raw.is_null() {
+                return;
+            }
+            // SAFETY: raw 为刚拿到的非空 +1 引用；create rule 接管所有权。
+            let system_wide = unsafe { CFType::wrap_under_create_rule(raw) };
+            let Some(focused_app) =
+                copy_attribute(system_wide.as_CFTypeRef(), FOCUSED_APPLICATION_ATTRIBUTE)
+            else {
+                return;
+            };
+            if let Some(pid) = application_pid(focused_app.as_CFTypeRef()) {
+                warm_web_accessibility(pid);
+            }
+        });
     }
 
     /// 读焦点元素的 `AXSelectedText`；类型不符或读取失败都返回 `None`。
