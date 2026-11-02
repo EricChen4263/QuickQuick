@@ -114,8 +114,6 @@ function GeneralPanel() {
     setStayInTray,
     autoUpdate,
     setAutoUpdate,
-    selectIconEnabled,
-    setSelectIconEnabled,
   } = useGeneralSettings();
 
   // 开关保存失败统一走页面级错误条：**在成功路径上显式清除同源错误**，
@@ -164,15 +162,6 @@ function GeneralPanel() {
           checked={stayInTray}
           onChange={(v) => {
             void runSave("general.stayInTray", () => setStayInTray(v));
-          }}
-        />
-        <SettingToggle
-          label="选中文字时显示翻译图标"
-          description="鼠标选中文字后在光标旁出现图标，点击即翻译（仅 macOS）"
-          tooltip="默认：关。开启后每次鼠标抬起都会读取前台应用的选中文字，只读，不写剪贴板；图标只出现，不会自动翻译。"
-          checked={selectIconEnabled}
-          onChange={(v) => {
-            void runSave("general.selectIconEnabled", () => setSelectIconEnabled(v));
           }}
         />
         <SettingToggle

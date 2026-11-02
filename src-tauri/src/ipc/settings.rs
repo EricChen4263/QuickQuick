@@ -46,7 +46,6 @@ use std::collections::HashMap;
 use crate::autostart::AutostartConfig;
 use crate::hotkey::{HotkeyAction, HotkeyConfig, HotkeyCorruptInfo, HotkeyError};
 use crate::ipc::translate::resolve_provider_or_fallback;
-use crate::select_icon::{self, SelectIconState};
 use crate::settings::{
     write_setting_field, AppSettings, HighlightStyle, SortOrder, MAX_HISTORY_ITEMS,
     MAX_IMAGE_HEIGHT_PX, MAX_PREVIEW_FIRST_DELAY_MS, MIN_HISTORY_ITEMS, MIN_IMAGE_HEIGHT_PX,
@@ -931,44 +930,6 @@ pub fn set_stay_in_tray(
     set_stay_in_tray_impl(value, &state, &path)
 }
 
-/// Tauri 命令：读取选中图标开关。
-#[tauri::command]
-pub fn get_select_icon_enabled(state: State<'_, SelectIconState>) -> bool {
-    state.is_enabled()
-}
-
-/// Tauri 命令：设置选中图标开关（运行时生效 + 持久化）。关闭时立即收起已冒出的图标。
-#[tauri::command]
-pub fn set_select_icon_enabled(
-    app: AppHandle,
-    state: State<'_, SelectIconState>,
-    value: bool,
-) -> Result<(), String> {
-    // 关闭动作无论落盘成败都先收起图标：宁可图标消失而设置没存上，也不让已关闭的功能继续冒出来。
-    if !value {
-        select_icon::dismiss(&app);
-    }
-    let path = resolve_config_path(&app, "settings.json")?;
-    set_select_icon_enabled_impl(value, &state, &path)
-}
-
-/// `set_select_icon_enabled` 的纯函数实现：先落盘，成功后才更新运行时状态。
-///
-/// 先写盘的原因：隐私相关开关若运行时已切换而落盘失败，界面显示「关」时功能仍在读取选区，
-/// 两者不一致的代价最高。落盘失败时运行时保持原值，界面与行为保持一致。
-///
-/// # Errors
-/// 文件写入失败时返回错误字符串，且运行时状态不变。
-pub fn set_select_icon_enabled_impl(
-    value: bool,
-    state: &SelectIconState,
-    settings_path: &Path,
-) -> Result<(), String> {
-    write_setting_field(settings_path, "select_icon_enabled", &value).map_err(|e| e.to_string())?;
-    state.set_enabled(value);
-    Ok(())
-}
-
 /// Tauri 命令：读取自动更新开关。
 #[tauri::command]
 pub fn get_auto_update(app: AppHandle) -> Result<bool, String> {
@@ -1389,37 +1350,6 @@ mod tests {
         assert!(!state.stay_in_tray.load(Ordering::Relaxed));
         let settings = AppSettings::load_or_default(file.path());
         assert!(!settings.stay_in_tray);
-    }
-
-    #[test]
-    fn set_select_icon_enabled_writes_state_and_persists() {
-        // Arrange
-        let state = SelectIconState::new(false);
-        let file = NamedTempFile::new().unwrap();
-
-        // Act
-        set_select_icon_enabled_impl(true, &state, file.path()).unwrap();
-
-        // Assert：运行时状态与落盘的设置都必须是新值
-        assert!(state.is_enabled());
-        let settings = AppSettings::load_or_default(file.path());
-        assert!(settings.select_icon_enabled);
-    }
-
-    #[test]
-    fn set_select_icon_enabled_false_persists_disabled() {
-        // Arrange：先开启并落盘，再关闭
-        let state = SelectIconState::new(true);
-        let file = NamedTempFile::new().unwrap();
-        set_select_icon_enabled_impl(true, &state, file.path()).unwrap();
-
-        // Act
-        set_select_icon_enabled_impl(false, &state, file.path()).unwrap();
-
-        // Assert
-        assert!(!state.is_enabled());
-        let settings = AppSettings::load_or_default(file.path());
-        assert!(!settings.select_icon_enabled);
     }
 
     #[test]

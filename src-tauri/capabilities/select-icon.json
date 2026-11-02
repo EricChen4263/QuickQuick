@@ -1,7 +1,0 @@
-{
-  "$schema": "../gen/schemas/desktop-schema.json",
-  "identifier": "select-icon",
-  "description": "选中图标窗口能力集：只允许加载本地页面并调用自定义命令，不授予其它窗口的权限",
-  "windows": ["select-icon"],
-  "permissions": ["core:default"]
-}
