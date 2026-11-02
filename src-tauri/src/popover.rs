@@ -22,7 +22,9 @@ use crate::window_pos::{
     monitor_specs, place_for_platform, placement_for_width, placement_near_rect,
 };
 
-#[cfg(target_os = "macos")]
+// 不加 cfg 门禁：PanelHidingGuard / hide_once 是全平台编译的
+// （隐藏去重骨架本身与平台无关，只把 resign / hide 以闭包注入）。
+// 只给 macOS 门禁会让 Windows 构建报 E0425/E0433「cannot find type AtomicBool」。
 use std::sync::atomic::{AtomicBool, Ordering};
 #[cfg(target_os = "macos")]
 use std::time::Duration;
