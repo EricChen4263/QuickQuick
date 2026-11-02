@@ -21,3 +21,6 @@ tsconfig.tsbuildinfo
 /src-tauri/ecdict.csv
 ecdict.csv
 __pycache__/
+
+# gh CLI 日志缓存（本地排查 CI 用）
+.ghcache/
