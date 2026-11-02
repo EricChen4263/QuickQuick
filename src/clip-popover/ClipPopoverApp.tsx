@@ -22,6 +22,7 @@ import {
 } from "../panels/history/keyboard";
 import { PopoverList } from "./PopoverList";
 import { PopoverPreview } from "./PopoverPreview";
+import { PopoverImageViewer } from "./PopoverImageViewer";
 import { PopoverFooter } from "./PopoverFooter";
 import { useDeferredPreviewId } from "./useDeferredPreview";
 import { resolvePreviewState } from "./preview-state";
@@ -73,6 +74,8 @@ export default function ClipPopoverApp() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  /** 大图覆盖层所属条目 ID；null 表示覆盖层未打开 */
+  const [imageViewId, setImageViewId] = useState<string | null>(null);
   // 悬停与键盘的主导权仲裁：面板打开时由键盘主导，真实 pointer 位移才交给鼠标
   const [ownership] = useState(createInputOwnership);
   // 面板会话序号：每次窗口重新获得焦点（面板被打开）递增，预览延迟档位随之重置
@@ -263,9 +266,35 @@ export default function ClipPopoverApp() {
     }
   }, [visibleFlatList, selectedId]);
 
+  // 大图覆盖层只属于它打开时选中的那一条：选中项一旦移走（键盘移动、搜索过滤），覆盖层收起，
+  // 避免盖着的图与当前选中项对不上。点击缩略图时行选中与覆盖层打开同批更新，两者保持一致。
+  useEffect(() => {
+    if (imageViewId !== null && imageViewId !== selectedId) setImageViewId(null);
+  }, [selectedId, imageViewId]);
+
+  // 覆盖层打开时 Esc 只关覆盖层。捕获阶段拦截，阻止事件再到达搜索框：
+  // 否则搜索框的 Esc 处理会关闭整个浮窗，把「关大图」变成「关面板」。
+  useEffect(() => {
+    if (imageViewId === null) return;
+    function closeViewerOnEscape(event: KeyboardEvent): void {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      event.stopPropagation();
+      setImageViewId(null);
+    }
+    window.addEventListener("keydown", closeViewerOnEscape, true);
+    return () => {
+      window.removeEventListener("keydown", closeViewerOnEscape, true);
+    };
+  }, [imageViewId]);
+
   const selectedItem = useMemo(
     () => visibleFlatList.find((i) => i.id === selectedId) ?? null,
     [visibleFlatList, selectedId]
+  );
+  const viewerItem = useMemo(
+    () => (imageViewId === null ? null : visibleFlatList.find((i) => i.id === imageViewId) ?? null),
+    [visibleFlatList, imageViewId]
   );
 
   // 预览区跟随「延迟后的 ID」，而不是 selectedId：快速连按时中间项来不及到期就被下一项覆盖，
@@ -536,10 +565,17 @@ export default function ClipPopoverApp() {
           selectedId={selectedId}
           hitRanges={hitRangesById}
           onSelect={(item) => setSelectedId(item.id)}
+          onOpenImage={(item) => setImageViewId(item.id)}
           ownership={ownership}
         />
         <PopoverPreview state={preview} />
       </div>
+      {viewerItem?.imageId !== undefined && (
+        <PopoverImageViewer
+          imageId={viewerItem.imageId}
+          onClose={() => setImageViewId(null)}
+        />
+      )}
       <PopoverFooter modifiers={modifiers} />
     </div>
   );

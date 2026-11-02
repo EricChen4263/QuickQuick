@@ -13,6 +13,8 @@ interface PopoverListProps {
   /** 条目 id → 命中区间；缺省表示无搜索条件，整段按普通文本渲染 */
   hitRanges?: ReadonlyMap<string, SearchRange[]>;
   onSelect: (item: ClipItem) => void;
+  /** 点击图片行的缩略图：请求以大图覆盖层查看（行本身的选中仍由 onSelect 负责） */
+  onOpenImage?: (item: ClipItem) => void;
   /** 悬停与键盘的主导权仲裁器：只有鼠标真实位移过，悬停才允许改选中项 */
   ownership: InputOwnership;
 }
@@ -25,8 +27,8 @@ function truncate(text: string): string {
   return text.slice(0, SUMMARY_MAX) + "…";
 }
 
-/** 图片行的缩略图：按需拉取，未就绪或取不到时保持既有 `[图片]` 占位 */
-function PopoverRowImage({ item }: { item: ClipItem }) {
+/** 图片行的缩略图：按需拉取，未就绪或取不到时保持既有 `[图片]` 占位；点击请求大图 */
+function PopoverRowImage({ item, onOpen }: { item: ClipItem; onOpen?: (item: ClipItem) => void }) {
   const thumbnailUrl = useClipItemThumbnail(item);
   if (thumbnailUrl === null) {
     return <div className="popover-row-text body-6">[图片]</div>;
@@ -36,6 +38,7 @@ function PopoverRowImage({ item }: { item: ClipItem }) {
       src={thumbnailUrl}
       alt="缩略图"
       className="popover-row-thumb"
+      onClick={onOpen ? () => onOpen(item) : undefined}
     />
   );
 }
@@ -46,12 +49,14 @@ function PopoverRow({
   isSelected,
   hitRanges,
   onSelect,
+  onOpenImage,
   onHoverSelect,
 }: {
   item: ClipItem;
   isSelected: boolean;
   hitRanges?: SearchRange[];
   onSelect: (item: ClipItem) => void;
+  onOpenImage?: (item: ClipItem) => void;
   /** 指针停在本行：是否据此改选中项由上层按主导权仲裁，行本身不做判断 */
   onHoverSelect: (item: ClipItem) => void;
 }) {
@@ -71,7 +76,7 @@ function PopoverRow({
       </div>
       <div className="popover-row-main">
         {item.kind === "image" ? (
-          <PopoverRowImage item={item} />
+          <PopoverRowImage item={item} onOpen={onOpenImage} />
         ) : (
           <div
             className={
@@ -110,6 +115,7 @@ function PopoverGroup({
   selectedId,
   hitRanges,
   onSelect,
+  onOpenImage,
   onHoverSelect,
 }: {
   label: string;
@@ -117,6 +123,7 @@ function PopoverGroup({
   selectedId: string | null;
   hitRanges?: ReadonlyMap<string, SearchRange[]>;
   onSelect: (item: ClipItem) => void;
+  onOpenImage?: (item: ClipItem) => void;
   onHoverSelect: (item: ClipItem) => void;
 }) {
   if (items.length === 0) return null;
@@ -132,6 +139,7 @@ function PopoverGroup({
           isSelected={item.id === selectedId}
           hitRanges={hitRanges?.get(item.id)}
           onSelect={onSelect}
+          onOpenImage={onOpenImage}
           onHoverSelect={onHoverSelect}
         />
       ))}
@@ -147,7 +155,7 @@ function PopoverGroup({
  * 悬停选中受 ownership 仲裁：键盘导航后鼠标停在原处时，列表滚动会把别的行送到指针下，
  * 浏览器随即补发进入事件与同坐标移动事件——这类「没有真实位移」的悬停不得改选中项。
  */
-export function PopoverList({ groups, selectedId, hitRanges, onSelect, ownership }: PopoverListProps) {
+export function PopoverList({ groups, selectedId, hitRanges, onSelect, onOpenImage, ownership }: PopoverListProps) {
   const { favorites, today, earlier } = groups;
   const isEmpty = favorites.length === 0 && today.length === 0 && earlier.length === 0;
   const listRef = useRef<HTMLDivElement>(null);
@@ -190,9 +198,9 @@ export function PopoverList({ groups, selectedId, hitRanges, onSelect, ownership
       // 捕获阶段先于行自身的移动事件执行：行处理悬停时，本次移动是否真实已经裁决完毕
       onMouseMoveCapture={handlePointerMoveCapture}
     >
-      <PopoverGroup label="收藏" items={favorites} selectedId={selectedId} hitRanges={hitRanges} onSelect={onSelect} onHoverSelect={handleHoverSelect} />
-      <PopoverGroup label="今天" items={today} selectedId={selectedId} hitRanges={hitRanges} onSelect={onSelect} onHoverSelect={handleHoverSelect} />
-      <PopoverGroup label="更早" items={earlier} selectedId={selectedId} hitRanges={hitRanges} onSelect={onSelect} onHoverSelect={handleHoverSelect} />
+      <PopoverGroup label="收藏" items={favorites} selectedId={selectedId} hitRanges={hitRanges} onSelect={onSelect} onOpenImage={onOpenImage} onHoverSelect={handleHoverSelect} />
+      <PopoverGroup label="今天" items={today} selectedId={selectedId} hitRanges={hitRanges} onSelect={onSelect} onOpenImage={onOpenImage} onHoverSelect={handleHoverSelect} />
+      <PopoverGroup label="更早" items={earlier} selectedId={selectedId} hitRanges={hitRanges} onSelect={onSelect} onOpenImage={onOpenImage} onHoverSelect={handleHoverSelect} />
     </div>
   );
 }
