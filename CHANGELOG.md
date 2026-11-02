@@ -3,6 +3,22 @@
 本项目每个发布版本的更新内容。排版约定：每版先一整段**中文**，分隔线后一整段 **English**（分语言成段，不行内混排）。
 发版时 `release.yml` 会自动抽取对应 `## v<版本>` 段拼到 GitHub Release 顶部；`release.sh` 预检要求新版在此有对应段，否则阻断发版。
 
+## v0.5.0
+
+### 🖼️ 图片预览
+- **右侧预览显示大图**：图片条目的预览不再是列表缩略图的放大版，而是原图按最长边 1600px 生成的预览图，放大后依然清晰。浮窗同步放大到 880×560，列表固定 320pt，预览区拿到剩余宽度。
+- **点击预览图片弹出大图**：点击右侧预览的图片，在浮窗或主窗口内弹出覆盖层显示大图。点击列表里的缩略图只负责选中，不再弹出大图。
+- **大图可缩放**：覆盖层工具栏提供缩小、放大、适应窗口、原比例，并显示当前比例；键盘 `-` `+` `0` `1` 同样可用。放大超出窗口后可以滚动查看局部。
+- **关闭方式**：点击空白处或按 Esc 关闭，按 Esc 只关闭大图，不会关掉整个浮窗。点击图片本身和工具栏不关闭。
+
+---
+
+### 🖼️ Image preview
+- **Large image in the right-hand preview**: the preview of an image entry is no longer an enlarged list thumbnail. It shows a preview generated from the original at up to 1600 px on its longest edge, so it stays sharp when enlarged. The quick-paste popover grows to 880×560, with the list fixed at 320 pt and the preview taking the remaining width.
+- **Click the preview image to open it large**: clicking the image in the right-hand preview opens an overlay with the full-size view, in either the popover or the main window. Clicking a thumbnail in the list now only selects the row and no longer opens the large view.
+- **Zoomable large view**: the overlay toolbar offers zoom out, zoom in, fit to window and actual size (100%), and shows the current scale. The keys `-` `+` `0` `1` work too. When the image overflows the window, you can scroll to see parts of it.
+- **Closing**: click an empty area or press Esc to close. Esc closes only the large view, not the whole popover. Clicking the image itself or the toolbar does not close it.
+
 ## v0.4.0
 
 ### 🎨 界面（重做）
