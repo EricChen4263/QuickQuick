@@ -22,7 +22,7 @@ import {
 } from "../panels/history/keyboard";
 import { PopoverList } from "./PopoverList";
 import { PopoverPreview } from "./PopoverPreview";
-import { PopoverImageViewer } from "./PopoverImageViewer";
+import { ImageViewer } from "../components/ImageViewer";
 import { PopoverFooter } from "./PopoverFooter";
 import { useDeferredPreviewId } from "./useDeferredPreview";
 import { resolvePreviewState } from "./preview-state";
@@ -272,21 +272,6 @@ export default function ClipPopoverApp() {
     if (imageViewId !== null && imageViewId !== selectedId) setImageViewId(null);
   }, [selectedId, imageViewId]);
 
-  // 覆盖层打开时 Esc 只关覆盖层。捕获阶段拦截，阻止事件再到达搜索框：
-  // 否则搜索框的 Esc 处理会关闭整个浮窗，把「关大图」变成「关面板」。
-  useEffect(() => {
-    if (imageViewId === null) return;
-    function closeViewerOnEscape(event: KeyboardEvent): void {
-      if (event.key !== "Escape") return;
-      event.preventDefault();
-      event.stopPropagation();
-      setImageViewId(null);
-    }
-    window.addEventListener("keydown", closeViewerOnEscape, true);
-    return () => {
-      window.removeEventListener("keydown", closeViewerOnEscape, true);
-    };
-  }, [imageViewId]);
 
   const selectedItem = useMemo(
     () => visibleFlatList.find((i) => i.id === selectedId) ?? null,
@@ -565,13 +550,12 @@ export default function ClipPopoverApp() {
           selectedId={selectedId}
           hitRanges={hitRangesById}
           onSelect={(item) => setSelectedId(item.id)}
-          onOpenImage={(item) => setImageViewId(item.id)}
           ownership={ownership}
         />
-        <PopoverPreview state={preview} />
+        <PopoverPreview state={preview} onOpenImage={(item) => setImageViewId(item.id)} />
       </div>
       {viewerItem?.imageId !== undefined && (
-        <PopoverImageViewer
+        <ImageViewer
           imageId={viewerItem.imageId}
           onClose={() => setImageViewId(null)}
         />

@@ -372,6 +372,7 @@
    本页唯一抬升面。不加边框：抬升由 surface + shadow-panel 表达。 */
 
 .clip-preview {
+  position: relative;
   display: grid;
   grid-template-rows: minmax(0, 1fr) auto;
   min-height: 0;
@@ -447,6 +448,7 @@
 /* 图片预览 */
 .preview-img {
   display: block;
+  cursor: zoom-in;
   max-width: 100%;
   max-height: calc(var(--sp-80) * 4);
   border-radius: var(--r-8);

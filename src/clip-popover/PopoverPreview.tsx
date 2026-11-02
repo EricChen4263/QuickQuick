@@ -8,6 +8,8 @@ import { useClipPreviewImage } from "./useClipPreviewImage";
 interface PopoverPreviewProps {
   /** 预览区三态，由 resolvePreviewState 判定（见 preview-state.ts） */
   state: PreviewState;
+  /** 点击右侧预览图片：请求以大图覆盖层查看 */
+  onOpenImage?: (item: ClipItem) => void;
 }
 
 /** 将 kind 值转为人读标签 */
@@ -50,7 +52,13 @@ function TextContent({ item }: { item: ClipItem }) {
  * 替换会改变图片的显示尺寸（缩略图是 256px 固有宽度，预览按容器宽度撑开），
  * 这里不做尺寸占位，属于已知的一次性视觉变化。
  */
-function ImageContent({ item }: { item: ClipItem }) {
+function ImageContent({
+  item,
+  onOpen,
+}: {
+  item: ClipItem;
+  onOpen?: (item: ClipItem) => void;
+}) {
   const thumbnailUrl = useClipItemThumbnail(item);
   const previewUrl = useClipPreviewImage(item.imageId ?? null);
   const displayUrl = previewUrl ?? thumbnailUrl;
@@ -62,6 +70,7 @@ function ImageContent({ item }: { item: ClipItem }) {
       src={displayUrl}
       alt="图片预览"
       className="popover-preview-img"
+      onClick={onOpen ? () => onOpen(item) : undefined}
     />
   );
 }
@@ -72,7 +81,7 @@ function ImageContent({ item }: { item: ClipItem }) {
  * 本组件只按态渲染，避免在 JSX 里堆叠条件。
  * selectedId 与扁平列表由 ClipPopoverApp 持有，B2 键盘流直接改 selectedId 即可。
  */
-export function PopoverPreview({ state }: PopoverPreviewProps) {
+export function PopoverPreview({ state, onOpenImage }: PopoverPreviewProps) {
   if (state.kind === "waiting") {
     return (
       <div className="popover-preview popover-preview-waiting">
@@ -101,7 +110,7 @@ export function PopoverPreview({ state }: PopoverPreviewProps) {
         )}
       </div>
       {item.kind === "image" ? (
-        <ImageContent item={item} />
+        <ImageContent item={item} onOpen={onOpenImage} />
       ) : (
         <TextContent item={item} />
       )}

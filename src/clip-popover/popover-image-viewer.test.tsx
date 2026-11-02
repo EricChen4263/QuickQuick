@@ -1,9 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
-import { PopoverImageViewer } from "./PopoverImageViewer";
-import { PopoverList } from "./PopoverList";
-import { createInputOwnership } from "./keyboard-nav";
-import type { ClipGroups } from "./grouping";
 import type { ClipItem } from "../ipc/ipc-client";
 import { resetClipThumbnailCacheForTest } from "../panels/clipboard/clip-thumbnails";
 
@@ -56,7 +52,7 @@ function makeItem(id: string, overrides: Partial<ClipItem> = {}): ClipItem {
     kind: "text",
     isFavorite: false,
     hasThumbnail: false,
-    lastModifiedUtc: 1000,
+    lastModifiedUtc: Date.now(),
     ...overrides,
   };
 }
@@ -76,104 +72,21 @@ beforeEach(() => {
   mockGetClipImagePreview.mockResolvedValue(PREVIEW_URL);
 });
 
-describe("PopoverImageViewer 覆盖层", () => {
-  it("优先显示大图预览", async () => {
-    render(<PopoverImageViewer imageId="img-1" onClose={() => undefined} />);
+/** 渲染浮窗并选中图片条目：默认选中第一条，因此把图片条目放在第一位 */
+async function renderAppWithImageSelected() {
+  mockListClipItems.mockResolvedValue([IMAGE_ITEM, makeItem("txt-1", { content: "plain text" })]);
+  render(<ClipPopoverApp />);
+  // 预览区有分级延迟（首次 1500ms），等图片预览真正出现再继续
+  await waitFor(() => {
+    expect(screen.getByRole("img", { name: "图片预览" })).toBeDefined();
+  }, { timeout: 3000 });
+}
 
-    await waitFor(() => {
-      expect(screen.getByRole("img", { name: "图片大图" })).toHaveAttribute("src", PREVIEW_URL);
-    });
-    expect(mockGetClipImagePreview).toHaveBeenCalledWith("img-1");
-  });
+describe("浮窗：右侧预览图片的大图覆盖层", () => {
+  it("点击右侧预览图片打开覆盖层，点击覆盖层关闭", async () => {
+    await renderAppWithImageSelected();
 
-  it("预览取不到时回落缩略图", async () => {
-    mockGetClipImagePreview.mockResolvedValue(null);
-
-    render(<PopoverImageViewer imageId="img-1" onClose={() => undefined} />);
-
-    await waitFor(() => {
-      expect(screen.getByRole("img", { name: "图片大图" })).toHaveAttribute("src", THUMB_URL);
-    });
-  });
-
-  it("预览与缩略图都没有时显示 [图片] 占位，不渲染空 img", async () => {
-    mockGetClipImagePreview.mockResolvedValue(null);
-    mockGetClipThumbnail.mockResolvedValue(null);
-
-    render(<PopoverImageViewer imageId="img-1" onClose={() => undefined} />);
-
-    await waitFor(() => {
-      expect(mockGetClipImagePreview).toHaveBeenCalled();
-    });
-    expect(screen.getByText("[图片]")).toBeDefined();
-    expect(screen.queryByRole("img", { name: "图片大图" })).toBeNull();
-  });
-
-  it("点击覆盖层任意处触发 onClose", () => {
-    const onClose = vi.fn();
-    render(<PopoverImageViewer imageId="img-1" onClose={onClose} />);
-
-    fireEvent.click(screen.getByRole("dialog", { name: "图片大图" }));
-
-    expect(onClose).toHaveBeenCalledTimes(1);
-  });
-});
-
-describe("PopoverList 缩略图点击", () => {
-  it("点击图片行的缩略图同时请求打开大图并选中该行", async () => {
-    const groups: ClipGroups = { favorites: [], today: [IMAGE_ITEM], earlier: [] };
-    const onSelect = vi.fn();
-    const onOpenImage = vi.fn();
-
-    render(
-      <PopoverList
-        groups={groups}
-        selectedId={null}
-        onSelect={onSelect}
-        onOpenImage={onOpenImage}
-        ownership={createInputOwnership()}
-      />
-    );
-
-    const thumb = await screen.findByRole("img", { name: "缩略图" });
-    fireEvent.click(thumb);
-
-    expect(onOpenImage).toHaveBeenCalledWith(IMAGE_ITEM);
-    expect(onSelect).toHaveBeenCalledWith(IMAGE_ITEM);
-  });
-
-  it("点击文本行不触发打开大图", () => {
-    const groups: ClipGroups = { favorites: [], today: [makeItem("t1")], earlier: [] };
-    const onOpenImage = vi.fn();
-
-    render(
-      <PopoverList
-        groups={groups}
-        selectedId={null}
-        onSelect={() => undefined}
-        onOpenImage={onOpenImage}
-        ownership={createInputOwnership()}
-      />
-    );
-
-    fireEvent.click(screen.getByText("content-t1"));
-
-    expect(onOpenImage).not.toHaveBeenCalled();
-  });
-});
-
-describe("ClipPopoverApp 大图覆盖层的交互", () => {
-  async function renderAppWithImageRow() {
-    mockListClipItems.mockResolvedValue([makeItem("txt-1", { content: "plain text" }), IMAGE_ITEM]);
-    render(<ClipPopoverApp />);
-    const thumb = await screen.findByRole("img", { name: "缩略图" });
-    return thumb;
-  }
-
-  it("点击缩略图打开覆盖层，点击覆盖层关闭", async () => {
-    const thumb = await renderAppWithImageRow();
-
-    fireEvent.click(thumb);
+    fireEvent.click(screen.getByRole("img", { name: "图片预览" }));
     expect(screen.getByRole("dialog", { name: "图片大图" })).toBeDefined();
 
     fireEvent.click(screen.getByRole("dialog", { name: "图片大图" }));
@@ -181,9 +94,19 @@ describe("ClipPopoverApp 大图覆盖层的交互", () => {
     expect(mockHideAndReturnFocus).not.toHaveBeenCalled();
   });
 
-  it("覆盖层打开时 Esc 只关覆盖层，不关闭整个浮窗；再按一次 Esc 才关浮窗", async () => {
-    const thumb = await renderAppWithImageRow();
+  it("列表里的缩略图点击不再打开大图，只负责选中", async () => {
+    mockListClipItems.mockResolvedValue([makeItem("txt-1", { content: "plain text" }), IMAGE_ITEM]);
+    render(<ClipPopoverApp />);
+    const thumb = await screen.findByRole("img", { name: "缩略图" });
+
     fireEvent.click(thumb);
+
+    expect(screen.queryByRole("dialog", { name: "图片大图" })).toBeNull();
+  });
+
+  it("覆盖层打开时 Esc 只关覆盖层，不关闭整个浮窗；再按一次 Esc 才关浮窗", async () => {
+    await renderAppWithImageSelected();
+    fireEvent.click(screen.getByRole("img", { name: "图片预览" }));
 
     fireEvent.keyDown(screen.getByRole("searchbox"), { key: "Escape" });
 
@@ -197,11 +120,11 @@ describe("ClipPopoverApp 大图覆盖层的交互", () => {
   });
 
   it("覆盖层打开后选中项移走，覆盖层收起", async () => {
-    const thumb = await renderAppWithImageRow();
-    fireEvent.click(thumb);
+    await renderAppWithImageSelected();
+    fireEvent.click(screen.getByRole("img", { name: "图片预览" }));
     expect(screen.getByRole("dialog", { name: "图片大图" })).toBeDefined();
 
-    fireEvent.keyDown(screen.getByRole("searchbox"), { key: "ArrowUp" });
+    fireEvent.keyDown(screen.getByRole("searchbox"), { key: "ArrowDown" });
 
     await waitFor(() => {
       expect(screen.queryByRole("dialog", { name: "图片大图" })).toBeNull();

@@ -14,6 +14,7 @@ import { ActionBar } from "../../components/ActionBar";
 import { sanitizeRichHtml } from "./sanitize-html";
 import { handleRichLinkClick } from "./rich-link";
 import { useClipThumbnail } from "./useClipThumbnail";
+import { ImageViewer } from "../../components/ImageViewer";
 
 interface ClipPreviewProps {
   /**
@@ -36,6 +37,8 @@ interface ClipPreviewProps {
 interface ImagePreviewProps {
   imageId: string;
   hasThumbnail: boolean;
+  /** 点击预览图片：请求以大图覆盖层查看 */
+  onOpen: () => void;
 }
 
 /** 两位补零 */
@@ -67,7 +70,7 @@ const KIND_LABEL: Record<ClipItem["kind"], string> = {
  * 两者都还没就绪时显示 `[图片]` 占位，避免图片到达时布局跳动。
  * effect 内局部 cancelled 闭包防止切换条目时产生 stale 更新。
  */
-function ImagePreview({ imageId, hasThumbnail }: ImagePreviewProps) {
+function ImagePreview({ imageId, hasThumbnail, onOpen }: ImagePreviewProps) {
   const [originalDataUrl, setOriginalDataUrl] = useState<string | null>(null);
   const thumbnailUrl = useClipThumbnail(hasThumbnail ? imageId : null);
 
@@ -101,6 +104,7 @@ function ImagePreview({ imageId, hasThumbnail }: ImagePreviewProps) {
       src={displayUrl}
       alt="图片预览"
       className="preview-img"
+      onClick={onOpen}
     />
   );
 }
@@ -284,6 +288,16 @@ export function ClipPreview({
   onPasteToFront,
   onTranslate,
 }: ClipPreviewProps) {
+  // 大图覆盖层只属于打开它时的那一条：切换条目即收起，避免盖着的图与当前选中项对不上
+  const [viewerItemId, setViewerItemId] = useState<string | null>(null);
+  useEffect(() => {
+    setViewerItemId(null);
+  }, [item?.id]);
+  const viewerImageId =
+    item !== null && item.kind === "image" && item.imageId !== undefined && item.id === viewerItemId
+      ? item.imageId
+      : null;
+
   return (
     <div
       role="region"
@@ -322,7 +336,12 @@ export function ClipPreview({
               )}
             </div>
             {item.kind === "image" && item.imageId !== undefined ? (
-              <ImagePreview imageId={item.imageId} hasThumbnail={item.hasThumbnail} />
+              <ImagePreview
+                key={item.imageId}
+                imageId={item.imageId}
+                hasThumbnail={item.hasThumbnail}
+                onOpen={() => setViewerItemId(item.id)}
+              />
             ) : (
               <PreviewContent item={item} />
             )}
@@ -346,6 +365,9 @@ export function ClipPreview({
             onTranslate={onTranslate}
           />
         </>
+      )}
+      {viewerImageId !== null && (
+        <ImageViewer imageId={viewerImageId} onClose={() => setViewerItemId(null)} />
       )}
     </div>
   );

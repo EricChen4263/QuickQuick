@@ -341,6 +341,7 @@ body::before {
    保证元信息行与内边距仍可见。min-height: 0 允许它作为预览列的 flex 子项被压缩，
    否则 img 的 min-height:auto 会锁死在内容高度，超出部分被 overflow:hidden 裁掉。 */
 .popover-preview-img {
+  cursor: zoom-in;
   max-width: 100%;
   max-height: 70vh;
   min-height: 0;
@@ -395,39 +396,3 @@ body::before {
   padding: var(--sp-24);
   color: var(--danger);
 }
-
-/* ------------------------------------------------------------ 大图覆盖层 ----
-   点击图片行的缩略图弹出，盖住整个浮窗；任意点击或 Esc 关闭。
-   图片限制在浮窗之内（留出四周留白），不做滚动——覆盖层只用来看清图片。 */
-
-.popover-row-thumb {
-  cursor: zoom-in;
-}
-
-.popover-image-viewer {
-  position: absolute;
-  inset: 0;
-  z-index: 20;
-  display: grid;
-  place-items: center;
-  padding: var(--sp-24);
-  background: rgb(0 0 0 / 0.62);
-  backdrop-filter: blur(6px);
-  cursor: zoom-out;
-}
-
-.popover-image-viewer-img {
-  max-width: 100%;
-  max-height: 100%;
-  width: auto;
-  height: auto;
-  min-height: 0;
-  object-fit: contain;
-  border-radius: var(--r-8);
-  box-shadow: 0 12px 40px rgb(0 0 0 / 0.45);
-}
-
-.popover-image-viewer-placeholder {
-  color: rgb(255 255 255 / 0.8);
-}
-

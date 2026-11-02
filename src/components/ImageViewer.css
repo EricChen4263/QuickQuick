@@ -1,0 +1,29 @@
+/* 大图覆盖层：点击右侧预览图片弹出，盖住所在容器（浮窗或主窗口预览区）；
+   任意点击或 Esc 关闭。图片限制在容器之内，不做滚动。 */
+
+.image-viewer {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  display: grid;
+  place-items: center;
+  padding: var(--sp-24);
+  background: rgb(0 0 0 / 0.62);
+  backdrop-filter: blur(6px);
+  cursor: zoom-out;
+}
+
+.image-viewer-img {
+  max-width: 100%;
+  max-height: 100%;
+  width: auto;
+  height: auto;
+  min-height: 0;
+  object-fit: contain;
+  border-radius: var(--r-8);
+  box-shadow: 0 12px 40px rgb(0 0 0 / 0.45);
+}
+
+.image-viewer-placeholder {
+  color: rgb(255 255 255 / 0.8);
+}
