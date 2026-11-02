@@ -309,7 +309,7 @@ pending:
     collect_env: real_device
     evidence_ref: 真机目测（无自动化证据位）
     added_at: 2026-10-31T00:00:00Z
-    status: 待确认
+    status: 已取消（功能撤销，见 91524cf）
     note: "取词、判定、代数作废、点击复用快照的纯逻辑由 select_icon 单测锚定；全局鼠标监听、非激活面板是否抢焦点、图标的落点与点击命中，只有真机能验。"
 
   - acceptance_id: TP2-M02
@@ -319,7 +319,7 @@ pending:
     collect_env: real_device
     evidence_ref: 真机目测（无自动化证据位）
     added_at: 2026-10-31T00:00:00Z
-    status: 待确认
+    status: 已取消（功能撤销，见 91524cf）
     note: "按下收起与代数作废依赖全局鼠标事件的实际投递，单测无法模拟。"
 
   - acceptance_id: TP2-M03
@@ -329,7 +329,7 @@ pending:
     collect_env: real_device
     evidence_ref: 真机目测 + Activity Monitor 观察（无自动化证据位）
     added_at: 2026-10-31T00:00:00Z
-    status: 待确认
+    status: 已取消（功能撤销，见 91524cf）
     note: "CPU 与隐私观感只能真机观察。日志不得打印选中文字，代码审查已要求核对，此处为运行时复核。"
 
   - acceptance_id: TP2-M04
@@ -339,7 +339,7 @@ pending:
     collect_env: real_device
     evidence_ref: 真机目测（无自动化证据位）
     added_at: 2026-10-31T00:00:00Z
-    status: 待确认
+    status: 已取消（功能撤销，见 91524cf）
     note: "图标用光标位置作为锚点（AX 选区边界不作为图标定位依据，避免与选区坐标单位混用），夹紧范围同 TP1-M01 的已知限制（未扣除菜单栏/Dock）。"
 
   - acceptance_id: TP4-M01
