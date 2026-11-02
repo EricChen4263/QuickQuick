@@ -238,6 +238,30 @@ describe("TransPopoverApp", () => {
     expect(mocks.writeToClipboard).toHaveBeenCalledWith("你好，世界");
   });
 
+  it("词典结果下点复制 → writeToClipboard 复制纯文本摘要而非词典结构", async () => {
+    mocks.listClipItems.mockResolvedValue([MOCK_TEXT_ITEM]);
+    mocks.translateText.mockResolvedValue({
+      kind: "dict",
+      translated: "hello int. 哈罗；你好",
+      sourceLang: "en",
+      targetLang: "zh",
+      entry: {
+        phonetic: "/həˈləʊ/",
+        definitions: [{ pos: "int.", meanings: ["哈罗"] }],
+        examples: [],
+        audio: null,
+        inflections: [],
+      },
+    });
+
+    render(<TransPopoverApp />);
+    await screen.findByTestId("dict-phonetic");
+
+    await userEvent.click(screen.getByRole("button", { name: /复制/ }));
+
+    expect(mocks.writeToClipboard).toHaveBeenCalledWith("hello int. 哈罗；你好");
+  });
+
   it("点朗读 → speakText 以译文调用", async () => {
     mocks.listClipItems.mockResolvedValue([MOCK_TEXT_ITEM]);
     mocks.translateText.mockResolvedValue(MOCK_RESULT);

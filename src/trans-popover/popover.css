@@ -59,11 +59,120 @@ body {
 
 .mini-body {
   flex: 1;
+  /* flex 子项默认 min-height:auto 会被内容撑开，撑开后不再收缩，
+     译文区就不滚动而是把操作行顶出窗口；显式置 0 才真正可滚动。 */
+  min-height: 0;
+  min-width: 0;
   overflow-y: auto;
   font-size: 14px;
   color: var(--fg);
   line-height: 1.5;
   word-break: break-word;
+  overflow-wrap: anywhere;
+}
+
+/* 操作行始终可见：译文区再高也不允许压缩按钮行（ActionBar 自带 flex:none，这里只补锚定） */
+.mini-actions {
+  flex-shrink: 0;
+}
+
+/*
+ * 词典结果（浮窗）：main 窗口的译文字体是 21px、行高宽松，直接搬进 320px 宽、
+ * 200px 高的浮窗会把释义挤成一屏两行。这里按浮窗尺度整体收紧，
+ * 并统一 min-width:0 + anywhere 换行，保证长音标 / 长英文例句不撑出横向滚动。
+ * 全部选择器带 .mini-translate 前缀：浮窗与主窗是两个独立 Vite 入口，
+ * translate.css 只在主窗加载，这份样式不能反向影响主窗。
+ */
+.mini-translate .dict-entry {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+/* 音标：等宽 + accent 色，与释义区分开 */
+.mini-translate .dict-phonetic {
+  font-family: var(--mono);
+  font-size: 13px;
+  color: var(--accent);
+  overflow-wrap: anywhere;
+}
+
+/* 释义分组 / 释义 / 例句三个列表：去默认列表样式，纵向紧凑排列 */
+.mini-translate .dict-defs,
+.mini-translate .dict-meanings,
+.mini-translate .dict-example-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.mini-translate .dict-def-group {
+  min-width: 0;
+}
+
+/* 词性标签：小徽章，弱化背景，比主窗更小一号 */
+.mini-translate .dict-pos {
+  display: inline-block;
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--muted);
+  background: var(--surface-2);
+  border: 1px solid color-mix(in oklch, var(--border) 76%, transparent);
+  border-radius: 4px;
+  padding: 0 5px;
+  margin-bottom: 3px;
+}
+
+.mini-translate .dict-meaning {
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--fg);
+  overflow-wrap: anywhere;
+}
+
+/* 区块小标题（例句 / 变形） */
+.mini-translate .dict-section-label {
+  font-size: 10px;
+  color: var(--muted);
+  margin-bottom: 3px;
+}
+
+/* 例句：左侧 accent 竖条点缀，字号再压一档，避免长句占满浮窗 */
+.mini-translate .dict-example {
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--muted);
+  padding-left: 8px;
+  border-left: 2px solid var(--accent-line);
+  overflow-wrap: anywhere;
+}
+
+/* 变形：标签与词形同排，词多时换行而不是撑宽 */
+.mini-translate .dict-inflections {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  font-size: 11px;
+}
+
+.mini-translate .dict-inflection-words {
+  font-family: var(--mono);
+  color: var(--fg);
+  overflow-wrap: anywhere;
+}
+
+/* 发音播放器：原生 controls 有固定最小宽度，窄窗里限宽铺满内容宽度并略压高度，
+   否则 240px 固定宽 + 窄窗内边距会把译文区挤出横向滚动；高度不低于 32px 以免裁掉原生控件 */
+.mini-translate .dict-audio {
+  width: 100%;
+  max-width: 100%;
+  height: 32px;
 }
 
 /* 操作行复用公共 ActionBar(glass)；三按钮等宽铺满（原 mini-btn flex:1 居中） */

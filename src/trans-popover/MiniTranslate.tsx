@@ -1,5 +1,6 @@
 import React from "react";
 import { ActionBar } from "../components/ActionBar";
+import DictEntryView from "../panels/translate/DictEntryView";
 import type {
   TransFallbackReason,
   TransSourceKind,
@@ -45,6 +46,18 @@ interface MiniTranslateProps {
 }
 
 /**
+ * 译文区内容：词典结果渲染结构化词条而非纯文本摘要——浮窗只有 320×200 可视高度，
+ * 「音标 + 词性分组 + 例句」比一整段摘要更快被扫读；plain 结果维持纯文本。
+ * 摘要（result.translated）在两类结果下都只用于复制 / 朗读，故这里不重复展示。
+ */
+function renderBody(result: TranslateResult): React.ReactElement {
+  if (result.kind === "dict") {
+    return <DictEntryView entry={result.entry} />;
+  }
+  return <>{result.translated}</>;
+}
+
+/**
  * 迷你翻译结果卡：方向行（含来源标签）+ 降级说明 + 译文区 + 操作行。
  * 纯展示组件，无副作用，所有动作由父组件 TransPopoverApp 传入。
  */
@@ -69,9 +82,7 @@ function MiniTranslate({
 
       {hint !== undefined && <div className="mini-degrade">{hint}</div>}
 
-      <div className="mini-body">
-        {result.translated}
-      </div>
+      <div className="mini-body">{renderBody(result)}</div>
 
       <ActionBar variant="glass" className="mini-actions">
         <button type="button" className="btn" aria-label="复制" onClick={onCopy}>
