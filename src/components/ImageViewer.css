@@ -1,19 +1,27 @@
-/* 大图覆盖层：点击右侧预览图片弹出，盖住所在容器（浮窗或主窗口预览区）；
-   任意点击或 Esc 关闭。图片限制在容器之内，不做滚动。 */
+/* 大图覆盖层：点击右侧预览图片弹出，盖住所在容器（浮窗或主窗口预览区）。
+   舞台区本身可滚动：放大超出容器后，用滚动条或触控板查看局部。
+   工具栏固定在底部，不随舞台滚动。 */
 
 .image-viewer {
   position: absolute;
   inset: 0;
   z-index: 20;
-  display: grid;
-  place-items: center;
-  padding: var(--sp-24);
   background: rgb(0 0 0 / 0.62);
   backdrop-filter: blur(6px);
-  cursor: zoom-out;
 }
 
+.image-viewer-stage {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  overflow: auto;
+  padding: var(--sp-24) var(--sp-24) 72px;
+}
+
+/* margin: auto 让图片在舞台里居中；舞台超出时仍从起点可滚动，不会被裁掉左上角 */
 .image-viewer-img {
+  flex: none;
+  margin: auto;
   max-width: 100%;
   max-height: 100%;
   width: auto;
@@ -24,6 +32,54 @@
   box-shadow: 0 12px 40px rgb(0 0 0 / 0.45);
 }
 
+/* 放大后取消适应窗口的约束，宽度由内联样式决定 */
+.image-viewer-img.is-zoomed {
+  max-width: none;
+  max-height: none;
+}
+
 .image-viewer-placeholder {
+  margin: auto;
   color: rgb(255 255 255 / 0.8);
+}
+
+.image-viewer-toolbar {
+  position: absolute;
+  left: 50%;
+  bottom: var(--sp-16);
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: var(--sp-4);
+  padding: var(--sp-4);
+  border-radius: 999px;
+  background: rgb(20 20 22 / 0.78);
+  color: #fff;
+}
+
+.image-viewer-btn {
+  min-width: 32px;
+  height: 28px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.image-viewer-btn:hover:not(:disabled) {
+  background: rgb(255 255 255 / 0.14);
+}
+
+.image-viewer-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.image-viewer-zoom-label {
+  min-width: 52px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
 }
