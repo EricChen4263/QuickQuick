@@ -1,7 +1,7 @@
 //! Popover 浮层窗口管理模块
 //!
 //! 负责两个独立 popover 窗口的懒建、触发、失焦隐藏：
-//! - `clip-popover`（720×480）：剪贴板快速选取
+//! - `clip-popover`（880×560）：剪贴板快速选取
 //! - `trans-popover`（320×200）：迷你翻译
 //!
 //! macOS 的 clip-popover 以非激活面板（NSPanel + nonactivatingPanel）承载：
@@ -42,9 +42,9 @@ const CLIP_POPOVER_LABEL: &str = "clip-popover";
 const TRANS_POPOVER_LABEL: &str = "trans-popover";
 
 /// clip-popover 窗口宽度（逻辑点：`inner_size` 按逻辑尺寸创建窗口，物理像素为逻辑 × 屏幕缩放比）
-const CLIP_WIDTH: i32 = 720;
+const CLIP_WIDTH: i32 = 880;
 /// clip-popover 窗口高度（逻辑点）
-const CLIP_HEIGHT: f64 = 480.0;
+const CLIP_HEIGHT: f64 = 560.0;
 /// trans-popover 窗口宽度（逻辑点）
 const TRANS_WIDTH: i32 = 320;
 /// trans-popover 窗口高度（逻辑点）
