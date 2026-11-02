@@ -224,3 +224,12 @@ P0 建立的分支覆盖（授权否 / 无焦点 / 空选中 / 非空选中 / �
 验证（修复后实跑）：`cargo test --lib` 593 passed / 0 failed；`cargo clippy --all-targets -- -D warnings` 退出 0；`cargo fmt --check` 退出 0（仅 rustfmt 本次三个文件）；定位相关 `cargo test --lib window_pos` 21 passed。
 
 未验证：Windows 真机（混合 DPI 落点）与非 macOS 编译分支运行，已写入 TP1-M02；clip-popover 单屏 2x 居中的真机观感同样待验。
+
+## 真机验证（TextEdit，2026-10-31 23:22）
+
+- 环境：`pnpm tauri dev`（开发版，pid 46720），单屏 1x，macOS。
+- 操作：剪贴板预置为 `CLIPBOARD_DECOY`；TextEdit 文档 `qq-verify-sample.txt` 内容 `The weather is nice today.`，⌘A 全选，按 ⌘⇧T。
+- 结果（截图）：浮窗译文「今天天气不错。」，来源标签「选中」，浮窗顶边紧贴选区下沿，水平大致居中于选区。未误译剪贴板。
+- 证明的范围：P0 AX 取选区文字、P0 来源标签、P1 贴选区定位（TextEdit 单屏 1x）。
+- 未证明：Safari/Notes/Terminal/Chrome/VS Code/Electron；选区靠近屏幕底部翻到上方；大选区；多屏与 Retina 2x；按住热键只弹一次；撤销授权后的降级；clip-popover 单屏 2x 居中。
+- 过程问题：AppleScript 写 TextEdit 超时，`打开`面板的后台点击无效，因此改为用 `open -a TextEdit <file>` 打开预先写好的文件。

@@ -281,3 +281,73 @@ pending:
     added_at: 2026-10-31T00:00:00Z
     status: 待确认
     note: "AX 返回逻辑点、显示器/窗口使用物理像素，换算按「物理 = 逻辑点 × 所在屏 scale_factor」实现并有 scale=2.0 单测；但混合缩放的多屏组合（1x 主屏 + 2x 副屏）下显示器归属与换算只有真机能验。另注：回退路径 `compute_window_position_for_width` 的既有单位不一致（窗口逻辑宽度 vs 显示器物理像素）未在本次修，若真机发现回退落点偏右/偏左属该既有问题。"
+
+  - acceptance_id: TP0-M01-EVIDENCE-2026-10-31
+    version: TP0
+    assertion: "补充证据（TextEdit 子项）：剪贴板预置为 CLIPBOARD_DECOY，TextEdit 中选中 The weather is nice today.，按 Cmd+Shift+T，浮窗译文为「今天天气不错。」，来源标签显示「选中」，未误译剪贴板。Safari/Notes/Terminal/Chrome/VS Code/Electron 仍待测。"
+    source_anchor: docs/design/translate-interaction-alignment.md§2.P0 验收
+    collect_env: real_device
+    evidence_ref: 真机截图（开发版 pnpm tauri dev，2026-10-31 23:22，TextEdit 文档 qq-verify-sample.txt）
+    added_at: 2026-10-31T23:30:00+08:00
+    status: 部分通过（仅 TextEdit）
+    note: "覆盖 TP0-M01 中的 TextEdit 一项；其他应用与 TP0-M02..M04 未测。"
+
+  - acceptance_id: TP1-M01-EVIDENCE-2026-10-31
+    version: TP1
+    assertion: "补充证据（TextEdit 子项）：浮窗出现在 TextEdit 选区正下方（窗口顶边紧贴选区下沿，水平大致居中于选区）。"
+    source_anchor: docs/design/translate-interaction-alignment.md§2.P1 验收
+    collect_env: real_device
+    evidence_ref: 真机截图（同上）
+    added_at: 2026-10-31T23:30:00+08:00
+    status: 部分通过（仅 TextEdit，单屏 1x）
+    note: "覆盖 TP1-M01 的 TextEdit 一项；未测翻到上方、大选区、多屏、Retina 2x。"
+
+  - acceptance_id: TP2-M01
+    version: TP2
+    assertion: "真机：设置 → 通用 中开启「选中文字时显示翻译图标」。在 Safari、Notes、TextEdit 中拖选文字，鼠标抬起后光标下方出现小圆形「译」图标；图标出现时源应用仍是前台（键盘焦点、光标、选区均不变）；点击图标后浮窗译的是刚才选中的文字，且图标收起；只选中文字而不点击时绝不自动弹出翻译浮窗。"
+    source_anchor: docs/design/translate-interaction-alignment.md§2.P2 验收（D2 已由用户确认先做完再验证）
+    collect_env: real_device
+    evidence_ref: 真机目测（无自动化证据位）
+    added_at: 2026-10-31T00:00:00Z
+    status: 待确认
+    note: "取词、判定、代数作废、点击复用快照的纯逻辑由 select_icon 单测锚定；全局鼠标监听、非激活面板是否抢焦点、图标的落点与点击命中，只有真机能验。"
+
+  - acceptance_id: TP2-M02
+    version: TP2
+    assertion: "真机：开启图标后，在无选中的空白处单击、在另一应用里按下鼠标拖选时，已冒出的图标应立即收起（按下即收起，旧选区不再可信）；快速连续拖选多次，图标位置始终对应最后一次选区，不出现旧位置残留。"
+    source_anchor: docs/design/translate-interaction-alignment.md§2.P2 验收
+    collect_env: real_device
+    evidence_ref: 真机目测（无自动化证据位）
+    added_at: 2026-10-31T00:00:00Z
+    status: 待确认
+    note: "按下收起与代数作废依赖全局鼠标事件的实际投递，单测无法模拟。"
+
+  - acceptance_id: TP2-M03
+    version: TP2
+    assertion: "真机：关闭图标开关后，任意拖选文字都不再出现图标，且 Activity Monitor 中 QuickQuick 的 CPU 与关闭前相比无明显升高（高频拖选时不卡顿）；重启应用后开关状态保持。另核对：图标开关开启期间，日志与剪贴板历史中不得出现由选中取词产生的文字记录。"
+    source_anchor: docs/design/translate-interaction-alignment.md§4 风险（CPU 占用、隐私观感）
+    collect_env: real_device
+    evidence_ref: 真机目测 + Activity Monitor 观察（无自动化证据位）
+    added_at: 2026-10-31T00:00:00Z
+    status: 待确认
+    note: "CPU 与隐私观感只能真机观察。日志不得打印选中文字，代码审查已要求核对，此处为运行时复核。"
+
+  - acceptance_id: TP2-M04
+    version: TP2
+    assertion: "真机：多屏与全屏 Space 中，选中文字后图标出现在选区所在屏、光标下方，不跑到其他屏；图标在 Dock、菜单栏附近选中文字时不被裁切到屏外。"
+    source_anchor: docs/design/translate-interaction-alignment.md§2.P2 + §4 风险（多屏）
+    collect_env: real_device
+    evidence_ref: 真机目测（无自动化证据位）
+    added_at: 2026-10-31T00:00:00Z
+    status: 待确认
+    note: "图标用光标位置作为锚点（AX 选区边界不作为图标定位依据，避免与选区坐标单位混用），夹紧范围同 TP1-M01 的已知限制（未扣除菜单栏/Dock）。"
+
+  - acceptance_id: TP4-M01
+    version: TP4
+    assertion: "真机：在浮窗（⌘⇧T）中翻译一个英文单词（例如 hello），译文区应显示音标、按词性分组的释义，并可滚动查看例句；操作行（复制 / 朗读 / 展开）始终可见，不被词典内容挤出 320×200 窗口。翻译普通句子时仍只显示纯文本译文。"
+    source_anchor: docs/design/translate-interaction-alignment.md§2.P4 + 本次 P4 实施说明
+    collect_env: real_device
+    evidence_ref: 真机目测（无自动化证据位）
+    added_at: 2026-10-31T00:00:00Z
+    status: 待确认
+    note: "浮窗高度 TRANS_HEIGHT=200 对词典视图偏紧，首屏大约只能看到音标与 1–2 组释义，其余需滚动；是否改为词典结果自动加高属于 Rust 侧改动，本期未做，待真机观感决定。原生 <audio controls> 在 32px 高度下是否被裁切需真机确认。"
