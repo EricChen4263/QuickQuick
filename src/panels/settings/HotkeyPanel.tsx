@@ -57,12 +57,29 @@ function occupiedValuesFor(action: HotkeyAction, hotkeys: Hotkeys): string[] {
   );
 }
 
+/**
+ * 加速器段 → 键帽文案。
+ *
+ * 后端存的是可移植写法（CmdOrCtrl / Shift …），直接摊在键帽上等于把配置格式
+ * 给用户看。这里换成 macOS 键帽上的符号，读起来才是「一排键」。
+ */
+const KEY_CAP_LABELS: Record<string, string> = {
+  CmdOrCtrl: "⌘",
+  Command: "⌘",
+  Super: "⌘",
+  Ctrl: "⌃",
+  Control: "⌃",
+  Alt: "⌥",
+  Option: "⌥",
+  Shift: "⇧",
+};
+
 /** kbd 芯片组：按 + 分段渲染每段为一个 <kbd> */
 function KbdCombo({ accelerator }: { accelerator: string }) {
   return (
-    <span className="kbd-combo">
+    <span className="kbd-combo caption-4 mono">
       {accelerator.split("+").map((part) => (
-        <kbd key={part}>{part}</kbd>
+        <kbd key={part}>{KEY_CAP_LABELS[part] ?? part}</kbd>
       ))}
     </span>
   );
@@ -153,33 +170,33 @@ function HotkeyRow({
       <div className="set-row column" title={tooltip}>
         <div className="hotkey-row-inner">
           <div className="grow">
-            <div className="label">{label}</div>
-            <div className="desc">{description}</div>
+            <div className="label title-4">{label}</div>
+            <div className="desc caption-5">{description}</div>
           </div>
           {captured !== null ? (
             <KbdCombo accelerator={captured} />
           ) : null}
           <button
             ref={captureRef}
-            className="btn capture-area"
+            className="btn button-sm capture-area"
             aria-label="录制中…请按下快捷键"
             onKeyDown={handleCaptureKeyDown}
           >
             录制中…请按下快捷键
           </button>
           <button
-            className="btn btn-primary"
+            className="btn btn-primary button-sm"
             disabled={captured === null}
             onClick={() => void handleSave()}
           >
             保存
           </button>
-          <button className="btn" onClick={cancelRecording}>
+          <button className="btn button-sm" onClick={cancelRecording}>
             取消
           </button>
         </div>
         {errorMessage !== null && (
-          <div role="alert" className="hotkey-error">
+          <div role="alert" className="hotkey-error caption-5">
             {errorMessage}
           </div>
         )}
@@ -191,16 +208,16 @@ function HotkeyRow({
     <div className="set-row column" title={tooltip}>
       <div className="hotkey-row-inner">
         <div className="grow">
-          <div className="label">{label}</div>
-          <div className="desc">{description}</div>
+          <div className="label title-4">{label}</div>
+          <div className="desc caption-5">{description}</div>
         </div>
         <KbdCombo accelerator={currentValue} />
-        <button className="btn" onClick={enterRecording}>
+        <button className="btn button-sm" onClick={enterRecording}>
           修改
         </button>
       </div>
       {errorMessage !== null && (
-        <div role="alert" className="hotkey-error">
+        <div role="alert" className="hotkey-error caption-5">
           {errorMessage}
         </div>
       )}
@@ -241,11 +258,11 @@ function HotkeyPanel() {
   }
 
   if (loadError !== null) {
-    return <div role="alert">{loadError}</div>;
+    return <div role="alert" className="set-inline-error caption-1">{loadError}</div>;
   }
 
   if (hotkeys === null) {
-    return <div>加载中…</div>;
+    return <div className="caption-5 set-muted">加载中…</div>;
   }
 
   return (
@@ -253,8 +270,8 @@ function HotkeyPanel() {
       <PanelHeader title="热键" subtitle="自定义全局快捷键，与其他应用冲突时可修改" />
       {hotkeys.corrupt != null && (
         <div className="hotkey-corrupt" role="alert">
-          <span className="hotkey-corrupt-title">热键配置文件已损坏</span>
-          <span className="hotkey-corrupt-hint">{hotkeys.corrupt.hint}</span>
+          <span className="hotkey-corrupt-title body-5">热键配置文件已损坏</span>
+          <span className="hotkey-corrupt-hint caption-5">{hotkeys.corrupt.hint}</span>
         </div>
       )}
       <SettingGroup>

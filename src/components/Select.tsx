@@ -170,7 +170,7 @@ const SelectTrigger = forwardRef<HTMLButtonElement, SelectTriggerProps>(function
     <button
       ref={ref}
       type="button"
-      className="qq-select-trigger"
+      className="qq-select-trigger body-6"
       aria-label={ariaLabel}
       aria-haspopup="listbox"
       aria-expanded={isOpen}
@@ -256,13 +256,8 @@ function useSelectInteractions(params: SelectInteractionsParams): SelectInteract
 function SelectChevron() {
   return (
     <svg
-      className="qq-select-chevron"
+      className="ico qq-select-chevron"
       viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.8"
-      strokeLinecap="round"
-      strokeLinejoin="round"
       aria-hidden="true"
     >
       <path d="m6 9 6 6 6-6" />
@@ -346,7 +341,9 @@ function SelectOptionItem({
       aria-selected={isSelected}
       aria-disabled={isDisabled}
       className={
-        "qq-select-option" + (isActive ? " is-active" : "") + (isDisabled ? " is-disabled" : "")
+        "qq-select-option body-6" +
+        (isActive ? " is-active" : "") +
+        (isDisabled ? " is-disabled" : "")
       }
       // mousedown 而非 click：避免 trigger 先 blur 关闭菜单导致 click 落空
       onMouseDown={(event) => {

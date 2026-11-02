@@ -15,7 +15,11 @@ import {
   SettingsSaveErrorProvider,
 } from "./settings-save-error";
 
-/** 关于子项面板：logo + 应用名 + 版本号 + 描述 */
+/**
+ * 关于子项面板：logo + 应用名 + 版本号 + 一句定位说明。
+ *
+ * 这里是全页唯一「非表单」的区块，所以不给它套设置行，而是一块居中的品牌区。
+ */
 function AboutPanel() {
   const [version, setVersion] = useState<string | null>(null);
 
@@ -38,9 +42,11 @@ function AboutPanel() {
       <div className="logo-mark">
         <img src={appIcon} alt="QuickQuick" />
       </div>
-      <h2><span className="brand-accent">Quick</span>Quick</h2>
-      <div className="ver num">{versionText}</div>
-      <p>托盘常驻的剪贴板历史 + 翻译小工具。本地加密存储，每台机器各一份、互相独立。</p>
+      <h2 className="heading-5"><span className="brand-accent">Quick</span>Quick</h2>
+      <div className="ver num caption-2 mono">{versionText}</div>
+      <p className="body-6">
+        托盘常驻的剪贴板历史 + 翻译小工具。本地加密存储，每台机器各一份、互相独立。
+      </p>
     </div>
   );
 }
@@ -56,7 +62,12 @@ function SectionContent({ section }: { section: SettingsSection }) {
   return <AboutPanel />;
 }
 
-/** 设置页根组件：左侧紧凑子项导航 + 右侧内容区 */
+/**
+ * 设置页根组件：左侧二级导航（160px 固定）+ 右侧内容区。
+ *
+ * 布局分工：本页只有内容区滚动，导航固定不动；内容列宽由 settings.css 限制在
+ * 阅读宽度内，右侧留白是有意留的，不是没铺满。
+ */
 function SettingsPage() {
   const [activeSection, setActiveSection] = useState<SettingsSection>("general");
   const sections = settingsSections();

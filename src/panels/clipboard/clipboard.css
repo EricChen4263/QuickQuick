@@ -1,485 +1,555 @@
-/*
- * 剪贴板页专属样式。
- * 全部使用短名 token（--bg/--fg/--accent 等），不用旧 --qq-* 别名。
- * 类名与设计稿 index.html 保持对应，方便逐项比对。
- */
+/* ============================================================================
+   QuickQuick — 剪贴板页
+   ----------------------------------------------------------------------------
+   层次只靠背景色差表达，不用「边框 + 阴影 + 白底」三件套：
+     · 页面底   = --bg（最外）
+     · 列表栏   = 透明、无卡面，行只在 hover / 选中时浮到 --surface
+     · 预览区   = --surface + --shadow-panel（本页唯一抬升面，承载「阅读」）
+   刻意只让一个容器有卡面观感——两块白卡并排是这类工具最典型的泛化做法。
 
-/* 页面根：左侧主列表 + 右侧轻量详情工作区 */
+   本文件不写字号 / 字重：文字形态一律由 TSX 上的命名样式类
+   （.title-3 / .body-3 / .body-6 / .caption-3 / .caption-4 / .button-sm …）决定。
+   ============================================================================ */
+
+/* ---------------------------------------------------------------- 页面根 ---- */
+
 .clip-page {
-  display: grid;
-  grid-template-columns: minmax(380px, 430px) minmax(0, 1fr);
-  gap: 18px;
-  height: 100%;
-  min-height: 0;
-  overflow: hidden;
-  padding: 18px 18px 16px 0;
-  font-family: var(--font);
-}
-
-/* 列表栏：内部 grid rows：搜索栏(auto) + 列表(1fr)
-   min-width:0 防 grid 列方向横向溢出；overflow:hidden 隔离内容撑高 */
-.clip-list-col {
-  display: grid;
-  grid-template-rows: auto auto 1fr;
-  min-height: 0;
-  min-width: 0;
-  overflow: hidden;
-  background: var(--surface);
-  border: 1px solid color-mix(in oklch, var(--border) 72%, transparent);
-  border-radius: var(--r-lg);
-}
-
-/* 搜索栏容器：搜索框 + 筛选器横排 */
-.searchbar {
-  display: flex;
-  gap: 8px;
-  padding: 18px 18px 12px;
-  border-bottom: 0;
-}
-
-/* 搜索栏外层：竖排容纳「搜索行 + 模式提示」，保持列表栏的 grid 子项个数不变 */
-.searchbar-col {
   display: flex;
   flex-direction: column;
+  gap: var(--sp-12);
+  height: 100%;
+  min-height: 0;
+  padding: var(--sp-24);
+  overflow: hidden;
+}
+
+/* 横幅区（错误 / 降级提示）：整行置顶，不挤压下面的两栏 */
+.clip-banners {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-8);
+  flex: none;
+}
+
+/* :empty 时不留占位，避免多出一段空白 */
+.clip-banners:empty {
+  display: none;
+}
+
+.clip-banner {
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.clip-banner--errors {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--sp-2);
+}
+
+.clip-banner .btn {
+  margin-left: auto;
+}
+
+/* 两栏主体：滚动全部交给各自的列，页面本身不滚 */
+.clip-columns {
+  display: grid;
+  grid-template-columns: minmax(280px, 340px) minmax(0, 1fr);
+  gap: var(--sp-24);
+  flex: 1;
+  min-height: 0;
   min-width: 0;
 }
 
-/* 搜索模式提示（如正则写法非法、已降级为文本搜索）：次要信息，不抢列表视觉 */
-.search-notice {
-  padding: 0 18px 10px;
-  font-size: 12px;
-  line-height: 1.4;
-  color: var(--muted);
+/* ------------------------------------------------------------ 左：列表栏 ---- */
+
+/* 列表栏保持扁平：透明底、无描边、无圆角、无阴影 */
+.clip-list-col {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-12);
+  min-height: 0;
+  min-width: 0;
 }
 
-/* 搜索命中高亮：四档（对齐 Maccy 的 HighlightMatch：color/bold/italic/underline，默认 bold）。
-   基础规则只保留不影响排版的公共属性，具体强调交给 data-hit-style 分支。
-
-   `background: transparent` 必须显式写：`<mark>` 自带 UA 的 `background-color: mark`（黄底），
-   不覆盖的话 bold/italic/underline 三档都会残留黄底，只有 color 档因为自带 background 才正常。
-   Maccy 的 textStorage 默认不带底色，只有 .color 档才设 backgroundColor——这里对齐该语义。 */
-.clip-hit {
-  color: inherit;
-  background: transparent;
-  border-radius: 3px;
-  padding: 0 1px;
-}
-
-/* 加粗（默认档）：Maccy 的 .bold —— 只加字重，无背景 */
-.clip-page[data-hit-style="bold"] .clip-hit {
-  font-weight: 700;
-}
-
-/* 背景色：Maccy 的 .color 用 findHighlightColor 整段染色，这里用项目的 OKLch accent token */
-.clip-page[data-hit-style="color"] .clip-hit {
-  background: color-mix(in oklch, var(--accent) 26%, transparent);
-  font-weight: 600;
-}
-
-/* 斜体：Maccy 的 .italic */
-.clip-page[data-hit-style="italic"] .clip-hit {
-  font-style: italic;
-}
-
-/* 下划线：Maccy 的 .underline */
-.clip-page[data-hit-style="underline"] .clip-hit {
-  text-decoration: underline;
-  text-decoration-color: color-mix(in oklch, var(--accent) 80%, transparent);
-  text-underline-offset: 2px;
-}
-
-/* 搜索框外层：相对定位容器，内嵌 SVG 图标 */
-.search-field {
+/* 搜索行：--surface-2 底、8px 圆角、放大镜内嵌在左 */
+.clip-search {
   position: relative;
-  flex: 1;
+  display: flex;
+  align-items: center;
+  flex: none;
 }
 
-.search-field svg {
+.clip-search .ico {
   position: absolute;
-  left: 9px;
-  top: 50%;
-  transform: translateY(-50%);
-  width: 15px;
-  height: 15px;
+  left: var(--sp-12);
   color: var(--muted);
   pointer-events: none;
 }
 
-.search-field input {
+.clip-search-input {
   width: 100%;
-  padding: 9px 12px 9px 34px;
-  border: 1px solid color-mix(in oklch, var(--border) 72%, transparent);
-  border-radius: var(--r-sm);
+  padding: var(--sp-8) var(--sp-12) var(--sp-8) var(--sp-32);
+  border: 1px solid transparent;
+  border-radius: var(--r-8);
   background: var(--surface-2);
-  outline: none;
-  font-size: 14px;
-  font-family: var(--font);
   color: var(--fg);
+  transition: var(--t-color);
 }
 
-.search-field input:focus {
+.clip-search-input::placeholder {
+  color: var(--muted);
+}
+
+/* 焦点只给一层光晕：再叠 outline 会形成双环，边缘互相吃掉 */
+.clip-search-input:focus,
+.clip-search-input:focus-visible {
+  outline: none;
   border-color: var(--accent);
   box-shadow: 0 0 0 3px var(--accent-soft);
 }
 
-/* 条目列表滚动区
-   min-height:0 配合父 grid 1fr 行，确保内容超出时在此滚动不冒泡外层 */
-.clip-list {
-  overflow-y: auto;
-  min-height: 0;
-  padding: 8px 12px 16px;
+/* 筛选行：类型下拉在左，命中计数在右 */
+.clip-filters {
   display: flex;
-  flex-direction: column;
-  gap: 2px;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-8);
+  flex: none;
 }
 
-/* 单行条目：三列 grid（类型图标 | 主内容 | 右侧操作） */
+.clip-count {
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+/* 加载中 / 空库时条目数未知或不适用，继续显示旧计数会自相矛盾 */
+.clip-page[data-state="loading"] .clip-count,
+.clip-page[data-state="empty"] .clip-count {
+  visibility: hidden;
+}
+
+.clip-notice {
+  padding-top: var(--sp-4);
+  color: var(--muted);
+}
+
+/* ------------------------------------------------------------ 条目列表 ---- */
+
+/* 唯一滚动区：min-height:0 让它在 flex 列里可收缩，超出时才滚 */
+.clip-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  /* 给滚动条让出与行的间距，避免贴边 */
+  padding-right: var(--sp-4);
+  margin-right: calc(var(--sp-4) * -1);
+}
+
+/* 时间分组：中文不做 uppercase / 字距夸张 */
+.clip-group-label {
+  color: var(--muted);
+  padding: var(--sp-12) var(--sp-8) var(--sp-4);
+}
+
+.clip-group:first-child .clip-group-label {
+  padding-top: var(--sp-4);
+}
+
+/* ---------------------------------------------------------------- 列表行 ----
+   三列：类型图标 | 摘要 + 元信息 | 内联操作
+   选中态 = 抬到 --surface + 左侧 2px accent 竖条，不做整块填色。 */
+
 .clip-row {
+  position: relative;
+  display: grid;
+  grid-template-columns: var(--icon-16) minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--sp-12);
+  padding: var(--sp-8) var(--sp-8) var(--sp-8) var(--sp-12);
+  border-radius: var(--r-8);
   text-align: left;
   width: 100%;
-  appearance: none;
-  border: 0;
-  border-left: 3px solid transparent;
-  background: transparent;
-  border-radius: var(--r);
-  padding: 11px 12px 11px 10px;
-  display: grid;
-  grid-template-columns: 24px 1fr auto;
-  gap: 12px;
-  align-items: center;
   cursor: default;
-  transition: background-color 110ms ease, border-color 110ms ease, color 110ms ease;
-  /* 这里刻意不用 content-visibility: auto —— 它会让离屏行退出无障碍树，
-     对纯键盘/读屏用户是不可见的可达性回归（中间的离屏行逐项浏览时摸不到）。
-     DOM 节点数由 ClipboardPage 的增量渲染控制，不需要靠行级跳过渲染。 */
+  transition: var(--t-color);
+}
+
+.clip-row + .clip-row {
+  margin-top: var(--sp-2);
 }
 
 .clip-row:hover {
   background: var(--hover);
 }
 
-/* 高亮态用 CSS 属性选择器驱动，不需 inline style */
-.clip-row[aria-selected="true"] {
-  background: var(--accent-soft);
-  border-left-color: var(--accent);
+.clip-row:active {
+  transform: translateY(1px);
 }
 
-/* 类型图标容器：小方块，灰色图标 */
+.clip-row[aria-selected="true"] {
+  background: var(--surface);
+  box-shadow: var(--shadow-panel);
+}
+
+/* 选中指示条：只动 transform / opacity，宽度不变 */
+.clip-row::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 50%;
+  width: 2px;
+  height: calc(var(--sp-16) + var(--sp-4));
+  border-radius: var(--r-4);
+  background: var(--accent);
+  opacity: 0;
+  transform: translateY(-50%) scaleY(0.4);
+  transform-origin: center;
+  transition: transform var(--dur-move) var(--ease), opacity var(--dur-color) var(--ease);
+}
+
+.clip-row[aria-selected="true"]::before {
+  opacity: 1;
+  transform: translateY(-50%) scaleY(1);
+}
+
+/* 类型图标：只换色，不加底色块（行里再套一个色块会显得脏） */
 .clip-kind {
-  width: 24px;
-  height: 24px;
-  border-radius: 0;
   display: grid;
   place-items: center;
   color: var(--muted);
-  background: transparent;
-  flex: none;
-}
-
-.clip-kind svg {
-  width: 18px;
-  height: 18px;
+  transition: var(--t-color);
 }
 
 .clip-row[aria-selected="true"] .clip-kind {
   color: var(--accent);
 }
 
-/* 主内容区：文本摘要 + 元信息 */
 .clip-main {
   min-width: 0;
 }
 
-/* 内容摘要：两行截断 */
+/* 摘要：两行截断 */
 .clip-text {
-  font-size: 13.5px;
-  line-height: 1.4;
-  max-height: 2.8em;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
   overflow: hidden;
-  word-break: break-word;
+  overflow-wrap: anywhere;
   color: var(--fg);
 }
 
-/* code/richtext 类型用等宽字体 */
-.clip-text.code {
-  font-family: var(--mono);
-  font-size: 12px;
-}
-
-/* 元信息行：时间戳、来源等次要信息 */
-.clip-meta {
-  margin-top: 4px;
+/* 图片条目的缩略图位：与文本同一格，保持行高一致 */
+.clip-text--image {
   display: flex;
   align-items: center;
-  gap: 7px;
-  color: var(--muted);
-  font-size: 11px;
+  gap: var(--sp-8);
 }
 
-/* 收藏星标：文本/富文本项右侧的小图标 */
-.clip-star {
-  color: var(--muted);
-  display: grid;
-  place-items: center;
-  width: 24px;
-  height: 24px;
-  background: none;
-  border: none;
-  padding: 0;
-  cursor: pointer;
-  border-radius: var(--r-sm);
-  transition: color 110ms ease;
-}
-
-.clip-star svg {
-  width: 14px;
-  height: 14px;
-}
-
-/* 已收藏态：accent 色高亮 */
-.clip-star.fav {
-  color: var(--accent);
-}
-
-/* 图片缩略图：固定尺寸，对象裁切 */
 .clip-thumb {
-  width: 44px;
-  height: 32px;
-  border-radius: 6px;
-  border: 1px solid color-mix(in oklch, var(--border) 70%, transparent);
+  width: calc(var(--sp-32) + var(--sp-4));
+  height: calc(var(--sp-24) + var(--sp-4));
+  border-radius: var(--r-4);
+  background: var(--surface-2);
   object-fit: cover;
-  background: linear-gradient(135deg, var(--accent-soft), var(--fg-soft));
+  flex: none;
 }
 
-/* 右侧操作区：收藏/删除按钮横排 */
-.clip-actions {
+/* 元信息行：时间 / 类型 / 收藏 */
+.clip-meta {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: var(--sp-8);
+  margin-top: var(--sp-2);
+  color: var(--muted);
 }
 
-/* 预览区：右侧主区，grid rows: 1fr(正文) + auto(操作栏) */
+/* 行内操作：默认隐藏，hover / 选中 / 键盘聚焦时浮出 */
+.clip-row-acts {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  opacity: 0;
+  transition: opacity var(--dur-color) var(--ease);
+}
+
+.clip-row:hover .clip-row-acts,
+.clip-row[aria-selected="true"] .clip-row-acts {
+  opacity: 1;
+}
+
+/* 键盘用户 Tab 进行内按钮时必须看得见焦点，否则等于没有焦点指示 */
+.clip-row:focus-within .clip-row-acts {
+  opacity: 1;
+}
+
+/* 已收藏的星标常驻可见，不靠 hover 才被发现 */
+.clip-row .clip-row-acts:has(.on) {
+  opacity: 1;
+}
+
+/* 已收藏 = 实心星：.ico 默认 fill:none，这里显式覆盖，状态不只靠颜色承担 */
+.clip-row-acts .icon-btn.on svg,
+.preview-actions .btn.on svg {
+  fill: currentColor;
+}
+
+/* -------------------------------------------------------------- 骨架屏 ----
+   形状照抄真实行（分组标题条 + 图标位 + 两行文字），不用转圈。 */
+
+.clip-skeleton {
+  display: block;
+  padding-bottom: var(--sp-16);
+}
+
+.clip-skel-group {
+  display: block;
+  padding: var(--sp-8) var(--sp-8) var(--sp-12) var(--sp-8);
+}
+
+.clip-skel-group-bar {
+  display: block;
+  width: calc(var(--sp-32) + var(--sp-16));
+  height: var(--sp-8);
+}
+
+.clip-skel-row {
+  display: grid;
+  grid-template-columns: var(--icon-16) minmax(0, 1fr);
+  gap: var(--sp-12);
+  align-items: center;
+  padding: var(--sp-8) var(--sp-8) var(--sp-8) var(--sp-12);
+}
+
+.clip-skel-ico {
+  display: block;
+  width: var(--icon-16);
+  height: var(--icon-16);
+}
+
+.clip-skel-lines {
+  display: grid;
+  gap: var(--sp-4);
+}
+
+.clip-skel-l1 {
+  display: block;
+  height: var(--sp-12);
+}
+
+.clip-skel-l2 {
+  display: block;
+  height: var(--sp-8);
+}
+
+/* 每行长度错开，避免骨架看起来像表格 */
+.clip-skel-row:nth-child(3) .clip-skel-l1 { width: 92%; }
+.clip-skel-row:nth-child(3) .clip-skel-l2 { width: 38%; }
+.clip-skel-row:nth-child(4) .clip-skel-l1 { width: 74%; }
+.clip-skel-row:nth-child(4) .clip-skel-l2 { width: 30%; }
+.clip-skel-row:nth-child(5) .clip-skel-l1 { width: 86%; }
+.clip-skel-row:nth-child(5) .clip-skel-l2 { width: 44%; }
+.clip-skel-row:nth-child(6) .clip-skel-l1 { width: 61%; }
+.clip-skel-row:nth-child(6) .clip-skel-l2 { width: 26%; }
+
+/* 空库时搜索与筛选没有对象：收起它们，而不是留一个永远搜不到结果的输入框。
+   「筛选后为空」用 data-state="filtered-empty"，那两行必须保留，否则用户没法改回条件。 */
+.clip-page[data-state="empty"] .clip-search,
+.clip-page[data-state="empty"] .clip-filters {
+  display: none;
+}
+
+/* -------------------------------------------------------------- 空态 ----
+   有内容的「下一步」引导视图：结构（.empty / .mark）来自 theme/components.css，
+   这里只负责让它占满列表列。 */
+
+.clip-list > .empty,
+.clip-preview > .empty {
+  min-height: 100%;
+}
+
+/* ------------------------------------------------------------ 右：预览区 ----
+   本页唯一抬升面。不加边框：抬升由 surface + shadow-panel 表达。 */
+
 .clip-preview {
   display: grid;
-  grid-template-rows: 1fr auto;
+  grid-template-rows: minmax(0, 1fr) auto;
   min-height: 0;
-  overflow: hidden;
-  container-type: inline-size;
+  min-width: 0;
   background: var(--surface);
-  border: 1px solid color-mix(in oklch, var(--border) 72%, transparent);
-  border-radius: var(--r-lg);
+  border-radius: var(--r-12);
+  box-shadow: var(--shadow-panel);
+  overflow: hidden;
 }
 
-/* 预览正文滚动区
-   min-height:0 配合父 grid 1fr 行，防止内容撑大后滚动冒泡外层 */
+/* 加载 / 空列表时的占位：不许继续显示上一条内容 */
+.preview-blank {
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  text-align: center;
+  gap: var(--sp-8);
+  padding: var(--sp-40);
+  color: var(--muted);
+}
+
 .preview-body {
   overflow-y: auto;
   min-height: 0;
-  padding: 30px 42px;
+  padding: var(--sp-40) var(--sp-32) var(--sp-24);
 }
 
-/* 预览 kicker：类型·来源·时间 小字元信息行 */
+/* kicker：类型徽章 · 时间 · 收藏 */
 .preview-kicker {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--sp-8);
+  margin-bottom: var(--sp-24);
   color: var(--muted);
-  font-size: 12px;
-  margin-bottom: 20px;
 }
 
-.preview-kicker .dot {
-  width: 4px;
-  height: 4px;
-  border-radius: 50%;
-  background: var(--muted);
-  flex: none;
+/* 收藏徽章：只在 .badge 之上换配色，不长成第二种徽章 */
+.badge-fav {
+  background: var(--accent-soft);
+  color: var(--accent);
 }
 
-/* 文本内容区 */
+/* 正文：中文按 em 计量（ch 按数字宽度算，中文会算窄导致词中断行） */
 .preview-content {
-  font-size: 18px;
-  line-height: 1.55;
-  word-break: break-word;
-  white-space: pre-wrap;
+  max-width: 34em;
   color: var(--fg);
-  max-width: 70ch;
+  line-height: var(--lh-lg);
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
-/* code 类型：等宽 + 代码块背景 */
-.preview-content.code {
-  font-family: var(--mono);
-  font-size: 13px;
+/* 富文本预览里的块级内容不继承 pre-wrap，否则段落间距会翻倍 */
+.preview-content p,
+.preview-content li {
+  white-space: normal;
+}
+
+.preview-content a {
+  color: var(--accent);
+  text-underline-offset: 2px;
+}
+
+/* 代码 / 无 HTML 的富文本：等宽 + 内嵌浅底，不做成「另一个卡片」 */
+.preview-content.mono {
+  font-family: var(--font-mono);
   background: var(--surface-2);
-  border: 1px solid color-mix(in oklch, var(--border) 76%, transparent);
-  border-radius: var(--r);
-  padding: 14px 16px;
-  line-height: 1.65;
+  border-radius: var(--r-8);
+  padding: var(--sp-16);
+  max-width: none;
   overflow-x: auto;
 }
 
-/* 图片预览容器 */
+/* 图片预览 */
 .preview-img {
-  width: 100%;
-  border-radius: var(--r);
-  border: 1px solid color-mix(in oklch, var(--border) 72%, transparent);
   display: block;
-  max-height: 360px;
+  max-width: 100%;
+  max-height: calc(var(--sp-80) * 4);
+  border-radius: var(--r-8);
+  background: var(--surface-2);
   object-fit: contain;
 }
 
-/* 图片预览占位：缩略图按需拉取，就绪前保持占位高度，避免图片到达时布局跳动 */
+/* 缩略图也未就绪时的占位：保持高度，避免图片到达时布局跳动 */
 .preview-img-placeholder {
-  min-height: 120px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: var(--r);
-  border: 1px dashed color-mix(in oklch, var(--border) 72%, transparent);
-  color: var(--muted);
-  font-size: 13px;
-}
-
-/* 底部操作栏：复用公共 ActionBar(surface)，仅保留响应式裁剪安全属性 */
-.preview-actions {
-  min-width: 0;
-  overflow: hidden;
-}
-
-.preview-actions .btn,
-.preview-actions .icon-btn {
-  flex: none;
-}
-
-@container (max-width: 520px) {
-  .preview-actions {
-    gap: 6px;
-    padding: 14px 16px;
-  }
-
-  .preview-actions .btn {
-    min-height: 36px;
-    padding-inline: 11px;
-    white-space: nowrap;
-  }
-
-  .preview-actions .btn:not(.btn-primary) {
-    width: 36px;
-    padding-inline: 0;
-    justify-content: center;
-    gap: 0;
-    font-size: 0;
-  }
-
-  .preview-actions .icon-btn {
-    width: 36px;
-    height: 36px;
-  }
-}
-
-/* 元数据网格：两列（dt=灰色标签 | dd=等宽值） */
-.meta-grid {
-  margin-top: 28px;
-  padding: 16px 18px;
-  display: grid;
-  grid-template-columns: auto 1fr;
-  gap: 9px 22px;
-  font-size: 12.5px;
-  background: var(--surface-2);
-  border-radius: var(--r);
-  max-width: 420px;
-}
-
-.meta-grid dt {
-  color: var(--muted);
-}
-
-.meta-grid dd {
-  margin: 0;
-  font-family: var(--mono);
-}
-
-/* 引导卡片：accent 色调背景，首次运行 Accessibility 权限提示 */
-.onboard {
-  margin: 12px;
-  padding: 14px 16px;
-  border: 1px solid color-mix(in oklch, var(--accent-line) 72%, transparent);
-  background: var(--accent-soft);
-  border-radius: var(--r);
-  display: flex;
-  gap: 12px;
-  align-items: flex-start;
-}
-
-.onboard svg.lead {
-  width: 20px;
-  height: 20px;
-  color: var(--accent);
-  flex: none;
-  margin-top: 1px;
-}
-
-.onboard .grow {
-  flex: 1;
-  min-width: 0;
-}
-
-.onboard h4 {
-  margin: 0 0 3px;
-  font-size: 13px;
-  color: var(--fg);
-}
-
-.onboard p {
-  margin: 0 0 10px;
-  color: var(--muted);
-  font-size: 12.5px;
-  line-height: 1.5;
-}
-
-.onboard .row {
-  display: flex;
-  gap: 8px;
-  align-items: center;
-}
-
-/* 关闭按钮：幽灵样式，hover 时显出背景 */
-.onboard .x {
-  margin-left: auto;
-  align-self: flex-start;
-  color: var(--muted);
-  background: transparent;
-  border: 0;
-  padding: 2px;
-  border-radius: 5px;
-  cursor: pointer;
   display: grid;
   place-items: center;
+  min-height: calc(var(--sp-96) + var(--sp-24));
+  border-radius: var(--r-8);
+  background: var(--surface-2);
+  color: var(--muted);
 }
 
-.onboard .x:hover {
-  background: var(--hover);
+/* 属性表：标签弱化，值等宽右列对齐 */
+.preview-meta {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: var(--sp-8) var(--sp-24);
+  margin-top: var(--sp-32);
+  padding-top: var(--sp-16);
+  border-top: 1px solid color-mix(in oklch, var(--border) 64%, transparent);
+  max-width: calc(var(--sp-80) * 5);
+  color: var(--muted);
+}
+
+.preview-meta dt {
+  white-space: nowrap;
+}
+
+.preview-meta dd {
+  margin: 0;
   color: var(--fg);
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
 }
 
-.onboard .x svg {
-  width: 16px;
-  height: 16px;
+/* 值不是数字 / 哈希时（类型名）不套等宽 */
+.preview-meta dd.sans {
+  font-family: var(--font-sans);
 }
 
-/* 向导步骤指示：四个进度点 + 「第 N / 4 步」 */
+/* ------------------------------------------------------ 底部操作行 ----
+   与正文同左边界对齐；底部留白略大于顶部，做视觉配平。 */
+
+.clip-preview .preview-actions {
+  flex-wrap: wrap;
+  padding: var(--sp-12) var(--sp-32) var(--sp-16);
+}
+
+/* 破坏性操作贴到行尾：不额外插一个伸缩占位元素，换行时也仍然靠右 */
+.preview-actions .btn-danger {
+  margin-left: auto;
+}
+
+.preview-actions .btn {
+  flex: none;
+}
+
+/* 收藏按钮的按下态：同一套 ghost 按钮，只换色，不换形状 */
+.preview-actions .btn.on {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+/* ------------------------------------------------------------ 首次引导 ----
+   引导卡是「提示」而不是第二个抬升面：accent 淡底 + 全周细描边，无阴影。 */
+
+.onboard {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-8);
+  flex: none;
+  padding: var(--sp-16);
+  border: 1px solid color-mix(in oklch, var(--accent-line) 72%, transparent);
+  border-radius: var(--r-12);
+  background: var(--accent-soft);
+}
+
+.onboard-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-8);
+  /* 给右上角的关闭按钮留位，避免步骤计数被压在按钮下面 */
+  padding-right: var(--sp-32);
+}
+
+/* 步骤指示：四段短条，当前步及之前点亮 */
 .onboard-steps {
   display: flex;
   align-items: center;
-  gap: 4px;
-  margin-bottom: 6px;
+  gap: var(--sp-4);
 }
 
 .onboard-steps i {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: color-mix(in oklch, var(--accent) 28%, transparent);
+  width: var(--sp-16);
+  height: var(--sp-2);
+  border-radius: var(--r-4);
+  background: color-mix(in oklch, var(--accent) 26%, transparent);
 }
 
 .onboard-steps i.on {
@@ -487,35 +557,107 @@
 }
 
 .onboard-meta {
-  margin-left: 4px;
-  color: var(--muted);
-  font-size: 11px;
-  font-variant-numeric: tabular-nums;
+  margin-left: auto;
+  /* 见 .onboard-body p 的说明：淡底上把 --muted 往 fg 靠一档才到 AA */
+  color: color-mix(in oklch, var(--muted) 65%, var(--fg));
+}
+
+.onboard-body h3 {
+  margin: 0 0 var(--sp-4);
+  color: var(--fg);
+}
+
+.onboard-body p {
+  margin: 0 0 var(--sp-12);
+  /* 卡片底色是 accent-soft，--muted 直接放上去约 4.47:1，略低于 AA 4.5。
+     往 fg 混 35% 既保住「次要文字」的层级，又把对比度拉回 6:1 以上。 */
+  color: color-mix(in oklch, var(--muted) 65%, var(--fg));
+}
+
+.onboard-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-8);
+  flex-wrap: wrap;
+}
+
+.onboard-close {
+  position: absolute;
+  top: var(--sp-8);
+  right: var(--sp-8);
 }
 
 /* 热键展示：与正文区分，避免「⌘⇧C」被读成普通文字 */
 .onboard kbd {
-  font-family: var(--mono);
-  font-size: 12px;
-  padding: 1px 5px;
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  background: var(--surface-2);
+  padding: var(--sp-0) var(--sp-4);
+  border: 1px solid color-mix(in oklch, var(--border) 76%, transparent);
+  border-radius: var(--r-4);
+  background: var(--surface);
   color: var(--fg);
 }
 
-/* 自启确认：复选框与文案同一行，整体可点 */
+/* 自启确认：复选框与文案同一行，整行可点 */
 .onboard-check {
   display: flex;
   align-items: center;
-  gap: 6px;
-  margin-bottom: 10px;
+  gap: var(--sp-8);
+  margin-bottom: var(--sp-12);
   color: var(--fg);
-  font-size: 12.5px;
   cursor: pointer;
 }
 
 .onboard-check input {
   accent-color: var(--accent);
   cursor: pointer;
+}
+
+/* ---------------------------------------------------------- 错误整页 ---- */
+
+.clip-page--error {
+  align-items: stretch;
+  justify-content: flex-start;
+}
+
+/* -------------------------------------------------------- 命中高亮 ----
+   四档（对齐 Maccy 的 HighlightMatch：color / bold / italic / underline，默认 bold）。
+   基础规则只保留不影响排版的公共属性，具体强调交给 data-hit-style 分支。
+
+   `background: transparent` 必须显式写：`<mark>` 自带 UA 的 `background-color: mark`（黄底），
+   不覆盖的话 bold / italic / underline 三档都会残留黄底。 */
+
+.clip-hit {
+  color: inherit;
+  background: transparent;
+  border-radius: var(--r-4);
+  padding: var(--sp-0) var(--sp-2);
+}
+
+.clip-page[data-hit-style="bold"] .clip-hit {
+  font-weight: var(--fw-bold);
+}
+
+.clip-page[data-hit-style="color"] .clip-hit {
+  background: color-mix(in oklch, var(--accent) 26%, transparent);
+  font-weight: var(--fw-semibold);
+}
+
+.clip-page[data-hit-style="italic"] .clip-hit {
+  font-style: italic;
+}
+
+.clip-page[data-hit-style="underline"] .clip-hit {
+  text-decoration: underline;
+  text-decoration-color: color-mix(in oklch, var(--accent) 80%, transparent);
+  text-underline-offset: 2px;
+}
+
+/* ------------------------------------------------ 小圆点（元信息分隔）---- */
+/* 4px 的圆点：--r-4 大于半径，浏览器会钳成圆，等价于 50% 但不引入额外 token。 */
+.c-dot {
+  width: var(--sp-4);
+  height: var(--sp-4);
+  border-radius: var(--r-4);
+  background: currentColor;
+  opacity: 0.5;
+  flex: none;
 }

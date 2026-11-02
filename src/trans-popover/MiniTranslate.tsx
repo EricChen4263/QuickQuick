@@ -74,24 +74,58 @@ function MiniTranslate({
   return (
     <div className="mini-translate">
       <div className="mini-dir">
-        <span>
+        <span className="caption-4">
           {result.sourceLang} → {result.targetLang}
         </span>
-        <span className="mini-source">来源：{sourceLabel(source)}</span>
+        <span className="mini-source badge caption-5">来源：{sourceLabel(source)}</span>
       </div>
 
-      {hint !== undefined && <div className="mini-degrade">{hint}</div>}
+      {hint !== undefined && <div className="mini-degrade caption-5">{hint}</div>}
 
-      <div className="mini-body">{renderBody(result)}</div>
+      {/* 纯文本译文用 .body-2（16/24）：320px 窄窗里 18/28 一行只放得下 13 个字，
+          一段真实译文要占 5–6 行，正在读的那一行还会被窗口底边切掉半截。
+          16/24 是「一眼扫完」的上限，也是全站正文档；词典结果维持 14px 密集排版。 */}
+      <div className={result.kind === "dict" ? "mini-body" : "mini-body body-2"}>
+        {renderBody(result)}
+      </div>
 
       <ActionBar variant="glass" className="mini-actions">
-        <button type="button" className="btn" aria-label="复制" onClick={onCopy}>
+        <button
+          type="button"
+          className="btn btn-sm button-xsm"
+          aria-label="复制"
+          onClick={onCopy}
+        >
+          <svg className="ico ico-16" viewBox="0 0 24 24" aria-hidden="true">
+            <rect x="9" y="9" width="11" height="11" rx="2.5" />
+            <path d="M15 6.5A2.5 2.5 0 0 0 12.5 4h-6A2.5 2.5 0 0 0 4 6.5v6A2.5 2.5 0 0 0 6.5 15" />
+          </svg>
           复制
         </button>
-        <button type="button" className="btn" aria-label="朗读" onClick={onSpeak}>
+        <button
+          type="button"
+          className="btn btn-sm button-xsm"
+          aria-label="朗读"
+          onClick={onSpeak}
+        >
+          <svg className="ico ico-16" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M11 5.5 6.5 9H3.5v6h3L11 18.5z" />
+            <path d="M15 9.2a4 4 0 0 1 0 5.6" />
+            <path d="M17.8 6.6a7.5 7.5 0 0 1 0 10.8" />
+          </svg>
           朗读
         </button>
-        <button type="button" className="btn" aria-label="展开" onClick={onExpand}>
+        <button
+          type="button"
+          className="btn btn-sm button-xsm"
+          aria-label="展开"
+          onClick={onExpand}
+        >
+          <svg className="ico ico-16" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M13.5 4.5h6v6" />
+            <path d="M19.5 4.5 12 12" />
+            <path d="M17 14v4.5a1.5 1.5 0 0 1-1.5 1.5h-10A1.5 1.5 0 0 1 4 18.5v-10A1.5 1.5 0 0 1 5.5 7H10" />
+          </svg>
           展开
         </button>
       </ActionBar>

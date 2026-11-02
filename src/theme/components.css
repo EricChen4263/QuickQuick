@@ -1,424 +1,507 @@
 /*
- * 组件样式
- * 外壳类（qq- 前缀）保留：测试文件依赖这些类名做断言。
- * 通用组件类供里程碑2+复用，不包含三页专属类（clip/tx/set 系列）。
+ * 组件样式：应用外壳 + 共享控件
+ *
+ * 外壳类（qq- 前缀）与控件类名被测试文件直接断言，改名需同步改测试。
+ * 所有按钮 / 开关 / 徽章 / 空态都必须来自本文件，页面不得自造一套控件外观
+ * ——同一应用里出现两种按钮手感是最大的返工点。
  */
 
-/* 应用主容器：纵向两行 grid（auto 标题栏 + 1fr 主体），实色背景，Tauri 主窗不用毛玻璃 */
+/* ============================================================ 外壳 ==== */
+
+/* 应用主容器：纵向两行 grid（48px 顶部栏 + 1fr 主体） */
 .qq-main {
   display: grid;
   grid-template-rows: auto 1fr;
   height: 100vh;
   background: var(--bg);
   color: var(--fg);
-  font-family: var(--font);
+  font-family: var(--font-sans);
 }
 
-/* 主体区：横向两列 grid（112px 入口区 + 1fr 内容），min-height:0 防撑破外层 */
-.qq-shell-body {
-  display: grid;
-  grid-template-columns: 112px 1fr;
-  min-height: 0;
-}
-
-/* 自绘标题栏：macOS Overlay 模式下替代系统标题栏
-   左侧 padding-left 96px 为系统红绿灯留出空间并在其右侧留清晰间隙
-   （76px 时绿灯紧贴「QuickQuick」），整条可拖拽移窗 */
+/* 顶部栏：标题栏与一级导航合并成一条，取代旧的 112px 常驻侧栏。
+   左：macOS 红绿灯留白 + 品牌；中：一级导航；右：状态 / Windows 窗口按钮。
+   整条可拖动移窗。 */
 .qq-titlebar {
-  height: 44px;
-  display: flex;
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
   align-items: center;
-  padding: 0 18px 0 106px;
-  border-bottom: 1px solid color-mix(in oklch, var(--border) 58%, transparent);
+  gap: var(--sp-16);
+  height: 48px;
+  padding: 0 var(--sp-16) 0 106px;
   background: var(--bg);
-  font-size: 15px;
-  font-weight: 600;
-  color: var(--fg);
+  border-bottom: 1px solid color-mix(in oklch, var(--border) 60%, transparent);
   -webkit-user-select: none;
   user-select: none;
 }
 
-/* 品牌标题首个 Quick 用 accent 色区分 */
+/* 品牌区：占满左侧整格，承载拖动 hit-test。
+   刻意不用 flex——品牌名由「brand-accent 的 Quick」+ 文本节点「Quick」拼成，
+   flex 会把裸文本变成匿名 flex item 并插入 gap，渲染成「Quick Quick」。
+   品牌名只用一种字重（brand-accent 是既有品牌资产，仅首词上色）。 */
+.qq-titlebar-brand {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--fg);
+  letter-spacing: -0.012em;
+}
+
 .brand-accent {
   color: var(--accent);
 }
 
-/* 一级导航侧边栏 */
-.qq-sidebar {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding: 18px 12px 14px;
-  border-right: 0;
-  background: var(--bg);
-}
-
-/* 导航项：图标+文字横向排列，激活态只靠 soft pill，不再区分侧栏底色 */
-.qq-nav-item {
-  appearance: none;
-  border: 0;
-  background: transparent;
+/* 一级导航：横向文字导航 + 下划线指示。
+   刻意不用强调色底色药丸——那是被点名的泛化模式。 */
+.qq-topnav {
   display: flex;
   align-items: center;
-  justify-content: flex-start;
-  gap: 9px;
-  min-height: 38px;
-  padding: 8px 10px;
-  border-radius: var(--r);
+  gap: var(--sp-4);
+  justify-self: center;
+}
+
+.qq-nav-item {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-8);
+  padding: var(--sp-8) var(--sp-12);
+  border-radius: var(--r-8);
   color: var(--muted);
-  font-size: 13px;
-  font-weight: 500;
-  transition: background-color 120ms ease, color 120ms ease;
+  transition: var(--t-color);
 }
 
 .qq-nav-item svg {
-  width: 19px;
-  height: 19px;
+  width: var(--icon-16);
+  height: var(--icon-16);
 }
 
 .qq-nav-item:hover {
-  background: var(--hover);
   color: var(--fg);
+  background: var(--hover);
+}
+
+.qq-nav-item:active {
+  transform: translateY(1px);
 }
 
 .qq-nav-item[aria-current="page"] {
-  background: var(--accent-soft);
-  color: var(--accent);
+  color: var(--fg);
 }
 
-/* spacer：推后续内容到底部 */
-.spacer {
-  flex: 1;
+/* 当前项指示：2px 下划线，只动 opacity / transform */
+.qq-nav-item::after {
+  content: "";
+  position: absolute;
+  left: var(--sp-12);
+  right: var(--sp-12);
+  bottom: -1px;
+  height: 2px;
+  border-radius: var(--r-4);
+  background: var(--accent);
+  opacity: 0;
+  transform: scaleX(0.4);
+  transition: opacity var(--dur-color) var(--ease), transform var(--dur-move) var(--ease);
 }
 
-/* 主题切换三档按钮组 */
-.theme-seg {
+.qq-nav-item[aria-current="page"]::after {
+  opacity: 1;
+  transform: scaleX(1);
+}
+
+/* 顶部栏右端插槽：macOS 下留空保持导航居中，Windows 下承载窗口控制按钮 */
+.qq-titlebar-trail {
   display: flex;
-  gap: 4px;
-  padding: 0;
-  background: transparent;
-  border: 0;
-  border-radius: var(--r);
+  align-items: center;
+  justify-content: flex-end;
+  min-width: 0;
+  height: 100%;
 }
 
-.theme-seg button {
-  flex: none;
-  width: 27px;
-  height: 27px;
-  border: 0;
-  background: transparent;
-  border-radius: var(--r-sm);
+/* 主体区：单列，min-height:0 防撑破外层。滚动由各页面内部列负责。 */
+.qq-shell-body {
+  display: grid;
+  grid-template-columns: 1fr;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* ------------------------------------------- Windows 窗口控制按钮 ----
+   原生标题栏被后端关掉，前端自绘栏须自带最小化/最大化/关闭三按钮。 */
+
+.qq-titlebar--win {
+  padding-left: var(--sp-16);
+  padding-right: 0;
+  grid-template-columns: auto 1fr auto;
+}
+
+/* Windows 下品牌区不占满剩余空间，按钮贴右 */
+.qq-titlebar--win .qq-titlebar-brand {
+  justify-self: start;
+}
+
+/* 窗口控制按钮容器：贴右侧，不参与拖动（容器本身不带 drag-region） */
+.qq-titlebar-controls {
+  display: flex;
+  align-items: stretch;
+  height: 100%;
+  justify-self: end;
+}
+
+/* 单个窗口控制按钮：内联 SVG 字形，不再用 Segoe MDL2 图标字体 */
+.qq-titlebar-btn {
+  width: 46px;
+  height: 100%;
   display: grid;
   place-items: center;
-  padding: 0;
-  color: var(--muted);
-  transition: background-color 120ms ease, color 120ms ease;
+  color: color-mix(in oklch, var(--fg) 82%, transparent);
+  transition: var(--t-color);
 }
 
-.theme-seg button svg {
-  width: 14px;
-  height: 14px;
+.qq-titlebar-btn svg {
+  width: var(--icon-14);
+  height: var(--icon-14);
 }
 
-.theme-seg button:hover {
-  color: var(--fg);
-}
-
-.theme-seg button[aria-pressed="true"] {
-  background: var(--accent-soft);
-  color: var(--accent);
-}
-
-/* 图标按钮：小方块，带边框，用于工具栏操作 */
-.icon-btn {
-  appearance: none;
-  border: 1px solid color-mix(in oklch, var(--border) 78%, transparent);
-  background: var(--surface-2);
-  width: 34px;
-  height: 34px;
-  border-radius: var(--r-sm);
-  display: grid;
-  place-items: center;
-  color: var(--muted);
-  transition: background-color 120ms ease, color 120ms ease, border-color 120ms ease;
-}
-
-.icon-btn svg {
-  width: 16px;
-  height: 16px;
-}
-
-.icon-btn:hover {
-  color: var(--fg);
+.qq-titlebar-btn:hover {
   background: var(--hover);
-  border-color: color-mix(in oklch, var(--fg) 24%, var(--border));
+  color: var(--fg);
 }
 
-/* on 态：accent 高亮，表示功能已开启 */
-.icon-btn.on {
-  color: var(--accent);
-  border-color: color-mix(in oklch, var(--accent-line) 78%, transparent);
-  background: var(--accent-soft);
+/* 关闭按钮悬停用警示色，对齐 Windows 原生标题栏行为 */
+.qq-titlebar-btn--close:hover {
+  background: var(--danger);
+  color: var(--accent-fg);
 }
 
-/* danger 态：hover 时变红，用于破坏性操作确认 */
-.icon-btn.danger:hover {
-  color: var(--danger);
-  border-color: color-mix(in oklch, var(--danger) 50%, var(--border));
-}
+/* ======================================================== 共享控件 ==== */
 
-/* 通用按钮 */
+/* ------------------------------------------------ 按钮（纵向8·横向12）---- */
+
 .btn {
-  appearance: none;
-  border: 1px solid color-mix(in oklch, var(--border) 80%, transparent);
-  background: var(--surface-2);
-  border-radius: var(--r-sm);
-  padding: 8px 14px;
-  font-size: 13px;
-  font-weight: 500;
   display: inline-flex;
   align-items: center;
-  gap: 7px;
+  justify-content: center;
+  gap: var(--sp-8);
+  padding: var(--sp-8) var(--sp-12);
+  border-radius: var(--r-8);
+  background: var(--surface-2);
   color: var(--fg);
-  transition: background-color 120ms ease, border-color 120ms ease, transform 60ms ease;
+  border: 1px solid transparent;
+  white-space: nowrap;
+  transition: var(--t-color), var(--t-move);
+  -webkit-user-select: none;
+  user-select: none;
 }
 
 .btn svg {
-  width: 15px;
-  height: 15px;
+  width: var(--icon-16);
+  height: var(--icon-16);
 }
 
 .btn:hover:not(:disabled) {
-  background: var(--hover);
-  border-color: color-mix(in oklch, var(--fg) 22%, var(--border));
+  background: color-mix(in oklch, var(--fg) 9%, var(--surface-2));
 }
 
 .btn:active:not(:disabled) {
   transform: translateY(1px);
 }
 
-/* 禁用态：需与可点击态有明显视觉区分，让用户看出按钮不可点击（如翻译进行中）。
-   用 opacity 置灰天然跨深色/浅色主题；hover/active 一律 :not(:disabled)，
-   禁用按钮不应给出任何悬停反馈，避免误导用户它仍可点。 */
+/* 禁用态必须与可点击态有明显视觉区分，且不给任何悬停反馈 */
 .btn:disabled {
-  opacity: 0.5;
+  opacity: 0.45;
   cursor: not-allowed;
 }
 
-/* 主操作按钮：accent 填充色，白色文字 */
+/* 主操作：全页唯一填充色 */
 .btn-primary {
   background: var(--accent);
-  border-color: var(--accent);
-  color: white;
+  color: var(--accent-fg);
+  border-color: transparent;
 }
 
 .btn-primary:hover:not(:disabled) {
   background: color-mix(in oklch, var(--accent) 88%, black);
 }
 
-/* 幽灵按钮：无背景无边框，用于次要操作 */
+/* 次操作：无底色，靠 hover 浮出，减少页面上的填充块数量 */
 .btn-ghost {
-  border-color: transparent;
   background: transparent;
+  color: var(--muted);
+  border-color: transparent;
 }
 
 .btn-ghost:hover:not(:disabled) {
   background: var(--hover);
+  color: var(--fg);
 }
 
-/* toggle 开关：单个 button[role=switch] + ::after 伪元素实现圆点
-   [aria-checked="true"] 时变色+位移，无需 input 子元素 */
+/* 破坏性操作：静止态克制，hover 才显出危险色 */
+.btn-danger {
+  background: transparent;
+  color: var(--muted);
+  border-color: transparent;
+}
+
+.btn-danger:hover:not(:disabled) {
+  background: color-mix(in oklch, var(--danger) 12%, transparent);
+  color: var(--danger);
+}
+
+/* 小号按钮：只出现在工具行、列表内联操作 */
+.btn-sm {
+  padding: var(--sp-4) var(--sp-8);
+  border-radius: var(--r-6);
+}
+
+/* ---------------------------------------------------------- 图标按钮 ---- */
+
+.icon-btn {
+  width: 28px;
+  height: 28px;
+  border-radius: var(--r-6);
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+  background: transparent;
+  flex: none;
+  transition: var(--t-color), var(--t-move);
+}
+
+.icon-btn svg {
+  width: var(--icon-16);
+  height: var(--icon-16);
+}
+
+.icon-btn:hover:not(:disabled) {
+  color: var(--fg);
+  background: var(--hover);
+}
+
+.icon-btn:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+.icon-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* on 态：表示该功能已开启（如仅看收藏） */
+.icon-btn.on,
+.icon-btn[aria-pressed="true"] {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+/* danger 态：hover 才变红，用于破坏性操作 */
+.icon-btn.danger:hover:not(:disabled) {
+  color: var(--danger);
+  background: color-mix(in oklch, var(--danger) 12%, transparent);
+}
+
+/* -------------------------------------------------------------- 开关 ----
+   唯一允许 --r-full 的控件：物理意义上的滑块。 */
+
 .switch {
   appearance: none;
+  position: relative;
   width: 38px;
   height: 22px;
-  border-radius: 999px;
-  background: var(--fg-soft);
-  border: 1px solid color-mix(in oklch, var(--border) 76%, transparent);
-  position: relative;
-  transition: background-color 140ms ease, border-color 140ms ease;
+  border-radius: var(--r-full);
+  background: color-mix(in oklch, var(--fg) 16%, transparent);
   flex: none;
+  transition: var(--t-color);
 }
 
 .switch::after {
-  content: '';
+  content: "";
   position: absolute;
   top: 3px;
   left: 3px;
-  width: 14px;
-  height: 14px;
-  border-radius: 50%;
-  background: var(--muted);
-  transition: transform 140ms ease, background-color 140ms ease;
+  width: 16px;
+  height: 16px;
+  border-radius: var(--r-full);
+  background: var(--surface);
+  box-shadow: var(--shadow-knob);
+  transition: transform var(--dur-move) var(--ease);
 }
 
 .switch[aria-checked="true"] {
   background: var(--accent);
-  border-color: transparent;
 }
 
 .switch[aria-checked="true"]::after {
   transform: translateX(16px);
-  background: var(--surface);
 }
 
-/* 状态徽章（角标） */
+.switch:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* -------------------------------------------------------------- 徽章 ----
+   方形直角，不做胶囊。 */
+
 .badge {
   display: inline-flex;
   align-items: center;
-  border-radius: 999px;
-  padding: 1px 7px;
-  font-size: 11px;
-  font-weight: 500;
+  gap: var(--sp-4);
+  height: 18px;
+  padding: 0 var(--sp-4);
+  border-radius: var(--r-4);
   background: var(--surface-2);
-  border: 1px solid color-mix(in oklch, var(--border) 76%, transparent);
   color: var(--muted);
+  white-space: nowrap;
 }
 
-/* ok 态：绿色，表示正常/完成 */
 .badge.ok {
-  background: color-mix(in oklch, var(--ok) 12%, transparent);
-  border-color: color-mix(in oklch, var(--ok) 36%, transparent);
+  background: color-mix(in oklch, var(--ok) 14%, transparent);
   color: var(--ok);
 }
 
-/* need 态：警告黄，表示需要操作 */
 .badge.need {
-  background: color-mix(in oklch, var(--warn) 12%, transparent);
-  border-color: color-mix(in oklch, var(--warn) 36%, transparent);
+  background: color-mix(in oklch, var(--warn) 16%, transparent);
   color: var(--warn);
 }
 
-/* 计数药丸：等宽数字，用于列表头部显示条目数 */
+/* 计数：等宽数字，用于列表头部 */
 .count-pill {
-  font-family: var(--mono);
-  font-size: 11px;
-  color: var(--muted);
+  display: inline-flex;
+  align-items: center;
+  height: 18px;
+  padding: 0 var(--sp-4);
+  border-radius: var(--r-4);
   background: var(--surface-2);
-  border: 1px solid color-mix(in oklch, var(--border) 76%, transparent);
-  border-radius: 999px;
-  padding: 1px 8px;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
-/* 面板头部：标题行，用留白和弱边界分隔 */
+/* ---------------------------------------------------------- 面板头部 ---- */
+
 .pane-head {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 16px 18px 10px;
+  gap: var(--sp-12);
+  padding: var(--sp-16) var(--sp-16) var(--sp-8);
   border-bottom: 1px solid color-mix(in oklch, var(--border) 46%, transparent);
 }
 
-/* 面板标题文字：稍大稍粗，字间距收紧 */
 .pane-title {
-  font-size: 15px;
-  font-weight: 600;
+  font-size: var(--text-base);
+  line-height: var(--lh-base);
+  font-weight: var(--fw-semibold);
+  letter-spacing: -0.01em;
 }
 
-/* 空态展示：居中 grid，图标+标题+说明，供剪贴板/翻译历史等多处复用 */
+/* -------------------------------------------------------------- 空态 ----
+   有内容的「下一步」引导视图，不是空白面板。 */
+
 .empty {
   display: grid;
   place-content: center;
   justify-items: center;
   text-align: center;
-  gap: 10px;
+  gap: var(--sp-12);
+  padding: var(--sp-40);
   color: var(--muted);
-  padding: 40px;
 }
 
-/* 空态图标容器：带圆角边框的小方块 */
 .empty .mark {
-  width: 46px;
-  height: 46px;
-  border-radius: 12px;
-  border: 1px solid color-mix(in oklch, var(--border) 76%, transparent);
+  width: 48px;
+  height: 48px;
+  border-radius: var(--r-12);
+  background: var(--surface-2);
   display: grid;
   place-items: center;
   color: var(--muted);
-  background: var(--surface-2);
 }
 
 .empty .mark svg {
-  width: 22px;
-  height: 22px;
+  width: var(--icon-20);
+  height: var(--icon-20);
 }
 
 .empty h3 {
   margin: 0;
-  font-size: 15px;
+  font-size: var(--text-base);
+  line-height: var(--lh-base);
+  font-weight: var(--fw-medium);
   color: var(--fg);
 }
 
 .empty p {
   margin: 0;
-  font-size: 13px;
-  max-width: 34ch;
-  line-height: 1.5;
+  font-size: var(--text-sm);
+  line-height: var(--lh-sm);
+  max-width: 24em;
+  text-wrap: pretty;
 }
 
-/* 视觉隐藏但可被辅助技术读取，用于 radio 等需要 aria-label 但无需视觉展示的控件 */
-.sr-only {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  padding: 0;
-  margin: -1px;
-  overflow: hidden;
-  clip: rect(0, 0, 0, 0);
-  white-space: nowrap;
-  border: 0;
-}
+/* -------------------------------------------------- 主题三档分段控件 ----
+   纯文字三档，不用太阳 / 月亮图标——那是被点名的 AI 默认套路。 */
 
-/*
- * .set-h/.set-sub/.set-group/.set-row 已迁移至 panels/settings/settings.css，
- * 因这些类仅设置页使用，不属于通用组件层。
- */
-
-/* Windows：原生标题栏被后端关掉，前端自绘栏须自带窗口控制按钮。
-   左 padding 收回（106px 是给 macOS 红绿灯留的，Windows 无），
-   品牌文字与按钮区分列两端。不改上方 .qq-titlebar 已校准的 macOS 数值。 */
-.qq-titlebar--win {
-  padding-left: 14px;
-  padding-right: 0;
-  justify-content: space-between;
-}
-
-/* 品牌区占满除按钮外的剩余空间：承载拖动 hit-test，把窗口控制按钮挤到最右侧，
-   避免按钮覆盖品牌文字、并让整条标题栏（按钮以外）均可拖动移窗。 */
-.qq-titlebar-brand {
-  flex: 1;
-  min-width: 0;
-}
-
-/* 窗口控制按钮容器：贴右侧，不参与拖动（容器本身不带 drag-region）。 */
-.qq-titlebar-controls {
-  display: flex;
-  align-items: stretch;
-  height: 100%;
-}
-
-/* 单个窗口控制按钮：Segoe MDL2 图标字体渲染最小化/最大化/关闭字形。 */
-.qq-titlebar-btn {
-  width: 46px;
-  height: 100%;
-  display: flex;
+.theme-seg {
+  display: inline-flex;
   align-items: center;
-  justify-content: center;
-  border: none;
-  background: transparent;
+  gap: var(--sp-2);
+  padding: var(--sp-2);
+  border-radius: var(--r-8);
+  background: var(--surface-2);
+}
+
+.theme-seg button {
+  padding: var(--sp-4) var(--sp-8);
+  border-radius: var(--r-6);
+  color: var(--muted);
+  white-space: nowrap;
+  transition: var(--t-color);
+}
+
+.theme-seg button:hover {
   color: var(--fg);
-  font-family: "Segoe MDL2 Assets", "Segoe Fluent Icons", sans-serif;
-  font-size: 10px;
-  line-height: 1;
-  cursor: pointer;
 }
 
-.qq-titlebar-btn:hover {
-  background: color-mix(in oklch, var(--fg) 10%, transparent);
+.theme-seg button:active {
+  transform: translateY(1px);
 }
 
-/* 关闭按钮悬停用警示红，对齐 Windows 原生标题栏行为。 */
-.qq-titlebar-btn--close:hover {
-  background: #c42b1c;
-  color: #fff;
+.theme-seg button[aria-pressed="true"] {
+  background: var(--surface);
+  color: var(--fg);
+  box-shadow: inset 0 0 0 1px color-mix(in oklch, var(--border) 82%, transparent);
+}
+
+/* ------------------------------------------------------------ 提示条 ---- */
+
+.qq-note {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-12);
+  padding: var(--sp-12);
+  border-radius: var(--r-8);
+  background: var(--surface-2);
+  color: var(--muted);
+}
+
+.qq-note--danger {
+  background: color-mix(in oklch, var(--danger) 10%, transparent);
+  color: var(--danger);
+}
+
+/* -------------------------------------------------------------- 骨架 ----
+   形状照抄真实布局，不用转圈。 */
+
+.skeleton {
+  background: color-mix(in oklch, var(--fg) 8%, transparent);
+  border-radius: var(--r-4);
+  animation: qq-breathe 1.8s var(--ease) infinite;
+}
+
+@keyframes qq-breathe {
+  0%, 100% { opacity: 0.45; }
+  50%      { opacity: 0.85; }
 }

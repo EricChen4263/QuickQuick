@@ -1,60 +1,216 @@
 /*
- * 设计语言 token（OKLch，短名）
- * 浅色在 :root，深色在 [data-theme="dark"]。
- * auto 模式由 themeStore.ts 写 data-theme，不用 @media prefers-color-scheme 驱动主题切换。
+ * 设计系统 token —— 唯一真源
+ *
+ * 规范来源：github.com/elayadesign/ai-design-skills
+ *   · redesign-existing-projects（审计项 → 替换值）
+ *   · landing-page-design（Part B 视觉系统）
+ *
+ * 铁律：任何模块不得发明本文件之外的字号 / 行高 / 间距 / 圆角 / 缓动 / 色值。
+ * 缺值先加 token，再使用。完整规则与豁免清单见 docs/design/DESIGN-SYSTEM.md。
+ *
+ * 兼容说明：`--r*` / `--font` / `--mono` / `--fg-soft` / `--glass*` 是历史短名，
+ * 保留成新阶梯的别名，避免旧引用一次性全断。新代码请直接用新 token。
  */
+
+/* ---------------------------------------------------------------- 字体 ----
+   skill：Geist / Manrope / Geist Mono / Poppins；禁用 Inter / Roboto / Arial /
+   Open Sans / Helvetica；全站一种主字体，无斜体，字重上限 700。
+   Geist 无 CJK 字形，故按 unicode-range 只接管拉丁与通用标点，中文回落苹方。 */
+
+@font-face {
+  font-family: "Geist";
+  src: url("../assets/fonts/geist-latin-wght-normal.woff2") format("woff2-variations");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA,
+    U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+2074, U+20AC, U+2122, U+2191,
+    U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+@font-face {
+  font-family: "Geist Mono";
+  src: url("../assets/fonts/geist-mono-latin-wght-normal.woff2") format("woff2-variations");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+  unicode-range: U+0000-00FF, U+2000-206F, U+2190-21FF, U+2200-22FF, U+FFFD;
+}
+
 :root {
-  /* 让原生滚动条/表单控件跟随主题。WebView 不看 data-theme，缺这行时一律按浅色渲染：
-     macOS 上「系统设置→外观→显示滚动条=始终」（或插了鼠标）时会常驻浅色滚动条，
-     压在暗色 UI 上就是刺眼白条；暗色主题须显式声明 dark 才匹配。 */
+  --font-sans: "Geist", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei",
+    system-ui, sans-serif;
+  --font-mono: "Geist Mono", "SF Mono", ui-monospace, "PingFang SC", monospace;
+
+  /* 历史别名 */
+  --font: var(--font-sans);
+  --mono: var(--font-mono);
+}
+
+/* ------------------------------------------------------------ 字号阶梯 ----
+   只允许 12 / 14 / 16 / 18 / 20 / 24 / 30。非阶梯值一律向下吸附并沿用该档行高。 */
+
+:root {
+  --text-xs: 12px;
+  --text-sm: 14px;
+  --text-base: 16px;
+  --text-lg: 18px;
+  --text-xl: 20px;
+  --text-2xl: 24px;
+  --text-3xl: 30px;
+
+  --lh-xs: 16px;
+  --lh-sm: 20px;
+  --lh-base: 24px;
+  --lh-lg: 28px;
+  --lh-xl: 28px;
+  --lh-2xl: 32px;
+  --lh-3xl: 36px;
+
+  --fw-regular: 400;
+  --fw-medium: 500;
+  --fw-semibold: 600;
+  /* skill 的字重上限就是 bold；只给「搜索命中加粗」这类必须与正文区分开的用途 */
+  --fw-bold: 700;
+}
+
+/* ------------------------------------------------------------ 间距阶梯 ---- */
+
+:root {
+  --sp-0: 0;
+  --sp-2: 2px;
+  --sp-4: 4px;
+  --sp-8: 8px;
+  --sp-12: 12px;
+  --sp-16: 16px;
+  --sp-24: 24px;
+  --sp-32: 32px;
+  --sp-40: 40px;
+  --sp-48: 48px;
+  --sp-64: 64px;
+  --sp-80: 80px;
+  --sp-96: 96px;
+}
+
+/* ------------------------------------------------------------ 圆角阶梯 ----
+   嵌套公式：子形状与父形状间距 < 32px 时 inner = outer − gap，结果 ≤ 2 则不动。 */
+
+:root {
+  --r-4: 4px;
+  --r-6: 6px;
+  --r-8: 8px;
+  --r-12: 12px;
+  --r-16: 16px;
+  /* --r-full 只给开关滑块。
+     真圆形元素不另开 token：小圆点用 --r-4、16px 单选圆用 --r-8，
+     圆角大于元素半径时浏览器会自行钳成圆，渲染结果一致，也少一条可绕过的规则。 */
+  --r-full: 999px;
+
+  /* 历史别名 */
+  --r: var(--r-8);
+  --r-sm: var(--r-6);
+  --r-lg: var(--r-12);
+}
+
+/* -------------------------------------------------------------- 色板 ----
+   浅色：冷中性灰单一家族，一个强调色。
+   深色：只用 #181818 / #1F1F1F / #272727 / #313131。
+   强调色只用于主按钮、选中指示、焦点环、当前导航。 */
+
+:root {
   color-scheme: light;
 
-  --bg:      oklch(96.5% 0.004 250);
-  --surface: oklch(99% 0.002 250);
-  --fg:      oklch(24% 0.015 250);
-  --muted:   oklch(50% 0.012 250);
-  --border:  oklch(89% 0.006 250);
-  --accent:  oklch(54% 0.092 242);
+  --bg: #f4f5f6;
+  --surface: #ffffff;
+  --surface-2: #eceef0;
+  --fg: #16181a;
+  --muted: #62686d;
+  --border: #e1e4e8;
 
-  --accent-soft: color-mix(in oklch, var(--accent) 12%, transparent);
-  --accent-line: color-mix(in oklch, var(--accent) 36%, transparent);
-  --surface-2:   color-mix(in oklch, var(--fg) 4%, var(--surface));
-  --hover:       color-mix(in oklch, var(--fg) 5%, transparent);
-  --fg-soft:     color-mix(in oklch, var(--fg) 6%, transparent);
-  --ok:    oklch(58% 0.12 150);
-  --warn:  oklch(70% 0.13 75);
-  --danger: oklch(58% 0.16 25);
+  --accent: #2f6e8f;
+  --accent-fg: #ffffff;
 
-  --font: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'PingFang SC', 'Segoe UI', '微软雅黑', system-ui, sans-serif;
-  --mono: ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, monospace;
+  --accent-soft: color-mix(in oklch, var(--accent) 11%, transparent);
+  --accent-line: color-mix(in oklch, var(--accent) 38%, transparent);
 
-  --r:    10px;
-  --r-sm: 7px;
-  --r-lg: 14px;
-  --shadow-pop: 0 12px 40px -8px color-mix(in oklch, black 30%, transparent);
+  --hover: color-mix(in oklch, var(--fg) 5%, transparent);
+  --inset: color-mix(in oklch, var(--fg) 4%, transparent);
+  /* 历史别名 */
+  --fg-soft: var(--inset);
 
-  /* 毛玻璃 token（弹窗/popover 用，主窗不用） */
-  --glass:        rgba(255, 255, 255, 0.72);
-  --glass-border: color-mix(in oklch, white 16%, oklch(91% 0.005 250));
+  --ok: #2f6a48;
+  --warn: #7d5314;
+  --danger: #b23b30;
+
+  /* 阴影向背景色相偏移，不用纯黑平铺 */
+  --shadow-pop: 0 16px 40px -8px rgb(22 24 26 / 0.18),
+    0 2px 8px -2px rgb(22 24 26 / 0.08);
+  --shadow-panel: 0 1px 2px rgb(22 24 26 / 0.04);
+  --shadow-knob: 0 1px 2px rgb(22 24 26 / 0.22);
+
+  /* 毛玻璃（仅浮窗） */
+  --glass: rgb(255 255 255 / 0.76);
+  --glass-border: rgb(22 24 26 / 0.09);
+
+  /* 细颗粒：解决「纯平表面没质感」，不用渐变糊过去 */
+  --grain-opacity: 0.028;
 }
 
 [data-theme="dark"] {
   color-scheme: dark;
 
-  --bg:      oklch(17.5% 0.006 250);
-  --surface: oklch(21.5% 0.008 250);
-  --fg:      oklch(95% 0.004 250);
-  --muted:   oklch(67% 0.01 250);
-  --border:  oklch(28% 0.008 250);
-  --accent:  oklch(67% 0.10 242);
+  --bg: #181818;
+  --surface: #1f1f1f;
+  --surface-2: #272727;
+  --fg: #f2f2f2;
+  --muted: #9b9b9b;
+  --border: #313131;
 
-  --accent-soft: color-mix(in oklch, var(--accent) 16%, transparent);
-  --accent-line: color-mix(in oklch, var(--accent) 34%, transparent);
-  --surface-2:   color-mix(in oklch, white 5%, var(--surface));
-  --hover:       color-mix(in oklch, white 6%, transparent);
-  --fg-soft:     color-mix(in oklch, white 6%, transparent);
-  --shadow-pop:  0 16px 48px -8px color-mix(in oklch, black 60%, transparent);
+  --accent: #7fb4ce;
+  --accent-fg: #10181c;
 
-  --glass:        rgba(30, 32, 35, 0.78);
-  --glass-border: color-mix(in oklch, white 16%, oklch(30% 0.012 250));
+  --accent-soft: color-mix(in oklch, var(--accent) 15%, transparent);
+  --accent-line: color-mix(in oklch, var(--accent) 42%, transparent);
+
+  --hover: color-mix(in oklch, white 6%, transparent);
+  --inset: color-mix(in oklch, white 5%, transparent);
+
+  --ok: #7bc49a;
+  --warn: #d6a85c;
+  --danger: #e0736a;
+
+  --shadow-pop: 0 20px 48px -8px rgb(0 0 0 / 0.62),
+    0 2px 8px -2px rgb(0 0 0 / 0.4);
+  --shadow-panel: 0 1px 2px rgb(0 0 0 / 0.3);
+  --shadow-knob: 0 1px 2px rgb(0 0 0 / 0.45);
+
+  --glass: rgb(31 31 31 / 0.8);
+  --glass-border: rgb(255 255 255 / 0.1);
+
+  --grain-opacity: 0.035;
+}
+
+/* -------------------------------------------------------------- 动效 ----
+   禁止 ease / linear / ease-in-out。位移 500ms，颜色 300ms，不低于 200ms。
+   只动 transform / opacity。 */
+
+:root {
+  --ease: cubic-bezier(0.22, 1, 0.36, 1);
+  --dur-move: 500ms;
+  --dur-color: 300ms;
+
+  --t-color: color var(--dur-color) var(--ease),
+    background-color var(--dur-color) var(--ease),
+    border-color var(--dur-color) var(--ease),
+    box-shadow var(--dur-color) var(--ease);
+  --t-move: transform var(--dur-move) var(--ease);
+}
+
+/* ------------------------------------------------ 图标（Phosphor 语汇）---- */
+
+:root {
+  --icon-14: 14px;
+  --icon-16: 16px;
+  --icon-18: 18px;
+  --icon-20: 20px;
 }

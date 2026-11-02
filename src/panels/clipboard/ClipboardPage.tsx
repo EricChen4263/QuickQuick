@@ -97,13 +97,66 @@ function toHistoryItem(clip: ClipItem): HistoryItem {
   };
 }
 
-/** 空列表图标 SVG */
+/** 空列表图标 SVG（24 网格 / 1.5 描边 / 圆头圆角） */
 const EmptyListIcon = (
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-    <rect x="8" y="2" width="8" height="4" rx="1" />
-    <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2" />
+  <svg className="ico ico-20" viewBox="0 0 24 24" aria-hidden="true">
+    <path d="M9 4H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2h-2" />
+    <rect x="9" y="2.5" width="6" height="3.5" rx="1" />
   </svg>
 );
+
+/**
+ * 时间分组口径。
+ *
+ * 只分「今天 / 昨天 / 更早」三档：列表已按最近复制排序，再细的日期分组会让分组标题
+ * 比条目还密。中文不做 uppercase，也不加字距——那是拉丁标题的排版手法。
+ */
+type TimeBucket = "today" | "yesterday" | "earlier";
+
+const BUCKET_LABEL: Record<TimeBucket, string> = {
+  today: "今天",
+  yesterday: "昨天",
+  earlier: "更早",
+};
+
+/** 取本地日历日口径的分组桶 */
+function timeBucketOf(utcMs: number, now: number): TimeBucket {
+  const today = new Date(now);
+  const startOfToday = new Date(
+    today.getFullYear(),
+    today.getMonth(),
+    today.getDate(),
+  ).getTime();
+  if (utcMs >= startOfToday) return "today";
+  if (utcMs >= startOfToday - 24 * 60 * 60 * 1000) return "yesterday";
+  return "earlier";
+}
+
+/** 一行（条目 + 它在过滤结果里的全局索引，索引用于高亮判定） */
+interface VisibleRow {
+  item: ClipItem;
+  index: number;
+}
+
+/** 连续同桶的行合并成一个分组；条目顺序本身由后端排序给定，不再重排 */
+interface ClipRowGroup {
+  bucket: TimeBucket;
+  rows: VisibleRow[];
+}
+
+function buildRowGroups(rows: VisibleRow[], now: number): ClipRowGroup[] {
+  const groups: ClipRowGroup[] = [];
+  for (const row of rows) {
+    const bucket = timeBucketOf(row.item.lastModifiedUtc, now);
+    const last = groups[groups.length - 1];
+    if (last !== undefined && last.bucket === bucket) {
+      last.rows.push(row);
+      continue;
+    }
+    groups.push({ bucket, rows: [row] });
+  }
+  return groups;
+}
 
 interface ClipboardPageProps {
   onTranslateItem?: (content: string) => void;
@@ -116,6 +169,13 @@ function ClipboardPage({ onTranslateItem }: ClipboardPageProps) {
   // 命中高亮样式：主窗列表与弹窗共用同一设置，读取失败时用默认档（背景 + 加粗）
   const appearance = useAppearancePreferences(appearanceReload);
   const [items, setItems] = useState<ClipItem[]>([]);
+  /**
+   * 首屏取数是否还没落地。
+   *
+   * 只用于「首次加载」：后续刷新（clipboard-changed / 收藏 / 删除）沿用已有数据，
+   * 不再切回骨架屏——那会让列表闪一下并丢掉用户当前的滚动位置。
+   */
+  const [initialLoading, setInitialLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [opError, setOpError] = useState<string | null>(null);
   /**
@@ -167,6 +227,8 @@ function ClipboardPage({ onTranslateItem }: ClipboardPageProps) {
       } catch {
         if (cancelled.current) return;
         setLoadError("加载失败，请稍后重试");
+      } finally {
+        if (!cancelled.current) setInitialLoading(false);
       }
     },
     [],
@@ -528,97 +590,231 @@ function ClipboardPage({ onTranslateItem }: ClipboardPageProps) {
     }
   }
 
-  if (loadError !== null) {
-    return <div role="alert">{loadError}</div>;
-  }
+  // 首屏骨架屏：只覆盖「第一次取数」这段未知期
+  const showSkeleton = initialLoading;
 
-  return (
-    <div className="clip-page" data-hit-style={appearance.highlightStyle}>
-      {[launchOnLoginError, opError].filter((message): message is string => message !== null).length > 0 && (
-        <div
-          role="alert"
-          style={{ gridColumn: "1 / -1", display: "flex", flexDirection: "column", gap: 4, padding: "8px 12px", color: "var(--danger)", background: "var(--surface)" }}
-        >
-          {/* 两个来源各占一行，互不覆盖：自启写失败不该把删除/粘贴的失败原因挤掉，反之亦然 */}
-          {launchOnLoginError !== null && <span data-error-source="launch-on-login">{launchOnLoginError}</span>}
-          {opError !== null && <span data-error-source="page-operation">{opError}</span>}
-        </div>
-      )}
-      {pasteMsg !== null && (
-        <div
-          role="status"
-          style={{ gridColumn: "1 / -1", display: "flex", alignItems: "center", gap: 12, padding: "8px 12px", fontSize: 12, color: "var(--muted)", background: "var(--surface)" }}
-        >
-          <span>{pasteMsg}</span>
+  // 可见行：先按渲染窗口切片，再反查完整条目（窗口只治理 DOM 行数，不裁剪可达范围）
+  const visibleRows = useMemo(() => {
+    const rows: VisibleRow[] = [];
+    for (let idx = 0; idx < visibleCount; idx += 1) {
+      const histItem = filteredItems[idx];
+      const clipItem = clipById.get(histItem.id);
+      if (clipItem !== undefined) rows.push({ item: clipItem, index: idx });
+    }
+    return rows;
+  }, [filteredItems, clipById, visibleCount]);
+
+  // 分组按本地日历日算：一次渲染取一次 now，避免同一屏里跨过零点导致分组自相矛盾
+  const rowGroups = useMemo(
+    () => buildRowGroups(visibleRows, Date.now()),
+    [visibleRows],
+  );
+
+  // 整页状态：加载 / 空库 / 筛选后为空 / 默认。空库和「筛选后为空」文案必须分开，
+  // 否则用户搜不到东西时会被提示「去复制点什么」，等于答非所问。
+  const pageState = showSkeleton
+    ? "loading"
+    : filteredItems.length > 0
+      ? "default"
+      : items.length === 0
+        ? "empty"
+        : "filtered-empty";
+
+  if (loadError !== null) {
+    return (
+      <div className="clip-page clip-page--error">
+        <div className="qq-note qq-note--danger clip-banner clip-banner--errors" role="alert">
+          <span className="body-6">{loadError}</span>
           <button
+            className="btn btn-sm button-sm"
             type="button"
-            onClick={() => { void handleOpenSystemSettings(); }}
-            style={{ flexShrink: 0, padding: "4px 10px", fontSize: 12, color: "var(--fg)", background: "var(--surface-2)", border: "1px solid var(--border)", borderRadius: 6, cursor: "pointer" }}
+            onClick={() => { void loadItems(cancelledRef); }}
           >
-            打开辅助功能设置
+            重新读取
           </button>
         </div>
-      )}
-      <div className="clip-list-col">
-        <ClipSearchBar
-          searchQuery={searchQuery}
-          typeFilter={typeFilter}
-          notice={queryPlan.notice}
-          onSearchChange={(q) => { setSearchQuery(q); setHighlightIndex(0); }}
-          onTypeFilterChange={(f) => { setTypeFilter(f); setHighlightIndex(0); }}
-          onKeyDown={handleKeyDown}
-        />
-        {!guideFinished && isGuideVisible(guide) && (
-          <OnboardCard
-            state={guide}
-            launchOnLogin={launchOnLogin}
-            hotkeyLabel={hotkeyLabel}
-            onAdvance={handleGuideAdvance}
-            onSkip={handleGuideSkip}
-            onDismiss={handleGuideDismiss}
-            onOpenSystemSettings={() => { void handleOpenSystemSettings(); }}
-            onLaunchOnLoginChange={handleLaunchOnLoginChange}
-          />
-        )}
-        <div
-          ref={listRef}
-          className="clip-list"
-          role="listbox"
-          aria-label="剪贴板历史"
-          onScroll={handleListScroll}
-        >
-          {filteredItems.length === 0 ? (
-            <EmptyState
-              icon={EmptyListIcon}
-              title="暂无记录"
-              description="复制任意内容后将显示在这里"
-            />
-          ) : (
-            filteredItems.slice(0, visibleCount).map((histItem, idx) => {
-              const clipItem = clipById.get(histItem.id);
-              if (!clipItem) return null;
-              return (
-                <ClipItemRow
-                  key={histItem.id}
-                  item={clipItem}
-                  isHighlighted={idx === safeHighlight}
-                  hitRanges={hitRangesById.get(histItem.id)}
-                  onToggleFavorite={handleToggleFavorite}
-                  onSelect={() => { setHighlightIndex(idx); }}
-                />
-              );
-            })
-          )}
-        </div>
       </div>
-      <ClipPreview
-        item={highlightedClipItem}
-        onToggleFavorite={handleToggleFavorite}
-        onDelete={handleDelete}
-        onCopy={(_item) => { /* 复制逻辑在 ClipPreview 内部调用 copyClipToClipboard(id) 完成，带富文本保真 */ }}
-        onPasteToFront={(item) => { void handlePasteToFront(item); }}
-        onTranslate={(item) => { onTranslateItem?.(item.content); }}
-      />
+    );
+  }
+
+  const hasErrors = launchOnLoginError !== null || opError !== null;
+
+  return (
+    <div
+      className="clip-page"
+      data-hit-style={appearance.highlightStyle}
+      data-state={pageState}
+    >
+      <h2 className="sr-only">剪贴板历史</h2>
+
+      {/* 横幅区置顶整行：错误与降级提示都不挤占下面的两栏 */}
+      <div className="clip-banners">
+        {hasErrors && (
+          <div
+            role="alert"
+            className="qq-note qq-note--danger clip-banner clip-banner--errors"
+          >
+            {/* 两个来源各占一行，互不覆盖：自启写失败不该把删除/粘贴的失败原因挤掉，反之亦然 */}
+            {launchOnLoginError !== null && (
+              <span className="body-6" data-error-source="launch-on-login">
+                {launchOnLoginError}
+              </span>
+            )}
+            {opError !== null && (
+              <span className="body-6" data-error-source="page-operation">
+                {opError}
+              </span>
+            )}
+          </div>
+        )}
+        {pasteMsg !== null && (
+          <div role="status" className="qq-note clip-banner clip-banner--status">
+            <span className="body-6">{pasteMsg}</span>
+            <button
+              className="btn btn-sm button-sm"
+              type="button"
+              onClick={() => { void handleOpenSystemSettings(); }}
+            >
+              打开辅助功能设置
+            </button>
+          </div>
+        )}
+      </div>
+
+      <div className="clip-columns">
+        <div className="clip-list-col">
+          <ClipSearchBar
+            searchQuery={searchQuery}
+            typeFilter={typeFilter}
+            notice={queryPlan.notice}
+            visibleCount={showSkeleton ? undefined : filteredItems.length}
+            totalCount={showSkeleton ? undefined : items.length}
+            onSearchChange={(q) => { setSearchQuery(q); setHighlightIndex(0); }}
+            onTypeFilterChange={(f) => { setTypeFilter(f); setHighlightIndex(0); }}
+            onKeyDown={handleKeyDown}
+          />
+          {!guideFinished && isGuideVisible(guide) && (
+            <OnboardCard
+              state={guide}
+              launchOnLogin={launchOnLogin}
+              hotkeyLabel={hotkeyLabel}
+              onAdvance={handleGuideAdvance}
+              onSkip={handleGuideSkip}
+              onDismiss={handleGuideDismiss}
+              onOpenSystemSettings={() => { void handleOpenSystemSettings(); }}
+              onLaunchOnLoginChange={handleLaunchOnLoginChange}
+            />
+          )}
+          {/* 加载播报交给 sr-only 文本：不额外加 role="status"，避免与搜索降级提示抢同一个 live region */}
+          {showSkeleton && <p className="sr-only">正在加载剪贴板历史</p>}
+          <div
+            ref={listRef}
+            className="clip-list"
+            role="listbox"
+            aria-label="剪贴板历史"
+            aria-busy={showSkeleton || undefined}
+            onScroll={handleListScroll}
+          >
+            {showSkeleton ? (
+              <ListSkeleton />
+            ) : filteredItems.length === 0 ? (
+              items.length === 0 ? (
+                <EmptyState
+                  icon={EmptyListIcon}
+                  title="暂无记录"
+                  description="复制任意内容后将显示在这里"
+                  action={(
+                    <button
+                      className="btn btn-ghost btn-sm button-sm"
+                      type="button"
+                      onClick={() => { void loadItems(cancelledRef); }}
+                    >
+                      重新读取
+                    </button>
+                  )}
+                />
+              ) : (
+                <EmptyState
+                  icon={EmptyListIcon}
+                  title="没有匹配的记录"
+                  description="换个关键词或放宽类型筛选，再看看。"
+                  action={(
+                    <button
+                      className="btn btn-ghost btn-sm button-sm"
+                      type="button"
+                      onClick={() => {
+                        setSearchQuery("");
+                        setTypeFilter("all");
+                        setHighlightIndex(0);
+                      }}
+                    >
+                      清除筛选
+                    </button>
+                  )}
+                />
+              )
+            ) : (
+              rowGroups.map((group) => (
+                // role="group" 包一层：listbox 的直接子项只能是 option / group，
+                // 分组标题因此挂在 group 的 aria-label 上，视觉标题本身对读屏隐藏
+                <div
+                  key={`${group.bucket}-${group.rows[0].index}`}
+                  className="clip-group"
+                  role="group"
+                  aria-label={BUCKET_LABEL[group.bucket]}
+                >
+                  <div className="clip-group-label caption-3" aria-hidden="true">
+                    {BUCKET_LABEL[group.bucket]}
+                  </div>
+                  {group.rows.map((row) => (
+                    <ClipItemRow
+                      key={row.item.id}
+                      item={row.item}
+                      isHighlighted={row.index === safeHighlight}
+                      hitRanges={hitRangesById.get(row.item.id)}
+                      onToggleFavorite={handleToggleFavorite}
+                      onSelect={() => { setHighlightIndex(row.index); }}
+                    />
+                  ))}
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+        <ClipPreview
+          item={highlightedClipItem}
+          isLoading={showSkeleton}
+          hasAnyClip={items.length > 0}
+          onToggleFavorite={handleToggleFavorite}
+          onDelete={handleDelete}
+          onCopy={(_item) => { /* 复制逻辑在 ClipPreview 内部调用 copyClipToClipboard(id) 完成，带富文本保真 */ }}
+          onPasteToFront={(item) => { void handlePasteToFront(item); }}
+          onTranslate={(item) => { onTranslateItem?.(item.content); }}
+        />
+      </div>
+    </div>
+  );
+}
+
+/**
+ * 列表骨架屏：形状照抄真实行（分组标题条 + 图标位 + 两行文字），
+ * 只用 opacity 呼吸，不转圈；对读屏隐藏，播报由外层 sr-only 文本负责。
+ */
+function ListSkeleton() {
+  return (
+    <div className="clip-skeleton" aria-hidden="true">
+      <div className="clip-skel-group">
+        <span className="skeleton clip-skel-group-bar" />
+      </div>
+      {[0, 1, 2, 3, 4].map((index) => (
+        <div className="clip-skel-row" key={index}>
+          <span className="skeleton clip-skel-ico" />
+          <div className="clip-skel-lines">
+            <span className="skeleton clip-skel-l1" />
+            <span className="skeleton clip-skel-l2" />
+          </div>
+        </div>
+      ))}
     </div>
   );
 }

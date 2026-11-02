@@ -38,7 +38,7 @@ async function runCheckForUpdates(): Promise<UpdateCheckFeedback> {
     return {
       outcome: null,
       msg: null,
-      error: "检查更新失败，可能更新服务尚未配置",
+      error: "检查更新失败：没连上更新服务。确认网络可用后重试，离线不影响现有功能。",
     };
   }
 }
@@ -48,15 +48,10 @@ function InstallFeedback({ doneMsg, error }: { doneMsg: string | null; error: st
   return (
     <>
       {doneMsg !== null && (
-        <div style={{ marginTop: 6, fontSize: 12, color: "var(--muted)" }}>
-          {doneMsg}
-        </div>
+        <div className="caption-5 set-feedback">{doneMsg}</div>
       )}
       {error !== null && (
-        <div
-          role="alert"
-          style={{ color: "var(--danger)", marginTop: 6, fontSize: 12 }}
-        >
+        <div role="alert" className="caption-5 set-feedback set-feedback--danger">
           {error}
         </div>
       )}
@@ -78,22 +73,19 @@ function UpdateInstallAction({ version }: { version: string }) {
       await downloadAndInstallUpdate();
       setDoneMsg("已下载，待重启生效");
     } catch {
-      setError("下载安装失败，请稍后重试");
+      setError("下载安装失败。确认网络可用后重试；反复失败可到发布页手动下载新版本。");
     } finally {
       setIsInstalling(false);
     }
   }
 
   return (
-    <div style={{ marginTop: 8 }}>
-      <div style={{ fontSize: 12, color: "var(--muted)" }}>
-        发现新版本 {version}
-      </div>
+    <div className="set-update">
+      <div className="caption-5 set-feedback">发现新版本 {version}</div>
       <button
-        className="btn"
+        className="btn button-sm"
         type="button"
         disabled={isInstalling}
-        style={{ marginTop: 6 }}
         onClick={() => {
           void handleInstall();
         }}
@@ -175,19 +167,21 @@ function GeneralPanel() {
         />
         <div className="set-row" title="一次性操作，无默认值。手动检查一次新版本，不影响「自动检查更新」开关。">
           <div className="grow">
-            <div className="label">立即检查更新</div>
-            <div className="desc">手动检查新版本</div>
+            <div className="label title-4">立即检查更新</div>
+            <div className="desc caption-5">手动检查新版本</div>
           </div>
-          <button
-            className="btn"
-            type="button"
-            disabled={isChecking}
-            onClick={() => {
-              void handleCheckUpdate();
-            }}
-          >
-            {isChecking ? "检查中…" : "检查"}
-          </button>
+          <div className="set-ctl">
+            <button
+              className="btn button-sm"
+              type="button"
+              disabled={isChecking}
+              onClick={() => {
+                void handleCheckUpdate();
+              }}
+            >
+              {isChecking ? "检查中…" : "检查"}
+            </button>
+          </div>
         </div>
       </SettingGroup>
 
@@ -195,16 +189,11 @@ function GeneralPanel() {
         <UpdateInstallAction version={outcome.version} />
       ) : (
         checkMsg !== null && (
-          <div style={{ marginTop: 8, fontSize: 12, color: "var(--muted)" }}>
-            {checkMsg}
-          </div>
+          <div className="caption-5 set-feedback">{checkMsg}</div>
         )
       )}
       {checkError !== null && (
-        <div
-          role="alert"
-          style={{ color: "var(--danger)", marginTop: 8, fontSize: 12 }}
-        >
+        <div role="alert" className="caption-5 set-feedback set-feedback--danger">
           {checkError}
         </div>
       )}

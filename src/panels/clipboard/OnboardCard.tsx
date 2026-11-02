@@ -136,7 +136,12 @@ export function formatAccelerator(accelerator: string): string {
     .join("");
 }
 
-/** 向导根组件：按状态机当前步骤渲染内容，渲染条件由 isGuideVisible 决定。 */
+/**
+ * 向导根组件：按状态机当前步骤渲染内容，渲染条件由 isGuideVisible 决定。
+ *
+ * 视觉上是一张「提示」而不是第二个抬升面：accent 淡底 + 全周细描边 + 12px 圆角，
+ * 无阴影。剪贴板页唯一的抬升面留给右侧预览区。
+ */
 export function OnboardCard({
   state,
   launchOnLogin,
@@ -151,8 +156,21 @@ export function OnboardCard({
 
   return (
     <div className="onboard" role="region" aria-label="首次引导">
-      <div className="grow">
-        <StepProgress step={state.step} />
+      <div className="onboard-head">
+        <span className="onboard-kicker caption-3">首次引导</span>
+        <span className="onboard-steps" aria-hidden="true">
+          {GUIDE_STEPS.map((each, index) => (
+            <i
+              key={each}
+              className={index <= GUIDE_STEPS.indexOf(state.step as (typeof GUIDE_STEPS)[number]) ? "on" : undefined}
+            />
+          ))}
+        </span>
+        <span className="onboard-meta caption-4">
+          {`第 ${Math.max(GUIDE_STEPS.indexOf(state.step as (typeof GUIDE_STEPS)[number]), 0) + 1} / ${GUIDE_STEPS.length} 步`}
+        </span>
+      </div>
+      <div className="onboard-body">
         <StepBody
           step={state.step}
           launchOnLogin={launchOnLogin}
@@ -163,37 +181,16 @@ export function OnboardCard({
           onLaunchOnLoginChange={onLaunchOnLoginChange}
         />
       </div>
-      <button className="x" type="button" aria-label="关闭" onClick={onDismiss}>
-        <svg
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="1.9"
-          strokeLinecap="round"
-          aria-hidden="true"
-        >
+      <button
+        className="icon-btn onboard-close"
+        type="button"
+        aria-label="关闭"
+        onClick={onDismiss}
+      >
+        <svg className="ico ico-16" viewBox="0 0 24 24" aria-hidden="true">
           <path d="M18 6 6 18M6 6l12 12" />
         </svg>
       </button>
-    </div>
-  );
-}
-
-/** 步骤指示器：四个圆点 + 「第 N / 4 步」。 */
-function StepProgress({ step }: { step: GuideStep }) {
-  const currentIndex = GUIDE_STEPS.indexOf(step as (typeof GUIDE_STEPS)[number]);
-  return (
-    <div className="onboard-steps">
-      {GUIDE_STEPS.map((each, index) => (
-        <i
-          key={each}
-          className={index <= currentIndex ? "on" : undefined}
-          aria-hidden="true"
-        />
-      ))}
-      <span className="onboard-meta">
-        {`第 ${Math.max(currentIndex, 0) + 1} / ${GUIDE_STEPS.length} 步`}
-      </span>
     </div>
   );
 }
@@ -206,6 +203,24 @@ interface StepBodyProps {
   onSkip: () => void;
   onOpenSystemSettings: () => void;
   onLaunchOnLoginChange: (enabled: boolean) => void;
+}
+
+/** 主操作按钮：向导里只有「下一步 / 完成 / 前往系统设置」是推进动作 */
+function PrimaryAction({ onClick, children }: { onClick: () => void; children: string }) {
+  return (
+    <button className="btn btn-primary btn-sm button-sm" type="button" onClick={onClick}>
+      {children}
+    </button>
+  );
+}
+
+/** 次操作按钮：跳过 / 稍后，退到 ghost，不抢主操作的注意力 */
+function GhostAction({ onClick, children }: { onClick: () => void; children: string }) {
+  return (
+    <button className="btn btn-ghost btn-sm button-sm" type="button" onClick={onClick}>
+      {children}
+    </button>
+  );
 }
 
 /** 按步骤渲染标题、说明与操作按钮。 */
@@ -222,67 +237,55 @@ function StepBody({
     case "welcome":
       return (
         <>
-          <h4>欢迎使用 QuickQuick</h4>
-          <p>
+          <h3 className="title-3">欢迎使用 QuickQuick</h3>
+          <p className="body-6">
             三步完成设置：认识热键 → 开启辅助功能（自动粘贴需要它）→ 确认开机自启。
           </p>
-          <div className="row">
-            <button className="btn btn-primary" type="button" onClick={onAdvance}>
-              下一步
-            </button>
+          <div className="onboard-actions">
+            <PrimaryAction onClick={onAdvance}>下一步</PrimaryAction>
             {/*
               欢迎页直接给授权入口：已经知道自己要开辅助功能的老用户不必连点两次「下一步」。
               这也是父页面既有的行为契约（首个界面就能一键跳到系统设置）。
             */}
-            <button className="btn btn-ghost" type="button" onClick={onOpenSystemSettings}>
-              前往系统设置
-            </button>
+            <GhostAction onClick={onOpenSystemSettings}>前往系统设置</GhostAction>
           </div>
         </>
       );
     case "hotkey":
       return (
         <>
-          <h4>
-            按 <kbd>{hotkeyLabel}</kbd> 随时唤出面板
-          </h4>
-          <p>
+          <h3 className="title-3">
+            按 <kbd className="mono caption-4">{hotkeyLabel}</kbd> 随时唤出面板
+          </h3>
+          <p className="body-6">
             ↑↓ 选择、Enter 粘贴、⌥Enter 只复制、Esc 关闭；⌘1–9 直达前九条。
           </p>
-          <div className="row">
-            <button className="btn btn-primary" type="button" onClick={onAdvance}>
-              下一步
-            </button>
-            <button className="btn btn-ghost" type="button" onClick={onSkip}>
-              跳过
-            </button>
+          <div className="onboard-actions">
+            <PrimaryAction onClick={onAdvance}>下一步</PrimaryAction>
+            <GhostAction onClick={onSkip}>跳过</GhostAction>
           </div>
         </>
       );
     case "accessibility":
       return (
         <>
-          <h4>开启「辅助功能」以启用自动粘贴</h4>
-          <p>
+          <h3 className="title-3">开启「辅助功能」以启用自动粘贴</h3>
+          <p className="body-6">
             授权后可模拟 ⌘V 自动回写选中条目；未授权时降级为仅复制到剪贴板，功能不中断。
             在系统设置里勾选 QuickQuick 后会立即自动进入下一步。
           </p>
-          <div className="row">
-            <button className="btn btn-primary" type="button" onClick={onOpenSystemSettings}>
-              前往系统设置
-            </button>
-            <button className="btn btn-ghost" type="button" onClick={onSkip}>
-              稍后
-            </button>
+          <div className="onboard-actions">
+            <PrimaryAction onClick={onOpenSystemSettings}>前往系统设置</PrimaryAction>
+            <GhostAction onClick={onSkip}>稍后</GhostAction>
           </div>
         </>
       );
     case "autostart":
       return (
         <>
-          <h4>确认开机自启</h4>
-          <p>登录时自动启动 QuickQuick，让热键随时可用；之后可随时在设置里关闭。</p>
-          <label className="onboard-check">
+          <h3 className="title-3">确认开机自启</h3>
+          <p className="body-6">登录时自动启动 QuickQuick，让热键随时可用；之后可随时在设置里关闭。</p>
+          <label className="onboard-check body-6">
             <input
               type="checkbox"
               checked={launchOnLogin}
@@ -292,13 +295,9 @@ function StepBody({
             />
             登录时自动启动 QuickQuick
           </label>
-          <div className="row">
-            <button className="btn btn-primary" type="button" onClick={onAdvance}>
-              完成
-            </button>
-            <button className="btn btn-ghost" type="button" onClick={onSkip}>
-              跳过
-            </button>
+          <div className="onboard-actions">
+            <PrimaryAction onClick={onAdvance}>完成</PrimaryAction>
+            <GhostAction onClick={onSkip}>跳过</GhostAction>
           </div>
         </>
       );

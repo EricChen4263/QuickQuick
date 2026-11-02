@@ -15,6 +15,7 @@ import { useEffect, useState } from "react";
 import { useSettingsSaveError } from "./settings-save-error";
 import type { HighlightStyle, SortOrder } from "../../ipc/ipc-client";
 import { Select } from "../../components/Select";
+import { ThemeSwitch } from "../../shell/ThemeSwitch";
 import {
   DEFAULT_IMAGE_HEIGHT_PX,
   DEFAULT_PREVIEW_FIRST_DELAY_MS,
@@ -139,8 +140,21 @@ function AppearancePanel() {
 
   return (
     <div>
-      <PanelHeader title="外观" subtitle="列表顺序、图片与预览的展示偏好。" />
+      <PanelHeader title="外观" subtitle="主题、列表顺序与搜索结果高亮的展示偏好。" />
       <SettingGroup>
+        {/*
+         * 主题入口从顶部栏搬到这里。
+         * 太阳 / 月亮式的三档图标开关是被点名的泛化模式，而主题本身是
+         * 「设一次就不再动」的偏好，放在外观分区比常驻顶栏更合适。
+         */}
+        <SettingRow
+          label="深浅外观"
+          description="跟随系统时随 macOS 外观自动切换，不需要重启"
+          tooltip="默认：跟随系统。跟随系统会读取 macOS 的浅色/深色外观并在切换时立即生效。"
+        >
+          <ThemeSwitch />
+        </SettingRow>
+
         <SettingRow
           label="排序方式"
           description="最近复制：最近一次复制的排最前；首次复制：按首次入库时间倒序，再次复制不跳位"
@@ -163,7 +177,7 @@ function AppearancePanel() {
         >
           <input
             id="image-height"
-            className="set-input short-num num"
+            className="set-input short-num num body-6"
             type="number"
             min={MIN_IMAGE_HEIGHT_PX}
             max={MAX_IMAGE_HEIGHT_PX}
@@ -185,7 +199,7 @@ function AppearancePanel() {
         >
           <input
             id="preview-first-delay"
-            className="set-input short-num num"
+            className="set-input short-num num body-6"
             type="number"
             min={MIN_PREVIEW_FIRST_DELAY_MS}
             max={MAX_PREVIEW_FIRST_DELAY_MS}
@@ -216,7 +230,7 @@ function AppearancePanel() {
         </SettingRow>
       </SettingGroup>
       {message !== null && (
-        <div role="status" style={{ marginTop: 8, fontSize: 12, color: "var(--muted)" }}>
+        <div role="status" className="caption-5 set-feedback">
           {message}
         </div>
       )}

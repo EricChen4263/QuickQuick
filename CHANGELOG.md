@@ -3,6 +3,32 @@
 本项目每个发布版本的更新内容。排版约定：每版先一整段**中文**，分隔线后一整段 **English**（分语言成段，不行内混排）。
 发版时 `release.yml` 会自动抽取对应 `## v<版本>` 段拼到 GitHub Release 顶部；`release.sh` 预检要求新版在此有对应段，否则阻断发版。
 
+## v0.4.0
+
+### 🎨 界面（重做）
+- **整体界面重做**：按统一的视觉规范重建了主窗三个页面与两个热键浮窗——字体、字号、间距、圆角、动效、图标全部收敛到一套阶梯上。此前界面里散着 15 种字号、9 种圆角、5 套「边框 + 白底」卡片，现在是 7 档字号、5 档圆角、每页只有一个抬升面。
+- **侧边栏改为顶部栏**：原来常驻的 112px 左侧导航占掉了横向宽度。现在标题栏与一级导航合并成一条 48px 顶栏，剪贴板与翻译的「列表 + 预览」双栏拿到全宽。
+- **字体换成 Geist**：拉丁与数字用 Geist / Geist Mono，中文回落到苹方 / 微软雅黑，并启用等宽数字让时间、计数、耗时对齐。
+- **层次改为「一页一个抬升面」**：剪贴板页只有预览区是抬升面板、翻译页只有工作区、设置页整页不用卡片，其余靠背景色差与留白分层。
+- **主题入口移到「设置 › 外观」**：顶栏不再放太阳 / 月亮式的三档图标开关，改为设置页里的纯文字三档分段。
+- **状态补齐**：列表加载改为骨架屏（不再是空白或转圈），空态给下一步动作，错误提示统一写成「什么失败 + 下一步怎么做」；键盘 Tab 进列表行时行内操作按钮会浮出，不再出现焦点看不见的问题。
+- **对比度修正**：浅色模式下次要文字与成功 / 警告徽章的对比度原本低于无障碍 AA 4.5:1（最低 3.4），现已全部提升到 4.85:1 以上。
+- **两个热键浮窗跟随同一套视觉**：毛玻璃窗口内部的选中态、键帽、徽章、译文排版与主窗一致；翻译浮窗的正文字号按 320×200 的真实窗口尺寸调小，长译文不再被切在字中间。
+- 修复翻译页语言方向箭头被渲染成实心黑三角、翻译历史显示 `deepl-free` 这类内部标识、剪贴板历史为空时右侧仍提示「选中左侧任意一条记录」等几处细节。
+
+---
+
+### 🎨 Interface (redesign)
+- **Full interface rebuild**: the three main-window pages and both hotkey popovers were rebuilt on one visual spec — type, spacing, corner radii, motion and iconography now all resolve to a single scale. The old UI carried 15 font sizes, 9 radius values and five variants of the same "border + white card" look; it is now 7 font sizes, 5 radii, and exactly one raised surface per page.
+- **Sidebar became a top bar**: the permanent 112px left navigation was eating horizontal space. The title bar and top-level navigation are now merged into a single 48px bar, so the list-plus-preview layouts on the clipboard and translate pages get the full width.
+- **New typeface, Geist**: Latin text and numerals use Geist / Geist Mono, with Chinese falling back to PingFang SC / Microsoft YaHei. Tabular numerals keep timestamps, counts and elapsed times aligned.
+- **One raised surface per page**: on the clipboard page only the preview is elevated, on the translate page only the workspace, and the settings page uses no cards at all — everything else layers through background tone and whitespace.
+- **Theme moved to Settings › Appearance**: the top bar no longer carries a sun / moon icon toggle; it is now a plain three-way text segment in settings.
+- **States completed**: list loading is a skeleton shaped like the real rows, empty states offer a next step, and error messages are written as "what failed plus what to do next". Tabbing into a list row now reveals its inline actions, so focus is never invisible.
+- **Contrast corrected**: secondary text and the success / warning badges fell below the WCAG AA 4.5:1 threshold in light mode (as low as 3.4). All now sit at 4.85:1 or above.
+- **Both hotkey popovers follow the same system**: selection states, keycaps, badges and translation typography match the main window, and the translate popover's body size was tuned to its real 320×200 window so long translations are no longer cut mid-glyph.
+- Fixed the translate page's direction arrow rendering as a solid black triangle, the translation history showing internal provider ids such as `deepl-free`, and the clipboard preview still prompting "select an item on the left" when the history is empty.
+
 ## v0.3.8
 
 ### 🪟 Windows（修复）

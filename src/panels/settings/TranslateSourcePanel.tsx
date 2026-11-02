@@ -23,17 +23,7 @@ function logoAbbr(name: string): string {
 }
 
 const GearIcon = () => (
-  <svg
-    width="15"
-    height="15"
-    viewBox="0 0 24 24"
-    fill="none"
-    stroke="currentColor"
-    strokeWidth="2"
-    strokeLinecap="round"
-    strokeLinejoin="round"
-    aria-hidden="true"
-  >
+  <svg className="ico ico-16" viewBox="0 0 24 24" aria-hidden="true">
     <circle cx="12" cy="12" r="3" />
     <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
   </svg>
@@ -59,10 +49,10 @@ function ProviderCard({
 }: ProviderCardProps) {
   // 判据为「是否可配置」（needsConfig）而非「是否要 key」：Ollama 无 key 但有必填字段也需配置。
   const badgeClass = isSelected
-    ? "badge default"
+    ? "badge default caption-5"
     : provider.needsConfig
-      ? isConfigured ? "badge ok" : "badge need"
-      : "badge ok";
+      ? isConfigured ? "badge ok caption-5" : "badge need caption-5"
+      : "badge ok caption-5";
 
   const badgeLabel = isSelected
     ? "默认"
@@ -77,9 +67,9 @@ function ProviderCard({
         onClick={() => onSelect(provider.id)}
       >
         <div className={`src-radio${isSelected ? " sel" : ""}`} />
-        <div className="src-logo">{logoAbbr(provider.name)}</div>
+        <div className="src-logo caption-1 mono">{logoAbbr(provider.name)}</div>
         <div className="grow">
-          <div className="label">{provider.name}</div>
+          <div className="label title-4">{provider.name}</div>
         </div>
         <span className={badgeClass}>{badgeLabel}</span>
         {/* radio 视觉隐藏，保留可访问性——让 getByRole("radio", { name }) 能命中 */}
@@ -95,7 +85,7 @@ function ProviderCard({
       {provider.needsConfig && (
         <button
           type="button"
-          className={`src-cfg-btn${isExpanded ? " open" : ""}`}
+          className={`src-cfg-btn button-sm${isExpanded ? " open" : ""}`}
           onClick={() => onConfigure(provider.id)}
           aria-label={`配置 ${provider.name}`}
         >
@@ -280,7 +270,7 @@ function TranslateSourcePanel() {
   if (loadError !== null) {
     return (
       <div>
-        <div role="alert" style={{ color: "var(--danger)" }}>{loadError}</div>
+        <div role="alert" className="set-inline-error caption-1">{loadError}</div>
       </div>
     );
   }

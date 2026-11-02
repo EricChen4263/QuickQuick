@@ -1,47 +1,79 @@
-@import "../theme/tokens.css";
+/*
+ * 剪贴板浮窗（Tauri 独立窗口，720×460）
+ *
+ * 分工：
+ *   theme/theme.css  = token + 命名字体样式 + 共享控件（.btn / .badge / .skeleton）
+ *   本文件           = 浮窗自身的窗口边界、搜索行、列表、预览
+ *
+ * 窗口与桌面的边界（毛玻璃 + 1px --glass-border + --r-16 + --shadow-pop）是
+ * 设计系统里的豁免项：浮窗叠在别人的桌面上，没有这层边界就分不清哪是窗口。
+ * 但窗口「内部」不出现卡片三件套——分隔只靠发丝线与留白。
+ */
 
+@import "../theme/theme.css";
+
+/* base.css 给 body 铺了 --bg 底与一层细颗粒。浮窗是透明窗口，这两样都会
+   挡住桌面透出；颗粒还会溢出圆角、在窗口四角留下噪点，所以这里收掉。 */
 html,
 body {
   margin: 0;
   background: transparent;
-  font-family: var(--font);
 }
 
+body::before {
+  display: none;
+}
+
+/* 窗口边界（豁免项） */
 #root {
-  width: 100vw;
-  height: 100vh;
+  width: 100%;
+  height: 100%;
   overflow: hidden;
-  backdrop-filter: blur(28px) saturate(1.8);
-  background: color-mix(in oklch, var(--glass) 78%, var(--bg));
-  border: 1px solid color-mix(in oklch, var(--glass-border) 72%, transparent);
-  border-radius: 14px;
-  box-sizing: border-box;
+  background: var(--glass);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--r-16);
+  box-shadow: var(--shadow-pop);
+  -webkit-backdrop-filter: blur(28px) saturate(180%);
+  backdrop-filter: blur(28px) saturate(180%);
 }
 
-/* 顶层 flex 容器：搜索行(顶) / 主体(中,flex:1) / footer(底) */
+/* 顶层 flex：搜索行(顶) / 主体(中, flex:1) / footer(底) */
 .popover-shell {
   display: flex;
   flex-direction: column;
   height: 100%;
   overflow: hidden;
-  border-radius: 14px;
+  border-radius: var(--r-16);
 }
 
-/* 搜索行：透明融入毛玻璃，底部分割线 */
+/* ------------------------------------------------------------ 搜索行 ----
+
+   无边框输入占满整行，左放大镜、右一枚唤起键帽。
+   用 grid 而不是 flex：搜索模式降级提示（role=status）要换行占满整行，
+   flex 里它会被挤成第三个行内元素。 */
+
 .popover-search-row {
   flex: none;
-  padding: 12px 14px 10px;
-  border-bottom: 1px solid color-mix(in oklch, var(--glass-border) 44%, transparent);
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--sp-8);
+  padding: var(--sp-12) var(--sp-16);
+  color: var(--muted);
+  border-bottom: 1px solid color-mix(in oklch, var(--glass-border) 86%, transparent);
+}
+
+.popover-search-icon {
+  width: var(--icon-16);
+  height: var(--icon-16);
+  flex: none;
 }
 
 .popover-search-input {
-  width: 100%;
-  box-sizing: border-box;
+  min-width: 0;
+  padding: 0;
   background: transparent;
-  border: none;
-  outline: none;
-  font-size: 15px;
-  font-family: var(--font);
+  border: 0;
   color: var(--fg);
   caret-color: var(--accent);
 }
@@ -50,7 +82,17 @@ body {
   color: var(--muted);
 }
 
-/* 主体：横向排列，左列表 + 右预览 */
+/* 非法的正则已降级为文本搜索这类「用户需要知道」的状态：换到第二行整行显示 */
+.popover-search-notice {
+  grid-column: 1 / -1;
+  color: var(--muted);
+}
+
+/* ---------------------------------------------------------------- 主体 ----
+
+   左列表 42% / 右预览 58%，共享一条竖向发丝线。
+   内部不叠背景色：玻璃上白叠白立刻糊成一片，分隔靠线与留白就够。 */
+
 .popover-body {
   flex: 1;
   display: flex;
@@ -58,69 +100,48 @@ body {
   overflow: hidden;
 }
 
-/* 左列表区：约 40% 宽，可纵向滚动 */
 .popover-list {
   flex: 0 0 42%;
-  overflow-y: auto;
-  border-right: 1px solid color-mix(in oklch, var(--glass-border) 38%, transparent);
-  padding: 6px 0;
   min-width: 0;
+  overflow-y: auto;
+  padding: var(--sp-8);
+  border-right: 1px solid color-mix(in oklch, var(--glass-border) 86%, transparent);
 }
 
-.popover-list-empty {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--muted);
-  font-size: 13px;
-}
-
-/* 列表/预览滚动条：贴合深色毛玻璃，去 WKWebView 默认白色滚动条 */
-.popover-list::-webkit-scrollbar,
-.popover-preview::-webkit-scrollbar {
-  width: 8px;
-}
-
-.popover-list::-webkit-scrollbar-track,
-.popover-preview::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-.popover-list::-webkit-scrollbar-thumb,
-.popover-preview::-webkit-scrollbar-thumb {
-  background: color-mix(in oklch, var(--muted) 40%, transparent);
-  border-radius: 999px;
-  background-clip: padding-box;
-  border: 2px solid transparent;
-}
-
-.popover-list::-webkit-scrollbar-thumb:hover,
-.popover-preview::-webkit-scrollbar-thumb:hover {
-  background: color-mix(in oklch, var(--muted) 60%, transparent);
-}
-
-/* 分组标题 */
+/* 分组标题：小号 + 字距，只做「这里换了一天」的路标，不抢行内文字 */
 .popover-group-header {
-  padding: 6px 12px 3px;
-  font-size: 11px;
-  font-weight: 600;
   color: var(--muted);
-  letter-spacing: 0.04em;
+  padding: var(--sp-12) var(--sp-8) var(--sp-4);
   text-transform: uppercase;
+  letter-spacing: 0.06em;
 }
 
-/* 单行条目：图标 | 摘要/缩略图 | 收藏星 */
-.popover-row {
+.popover-group-header:first-child {
+  padding-top: var(--sp-4);
+}
+
+/* 全空：一句话说清楚，不做空白面板。分隔线保留——右侧仍是「无选中项」，
+   两侧各自占位比合成一片空白更容易读。 */
+.popover-list-empty {
   display: grid;
-  grid-template-columns: 20px 1fr auto;
+  place-items: center;
+  color: var(--muted);
+}
+
+/* ---------------------------------------------------------------- 列表行 ----
+   三列：类型图标 | 摘要（单行截断）| 收藏星
+   选中态 = 左侧 2px accent 竖条 + 一层 accent-soft 底，不整块填色、不抬升 --surface。 */
+
+.popover-row {
+  position: relative;
+  display: grid;
+  grid-template-columns: var(--icon-16) minmax(0, 1fr) auto;
   align-items: center;
-  gap: 8px;
-  padding: 7px 12px;
+  gap: var(--sp-8);
+  padding: var(--sp-8) var(--sp-8) var(--sp-8) var(--sp-12);
+  border-radius: var(--r-8);
   cursor: default;
-  border-left: 3px solid transparent;
-  border-radius: var(--r-sm);
-  margin: 0 4px;
-  transition: background-color 90ms ease;
+  transition: var(--t-color);
 }
 
 .popover-row:hover {
@@ -129,21 +150,39 @@ body {
 
 .popover-row[aria-selected="true"] {
   background: var(--accent-soft);
-  border-left-color: var(--accent);
+}
+
+/* 选中竖条：只动 opacity / transform，宽度和高度都是常量 */
+.popover-row::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 50%;
+  width: var(--sp-2);
+  height: var(--sp-24);
+  border-radius: var(--r-4);
+  background: var(--accent);
+  opacity: 0;
+  transform: translateY(-50%) scaleY(0.4);
+  transition: opacity var(--dur-color) var(--ease), transform var(--dur-move) var(--ease);
+}
+
+.popover-row[aria-selected="true"]::before {
+  opacity: 1;
+  transform: translateY(-50%) scaleY(1);
 }
 
 .popover-row-icon {
-  width: 20px;
-  height: 20px;
+  width: var(--icon-16);
+  height: var(--icon-16);
   display: grid;
   place-items: center;
   color: var(--muted);
-  flex: none;
+  transition: var(--t-color);
 }
 
-.popover-row-icon svg {
-  width: 13px;
-  height: 13px;
+.popover-row[aria-selected="true"] .popover-row-icon {
+  color: var(--accent);
 }
 
 .popover-row-main {
@@ -151,182 +190,199 @@ body {
 }
 
 .popover-row-text {
-  font-size: 12.5px;
-  line-height: 1.4;
   color: var(--fg);
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
 }
 
+/* 富文本 / 代码摘要：等宽才有「这段不是句子」的信号 */
 .popover-row-text.code {
-  font-family: var(--mono);
-  font-size: 11.5px;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
 }
 
-/* 搜索命中高亮：四档（对齐 Maccy 的 HighlightMatch：color/bold/italic/underline，默认 bold）。
-   基础规则只保留不影响排版的公共属性——具体强调交给 data-hit-style 分支，
-   这样「默认档」与「可选档」不会各写一份可能漂移的基线。
+/* 图片行缩略图：高度由外观设置下发（--popover-thumb-height），缺省 40px
+   与设置默认值（Maccy 的 imageMaxHeight 默认）一致；宽度固定，超高时裁切不撑行。
+   注：40px 是 popover-style.test.ts 锁定的 fallback 契约，不是可随手改的字面值。 */
+.popover-row-thumb {
+  width: var(--sp-32);
+  height: var(--popover-thumb-height, 40px);
+  border-radius: var(--r-4);
+  border: 1px solid color-mix(in oklch, var(--border) 72%, transparent);
+  object-fit: cover;
+  display: block;
+}
 
-   `background: transparent` 必须显式写：`<mark>` 自带 UA 的 `background-color: mark`（黄底），
-   不覆盖的话 bold/italic/underline 三档都会残留黄底，只有 color 档因为自带 background 才正常。 */
+.popover-row-fav {
+  width: var(--icon-14);
+  height: var(--icon-14);
+  color: var(--accent);
+  display: grid;
+  place-items: center;
+}
+
+/* 收藏星保留实心（.ico 默认 fill:none）：它是「已收藏」的状态标记，
+   空心星在 12px 尺度下读不出状态。 */
+.popover-row-fav .ico {
+  fill: currentColor;
+}
+
+/* ------------------------------------------------------------ 命中高亮 ----
+   四档强调（对齐 Maccy 的 HighlightMatch），默认 bold。
+   基础规则只放不影响排版的公共属性；`background: transparent` 必须显式写，
+   否则 <mark> 会带着 UA 的黄底出现在另外三档里。 */
+
 .popover-row-text .clip-hit {
   color: inherit;
   background: transparent;
-  border-radius: 3px;
-  padding: 0 1px;
+  border-radius: var(--r-4);
+  padding: 0 var(--sp-2);
 }
 
-/* 加粗（默认档）：Maccy 的 .bold —— 只加字重，无背景 */
 .popover-shell[data-hit-style="bold"] .clip-hit {
-  font-weight: 700;
+  font-weight: var(--fw-semibold);
 }
 
-/* 背景色：Maccy 的 .color 用 findHighlightColor 整段染色，这里用项目的 OKLch accent token */
 .popover-shell[data-hit-style="color"] .clip-hit {
   background: color-mix(in oklch, var(--accent) 32%, transparent);
-  font-weight: 600;
+  font-weight: var(--fw-semibold);
 }
 
-/* 斜体：Maccy 的 .italic */
 .popover-shell[data-hit-style="italic"] .clip-hit {
   font-style: italic;
 }
 
-/* 下划线：Maccy 的 .underline */
 .popover-shell[data-hit-style="underline"] .clip-hit {
   text-decoration: underline;
   text-decoration-color: color-mix(in oklch, var(--accent) 80%, transparent);
   text-underline-offset: 2px;
 }
 
-/* 搜索模式提示（如非法正则已降级为文本搜索）：贴在搜索框下方，弱化显示 */
-.popover-search-notice {
-  margin-top: 6px;
-  font-size: 11.5px;
-  line-height: 1.4;
-  color: var(--muted);
-}
+/* -------------------------------------------------------------- 预览区 ---- */
 
-/* 图片行的缩略图：高度由外观设置下发（--popover-thumb-height），
-   缺省 40px 与默认设置（Maccy 的 imageMaxHeight 默认值）一致；宽度固定，
-   超高时 object-fit: cover 裁切不撑行 */
-.popover-row-thumb {
-  width: 36px;
-  height: var(--popover-thumb-height, 40px);
-  border-radius: 4px;
-  object-fit: cover;
-  border: 1px solid color-mix(in oklch, var(--border) 72%, transparent);
-  display: block;
-}
-
-.popover-row-fav {
-  width: 14px;
-  height: 14px;
-  color: var(--accent);
-  display: grid;
-  place-items: center;
-}
-
-.popover-row-fav svg {
-  width: 11px;
-  height: 11px;
-}
-
-/* 右预览区：约 60% 宽，可纵向滚动 */
 .popover-preview {
   flex: 1;
-  overflow-y: auto;
-  padding: 16px 18px;
   min-width: 0;
-}
-
-.popover-preview-empty {
   display: flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--muted);
-  font-size: 13px;
+  flex-direction: column;
+  gap: var(--sp-12);
+  padding: var(--sp-16);
+  overflow: hidden;
 }
 
-/* 分级延迟窗口内的中性占位：居中弱化，且不声称「无选中项」 */
-.popover-preview-waiting {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--muted);
-  font-size: 13px;
-}
-
-/* kicker：类型 · 时间 元信息行 */
+/* 类型 · 时间 的元信息行 */
 .popover-preview-kicker {
+  flex: none;
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--sp-8);
   color: var(--muted);
-  font-size: 11.5px;
-  margin-bottom: 12px;
 }
 
 .popover-preview-dot {
-  width: 3px;
-  height: 3px;
-  border-radius: 50%;
-  background: var(--muted);
+  width: var(--sp-4);
+  height: var(--sp-4);
+  border-radius: var(--r-4);
+  background: currentColor;
+  opacity: 0.5;
   flex: none;
 }
 
 .popover-preview-fav-badge {
-  margin-left: 4px;
-  padding: 1px 5px;
-  border-radius: 4px;
-  background: var(--accent-soft);
-  color: var(--accent);
-  font-size: 10.5px;
+  margin-left: var(--sp-4);
 }
 
-/* 预览内容：文本/富文本 */
 .popover-preview-content {
-  font-size: 13px;
-  line-height: 1.6;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
   color: var(--fg);
-  word-break: break-word;
   white-space: pre-wrap;
+  word-break: break-word;
 }
 
-.popover-preview-content.code {
-  font-family: var(--mono);
-  font-size: 12px;
-  background: var(--surface-2);
+/* 富文本条目是「别人剪下来的 HTML」：把粘进来的排版约束在浮窗尺度，
+   不让一进面板就被 h1 / 表格 / 大图撑爆。 */
+.popover-preview-content > :first-child {
+  margin-top: 0;
+}
+
+.popover-preview-content :is(p, ul, ol, blockquote, table, pre) {
+  margin: 0 0 var(--sp-12);
+}
+
+.popover-preview-content :is(h1, h2, h3, h4, h5, h6) {
+  font-size: var(--text-base);
+  line-height: var(--lh-base);
+  font-weight: var(--fw-semibold);
+  margin: var(--sp-16) 0 var(--sp-8);
+}
+
+.popover-preview-content img {
+  max-width: 100%;
+  height: auto;
+  border-radius: var(--r-4);
+}
+
+.popover-preview-content table {
+  border-collapse: collapse;
+}
+
+.popover-preview-content :is(td, th) {
+  padding: var(--sp-4) var(--sp-8);
   border: 1px solid color-mix(in oklch, var(--border) 76%, transparent);
-  border-radius: var(--r-sm);
-  padding: 10px 12px;
-  line-height: 1.55;
-  overflow-x: auto;
 }
 
-/* 预览内容：图片 */
 .popover-preview-img {
   max-width: 100%;
-  border-radius: var(--r-sm);
+  border-radius: var(--r-8);
   border: 1px solid color-mix(in oklch, var(--border) 72%, transparent);
   display: block;
   object-fit: contain;
 }
 
+/* 两个占位态：都以「居中一句弱化的话」呈现，不装成内容 */
+.popover-preview-empty,
+.popover-preview-waiting {
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+}
+
 .popover-preview-img-placeholder {
   color: var(--muted);
-  font-size: 13px;
 }
 
-/* 错误态 */
-.popover-error {
-  padding: 24px;
-  color: var(--danger);
-  font-size: 13px;
-}
+/* --------------------------------------------------------------- footer ----
+   快捷键提示条沿用公共 ActionBar（条壳归 components 层），这里只调间距与键帽尺度。 */
 
-/* Footer：复用公共 ActionBar(glass)，仅恢复 18px 提示间距（默认 8px 偏窄） */
 .popover-footer {
-  gap: 18px;
+  gap: var(--sp-16);
+}
+
+/* ActionBar 的条壳与键帽只给布局和外框（外框已是 --r-4 方块 + --surface-2），
+   字号按它的约定由使用处补。浮窗这个小窗里键帽与说明统一落到 12px 档，
+   键帽走等宽——「⌘⇧C」「1–0」这类符号在等宽下才不会左右晃。 */
+.popover-shell .qq-kbd {
+  min-width: var(--sp-16);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: var(--lh-xs);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+}
+
+.popover-footer .qq-action-bar-hint {
+  gap: var(--sp-8);
+  font-size: var(--text-xs);
+  line-height: var(--lh-xs);
+}
+
+/* ---------------------------------------------------------------- 错误态 ---- */
+
+.popover-error {
+  padding: var(--sp-24);
+  color: var(--danger);
 }

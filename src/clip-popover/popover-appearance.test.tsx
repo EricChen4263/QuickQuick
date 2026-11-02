@@ -95,19 +95,23 @@ function previewText(container: HTMLElement): string {
   return container.querySelector(".popover-preview")?.textContent ?? "";
 }
 
-/** 按分组标题把列表行归桶：返回「组标题 → 行文本数组」的有序 Map */
+/**
+ * 按分组把列表行归桶：返回「组名 → 行文本数组」的有序 Map。
+ *
+ * 分组改为 `role="group"` 包裹（Listbox 的直接子项只能是 option / group，
+ * 裸 div 的分组标题不合法），所以这里按 ARIA 结构取组名与行，
+ * 而不是按 DOM 相邻关系推断——断言的语义（哪一行落在哪一组）没有变。
+ */
 function rowsByGroup(container: HTMLElement): Map<string, string[]> {
   const list = container.querySelector(".popover-list");
   if (list === null) throw new Error("找不到 .popover-list");
   const buckets = new Map<string, string[]>();
-  let current = "";
-  for (const child of Array.from(list.children)) {
-    if (child.classList.contains("popover-group-header")) {
-      current = child.textContent ?? "";
-      buckets.set(current, []);
-      continue;
-    }
-    buckets.get(current)?.push(child.textContent ?? "");
+  for (const group of Array.from(list.querySelectorAll('[role="group"]'))) {
+    const label = group.getAttribute("aria-label") ?? "";
+    const rows = Array.from(group.querySelectorAll('[role="option"]')).map(
+      (row) => row.textContent ?? "",
+    );
+    buckets.set(label, rows);
   }
   return buckets;
 }

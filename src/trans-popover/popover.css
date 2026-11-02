@@ -1,60 +1,80 @@
-@import "../theme/tokens.css";
+/*
+ * 翻译浮窗（Tauri 独立窗口，320×200，见 src-tauri/src/popover.rs 的 TRANS_WIDTH/HEIGHT）
+ *
+ * 分工：
+ *   theme/theme.css  = token + 命名字体样式 + 共享控件（.btn / .badge / .skeleton）
+ *   本文件           = 浮窗自身的窗口边界、方向行、译文区、词典视图、状态视图
+ *
+ * 窗口与桌面的边界（毛玻璃 + 1px --glass-border + --r-16 + --shadow-pop）是
+ * 设计系统里的豁免项。窗口内部只留「方向行 / 译文 / 操作行」三段，不加卡片。
+ */
 
+@import "../theme/theme.css";
+
+/* 透明浮窗：base.css 的 --bg 底与细颗粒都要收掉，否则挡住桌面透出、
+   颗粒还会漏到圆角外的透明角落。 */
 html,
 body {
   margin: 0;
   background: transparent;
 }
 
+body::before {
+  display: none;
+}
+
+/* 窗口边界（豁免项） */
 #root {
-  width: 100vw;
-  height: 100vh;
-  overflow: hidden;
-  backdrop-filter: blur(28px) saturate(1.8);
-  background: color-mix(in oklch, var(--glass) 78%, var(--bg));
-  border: 1px solid color-mix(in oklch, var(--glass-border) 72%, transparent);
-  border-radius: 14px;
-  box-sizing: border-box;
+  width: 100%;
+  height: 100%;
   display: flex;
   flex-direction: column;
+  overflow: hidden;
+  background: var(--glass);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--r-16);
+  box-shadow: var(--shadow-pop);
+  -webkit-backdrop-filter: blur(28px) saturate(180%);
+  backdrop-filter: blur(28px) saturate(180%);
 }
+
+/* ------------------------------------------------------------ 结果视图 ----
+   三段：方向行（含来源）/ 译文（占满剩余高度，自己滚）/ 操作行（常驻）。
+   基底字号按 --text-sm 铺，纯文本译文由 .title-2 单独抬到 18px。 */
 
 .mini-translate {
   display: flex;
   flex-direction: column;
-  height: 100%;
-  padding: 10px 12px;
-  box-sizing: border-box;
-  gap: 6px;
+  flex: 1;
+  min-height: 0;
+  gap: var(--sp-8);
+  padding: var(--sp-12);
+  font-size: var(--text-sm);
+  line-height: var(--lh-sm);
+  color: var(--fg);
 }
 
 .mini-dir {
+  flex: none;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
-  font-size: 11px;
+  gap: var(--sp-8);
+  /* 方向行与正文之间比段内间距再多一档：行高 16 的元信息行紧贴 16px 正文会糊在一起 */
+  margin-bottom: var(--sp-4);
   color: var(--muted);
-  flex-shrink: 0;
-  letter-spacing: 0.02em;
 }
 
-/* 来源标签：与方向行同排右端，弱化但不隐藏——它是「译的是不是选中文字」的唯一凭据 */
+/* 「来源」标记：它是「这段译文取自哪里」的凭据，用方形 --r-4 徽章而不是胶囊
+   ——胶囊的柔和语汇会把它降级成一个语气标签。底色/圆角来自公共 .badge，这里只定位。 */
 .mini-source {
-  flex-shrink: 0;
-  padding: 1px 6px;
-  border-radius: 999px;
-  font-size: 10px;
-  color: var(--muted);
-  background: color-mix(in oklch, var(--glass-border) 40%, transparent);
+  flex: none;
 }
 
-/* 降级说明：只在取词通道不可用时出现，一行小字，不与译文抢视觉重心 */
+/* 降级说明：只在取词通道本身不可用时出现，一行小字，不与译文抢视觉重心 */
 .mini-degrade {
-  flex-shrink: 0;
-  font-size: 10px;
+  flex: none;
   color: var(--muted);
-  line-height: 1.3;
 }
 
 .mini-body {
@@ -64,41 +84,49 @@ body {
   min-height: 0;
   min-width: 0;
   overflow-y: auto;
-  font-size: 14px;
+  /* 滚到底时最后一行与按钮行之间留一口气；滚动条自身的留白也走这里 */
+  padding-bottom: var(--sp-8);
   color: var(--fg);
-  line-height: 1.5;
   word-break: break-word;
   overflow-wrap: anywhere;
 }
 
-/* 操作行始终可见：译文区再高也不允许压缩按钮行（ActionBar 自带 flex:none，这里只补锚定） */
+/* 操作行：复用公共 ActionBar(glass)；三按钮等宽铺满，不与译文抢高度 */
 .mini-actions {
-  flex-shrink: 0;
+  flex: none;
 }
 
-/*
- * 词典结果（浮窗）：main 窗口的译文字体是 21px、行高宽松，直接搬进 320px 宽、
- * 200px 高的浮窗会把释义挤成一屏两行。这里按浮窗尺度整体收紧，
- * 并统一 min-width:0 + anywhere 换行，保证长音标 / 长英文例句不撑出横向滚动。
- * 全部选择器带 .mini-translate 前缀：浮窗与主窗是两个独立 Vite 入口，
- * translate.css 只在主窗加载，这份样式不能反向影响主窗。
- */
+.mini-actions .btn {
+  flex: 1;
+  min-width: 0;
+}
+
+/* ------------------------------------------------------------ 词典视图 ----
+   DictEntryView 是主窗与浮窗共用的面板组件（src/panels/translate），
+   它不接受外部类名，所以这里按 token 写与命名样式等价的规则：
+     .dict-meaning  ≈ .body-6      （14/20）
+     .dict-section-label ≈ .caption-5 （12/16）
+     .dict-example  ≈ .caption-5 的弱化版
+   全部选择器带 .mini-translate 前缀：浮窗与主窗是两个入口，
+   主窗的译文字体是 21px，搬进 320px 宽的浮窗会把释义挤成一屏两行。 */
+
 .mini-translate .dict-entry {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: var(--sp-8);
   min-width: 0;
 }
 
 /* 音标：等宽 + accent 色，与释义区分开 */
 .mini-translate .dict-phonetic {
-  font-family: var(--mono);
-  font-size: 13px;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: var(--lh-xs);
   color: var(--accent);
   overflow-wrap: anywhere;
 }
 
-/* 释义分组 / 释义 / 例句三个列表：去默认列表样式，纵向紧凑排列 */
+/* 三个列表：去默认列表样式，纵向紧凑排列 */
 .mini-translate .dict-defs,
 .mini-translate .dict-meanings,
 .mini-translate .dict-example-list {
@@ -107,7 +135,7 @@ body {
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: var(--sp-4);
   min-width: 0;
 }
 
@@ -115,39 +143,44 @@ body {
   min-width: 0;
 }
 
-/* 词性标签：小徽章，弱化背景，比主窗更小一号 */
+/* 词性标签：方形 --r-4 小徽章，等宽，比释义再弱一档 */
 .mini-translate .dict-pos {
-  display: inline-block;
-  font-family: var(--mono);
-  font-size: 10px;
-  color: var(--muted);
+  display: inline-flex;
+  align-items: center;
+  height: var(--sp-16);
+  padding: 0 var(--sp-4);
+  margin-bottom: var(--sp-4);
+  border-radius: var(--r-4);
   background: var(--surface-2);
   border: 1px solid color-mix(in oklch, var(--border) 76%, transparent);
-  border-radius: 4px;
-  padding: 0 5px;
-  margin-bottom: 3px;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: var(--lh-xs);
 }
 
 .mini-translate .dict-meaning {
-  font-size: 13px;
-  line-height: 1.45;
+  font-size: var(--text-sm);
+  line-height: var(--lh-sm);
   color: var(--fg);
   overflow-wrap: anywhere;
 }
 
 /* 区块小标题（例句 / 变形） */
 .mini-translate .dict-section-label {
-  font-size: 10px;
+  display: block;
+  font-size: var(--text-xs);
+  line-height: var(--lh-xs);
   color: var(--muted);
-  margin-bottom: 3px;
+  margin-bottom: var(--sp-4);
 }
 
-/* 例句：左侧 accent 竖条点缀，字号再压一档，避免长句占满浮窗 */
+/* 例句：左侧 accent 竖条点缀，字号压到 12px，避免长句占满浮窗 */
 .mini-translate .dict-example {
-  font-size: 11px;
-  line-height: 1.4;
+  font-size: var(--text-xs);
+  line-height: var(--lh-xs);
   color: var(--muted);
-  padding-left: 8px;
+  padding-left: var(--sp-8);
   border-left: 2px solid var(--accent-line);
   overflow-wrap: anywhere;
 }
@@ -157,52 +190,83 @@ body {
   display: flex;
   align-items: baseline;
   flex-wrap: wrap;
-  gap: 4px 8px;
-  font-size: 11px;
+  gap: var(--sp-4) var(--sp-8);
+  font-size: var(--text-xs);
+  line-height: var(--lh-xs);
 }
 
 .mini-translate .dict-inflection-words {
-  font-family: var(--mono);
+  font-family: var(--font-mono);
   color: var(--fg);
   overflow-wrap: anywhere;
 }
 
 /* 发音播放器：原生 controls 有固定最小宽度，窄窗里限宽铺满内容宽度并略压高度，
-   否则 240px 固定宽 + 窄窗内边距会把译文区挤出横向滚动；高度不低于 32px 以免裁掉原生控件 */
+   高度不低于 --sp-32 以免裁掉原生控件 */
 .mini-translate .dict-audio {
   width: 100%;
   max-width: 100%;
-  height: 32px;
+  height: var(--sp-32);
 }
 
-/* 操作行复用公共 ActionBar(glass)；三按钮等宽铺满（原 mini-btn flex:1 居中） */
-.mini-actions .btn {
-  flex: 1;
-  justify-content: center;
-}
+/* -------------------------------------------------------------- 状态视图 ----
+   加载 / 无可译内容 / 失败三态共用 .mini-status 外壳，各自补布局。 */
 
 .mini-status {
+  flex: 1;
+  min-height: 0;
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
-  height: 100%;
-  padding: 12px;
-  box-sizing: border-box;
-}
-
-/* 「无可译内容」态除了提示语还可能带一行降级说明，纵向排列 */
-.mini-empty {
-  flex-direction: column;
-  gap: 6px;
+  gap: var(--sp-8);
+  padding: var(--sp-16);
+  color: var(--muted);
 }
 
 .mini-hint {
-  font-size: 13px;
-  color: var(--muted);
   text-align: center;
-  line-height: 1.4;
+  color: var(--muted);
 }
 
 .mini-error {
   color: var(--danger);
+}
+
+/* 无可译内容：提示语 +（可能有的）降级说明 */
+.mini-empty {
+  gap: var(--sp-8);
+}
+
+/* 加载态：顶部一行状态（占住方向行的位置）+ 三行骨架，都不用 spinner——
+   骨架能预告「译文大概占几行」，转圈只能说「在等」。骨架保持顶部对齐，
+   译文到达时内容不从中间跳回顶部。 */
+.mini-loading {
+  align-items: stretch;
+  justify-content: flex-start;
+  gap: var(--sp-8);
+}
+
+.mini-loading .mini-hint {
+  text-align: start;
+}
+
+.mini-skeleton {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-12);
+}
+
+.mini-skel {
+  display: block;
+  height: var(--sp-12);
+}
+
+.mini-skel--md {
+  width: 82%;
+}
+
+.mini-skel--sm {
+  width: 48%;
 }

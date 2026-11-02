@@ -84,6 +84,9 @@ export function applyModifierKey(
 const DEFAULT_HINTS: readonly FooterHint[] = [
   { kbd: "↵", label: "粘贴" },
   { kbd: "⌥↵", label: "复制" },
+  // 写 1–0 而不是 1–9：浮窗走 directPickIndex（panels/history/keyboard.ts），
+  // 其中 "0" 明确映射到第 10 条，"1".."9" 映射到第 1..9 条，0 是能用的键。
+  // 注意别和主窗的 quickSelectIndex 混了——那条路径只接受 ⌘1–9。
   { kbd: "1–0", label: "直达" },
   { kbd: "↑↓", label: "选择" },
   { kbd: "esc", label: "关闭" },

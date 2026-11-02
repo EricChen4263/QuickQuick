@@ -1,26 +1,26 @@
 /* 更新就绪提示条：浮于内容上层右下角，非打扰式。
-   定位与配色复用既有 token，不新造视觉系统。 */
+   定位与配色只用 token；文字形态由组件上的命名样式类（.body-6）决定。 */
 .update-banner {
   position: fixed;
-  right: 16px;
-  bottom: 16px;
+  right: var(--sp-16);
+  bottom: var(--sp-16);
   z-index: 1000;
   display: flex;
   align-items: center;
-  gap: 14px;
-  padding: 12px 16px;
+  gap: var(--sp-16);
+  padding: var(--sp-12) var(--sp-16);
   background: var(--surface);
   border: 1px solid color-mix(in oklch, var(--border) 76%, transparent);
-  border-radius: var(--r);
+  border-radius: var(--r-12);
   box-shadow: var(--shadow-pop);
 }
 
 .update-banner-text {
-  font-size: 13px;
   color: var(--fg);
 }
 
 .update-banner-actions {
   display: flex;
-  gap: 8px;
+  align-items: center;
+  gap: var(--sp-8);
 }

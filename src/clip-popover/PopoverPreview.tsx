@@ -34,20 +34,20 @@ function TextContent({ item }: { item: ClipItem }) {
   if (item.kind === "richtext" && item.htmlContent !== undefined) {
     return (
       <div
-        className="popover-preview-content"
+        className="popover-preview-content body-3"
         onClick={handleRichLinkClick}
         dangerouslySetInnerHTML={{ __html: sanitizeRichHtml(item.htmlContent) }}
       />
     );
   }
-  return <div className="popover-preview-content">{item.content}</div>;
+  return <div className="popover-preview-content body-3">{item.content}</div>;
 }
 
 /** 图片内容区：缩略图按需拉取，未就绪或取不到时保持既有 `[图片]` 占位 */
 function ImageContent({ item }: { item: ClipItem }) {
   const thumbnailUrl = useClipItemThumbnail(item);
   if (thumbnailUrl === null) {
-    return <div className="popover-preview-img-placeholder">[图片]</div>;
+    return <div className="popover-preview-img-placeholder body-5">[图片]</div>;
   }
   return (
     <img
@@ -68,7 +68,7 @@ export function PopoverPreview({ state }: PopoverPreviewProps) {
   if (state.kind === "waiting") {
     return (
       <div className="popover-preview popover-preview-waiting">
-        <span>{PREVIEW_WAITING_TEXT}</span>
+        <span className="caption-2">{PREVIEW_WAITING_TEXT}</span>
       </div>
     );
   }
@@ -76,7 +76,7 @@ export function PopoverPreview({ state }: PopoverPreviewProps) {
   if (state.kind === "empty") {
     return (
       <div className="popover-preview popover-preview-empty">
-        <span>无选中项</span>
+        <span className="caption-2">无选中项</span>
       </div>
     );
   }
@@ -85,10 +85,12 @@ export function PopoverPreview({ state }: PopoverPreviewProps) {
   return (
     <div className="popover-preview">
       <div className="popover-preview-kicker">
-        <span>{kindLabel(item.kind)}</span>
+        <span className="caption-4">{kindLabel(item.kind)}</span>
         <span className="popover-preview-dot" aria-hidden="true" />
-        <span>{formatTime(item.lastModifiedUtc)}</span>
-        {item.isFavorite && <span className="popover-preview-fav-badge">已收藏</span>}
+        <span className="caption-4 mono">{formatTime(item.lastModifiedUtc)}</span>
+        {item.isFavorite && (
+          <span className="popover-preview-fav-badge badge caption-5">已收藏</span>
+        )}
       </div>
       {item.kind === "image" ? (
         <ImageContent item={item} />

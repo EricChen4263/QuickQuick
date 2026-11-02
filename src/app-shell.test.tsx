@@ -124,12 +124,12 @@ describe("app-shell", () => {
     expect(within(nav).getByRole("button", { name: "剪贴板" })).not.toHaveAttribute("aria-current");
   });
 
-  it("app-shell: 主导航 nav 使用 qq-sidebar 类", () => {
+  it("app-shell: 主导航 nav 使用 qq-topnav 类", () => {
     render(<App />);
 
-    // qq-sidebar 类赋予侧边栏版式与背景，验证样式类已挂载
+    // 外壳重组后一级导航从 112px 常驻侧栏并入顶部栏，类名随之改为 qq-topnav
     const nav = screen.getByRole("navigation", { name: "主导航" });
-    expect(nav).toHaveClass("qq-sidebar");
+    expect(nav).toHaveClass("qq-topnav");
   });
 
   it("app-shell: 三个导航入口按钮均使用 qq-nav-item 类", () => {
@@ -143,15 +143,16 @@ describe("app-shell", () => {
     }
   });
 
-  it("app-shell: 主题切换区渲染三个 aria-pressed 按钮", () => {
+  it("app-shell: 主导航只容纳三个一级入口，不留主题开关", () => {
     render(<App />);
 
-    // 校验 ThemeSwitch 三按钮存在且有 aria-pressed 属性（auto/light/dark）
+    // 主题开关已从顶部栏移到「设置 › 外观」：它是设一次就不再动的偏好，
+    // 常驻顶栏会与导航争夺注意力。这里断言导航里只剩三个入口按钮。
     const nav = screen.getByRole("navigation", { name: "主导航" });
-    const themeBtns = within(nav).getAllByRole("button").filter(
-      (btn) => btn.hasAttribute("aria-pressed")
-    );
-    expect(themeBtns).toHaveLength(3);
+    expect(within(nav).getAllByRole("button")).toHaveLength(3);
+    expect(
+      within(nav).getAllByRole("button").filter((btn) => btn.hasAttribute("aria-pressed"))
+    ).toHaveLength(0);
   });
 
   // 托盘「打开设置」链路的前端一半：后端 emit(ROUTE_EVENT, "settings") 后，

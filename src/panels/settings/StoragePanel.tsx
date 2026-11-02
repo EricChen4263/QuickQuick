@@ -279,14 +279,14 @@ function StoragePanel() {
       <SettingGroup>
         <div className="set-row">
           <div className="grow">
-            <div className="label">图片占用</div>
-            <div className="desc">
+            <div className="label title-4">图片占用</div>
+            <div className="desc caption-5">
               受 500 MB 上限约束；进度条与自动清理的阈值判据取的是同一个量
             </div>
             <div className="meter" aria-hidden="true">
               <i style={{ width: `${meterWidth}%` }} />
             </div>
-            <div className="meter-legend">
+            <div className="meter-legend caption-5 mono">
               <span>{toMB(imageBytes)} MB 已用</span>
               <span>图片占用上限 500 MB</span>
             </div>
@@ -294,8 +294,8 @@ function StoragePanel() {
         </div>
         <div className="set-row">
           <div className="grow">
-            <div className="label">库文件体积</div>
-            <div className="desc">
+            <div className="label title-4">库文件体积</div>
+            <div className="desc caption-5">
               {toMB(fileSizeBytes)} MB · 磁盘实际占用，与上面的图片占用不是同一个量：还含文本条目、
               索引与未回收页，SQLite 删除只把页标记为可复用，文件在 VACUUM 前不会缩小
             </div>
@@ -303,8 +303,8 @@ function StoragePanel() {
         </div>
         <div className="set-row">
           <div className="grow">
-            <div className="label">条目数</div>
-            <div className="desc">{liveCount} 条活跃记录（不含软删）</div>
+            <div className="label title-4">条目数</div>
+            <div className="desc caption-5">{liveCount} 条活跃记录（不含软删）</div>
           </div>
         </div>
         <div
@@ -312,22 +312,22 @@ function StoragePanel() {
           title={`默认：${DEFAULT_HISTORY_ITEMS} 条。超过此数量的非收藏条目会在入库时自动淘汰最旧的；收藏项不计数也不删除。`}
         >
           <div className="grow">
-            <label className="label" htmlFor="history-limit">
+            <label className="label title-4" htmlFor="history-limit">
               历史条目上限
             </label>
-            <div className="desc">
+            <div className="desc caption-5">
               超过此数量的非收藏条目会在入库时自动淘汰最旧的；收藏项不计数也不删除。
               范围 {MIN_HISTORY_ITEMS}–{MAX_HISTORY_ITEMS} 条，改小会立即生效。
             </div>
             {historyMsg !== null && (
-              <div className="desc" role="status">
+              <div className="desc caption-5" role="status">
                 {historyMsg}
               </div>
             )}
           </div>
           <input
             id="history-limit"
-            className="set-input short-num num"
+            className="set-input short-num num body-6"
             type="number"
             min={MIN_HISTORY_ITEMS}
             max={MAX_HISTORY_ITEMS}
@@ -346,10 +346,10 @@ function StoragePanel() {
           title="默认：500 MB，固定不可配置（与后端 image::CleanupPolicy::default 同源）。超出后按分级清理：先删大图原图保缩略图，再整条清最旧非收藏。"
         >
           <div className="grow">
-            <div className="label">图片占用上限</div>
-            <div className="desc">超出按分级清理：先删大图原图保缩略图，再整条清最旧非收藏</div>
+            <div className="label title-4">图片占用上限</div>
+            <div className="desc caption-5">超出按分级清理：先删大图原图保缩略图，再整条清最旧非收藏</div>
           </div>
-          <span className="kbd-combo num">
+          <span className="kbd-combo caption-4 mono">
             <kbd>500 MB</kbd>
           </span>
         </div>
@@ -358,8 +358,8 @@ function StoragePanel() {
           title={`默认：${DEFAULT_IMAGE_THRESHOLD_MB} MB。超过此大小的图片只保留缩略图，原图标记为过大未存；可选档位 ${IMAGE_THRESHOLD_OPTIONS.join(" / ")} MB。`}
         >
           <div className="grow">
-            <div className="label">单张图片阈值</div>
-            <div className="desc">超过此大小的图片只保留缩略图，原图标记为过大未存</div>
+            <div className="label title-4">单张图片阈值</div>
+            <div className="desc caption-5">超过此大小的图片只保留缩略图，原图标记为过大未存</div>
           </div>
           <Select
             ariaLabel="单张图片阈值"
@@ -373,10 +373,10 @@ function StoragePanel() {
           title="一次性操作，无默认值。当场清理非收藏条目；收藏项永远豁免。"
         >
           <div className="grow">
-            <div className="label">立即清理非收藏历史</div>
-            <div className="desc">物理清除已软删条目（墓碑 GC）</div>
+            <div className="label title-4">立即清理非收藏历史</div>
+            <div className="desc caption-5">物理清除已软删条目（墓碑 GC）</div>
           </div>
-          <button className="btn" type="button" onClick={() => { void handleCleanup(); }}>
+          <button className="btn button-sm" type="button" onClick={() => { void handleCleanup(); }}>
             清理…
           </button>
         </div>
@@ -388,19 +388,19 @@ function StoragePanel() {
           title="一次性操作，无默认值。导出为口令加密的可移植包（含条目与图片）；导入时会跳过已存在的条目。"
         >
           <div className="grow">
-            <div className="label">备份 / 恢复</div>
-            <div className="desc">
+            <div className="label title-4">备份 / 恢复</div>
+            <div className="desc caption-5">
               导出带口令加密的备份包（.qqbp）；换机或空库时导入即可恢复历史。导入只做合并，不删除现有条目。
             </div>
           </div>
         </div>
         <div className="set-row column">
-          <label className="label" htmlFor="backup-passphrase">
+          <label className="label title-4" htmlFor="backup-passphrase">
             备份口令
           </label>
           <input
             id="backup-passphrase"
-            className="set-input"
+            className="set-input body-6"
             type="password"
             autoComplete="new-password"
             value={passphrase}
@@ -409,7 +409,7 @@ function StoragePanel() {
           />
           <div className="backup-actions">
             <button
-              className="btn btn-primary"
+              className="btn btn-primary button-sm"
               type="button"
               onClick={() => void handleExportBackup()}
               disabled={isExporting}
@@ -417,7 +417,7 @@ function StoragePanel() {
               {isExporting ? "导出中…" : "导出备份"}
             </button>
             <button
-              className="btn"
+              className="btn button-sm"
               type="button"
               onClick={() => fileInputRef.current?.click()}
               disabled={isImporting}
@@ -440,17 +440,17 @@ function StoragePanel() {
             title="默认：优先「文稿」目录，其次「下载」目录；两者都不可用时回退到应用数据目录。"
           >
             <div className="grow">
-              <div className="label">备份位置</div>
-              <div className="desc" style={{ wordBreak: "break-all" }}>
+              <div className="label title-4">备份位置</div>
+              <div className="desc caption-5 set-path">
                 {backupPath}
               </div>
               {backupUsedFallbackDir && (
-                <div className="desc">
+                <div className="desc caption-5">
                   已回退到应用数据目录（文稿/下载目录不可用）
                 </div>
               )}
             </div>
-            <button className="btn" type="button" onClick={() => void handleRevealBackup()}>
+            <button className="btn button-sm" type="button" onClick={() => void handleRevealBackup()}>
               在 Finder 中显示
             </button>
           </div>
@@ -458,14 +458,10 @@ function StoragePanel() {
       </SettingGroup>
 
       {cleanupMsg !== null && (
-        <div style={{ marginTop: 8, fontSize: 12, color: "var(--muted)" }}>
-          {cleanupMsg}
-        </div>
+        <div className="caption-5 set-feedback">{cleanupMsg}</div>
       )}
       {backupMsg !== null && (
-        <div style={{ marginTop: 8, fontSize: 12, color: "var(--muted)" }}>
-          {backupMsg}
-        </div>
+        <div className="caption-5 set-feedback">{backupMsg}</div>
       )}
     </div>
   );

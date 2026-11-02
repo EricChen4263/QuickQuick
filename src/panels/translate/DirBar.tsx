@@ -27,8 +27,13 @@ const TARGET_OPTIONS = toLangOptions(TARGET_LANGUAGES);
 /**
  * 翻译方向栏：源语下拉 + 目标语下拉 + 翻译源选择器。
  * 纯展示组件，无副作用，所有状态由父组件 TranslatePage 持有。
+ *
  * 源语含"自动检测"选项；目标语不含（目标必须为具体语言）。
  * 三处下拉用自定义 Select，绕开 Overlay 标题栏下原生弹窗的坐标错位。
+ *
+ * 两个语言下拉被 .lang-selects 的容器底色包成一个分段控件，中间的箭头是纯装饰
+ * （不进无障碍树、不可点）。真正改变方向的「交换」动作由工作区的操作行发起，
+ * 因为它需要同时写回源语与目标语两个值。
  */
 function DirBar({
   sourceLang,
@@ -54,7 +59,7 @@ function DirBar({
 
   return (
     <div className="dir-bar">
-      <span className="lang-selects">
+      <div className="lang-selects">
         <Select
           ariaLabel="源语言"
           value={sourceLang}
@@ -62,18 +67,9 @@ function DirBar({
           onChange={onSourceChange}
         />
         {/* 方向箭头：表意"源语 → 目标语"，纯装饰，不进无障碍树、不可点 */}
-        <svg
-          className="lang-dir-arrow"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="1.8"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          aria-hidden="true"
-        >
-          <path d="M5 12h14" />
-          <path d="m13 6 6 6-6 6" />
+        <svg className="ico lang-dir-arrow" viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M4 12h15" />
+          <path d="m14.5 7 5 5-5 5" />
         </svg>
         <Select
           ariaLabel="目标语言"
@@ -81,17 +77,17 @@ function DirBar({
           options={TARGET_OPTIONS}
           onChange={onTargetChange}
         />
-      </span>
+      </div>
 
-      <span className="src-select">
-        翻译源
+      <div className="tx-src-select">
+        <span className="caption-4">翻译源</span>
         <Select
           ariaLabel="翻译源"
           value={selectedProviderId}
           options={providerOptions}
           onChange={onProviderChange}
         />
-      </span>
+      </div>
     </div>
   );
 }

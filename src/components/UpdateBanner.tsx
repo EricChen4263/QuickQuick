@@ -58,14 +58,14 @@ function UpdateBanner() {
 
   return (
     <div className="update-banner" role="status">
-      <span className="update-banner-text">新版本 {readyVersion} 已就绪</span>
+      <span className="update-banner-text body-6">新版本 {readyVersion} 已就绪</span>
       <div className="update-banner-actions">
-        <button type="button" className="btn btn-primary" onClick={handleRestart}>
+        <button type="button" className="btn btn-primary btn-sm button-sm" onClick={handleRestart}>
           重启更新
         </button>
         <button
           type="button"
-          className="btn btn-ghost"
+          className="btn btn-ghost btn-sm button-sm"
           onClick={() => setReadyVersion((_prev) => null)}
         >
           稍后

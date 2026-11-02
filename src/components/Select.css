@@ -1,7 +1,9 @@
 /*
  * 自定义下拉组件样式。
- * trigger 复用原生 select 的外观（深色面、圆角、token 变量、右侧 chevron）；
+ * 外观按设计系统：--surface-2 面、8px 圆角、全周描边、焦点用光晕（不叠 outline）；
  * 菜单浮层 portal 到 body、fixed 定位，绕开 overflow 容器裁剪。
+ *
+ * 本文件不写字号 / 字重：文字形态由组件上的命名样式类（.body-6）决定。
  */
 
 .qq-select {
@@ -14,21 +16,26 @@
   display: inline-flex;
   align-items: center;
   justify-content: space-between;
-  gap: 6px;
-  border: 1px solid color-mix(in oklch, var(--border) 78%, transparent);
+  gap: var(--sp-8);
+  border: 1px solid transparent;
   background: var(--surface-2);
-  border-radius: var(--r-sm);
-  padding: 7px 10px 7px 12px;
-  font-size: 12.5px;
-  font-family: var(--font);
+  border-radius: var(--r-8);
+  padding: var(--sp-8) var(--sp-12);
   color: var(--fg);
   outline: none;
   cursor: pointer;
   width: 100%;
+  transition: var(--t-color);
+}
+
+.qq-select-trigger:hover {
+  background: color-mix(in oklch, var(--fg) 8%, var(--surface-2));
 }
 
 .qq-select-trigger:focus-visible,
 .qq-select[data-open="true"] .qq-select-trigger {
+  /* 焦点表现只给一层光晕，不再叠 outline —— 两层环会互相吃掉边缘 */
+  outline: none;
   border-color: var(--accent);
   box-shadow: 0 0 0 3px var(--accent-soft);
 }
@@ -40,8 +47,8 @@
 }
 
 .qq-select-chevron {
-  width: 13px;
-  height: 13px;
+  width: var(--icon-14);
+  height: var(--icon-14);
   flex: none;
   color: var(--muted);
 }
@@ -51,32 +58,32 @@
 .qq-select-menu {
   list-style: none;
   margin: 0;
-  padding: 4px;
+  padding: var(--sp-4);
   z-index: 1000;
-  max-height: 260px;
+  max-height: calc(var(--sp-64) * 4);
   overflow-y: auto;
   background: var(--surface);
   border: 1px solid color-mix(in oklch, var(--border) 82%, transparent);
-  border-radius: var(--r-sm);
+  border-radius: var(--r-8);
   box-shadow: var(--shadow-pop);
 }
 
 .qq-select-option {
-  padding: 6px 10px;
-  font-size: 12.5px;
-  border-radius: var(--r-sm);
+  padding: var(--sp-8);
+  border-radius: var(--r-6);
   color: var(--fg);
   cursor: pointer;
   white-space: nowrap;
+  transition: var(--t-color);
 }
 
 .qq-select-option.is-active {
   background: var(--surface-2);
 }
 
+/* 选中项只加颜色，不额外加粗：字重由命名样式类统一，状态不抢排版 */
 .qq-select-option[aria-selected="true"] {
   color: var(--accent);
-  font-weight: 600;
 }
 
 .qq-select-option.is-disabled {

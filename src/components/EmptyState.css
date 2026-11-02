@@ -1,0 +1,10 @@
+/* 空态：结构性样式（.empty / .mark / h3 / p）由 theme/components.css 提供，
+   这里只补「下一步动作」这一层，不重定义既有的空态外观。 */
+
+.empty-action {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-8);
+  margin-top: var(--sp-4);
+}

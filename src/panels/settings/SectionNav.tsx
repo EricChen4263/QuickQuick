@@ -12,53 +12,57 @@ export const SECTION_LABELS: Record<SettingsSection, string> = {
   about: "关于",
 };
 
-/** 各子项对应的内联 SVG 图标（来自设计稿，stroke-width=1.6） */
+/**
+ * 各子项对应的内联 SVG 图标。
+ *
+ * 全部走 .ico 基类（24 网格 / stroke 1.5 / 圆头圆角，Phosphor 语汇），
+ * 不在各处重复写 stroke-width；尺寸交给 .ico-16。形状各自扣题，
+ * 不用通用齿轮堆满整列。
+ */
 const SECTION_ICONS: Record<SettingsSection, ReactElement> = {
   general: (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <circle cx="12" cy="12" r="3"/>
-      <path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>
+    <svg className="ico ico-16" viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M10.55 2.81 13.45 2.81 13.68 5 15.76 5.86 17.47 4.48 19.52 6.53 18.14 8.24 19 10.32 21.19 10.55 21.19 13.45 19 13.68 18.14 15.76 19.52 17.47 17.47 19.52 15.76 18.14 13.68 19 13.45 21.19 10.55 21.19 10.32 19 8.24 18.14 6.53 19.52 4.48 17.47 5.86 15.76 5 13.68 2.81 13.45 2.81 10.55 5 10.32 5.86 8.24 4.48 6.53 6.53 4.48 8.24 5.86 10.32 5Z" />
+      <circle cx="12" cy="12" r="3" />
     </svg>
   ),
   appearance: (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <path d="M5 3v18M12 3v18M19 3v18"/>
-      <circle cx="5" cy="8" r="2"/>
-      <circle cx="12" cy="14" r="2"/>
-      <circle cx="19" cy="7" r="2"/>
+    <svg className="ico ico-16" viewBox="0 0 24 24" aria-hidden="true">
+      <circle cx="12" cy="12" r="9" />
+      <path d="M12 3a9 9 0 0 1 0 18Z" fill="currentColor" stroke="none" />
     </svg>
   ),
   hotkey: (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <rect x="2" y="6" width="20" height="12" rx="2"/>
-      <path d="M6 10h0M10 10h0M14 10h0M18 10h0M6 14h12"/>
+    <svg className="ico ico-16" viewBox="0 0 24 24" aria-hidden="true">
+      <rect x="2.5" y="6" width="19" height="12" rx="2.5" />
+      <path d="M6.5 10h.01M10 10h.01M13.5 10h.01M17 10h.01M8 14h8" />
     </svg>
   ),
   "translate-source": (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <path d="m5 8 6 6"/>
-      <path d="m4 14 6-6 2-3"/>
-      <path d="M2 5h12"/>
-      <path d="m22 22-5-10-5 10"/>
-      <path d="M14 18h6"/>
+    <svg className="ico ico-16" viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M3.5 6h9M8 6c0 4.2-1.6 7.4-4.5 9.4" />
+      <path d="M6 10.5c1.3 2.1 3.2 3.6 5.6 4.4" />
+      <path d="m12.5 20.5 4.2-9.6 4.2 9.6M14.2 17.2h5" />
     </svg>
   ),
   privacy: (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+    <svg className="ico ico-16" viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M12 2.8 19 5.5v5.6c0 4.5-2.9 8.4-7 9.6-4.1-1.2-7-5.1-7-9.6V5.5Z" />
+      <path d="m9 11.8 2.2 2.2 4.2-4.4" />
     </svg>
   ),
   storage: (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <ellipse cx="12" cy="5" rx="9" ry="3"/>
-      <path d="M3 5v14a9 3 0 0 0 18 0V5"/>
-      <path d="M3 12a9 3 0 0 0 18 0"/>
+    <svg className="ico ico-16" viewBox="0 0 24 24" aria-hidden="true">
+      <ellipse cx="12" cy="5.5" rx="7.5" ry="2.8" />
+      <path d="M4.5 5.5v13c0 1.5 3.4 2.8 7.5 2.8s7.5-1.3 7.5-2.8v-13" />
+      <path d="M4.5 12c0 1.5 3.4 2.8 7.5 2.8s7.5-1.3 7.5-2.8" />
     </svg>
   ),
   about: (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <circle cx="12" cy="12" r="10"/>
-      <path d="M12 16v-4M12 8h.01"/>
+    <svg className="ico ico-16" viewBox="0 0 24 24" aria-hidden="true">
+      <circle cx="12" cy="12" r="9" />
+      <path d="M12 11.5v5" />
+      <path d="M12 8h.01" />
     </svg>
   ),
 };
@@ -69,21 +73,33 @@ interface SectionNavProps {
   onSelect: (section: SettingsSection) => void;
 }
 
-/** 设置页左侧纵向子项导航栏：图标 + 文字，选中态用 aria-current="page" */
+/**
+ * 设置页左侧纵向子项导航。
+ *
+ * 选中态用 aria-current="page" 表达，视觉上只做两件事：左侧 2px 强调色竖条
+ * + 标签加重字重。刻意不做「强调色底色药丸」——那会把导航变成一排按钮，
+ * 让 7 个平级入口看起来像 7 个操作。
+ */
 function SectionNav({ sections, activeSection, onSelect }: SectionNavProps) {
   return (
     <nav className="set-nav" aria-label="设置子项">
-      {sections.map((section) => (
-        <button
-          key={section}
-          className="set-nav-item"
-          aria-current={activeSection === section ? "page" : undefined}
-          onClick={() => onSelect(section)}
-        >
-          {SECTION_ICONS[section]}
-          {SECTION_LABELS[section]}
-        </button>
-      ))}
+      {sections.map((section) => {
+        const isActive = activeSection === section;
+        return (
+          <button
+            key={section}
+            type="button"
+            className="set-nav-item"
+            aria-current={isActive ? "page" : undefined}
+            onClick={() => onSelect(section)}
+          >
+            {SECTION_ICONS[section]}
+            <span className={isActive ? "body-4" : "caption-1"}>
+              {SECTION_LABELS[section]}
+            </span>
+          </button>
+        );
+      })}
     </nav>
   );
 }

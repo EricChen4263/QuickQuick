@@ -1,384 +1,608 @@
 /*
- * 翻译页专属样式
- * 复用 tokens.css 的短名 token，不引入新 token。
- * 通用组件类（.btn/.pane-head 等）来自 components.css，此处只写翻译页独有结构。
+ * 翻译页
+ *
+ * 一次翻译的阅读顺序：语言方向与翻译源（工具栏）→ 原文（可写的凹槽）→ 译文（抬起的纸面）
+ * → 历史（随取随用的旁栏）。
+ *
+ * 层次只靠背景色差与留白，不用「边框 + 阴影 + 白底」三件套：
+ *   · 页面底 = --bg
+ *   · 工作区 = --surface（本页唯一的抬升面，因为它承载「读译文」这件事）
+ *   · 历史栏 = 透明，行只在 hover / 选中时抬到 --surface
+ * 两块都做成白卡是这类工具最泛化的做法，所以只留一块有卡片观感。
+ *
+ * 外壳去掉 112px 常驻侧栏后本页拿回全宽，四边统一 --sp-24；
+ * 字号 / 间距 / 圆角 / 缓动一律走 token，文字全部套 base.css 的命名样式（写在 TSX 里）。
  */
 
-/* 翻译页根：工作区 1fr + 历史栏 280px */
+/* ------------------------------------------------------------------ 页面 ---- */
+
 .view-translate {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 300px;
-  gap: 18px;
+  gap: var(--sp-24);
   height: 100%;
   min-height: 0;
-  padding: 18px 18px 16px 0;
+  padding: var(--sp-24);
 }
 
-/* 工作区主列：头部固定 + 内容可滚动
-   min-width:0 防止 grid 列方向横向溢出；overflow:hidden 隔离内容撑高 */
+/* 工作区：全页唯一的卡片。抬升感由 --bg → --surface 的色差给出，
+   只补一层 1px 的贴边阴影（和剪贴板页的预览面同一语言），不描边。 */
 .tx-work {
   display: grid;
-  grid-template-rows: auto 1fr;
-  min-height: 0;
+  grid-template-rows: auto minmax(0, 1fr);
   min-width: 0;
-  overflow: hidden;
-  border-right: 0;
-  background: var(--surface);
-  border: 1px solid color-mix(in oklch, var(--border) 72%, transparent);
-  border-radius: var(--r-lg);
-}
-
-/* 可滚动内容区，包裹 DirBar / 输入 / 译文
-   min-height:0 让 grid 1fr 行不被内容撑大，防止滚动冒泡到外层 */
-.tx-scroll {
-  overflow-y: auto;
   min-height: 0;
-  padding: 22px 28px 30px;
+  overflow: hidden;
+  background: var(--surface);
+  border-radius: var(--r-12);
+  box-shadow: var(--shadow-panel);
 }
 
-/* 语言方向栏：lang-selects 左对齐 + src-select 推到右侧 */
+/* -------------------------------------------------------------- 工具栏 ----
+   左侧语言方向读作「一组」，右侧翻译源单独成簇。底部不画分割线：
+   下面的输入框本身就是凹槽，已经足够分层。 */
+
 .dir-bar {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: var(--sp-16);
   flex-wrap: wrap;
-  margin-bottom: 16px;
+  min-width: 0;
+  padding: var(--sp-16) var(--sp-24) var(--sp-12);
 }
 
-/* 语言下拉组：两个语言 Select 并排，间距与翻译源 Select 保持一致 */
+/* 分段容器：--surface-2 的底 + --sp-2 的内缩，把两个下拉读成一个控件 */
 .lang-selects {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  flex: none;
+  padding: var(--sp-2);
+  border-radius: var(--r-8);
+  background: var(--surface-2);
 }
 
-/* 源语 → 目标语方向箭头：装饰性，muted 色、不抢占交互 */
-.lang-dir-arrow {
-  width: 15px;
-  height: 15px;
+.lang-selects .qq-select {
   flex: none;
+}
+
+/*
+ * 下拉 trigger 的外观由 components/Select.css 提供，它仍是旧版「描边药丸」尺寸。
+ * 这里只在页面作用域内（三段选择器，稳过 Select.css 的两段）把它改成透明分段项，
+ * 不改组件本身，避免同一应用里出现两种下拉手感。
+ */
+.view-translate .lang-selects .qq-select-trigger {
+  padding: var(--sp-4) var(--sp-8);
+  gap: var(--sp-4);
+  border-color: transparent;
+  border-radius: var(--r-6);
+  background: transparent;
+  font-size: var(--text-sm);
+  line-height: var(--lh-sm);
+  font-weight: var(--fw-medium);
+}
+
+.view-translate .lang-selects .qq-select-trigger:hover {
+  background: var(--hover);
+}
+
+/* 焦点环由本页重给：上面把 Select 自带的描边焦点态一并覆盖了 */
+.view-translate .lang-selects .qq-select-trigger:focus-visible,
+.view-translate .lang-selects .qq-select[data-open="true"] .qq-select-trigger {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
+
+/* 源语 → 目标语：纯装饰，不进无障碍树、不可点 */
+/* 方向箭头。必须同时挂 base.css 的 .ico 基类：
+   否则 SVG 会用默认 fill:black / stroke:none 渲染，把箭头画成实心黑三角。
+   这里只负责尺寸与布局，描边语汇交给 .ico。 */
+.lang-dir-arrow {
+  width: var(--icon-16);
+  height: var(--icon-16);
+  flex: none;
+  margin: 0 var(--sp-2);
   color: var(--muted);
   pointer-events: none;
 }
 
-/* 翻译源选择器容器：margin-left auto 推到右端 */
-.src-select {
-  margin-left: auto;
+/* 翻译源：推到右端。类名带 tx- 前缀，避免与设置页的同名区块互相污染。 */
+.tx-src-select {
   display: inline-flex;
   align-items: center;
-  gap: 7px;
-  color: var(--muted);
-  font-size: 12.5px;
-}
-
-/* 字段标签：小号灰色，textarea / 译文区上方 */
-.field-label {
-  font-size: 12px;
-  color: var(--muted);
-  margin-bottom: 6px;
-  display: flex;
-  align-items: center;
-  gap: 7px;
-}
-
-/* 输入框：全宽可拉伸，获焦高亮 */
-.tx-input {
-  width: 100%;
-  min-height: 96px;
-  resize: vertical;
-  padding: 14px 16px;
-  border: 1px solid color-mix(in oklch, var(--border) 76%, transparent);
-  border-radius: var(--r);
-  background: var(--surface-2);
-  outline: none;
-  font-size: 15px;
-  line-height: 1.55;
-  color: var(--fg);
-  font-family: var(--font);
-}
-
-.tx-input:focus {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 3px var(--accent-soft);
-}
-
-/* 翻译 CTA 行：复用 ActionBar(surface) 统一按钮容器语言，
-   但此处在输入区下方、非窗口底部固定条，去掉变体自带的顶分割线与外 padding */
-.tx-cta {
-  margin-top: 12px;
-}
-
-.tx-cta.qq-action-bar {
-  border-top: none;
-  padding: 0;
-  /* 非底部固定条，去掉 surface 皮自带的深色底 */
-  background: transparent;
-  /* 恢复原 CTA 行 10px 间距（surface 默认 8px 偏窄） */
-  gap: 10px;
-}
-
-.tx-cta .meta {
-  color: var(--muted);
-  font-size: 12px;
-  font-family: var(--mono);
+  gap: var(--sp-8);
   margin-left: auto;
-}
-
-/* 译文区：顶部分隔线，与输入区视觉分层 */
-.tx-result {
-  margin-top: 22px;
-  border-top: 0;
-  padding: 20px;
-  background: var(--surface-2);
-  border-radius: var(--r);
-}
-
-/* 翻译进行中的结果区加载态：用 muted 弱化色 + 脉冲呼吸，
-   既明确告知"正在翻译"，又不喧宾夺主、不需引入额外 spinner 资源 */
-.tx-loading {
+  min-width: 0;
   color: var(--muted);
-  font-size: 16px;
-  animation: tx-pulse 1.2s ease-in-out infinite;
 }
 
-@keyframes tx-pulse {
-  0%,
-  100% {
-    opacity: 0.5;
-  }
-  50% {
-    opacity: 1;
-  }
-}
-
-/* 尊重系统「减少动态效果」：眩晕/前庭敏感用户关闭脉冲动画，
-   仍保留弱化色的静态「翻译中…」提示，不丢失进度反馈。 */
-@media (prefers-reduced-motion: reduce) {
-  .tx-loading {
-    animation: none;
-    opacity: 0.7;
-  }
-}
-
-/* 译文大字展示，字间距略收 */
-.tx-out {
-  font-size: 21px;
-  line-height: 1.4;
-}
-
-/* 词典词条展示：音标 / 按词性分组释义 / 例句 / 变形 / 发音 */
-.dict-entry {
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-}
-
-/* 音标：等宽字体、accent 色，区别于普通译文 */
-.dict-phonetic {
-  font-family: var(--mono);
-  font-size: 16px;
-  color: var(--accent);
-}
-
-/* 释义分组列表：去默认列表样式，纵向排列 */
-.dict-defs {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-/* 词性标签：小徽章，弱化背景 */
-.dict-pos {
-  display: inline-block;
-  font-family: var(--mono);
-  font-size: 11px;
-  color: var(--muted);
+.view-translate .tx-src-select .qq-select-trigger {
+  padding: var(--sp-4) var(--sp-8);
+  gap: var(--sp-8);
+  border-color: transparent;
+  border-radius: var(--r-6);
   background: var(--surface-2);
-  border: 1px solid color-mix(in oklch, var(--border) 76%, transparent);
-  border-radius: 4px;
-  padding: 1px 6px;
-  margin-bottom: 5px;
-}
-
-/* 该词性下的释义列表 */
-.dict-meanings {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-}
-
-.dict-meaning {
-  font-size: 16px;
-  line-height: 1.45;
+  font-size: var(--text-sm);
+  line-height: var(--lh-sm);
+  font-weight: var(--fw-medium);
   color: var(--fg);
 }
 
-/* 区块小标题（例句 / 变形） */
-.dict-section-label {
-  font-size: 12px;
-  color: var(--muted);
-  margin-bottom: 6px;
+.view-translate .tx-src-select .qq-select-trigger:hover {
+  background: color-mix(in oklch, var(--fg) 9%, var(--surface-2));
 }
 
-.dict-example-list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
+.view-translate .tx-src-select .qq-select-trigger:focus-visible,
+.view-translate .tx-src-select .qq-select[data-open="true"] .qq-select-trigger {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
+
+/* ---------------------------------------------------------------- 正文区 ---- */
+
+.tx-scroll {
   display: flex;
   flex-direction: column;
-  gap: 5px;
+  gap: var(--sp-24);
+  min-height: 0;
+  overflow-y: auto;
+  padding: 0 var(--sp-24) var(--sp-24);
 }
 
-/* 例句：稍弱化、左侧 accent 竖条点缀 */
-.dict-example {
-  font-size: 14px;
-  line-height: 1.5;
-  color: var(--muted);
-  padding-left: 10px;
-  border-left: 2px solid color-mix(in oklch, var(--accent-line) 82%, transparent);
-}
-
-/* 变形：标签 + 词形并排 */
-.dict-inflections {
+/* 字段标签行：左侧说明这行是什么。留空右侧，不放装饰性元信息。 */
+.tx-src-head {
   display: flex;
   align-items: baseline;
-  gap: 8px;
-  font-size: 13px;
+  justify-content: space-between;
+  gap: var(--sp-8);
+  margin-bottom: var(--sp-8);
+  color: var(--muted);
 }
 
-.dict-inflection-words {
-  font-family: var(--mono);
+/* 输入框容器只负责定位计数器，外观全部给 textarea 自己 */
+.tx-field {
+  position: relative;
+  min-width: 0;
+}
+
+/*
+ * 输入框：--surface-2 的凹槽。base.css 只重置了 button，所以描边 / 内距 /
+ * 缩放行为必须在这里显式写掉，否则会露出 UA 默认外观。
+ */
+.tx-input {
+  display: block;
+  width: 100%;
+  min-height: calc(var(--sp-96) + var(--sp-8));
+  /* 底部留白让计数器落在框内右下角，不另起一行抢视线 */
+  padding: var(--sp-12) var(--sp-16) var(--sp-32);
+  border: 0;
+  border-radius: var(--r-8);
+  background: var(--surface-2);
   color: var(--fg);
+  resize: none;
+  transition: var(--t-color);
 }
 
-/* 发音播放器：原生 audio controls，限宽不撑满 */
-.dict-audio {
-  width: 240px;
-  max-width: 100%;
-  height: 34px;
+.tx-input::placeholder {
+  /* 直接用 --muted：再乘透明度会掉到 4.5:1 以下（placeholder 也要可读） */
+  color: var(--muted);
 }
 
-/* 译文操作按钮行：复用 ActionBar(surface)；它在 .tx-result 卡片内，
-   去掉变体的顶分割线与外 padding，保留卡片内布局节奏 */
-.tx-actions {
-  margin-top: 14px;
+.tx-input:hover {
+  background: color-mix(in oklch, var(--fg) 7%, var(--surface-2));
+}
+
+.tx-input:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--accent);
+}
+
+.tx-count {
+  position: absolute;
+  right: var(--sp-12);
+  bottom: var(--sp-8);
+  color: var(--muted);
+  pointer-events: none;
+}
+
+/* CTA 行：复用 ActionBar 的条壳语义，但这里是内容流里的按钮行，
+   去掉变体自带的顶分割线、内距与底色，只留 flex 布局。 */
+.tx-cta.qq-action-bar {
+  margin-top: var(--sp-16);
+  padding: 0;
+  border-top: 0;
+  background: transparent;
+  gap: var(--sp-8);
   flex-wrap: wrap;
 }
 
-.tx-actions.qq-action-bar {
-  border-top: none;
-  padding: 0;
-  /* 卡片内操作行，去掉 surface 皮自带的深色底 */
-  background: transparent;
-}
-
-/* 历史侧栏：头部固定 + 列表可滚动
-   min-height/min-width 双保险，防止 grid 列方向也被撑大 */
-.tx-history {
-  display: grid;
-  grid-template-rows: auto 1fr;
-  min-height: 0;
-  min-width: 0;
-  overflow: hidden;
-  background: var(--surface);
-  border: 1px solid color-mix(in oklch, var(--border) 72%, transparent);
-  border-radius: var(--r-lg);
-}
-
-/* 历史栏头部块：标题行 + 可选的「仅显示最近 N 条」提示
-   作为 .tx-history grid 的第一行（auto），提示出现时把列表整体下推，不破坏 1fr 滚动行 */
-.tx-hist-head {
-  min-width: 0;
-}
-
-/* 分页提示：条数达到后端单页上限时出现，弱化为说明性文字，不与标题争视觉权重 */
-.tx-hist-limit {
+/* 原文与译文之间的分隔：独立 1px 线，不是卡片的单边边框 */
+.tx-rule {
+  height: 1px;
   margin: 0;
-  padding: 0 18px 10px;
-  font-size: 11px;
-  line-height: 1.4;
+  border: 0;
+  background: color-mix(in oklch, var(--border) 70%, transparent);
+}
+
+/* ------------------------------------------------------------------ 译文 ----
+   译文不套第二层卡片：它就在工作区这张纸上，靠 kicker 与间距和输入区分开。
+   读者视线不必在「卡片里的卡片」之间跳。 */
+
+.tx-result {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-12);
+  min-width: 0;
+}
+
+/* 元信息行：谁翻的、花了多久、哪两种语言 */
+.tx-kicker {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-8);
+  flex-wrap: wrap;
   color: var(--muted);
 }
 
-/* 历史列表可滚区
-   min-height:0 配合父 grid 1fr 行，确保内容超出时在此滚动 */
-.tx-hist-list {
-  overflow-y: auto;
-  min-height: 0;
-  padding: 10px 12px 16px;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
+.tx-kicker-sep {
+  color: color-mix(in oklch, var(--muted) 55%, transparent);
 }
 
-/* 历史条目按钮：全宽，左对齐，hover/selected 高亮 */
-.hist-row {
-  width: 100%;
-  text-align: left;
-  appearance: none;
-  border: 0;
-  border-left: 3px solid transparent;
+/* 译文用 .title-1（20/28 medium）：中文 20px 已是舒适读数，再大就把一段话读成标题 */
+.tx-out {
+  margin: 0;
+  color: var(--fg);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.tx-actions.qq-action-bar {
+  margin-top: var(--sp-4);
+  padding: 0;
+  border-top: 0;
   background: transparent;
-  border-radius: var(--r);
-  padding: 10px 12px 10px 9px;
+  gap: var(--sp-4);
+  flex-wrap: wrap;
+}
+
+/* 还没翻译时的引导：说清「这里会出现什么」和「怎么让它出现」，
+   不是一个空白面板，也不做成居中的大插画——输入框就在上面，别抢它。 */
+.tx-idle {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-12);
+  padding: var(--sp-16) 0;
+  color: var(--muted);
+}
+
+.tx-idle .ico {
+  margin-top: var(--sp-2);
+}
+
+.tx-idle-body {
+  display: grid;
+  gap: var(--sp-4);
+  min-width: 0;
+}
+
+.tx-idle-body p {
+  margin: 0;
+}
+
+.tx-idle-title {
+  color: var(--fg);
+}
+
+/* ---------------------------------------------------------------- 加载态 ----
+   骨架块照抄译文的行高节奏（12px 块 + 8px 间距 ≈ 20px 文本行），
+   比一个转圈更能说明「这里马上会出现一段话」。 */
+
+.tx-loading {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-12);
+}
+
+.tx-skel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-8);
+}
+
+.tx-skel-line {
+  height: var(--sp-12);
+  width: 100%;
+}
+
+.tx-skel-line:nth-child(2) {
+  width: 94%;
+}
+
+.tx-skel-line:last-child {
+  width: 62%;
+}
+
+.tx-skel-note {
+  margin: 0;
+  color: var(--muted);
+}
+
+/* ------------------------------------------------------------------ 告警 ----
+   条壳用共享的 .qq-note--danger，这里只补内部节奏：
+   第一行说清「什么失败了」，第二行（仅非官方源）说清「下一步怎么做」。 */
+
+.tx-alert-icon {
+  display: flex;
+  flex: none;
+  margin-top: var(--sp-2);
+}
+
+.tx-alert-body {
+  display: grid;
+  gap: var(--sp-4);
+  min-width: 0;
+}
+
+/* 「下一步」比错误本身弱一档：同一族颜色降透明度，不引入第二个色相 */
+.tx-alert-body .caption-5 {
+  color: color-mix(in oklch, var(--danger) 78%, transparent);
+}
+
+.tx-alert-body p {
+  margin: 0;
+}
+
+/* ------------------------------------------------------------------ 历史 ----
+   旁栏透明，行在 hover / 选中时抬到 --surface：列表平时只是页面上的文字，
+   被选中的那条才成为一张纸。 */
+
+.tx-history {
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr);
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.tx-hist-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-8);
+  padding: var(--sp-16) 0 var(--sp-8);
+}
+
+.tx-hist-limit {
+  margin: 0;
+  padding: 0 0 var(--sp-8);
+  color: var(--muted);
+}
+
+/* 唯一滚动区 */
+.tx-hist-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  min-height: 0;
+  overflow-y: auto;
+  padding-bottom: var(--sp-16);
+}
+
+/* 空态在侧栏里垂直居中，别孤零零挂在顶部 */
+.tx-hist-list > .empty {
+  flex: 1;
+}
+
+.hist-row {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  padding: var(--sp-8) var(--sp-12);
+  border-radius: var(--r-8);
+  text-align: left;
+  background: transparent;
   cursor: pointer;
-  transition: background-color 110ms ease, border-color 110ms ease;
+  transition: var(--t-color), var(--t-move);
 }
 
 .hist-row:hover {
   background: var(--hover);
 }
 
-.hist-row[aria-selected="true"] {
-  background: var(--accent-soft);
-  border-left-color: var(--accent);
+.hist-row:active {
+  transform: translateY(1px);
 }
 
-/* 历史条目原文：标准字号 */
-.hist-src {
-  font-size: 13px;
-  line-height: 1.35;
+.hist-row[aria-selected="true"] {
+  background: var(--surface);
+  box-shadow: var(--shadow-panel);
+}
+
+/* 选中指示：2px 竖条只动 transform，scaleY(0) 收进中轴即不可见，
+   不必再补 opacity 过渡，动效来源保持单一。 */
+.hist-row::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: var(--sp-8);
+  bottom: var(--sp-8);
+  width: 2px;
+  border-radius: var(--r-4);
+  background: var(--accent);
+  transform: scaleY(0);
+  transform-origin: center;
+  transition: var(--t-move);
+}
+
+.hist-row[aria-selected="true"]::before {
+  transform: scaleY(1);
+}
+
+/* 焦点环贴着行内收，避免在 300px 的窄栏里被裁掉 */
+.hist-row:focus-visible {
+  outline-offset: -2px;
+}
+
+/* 原文一行、译文一行，都截断——列表是用来扫的，不是用来读的。
+   选择器带上 .hist-row：base.css 的 .body-5 / .caption-5 带 text-wrap: pretty，
+   与本文件的加载顺序不固定，同名特异性下必须靠多一级类名稳压它们。 */
+.hist-row .hist-src {
+  display: block;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
   color: var(--fg);
 }
 
-/* 历史条目译文：小号灰色 */
-.hist-dst {
-  font-size: 12px;
+.hist-row .hist-dst {
+  display: block;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  margin-top: var(--sp-2);
   color: var(--muted);
-  line-height: 1.35;
-  margin-top: 2px;
 }
 
-/* 历史条目语言/provider 标签行：等宽字体，极小号 */
 .hist-tag {
-  margin-top: 5px;
   display: flex;
   align-items: center;
-  gap: 6px;
-  font-family: var(--mono);
-  font-size: 10.5px;
+  gap: var(--sp-8);
+  min-width: 0;
+  margin-top: var(--sp-8);
   color: var(--muted);
 }
 
-/* 标签内的语言对小徽章 */
+/* 语言对徽章不压缩；provider 名过长时自己省略 */
 .hist-tag .lp {
-  background: var(--surface-2);
-  border: 1px solid color-mix(in oklch, var(--border) 76%, transparent);
-  border-radius: 4px;
-  padding: 0 5px;
+  flex: none;
 }
 
-/* 错误提示条：顶部横幅，danger 色 */
-.tx-error {
-  padding: 8px 16px;
-  color: var(--danger);
-  background: color-mix(in oklch, var(--danger) 8%, var(--bg));
-  border-bottom: 1px solid color-mix(in oklch, var(--danger) 18%, var(--border));
-  font-size: 13px;
+.hist-prov {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* ---------------------------------------------------------------- 词典态 ----
+   词性放在左侧装订线：查词时先扫词性再读释义，比把词性压在释义上方更省纵向空间，
+   同一条目的多个词性也能一眼横向比较。
+
+   注意：DictEntryView 是主窗与翻译浮窗共用的组件（src/trans-popover 也渲染它）。
+   浮窗侧在 popover.css 里按 .mini-translate 前缀自带完整样式，所以这里每条规则
+   都挂在 .view-translate 下：只改主窗的读法，不把浮窗的词典视图一起重排。 */
+
+.view-translate .dict-entry {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-16);
+  min-width: 0;
+}
+
+.view-translate .dict-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-12);
+  flex-wrap: wrap;
+}
+
+/* 音标：等宽 + accent，是这个条目唯一着色的元素 */
+.view-translate .dict-phonetic {
+  color: var(--accent);
+}
+
+.view-translate .dict-defs {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-12);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.view-translate .dict-def-group {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: var(--sp-16);
+  align-items: start;
+}
+
+/* 无词性时释义独占整行，不留空的装订线 */
+.view-translate .dict-def-group .dict-meanings:only-child {
+  grid-column: 1 / -1;
+}
+
+.view-translate .dict-meanings {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  color: var(--fg);
+}
+
+.view-translate .dict-pos {
+  align-self: start;
+}
+
+.view-translate .dict-examples {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-8);
+}
+
+.view-translate .dict-section-label {
+  color: var(--muted);
+}
+
+.view-translate .dict-example-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-8);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* 例句左侧 2px accent 竖线：用 ::before 画引用标记，不用 border-left 参与盒模型，
+   这样竖线的高度可以比文本行内缩一点（浮窗那边仍用 border-left，互不影响）。 */
+.view-translate .dict-example {
+  position: relative;
+  padding-left: var(--sp-12);
+  color: var(--muted);
+}
+
+.view-translate .dict-example::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: var(--sp-2);
+  bottom: var(--sp-2);
+  width: 2px;
+  border-radius: var(--r-4);
+  background: var(--accent-line);
+}
+
+.view-translate .dict-inflections {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: var(--sp-8);
+}
+
+/* 发音入口：主窗里真正的播放由图标按钮驱动，audio 元素本身不进视觉层。
+   浮窗沿用原生 controls（popover.css 给了它宽高），所以隐藏只在主窗生效。 */
+.view-translate .dict-audio {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+}
+
+/* 反过来：浮窗保留原生播放器，那个图标按钮在浮窗里是重复入口，藏掉它。
+   写在翻译页样式里，是因为按钮属于本页维护的 DictEntryView，而 popover.css 不归我改。 */
+.mini-translate .dict-speak {
+  display: none;
 }

@@ -157,14 +157,27 @@ export function SettingsSaveErrorBanner() {
 
   return (
     <div className="set-save-error" role="alert">
+      <svg className="ico ico-16" viewBox="0 0 24 24" aria-hidden="true">
+        <circle cx="12" cy="12" r="9" />
+        <path d="M12 7.5v6" />
+        <path d="M12 17h.01" />
+      </svg>
       <div className="set-save-error-list">
         {saveErrors.map((entry) => (
-          <div key={entry.source} className="set-save-error-text" data-source={entry.source}>
+          <div
+            key={entry.source}
+            className="set-save-error-text body-6"
+            data-source={entry.source}
+          >
             {entry.message}
           </div>
         ))}
       </div>
-      <button type="button" className="set-save-error-dismiss" onClick={clearAllSaveErrors}>
+      <button
+        type="button"
+        className="set-save-error-dismiss button-sm"
+        onClick={clearAllSaveErrors}
+      >
         知道了
       </button>
     </div>

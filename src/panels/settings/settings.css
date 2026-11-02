@@ -1,380 +1,512 @@
 /*
- * 设置页专属样式
- * 依赖 theme/tokens.css 中的短名 token（--bg/--fg/--border/--accent/--r 等）。
- * .set-h/.set-sub/.set-group/.set-row 从 components.css 迁移至此，
- * 因这些类仅设置页使用，放组件层是错误分层。
+ * 设置页 —— 布局 + 页面级控件
+ *
+ * 整页零卡片：层次只靠背景色差、留白和 1px 分隔线，不再有「边框 + 圆角 + 白底」
+ * 的容器。组与组之间是留白，组内行与行之间是一条细线，最后一行不留线。
+ *
+ * 控件外观来自 theme/components.css（.btn / .switch / .icon-btn / .badge /
+ * .theme-seg / .skeleton）。本文件只定义设置页自己的排版，以及设置页专用的
+ * 输入框、芯片、进度条、键帽与两态分段。
+ *
+ * 色值 / 间距 / 圆角 / 时长全部取 tokens.css 的变量，本文件不写字面量。
  */
 
-/* 设置页根布局：左侧 128px 子项导航 + 右侧内容区 */
+/* ---------------------------------------------------------- 页面骨架 ----
+   左 160px 二级导航 + 右内容区。导航不进卡片，也不靠底色表达选中。 */
+
 .set-page {
   display: grid;
-  grid-template-columns: 128px minmax(0, 1fr);
-  gap: 18px;
+  grid-template-columns: 160px minmax(0, 1fr);
+  gap: var(--sp-32);
   height: 100%;
   min-height: 0;
-  padding: 18px 18px 16px 0;
+  padding: var(--sp-24);
+  background: var(--bg);
 }
 
-/* 左侧子项导航列：纵向排列，右边框分隔
-   min-height:0 + overflow:hidden 防止导航内容撑大 grid 行高 */
+/* 内容区是唯一滚动容器：导航固定，只有右侧内容滚 */
+.set-body {
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+  padding-block: var(--sp-8) var(--sp-48);
+  padding-inline-end: var(--sp-16);
+}
+
+/* 阅读宽度：表单不铺满整窗，右侧留白是有意留的 */
+.set-body > * {
+  max-width: 680px;
+}
+
+/* -------------------------------------------------------- 二级导航 ----
+   纯文字 + 图标。选中 = 左侧 2px 强调色竖条 + 加重字重，没有底色药丸。
+   竖条用 ::before + transform 表达，不动尺寸也不触发重排。 */
+
 .set-nav {
-  border-right: 0;
-  padding: 4px 0;
+  align-self: start;
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: var(--sp-2);
   min-height: 0;
-  overflow: hidden;
 }
 
-/* 子项导航按钮：图标 + 文字横排，hover/active 背景 */
 .set-nav-item {
-  appearance: none;
-  border: 0;
-  background: transparent;
-  text-align: left;
+  position: relative;
   display: flex;
   align-items: center;
-  gap: 9px;
-  padding: 9px 10px;
-  border-radius: var(--r);
+  gap: var(--sp-12);
+  padding: var(--sp-8) var(--sp-8) var(--sp-8) var(--sp-16);
+  border-radius: var(--r-6);
   color: var(--muted);
-  font-size: 13px;
-  transition: background-color 110ms ease, color 110ms ease;
+  text-align: left;
+  transition: var(--t-color);
 }
 
-.set-nav-item svg {
-  width: 16px;
-  height: 16px;
-  color: var(--muted);
-  flex: none;
+.set-nav-item::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 50%;
+  width: var(--sp-2);
+  height: var(--sp-16);
+  border-radius: var(--r-4);
+  background: var(--accent);
+  transform: translateY(-50%) scaleY(0);
+  transition: var(--t-move);
 }
 
 .set-nav-item:hover {
-  background: var(--hover);
   color: var(--fg);
 }
 
-/* 选中项：accent 背景 + accent 文字/图标色 */
+.set-nav-item:active {
+  background: var(--hover);
+}
+
 .set-nav-item[aria-current="page"] {
-  background: var(--accent-soft);
-  color: var(--accent);
+  color: var(--fg);
 }
 
-.set-nav-item[aria-current="page"] svg {
-  color: var(--accent);
+.set-nav-item[aria-current="page"]::before {
+  transform: translateY(-50%) scaleY(1);
 }
 
-/* 右侧内容滚动区：内边距给面板内容留白
-   min-height:0 配合父 grid 1fr 列，确保内容超出时在此滚动 */
-.set-body {
-  overflow-y: auto;
-  min-height: 0;
-  padding: 28px 36px;
-  background: var(--surface);
-  border: 1px solid color-mix(in oklch, var(--border) 72%, transparent);
-  border-radius: var(--r-lg);
-}
+/* ------------------------------------------------------------ 页头 ---- */
 
-/* 面板内的「读取失败」提示：与页面级保存错误条区分开（读失败不是保存失败） */
-.set-inline-error {
-  margin-bottom: 16px;
-  padding: 8px 12px;
-  font-size: 12px;
-  color: var(--danger);
-  background: color-mix(in oklch, var(--danger) 8%, transparent);
-  border: 1px solid color-mix(in oklch, var(--danger) 26%, transparent);
-  border-radius: var(--r-md);
-}
-
-.set-save-error-list {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-/* 热键配置文件损坏提示：贴在键位行上方，说明备份在哪、怎么修。
-   与「页面级保存失败错误条」区分开——那条是写失败，这条是读到的文件已经坏了。 */
-.hotkey-corrupt {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  margin-bottom: 16px;
-  padding: 10px 12px;
-  font-size: 12px;
-  line-height: 1.5;
-  color: var(--danger);
-  background: color-mix(in oklch, var(--danger) 9%, transparent);
-  border: 1px solid color-mix(in oklch, var(--danger) 30%, transparent);
-  border-radius: var(--r-md);
-}
-
-.hotkey-corrupt-title {
-  font-weight: 600;
-}
-
-.hotkey-corrupt-hint {
-  overflow-wrap: anywhere;
-}
-
-/* 页面级保存失败错误条：所有面板的写失败都汇总到这里（文案是后端原文）。
-   贴在内容区顶部但不 sticky —— 设置页本身不滚动整页，错误条跟着内容走即可。 */
-.set-save-error {
-  display: flex;
-  align-items: flex-start;
-  gap: 12px;
-  margin-bottom: 18px;
-  padding: 10px 12px;
-  color: var(--danger);
-  font-size: 12px;
-  line-height: 1.5;
-  background: color-mix(in oklch, var(--danger) 10%, transparent);
-  border: 1px solid color-mix(in oklch, var(--danger) 34%, transparent);
-  border-radius: var(--r-md);
-}
-
-.set-save-error-text {
-  flex: 1;
-  /* 后端文案可能很长（含备份路径），允许换行而不是撑破容器 */
-  overflow-wrap: anywhere;
-}
-
-.set-save-error-dismiss {
-  flex: none;
-  padding: 2px 8px;
-  font-size: 12px;
-  color: var(--danger);
-  background: transparent;
-  border: 1px solid color-mix(in oklch, var(--danger) 40%, transparent);
-  border-radius: var(--r-sm);
-  cursor: pointer;
-}
-
-.set-save-error-dismiss:hover {
-  background: color-mix(in oklch, var(--danger) 14%, transparent);
-}
-
-/* 面板大标题：字号偏大、字重粗，字间距收紧 */
 .set-h {
-  font-size: 19px;
-  font-weight: 600;
-  margin: 0 0 4px;
+  margin: 0;
 }
 
-/* 面板副标题：灰色说明文字 */
 .set-sub {
+  margin: var(--sp-4) 0 var(--sp-24);
   color: var(--muted);
-  font-size: 13px;
-  margin: 0 0 26px;
 }
 
-/* 设置分组容器：轻量行组，不再使用厚重卡片边框 */
+/* ------------------------------------------------------ 分组与行 ----
+   .set-group 只是个行容器：无边框、无底色、无圆角。
+   组间 24 留白，组内行靠下分隔线区分。 */
+
 .set-group {
-  border: 0;
-  border-top: 1px solid color-mix(in oklch, var(--border) 58%, transparent);
-  background: transparent;
-  overflow: visible;
-  margin-bottom: 26px;
+  margin-top: var(--sp-24);
 }
 
-/* 设置行：左侧文字区 + 右侧控件，带底边框分隔（最后一行无底边框） */
+/* 首组紧贴页头，不再叠一层间距 */
+.set-sub + .set-group {
+  margin-top: 0;
+}
+
 .set-row {
   display: flex;
   align-items: center;
-  gap: 14px;
-  padding: 15px 2px;
-  border-bottom: 1px solid color-mix(in oklch, var(--border) 46%, transparent);
+  gap: var(--sp-16);
+  padding-block: var(--sp-16);
+  border-bottom: 1px solid color-mix(in oklch, var(--border) 82%, transparent);
 }
 
 .set-row:last-child {
   border-bottom: 0;
 }
 
-/* 设置行左侧弹性区：占满剩余宽度，防止长文本撑破布局 */
 .set-row .grow {
   flex: 1;
   min-width: 0;
 }
 
 .set-row .label {
-  font-size: 13.5px;
+  color: var(--fg);
 }
 
-/* 设置行说明文字：小号灰色，标签下方辅助说明 */
 .set-row .desc {
-  font-size: 12px;
+  margin-top: var(--sp-2);
   color: var(--muted);
-  margin-top: 2px;
 }
 
-/* 设置行纵向变体：子项上下排列，适用于需要换行展示的控件（如热键行含错误提示） */
+/* 纵向变体：需要换行放控件（热键录制、备份口令、进度条）的行 */
 .set-row.column {
   flex-direction: column;
-  align-items: flex-start;
-  gap: 8px;
+  align-items: stretch;
+  gap: var(--sp-12);
 }
 
-/* 热键行内部横向布局：label+kbd+input+保存按钮一行排列 */
+/* 行右侧控件簇：多个控件时用 8 间距成组，而不是被行间距拉开 */
+.set-ctl {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-8);
+  flex: none;
+}
+
+/* 热键行的横向内层：文字 + 键帽 + 按钮 */
 .hotkey-row-inner {
   display: flex;
   align-items: center;
-  gap: 14px;
+  gap: var(--sp-16);
   width: 100%;
 }
 
-/* 热键行错误提示：danger 色小字，左对齐 */
 .hotkey-error {
+  padding-left: var(--sp-2);
   color: var(--danger);
-  font-size: 12px;
-  padding-left: 2px;
 }
 
-/* 设置输入框：统一宽度与外观，隐私/热键等面板复用 */
+/* -------------------------------------------------------- 提示与反馈 ----
+   下面两种都是「一条色带 + 一段文字」，没有边框和阴影：
+     · .set-inline-error  读失败（面板内，就地提示）
+     · .set-save-error    写失败（页面级唯一出口，文案是后端原文） */
+
+.set-inline-error {
+  margin-bottom: var(--sp-24);
+  padding: var(--sp-12);
+  border-radius: var(--r-8);
+  background: color-mix(in oklch, var(--danger) 10%, transparent);
+  color: var(--danger);
+}
+
+.set-save-error {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-12);
+  margin-bottom: var(--sp-24);
+  padding: var(--sp-12);
+  border-radius: var(--r-8);
+  background: color-mix(in oklch, var(--danger) 10%, transparent);
+  color: var(--danger);
+}
+
+.set-save-error-list {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: var(--sp-4);
+  min-width: 0;
+}
+
+/* 图标与首行文字对齐：贴在行首而不是居中悬空 */
+.set-save-error .ico {
+  margin-top: var(--sp-2);
+}
+
+/* 后端文案可能很长（含备份路径），允许换行而不是撑破容器 */
+.set-save-error-text {
+  overflow-wrap: anywhere;
+}
+
+.set-save-error-dismiss {
+  flex: none;
+  padding: var(--sp-2) var(--sp-8);
+  border-radius: var(--r-6);
+  color: var(--danger);
+  background: transparent;
+  transition: var(--t-color);
+}
+
+.set-save-error-dismiss:hover {
+  background: color-mix(in oklch, var(--danger) 14%, transparent);
+}
+
+.set-save-error-dismiss:active {
+  transform: translateY(1px);
+}
+
+/* 热键配置文件损坏：读到的文件已经坏了，与「写失败」不是同一件事 */
+.hotkey-corrupt {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+  margin-bottom: var(--sp-24);
+  padding: var(--sp-12);
+  border-radius: var(--r-8);
+  background: color-mix(in oklch, var(--danger) 10%, transparent);
+  color: var(--danger);
+}
+
+.hotkey-corrupt-hint {
+  overflow-wrap: anywhere;
+}
+
+/* 一次操作的结果回执：不用提示条，一行小字贴在控件下方 */
+.set-feedback {
+  margin-top: var(--sp-8);
+  color: var(--muted);
+}
+
+.set-feedback--danger {
+  color: var(--danger);
+}
+
+/* 可换行的长路径（备份包位置） */
+.set-path {
+  overflow-wrap: anywhere;
+}
+
+/* 只降一级的次要文字：计数器为空、加载中等 */
+.set-muted {
+  color: var(--muted);
+}
+
+/* 更新检查的结果块：文字 + 按钮纵向排 */
+.set-update {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--sp-8);
+  margin-top: var(--sp-12);
+}
+
+/* 块内间距交给 gap：回执不再自带 margin，否则会叠成双倍间距 */
+.set-update .set-feedback {
+  margin-top: 0;
+}
+
+/* ---------------------------------------------------------- 输入框 ----
+   与共享控件同一套观感：--surface-2 底、无描边、hover 提亮一档、
+   focus 换成 accent 描边 + 一圈柔光（只有一层环，不叠 outline）。 */
+
 .set-input {
   width: 180px;
-  padding: 6px 9px;
-  border-radius: var(--r-sm);
-  border: 1px solid color-mix(in oklch, var(--border) 76%, transparent);
+  /* base.css 只重置了 button，input 还带着 WebView 默认边框：
+     用一条透明边占位，焦点时只换颜色，避免聚焦时控件高度跳 1px */
+  border: 1px solid transparent;
+  padding: var(--sp-8) var(--sp-12);
+  border-radius: var(--r-8);
+  background: var(--surface-2);
+  color: var(--fg);
+  transition: var(--t-color);
+}
+
+.set-input::placeholder {
+  /* 直接用 --muted：再乘透明度会掉到 4.5:1 以下（placeholder 也要可读） */
+  color: var(--muted);
+}
+
+.set-input:hover {
+  background: color-mix(in oklch, var(--fg) 7%, var(--surface-2));
+}
+
+/* 聚焦态就是输入框的按下去：再做一层 :active 只会和焦点环打架 */
+
+.set-input:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 var(--sp-2) var(--accent-soft);
+}
+
+.set-input:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* 短数字输入：不占满行宽，数字右对齐便于读数 */
+.set-input.short-num {
+  width: var(--sp-96);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 隐藏 number 的增减箭头：数字键盘自己会给，这里不需要两组控件 */
+.set-input.short-num::-webkit-outer-spin-button,
+.set-input.short-num::-webkit-inner-spin-button {
+  appearance: none;
+  margin: 0;
+}
+
+/* ------------------------------------------------------------ 键帽 ---- */
+
+.kbd-combo {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-4);
+}
+
+.kbd-combo kbd {
+  min-width: var(--sp-24);
+  padding: var(--sp-2) var(--sp-8);
+  border-radius: var(--r-4);
+  border: 1px solid color-mix(in oklch, var(--border) 78%, transparent);
+  background: var(--surface-2);
+  text-align: center;
+}
+
+/* 录制态：这里正在接收键盘输入，用强调色柔光把它和普通行区分开。
+   选择器带上父级，压过 components.css 的 .btn 底色（两者同权重时顺序不可靠）。 */
+.hotkey-row-inner .capture-area {
+  background: var(--accent-soft);
+  color: var(--accent);
+  box-shadow: inset 0 0 0 1px var(--accent-line);
+}
+
+/* ------------------------------------------------------ 芯片（方形）----
+   徽章 / 芯片一律 --r-4 方角；胶囊只留给开关滑块。 */
+
+.chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-8);
+  padding-block: var(--sp-12) var(--sp-8);
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-4);
+  height: var(--sp-24);
+  padding: 0 var(--sp-2) 0 var(--sp-8);
+  border-radius: var(--r-4);
   background: var(--surface-2);
   color: var(--fg);
 }
 
-/* 短数字输入（历史条目上限这类四位数以内的字段）：不占满 180px，数字右对齐便于读数 */
-.set-input.short-num {
-  width: 84px;
-  text-align: right;
+.chip button {
+  display: grid;
+  place-items: center;
+  width: var(--icon-18);
+  height: var(--icon-18);
+  border-radius: var(--r-4);
+  color: var(--muted);
+  transition: var(--t-color);
 }
 
-/* 快捷键组合展示：等宽字体 + 多个 kbd 标签横排 */
-.kbd-combo {
-  font-family: var(--mono);
-  font-size: 12px;
-  display: inline-flex;
-  gap: 3px;
+.chip button:hover {
+  background: var(--hover);
+  color: var(--danger);
 }
 
-.kbd-combo kbd {
-  background: var(--surface-2);
-  border: 1px solid color-mix(in oklch, var(--border) 76%, transparent);
-  border-radius: 5px;
-  padding: 2px 7px;
-  min-width: 24px;
-  text-align: center;
-}
+/* ---------------------------------------------------------- 进度条 ---- */
 
-/* 用量进度条：细高度，accent 色填充，用于库体积可视化 */
 .meter {
-  height: 7px;
-  border-radius: 999px;
+  height: var(--sp-8);
+  border-radius: var(--r-4);
   background: var(--surface-2);
-  border: 1px solid color-mix(in oklch, var(--border) 76%, transparent);
   overflow: hidden;
-  margin: 10px 0 6px;
+  margin-block: var(--sp-12) var(--sp-8);
 }
 
-.meter i {
+.meter > i {
   display: block;
   height: 100%;
+  border-radius: var(--r-4);
   background: var(--accent);
 }
 
-/* 进度条图例：两端分别显示已用量和上限，等宽字体 */
+/* 两端对齐的图例：左边已用量、右边上限，数字用等宽 */
 .meter-legend {
   display: flex;
   justify-content: space-between;
-  font-family: var(--mono);
-  font-size: 11.5px;
+  gap: var(--sp-16);
   color: var(--muted);
 }
 
-/* 关于面板：居中布局，logo + 版本信息 */
+/* ---------------------------------------------------- 关于（非表单）---- */
+
 .about {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--sp-8);
+  padding-block: var(--sp-24) var(--sp-8);
   text-align: center;
-  padding: 20px 0 8px;
 }
 
-/* logo 标志块：60px 圆角块承载应用 icon 图片（icon 自带蓝色背景，不再叠 accent 底色） */
 .about .logo-mark {
   width: 60px;
   height: 60px;
-  border-radius: 15px;
-  margin: 0 auto 14px;
+  border-radius: var(--r-16);
+  overflow: hidden;
 }
 
 .about .logo-mark img {
-  width: 60px;
-  height: 60px;
-  border-radius: 15px;
+  width: 100%;
+  height: 100%;
   object-fit: cover;
 }
 
 .about h2 {
-  margin: 0 0 2px;
-  font-size: 19px;
+  margin: 0;
 }
 
-/* 版本号行：等宽字体，灰色 */
 .about .ver {
-  font-family: var(--mono);
-  font-size: 12.5px;
   color: var(--muted);
 }
 
 .about p {
-  color: var(--muted);
-  font-size: 13px;
+  margin: 0;
   max-width: 42ch;
-  margin: 14px auto 0;
-  line-height: 1.6;
+  color: var(--muted);
 }
 
-/*
- * D2 用到的翻译源/隐私面板专属类，在此预定义，D2 组件直接使用无需修改 CSS。
- */
+/* ---------------------------------------------------- 翻译源列表 ----
+   注意：.src-select 这个类名在 translate.css 里也有一份（翻译页的源选择器，
+   带 margin-left:auto 与自己的字号），两页同时挂在 DOM 上时会互相串味。
+   类名不能改（测试用 closest(".src-select") 定位这块热区），所以这里用
+   .src-card 前缀把权重提到 0,2,0 并显式重置 margin / 描边色——
+   谁后加载都不影响结果。 */
 
-/* 翻译源卡片行：左侧「设默认」热区 + 右侧配置按钮，flex 行布局 */
 .src-card {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 12px 2px;
-  border-bottom: 1px solid color-mix(in oklch, var(--border) 46%, transparent);
+  gap: var(--sp-8);
+  padding-block: var(--sp-12);
+  border-bottom: 1px solid color-mix(in oklch, var(--border) 82%, transparent);
 }
 
 .src-card:last-child {
   border-bottom: 0;
 }
 
-/* 左侧「设默认」可点区域：radio 圆点 + logo + 名称 + 徽标，hover 高亮 */
-.src-select {
+.src-card .src-select {
   display: flex;
-  align-items: center;
-  gap: 12px;
   flex: 1 1 auto;
+  align-items: center;
+  gap: var(--sp-12);
   min-width: 0;
+  margin: 0 calc(var(--sp-8) * -1);
+  padding: var(--sp-4) var(--sp-8);
+  border-radius: var(--r-8);
+  color: var(--fg);
   cursor: pointer;
-  border-radius: 8px;
-  padding: 3px 6px;
-  margin: -3px -6px;
-  transition: background-color 120ms ease;
+  transition: var(--t-color);
 }
 
-.src-select:hover {
+.src-card .src-select:hover {
   background: var(--hover);
 }
 
-/* radio 圆点指示：未选中空心圆，选中时 accent 边框 + 内圆点 */
+/* 源名用命名样式类给出字号字重（.title-4），容器不再设字号 */
+.src-card .label {
+  color: var(--fg);
+}
+
+/* 单选圆点：16px 方框配 --r-8，圆角等于半径，渲染成正圆（不引入 50% 字面量） */
 .src-radio {
-  width: 16px;
-  height: 16px;
-  border-radius: 50%;
-  border: 2px solid var(--border);
+  display: grid;
+  place-items: center;
   flex: none;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  transition: border-color 120ms ease;
+  width: var(--icon-16);
+  height: var(--icon-16);
+  border-radius: var(--r-8);
+  border: 1px solid var(--border);
+  transition: var(--t-color);
 }
 
 .src-radio.sel {
@@ -383,207 +515,126 @@
 
 .src-radio.sel::after {
   content: "";
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
+  width: var(--sp-8);
+  height: var(--sp-8);
+  border-radius: var(--r-4);
   background: var(--accent);
 }
 
-/* 配置按钮：边框风格，与 .btn 协调；展开态 accent 高亮 */
+/* 源缩写方块：等宽两字，方形圆角 */
+.src-logo {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: var(--sp-32);
+  height: var(--sp-32);
+  border-radius: var(--r-8);
+  background: var(--surface-2);
+  color: var(--fg);
+}
+
 .src-cfg-btn {
-  appearance: none;
-  border: 1px solid color-mix(in oklch, var(--border) 76%, transparent);
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: var(--sp-4);
+  padding: var(--sp-4) var(--sp-8);
+  border-radius: var(--r-6);
   background: var(--surface-2);
   color: var(--muted);
-  font-size: 12.5px;
-  font-family: inherit;
-  padding: 5px 10px;
-  border-radius: var(--r-sm);
-  cursor: pointer;
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
   white-space: nowrap;
-  flex: none;
-  transition: background-color 120ms ease, border-color 120ms ease, color 120ms ease;
+  transition: var(--t-color), var(--t-move);
 }
 
 .src-cfg-btn:hover {
   color: var(--fg);
-  border-color: var(--muted);
-  background: var(--hover);
+  background: color-mix(in oklch, var(--fg) 9%, var(--surface-2));
+}
+
+.src-cfg-btn:active {
+  transform: translateY(1px);
 }
 
 .src-cfg-btn.open {
   color: var(--accent);
-  border-color: var(--accent-line);
   background: var(--accent-soft);
 }
 
-/* 翻译源 logo 方块：等宽字体缩写，圆角方块背景 */
-.src-logo {
-  width: 30px;
-  height: 30px;
-  border-radius: 8px;
-  display: grid;
-  place-items: center;
-  font-family: var(--mono);
-  font-size: 13px;
-  font-weight: 600;
-  background: var(--surface-2);
-  border: 1px solid color-mix(in oklch, var(--border) 76%, transparent);
-  color: var(--fg);
-  flex: none;
+/* 删除已存密钥：静止态克制（与邻座按钮同款），悬停才显危险色 */
+.credential-actions .btn-clear-cred:hover:not(:disabled) {
+  color: var(--danger);
+  background: color-mix(in oklch, var(--danger) 12%, transparent);
 }
 
-/* 凭据表单：纵向排列字段 + 保存按钮，与卡片内边距对齐 */
+/* ------------------------------------------------------ 凭据表单 ---- */
+
 .credential-form {
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  padding: 14px 2px;
+  gap: var(--sp-12);
+  padding-block: var(--sp-12) var(--sp-16);
 }
 
-/* 凭据字段：label 在上、input 在下，间距协调 */
 .credential-field {
   display: flex;
   flex-direction: column;
-  gap: 5px;
+  gap: var(--sp-4);
 }
 
-.credential-field label {
-  font-size: 13px;
-  color: var(--fg);
-}
-
-/* 凭据表单输入框：全宽，与 .set-input 统一风格 */
-.credential-form .set-input {
+.credential-field .set-input {
   width: 100%;
-  box-sizing: border-box;
 }
 
-/* 保存按钮与字段组间留顶部间距 */
-.credential-form .btn {
-  align-self: flex-start;
-  margin-top: 4px;
-}
-
-/* 已配置提示：次要文字，置于字段上方，与下方留间距 */
-.credential-configured-hint {
-  font-size: 12.5px;
-  color: var(--muted);
-  margin-bottom: 2px;
-}
-
-/* 操作按钮行：保存 / 清除横向排布 */
-.credential-actions {
-  display: flex;
-  flex-direction: row;
-  align-items: center;
-  gap: 10px;
-  margin-top: 4px;
-}
-
-/* 行内按钮已由容器控制间距，去掉单按钮的顶部留白 */
-.credential-actions .btn {
-  margin-top: 0;
-}
-
-/* 清除已存密钥：默认克制（次要边框态），hover 才显 danger */
-.btn-clear-cred {
-  border: 1px solid color-mix(in oklch, var(--border) 76%, transparent);
-  background: var(--surface-2);
-  color: var(--muted);
-  transition: background-color 120ms ease, border-color 120ms ease, color 120ms ease;
-}
-
-.btn-clear-cred:hover:not(:disabled) {
-  color: var(--danger);
-  border-color: var(--danger);
-  background: color-mix(in oklch, var(--danger) 10%, transparent);
-}
-
-/* 标签芯片行：flex wrap，用于排除名单 App 列表 */
-.chip-row {
+.credential-form .credential-actions {
   display: flex;
   flex-wrap: wrap;
-  gap: 7px;
-  padding: 14px 2px;
-}
-
-/* App 排除名单芯片：圆角胶囊，右侧关闭按钮 */
-.chip {
-  display: inline-flex;
   align-items: center;
-  gap: 6px;
-  font-size: 12.5px;
-  background: var(--surface-2);
-  border: 1px solid color-mix(in oklch, var(--border) 76%, transparent);
-  border-radius: 999px;
-  padding: 4px 6px 4px 11px;
+  gap: var(--sp-8);
 }
 
-.chip button {
-  border: 0;
-  background: transparent;
+.credential-configured-hint {
   color: var(--muted);
-  display: grid;
-  place-items: center;
-  width: 18px;
-  height: 18px;
-  border-radius: 50%;
 }
 
-.chip button:hover {
-  background: var(--hover);
-  color: var(--danger);
-}
+/* ------------------------------------------- 两态分段（黑名单/白名单）----
+   与 .theme-seg 同一套语言：--surface-2 容器 + --r-8，选中项抬到 --surface
+   并给一圈内描边。这里只是把三档换成两档、加上 radio 语义。 */
 
-.chip button svg {
-  width: 12px;
-  height: 12px;
-}
-
-/* 正则芯片里的模式文本：等宽，避免反斜杠与花括号比例失真 */
-.chip code {
-  font-family: var(--mono);
-  font-size: 12px;
-}
-
-/* 两态模式切换（黑名单 / 白名单）：分段控件，选中态用 accent 描边 */
 .mode-switch {
   display: inline-flex;
-  padding: 2px;
-  gap: 2px;
-  border-radius: var(--r-sm);
-  border: 1px solid color-mix(in oklch, var(--border) 76%, transparent);
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-2);
+  border-radius: var(--r-8);
   background: var(--surface-2);
 }
 
 .mode-option {
-  border: 0;
-  background: transparent;
+  padding: var(--sp-4) var(--sp-8);
+  border-radius: var(--r-6);
   color: var(--muted);
-  font-size: 12.5px;
-  padding: 5px 12px;
-  border-radius: calc(var(--r-sm) - 2px);
-  cursor: pointer;
+  white-space: nowrap;
+  transition: var(--t-color);
 }
 
 .mode-option:hover {
   color: var(--fg);
-  background: var(--hover);
+}
+
+.mode-option:active {
+  transform: translateY(1px);
 }
 
 .mode-option[aria-checked="true"] {
   background: var(--surface);
   color: var(--fg);
-  box-shadow: inset 0 0 0 1px color-mix(in oklch, var(--accent) 55%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in oklch, var(--border) 82%, transparent);
 }
+
+/* ---------------------------------------------------------- 按钮行 ---- */
 
 .backup-actions {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
-  margin-top: 8px;
+  gap: var(--sp-8);
 }

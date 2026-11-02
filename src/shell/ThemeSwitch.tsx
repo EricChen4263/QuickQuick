@@ -3,50 +3,39 @@ import type { ThemePref } from "../theme/themeStore";
 
 interface SegOption {
   pref: ThemePref;
+  label: string;
+  /** 完整说明，作为 title 与读屏补充；按钮文字本身只放最短的口径 */
   title: string;
-  icon: React.ReactNode;
 }
 
-const MonitorIcon = (
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
-    <rect x="2" y="3" width="20" height="14" rx="2"/>
-    <path d="M8 21h8"/><path d="M12 17v4"/>
-  </svg>
-);
-
-const SunIcon = (
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
-    <circle cx="12" cy="12" r="4"/>
-    <path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>
-  </svg>
-);
-
-const MoonIcon = (
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
-    <path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/>
-  </svg>
-);
-
+/**
+ * 三档主题选项。
+ *
+ * 刻意用纯文字而不是太阳 / 月亮 / 显示器图标：
+ * 「亮暗切换做成太阳月亮开关」是最典型的 AI 默认套路之一，
+ * 而且在这个体量下三个图标反而比三个词更难一眼分辨。
+ */
 const OPTIONS: SegOption[] = [
-  { pref: "auto", title: "跟随系统", icon: MonitorIcon },
-  { pref: "light", title: "浅色", icon: SunIcon },
-  { pref: "dark", title: "深色", icon: MoonIcon },
+  { pref: "auto", label: "跟随系统", title: "跟随系统" },
+  { pref: "light", label: "浅色", title: "浅色" },
+  { pref: "dark", label: "深色", title: "深色" },
 ];
 
-/** 三档主题切换按钮组，跟随 themeStore 状态，点击写入 store */
+/** 三档主题切换分段控件，跟随 themeStore 状态，点击写入 store */
 export function ThemeSwitch() {
   const { pref, setPref } = useTheme();
 
   return (
-    <div className="theme-seg" role="group" aria-label="外观">
+    <div className="theme-seg caption-1" role="group" aria-label="外观">
       {OPTIONS.map((opt) => (
         <button
           key={opt.pref}
+          type="button"
           title={opt.title}
           aria-pressed={pref === opt.pref ? "true" : "false"}
           onClick={() => setPref(opt.pref)}
         >
-          {opt.icon}
+          {opt.label}
         </button>
       ))}
     </div>

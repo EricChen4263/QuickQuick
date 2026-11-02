@@ -26,8 +26,8 @@ import { useSettingsSaveError } from "./settings-save-error";
 /** SVG × 图标，用于 chip 删除按钮 */
 function CloseIcon() {
   return (
-    <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">
-      <path d="M2 2l8 8M10 2l-8 8" />
+    <svg className="ico ico-16" viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M17.5 6.5l-11 11M6.5 6.5l11 11" />
     </svg>
   );
 }
@@ -83,7 +83,7 @@ function ModeOption({ mode, current, onSelect }: ModeOptionProps) {
       role="radio"
       aria-checked={mode === current}
       aria-label={MODE_LABEL[mode]}
-      className="mode-option"
+      className="mode-option caption-1"
       onClick={() => onSelect(mode)}
     >
       {MODE_LABEL[mode]}
@@ -231,7 +231,7 @@ function PrivacyPanel() {
   if (loadError !== null) {
     return (
       <div>
-        <div role="alert" style={{ color: "var(--danger)" }}>{loadError}</div>
+        <div role="alert" className="set-inline-error caption-1">{loadError}</div>
       </div>
     );
   }
@@ -263,8 +263,8 @@ function PrivacyPanel() {
           title="默认：黑名单（名单内的应用不记录）。白名单则只记录名单内的应用；切换模式不会清空已填的名单。"
         >
           <div className="grow">
-            <div className="label">App 名单模式</div>
-            <div className="desc">{MODE_DESCRIPTION[excludeMode]}</div>
+            <div className="label title-4">App 名单模式</div>
+            <div className="desc caption-5">{MODE_DESCRIPTION[excludeMode]}</div>
           </div>
           <div className="mode-switch" role="radiogroup" aria-label="App 名单模式">
             <ModeOption
@@ -285,24 +285,24 @@ function PrivacyPanel() {
           title="默认：空名单。黑名单模式下空名单等于不排除任何应用；白名单模式下空名单等于不记录任何应用。"
         >
           <div className="grow">
-            <div className="label">App 名单</div>
-            <div className="desc">{LIST_DESCRIPTION[excludeMode]}</div>
+            <div className="label title-4">App 名单</div>
+            <div className="desc caption-5">{LIST_DESCRIPTION[excludeMode]}</div>
           </div>
           <input
             type="text"
-            className="set-input"
+            className="set-input body-6"
             value={inputValue}
             placeholder="应用名称（如 1Password）"
             onChange={(e) => setInputValue(e.target.value)}
             onKeyDown={(e) => { if (e.key === "Enter") void handleAdd(); }}
           />
-          <button className="btn" aria-label="添加应用" onClick={() => void handleAdd()}>
+          <button className="btn button-sm" aria-label="添加应用" onClick={() => void handleAdd()}>
             添加
           </button>
         </div>
         <div className="chip-row">
           {excludeList.map((app) => (
-            <span key={app} className="chip">
+            <span key={app} className="chip caption-2">
               {app}
               <button
                 type="button"
@@ -314,7 +314,7 @@ function PrivacyPanel() {
             </span>
           ))}
           {excludeList.length === 0 && (
-            <span style={{ fontSize: 12, color: "var(--muted)" }}>暂无排除应用</span>
+            <span className="caption-5 set-muted">暂无排除应用</span>
           )}
         </div>
       </SettingGroup>
@@ -325,25 +325,25 @@ function PrivacyPanel() {
           title="默认：空（不启用内容过滤）。任一正则命中文本内容即不入库；写错的正则只让该条失效，不影响其它条目。"
         >
           <div className="grow">
-            <div className="label">内容忽略正则</div>
-            <div className="desc">{REGEX_DESCRIPTION}</div>
+            <div className="label title-4">内容忽略正则</div>
+            <div className="desc caption-5">{REGEX_DESCRIPTION}</div>
           </div>
           <input
             type="text"
-            className="set-input"
+            className="set-input body-6"
             value={regexInput}
             placeholder={REGEX_PLACEHOLDER}
             onChange={(e) => setRegexInput(e.target.value)}
             onKeyDown={(e) => { if (e.key === "Enter") void handleAddRegex(); }}
           />
-          <button className="btn" aria-label="添加正则" onClick={() => void handleAddRegex()}>
+          <button className="btn button-sm" aria-label="添加正则" onClick={() => void handleAddRegex()}>
             添加
           </button>
         </div>
         <div className="chip-row">
           {regexPatterns.map((pattern) => (
-            <span key={pattern} className="chip">
-              <code>{pattern}</code>
+            <span key={pattern} className="chip caption-2">
+              <code className="mono">{pattern}</code>
               <button
                 type="button"
                 aria-label={`删除正则 ${pattern}`}
@@ -354,7 +354,7 @@ function PrivacyPanel() {
             </span>
           ))}
           {regexPatterns.length === 0 && (
-            <span style={{ fontSize: 12, color: "var(--muted)" }}>暂无内容规则</span>
+            <span className="caption-5 set-muted">暂无内容规则</span>
           )}
         </div>
       </SettingGroup>

@@ -49,11 +49,14 @@ export interface ActionBarHintProps {
   label: string;
 }
 
-/** 快捷键提示：kbd 键帽 + 说明文本，供弹窗底部条复用 */
+/**
+ * 快捷键提示：kbd 键帽 + 说明文本，供弹窗底部条复用。
+ * 文字形态走命名样式类（caption-4 / caption-5 + mono），不在 CSS 里裸写字号。
+ */
 export function ActionBarHint({ kbd, label }: ActionBarHintProps): ReactElement {
   return (
-    <span className="qq-action-bar-hint">
-      <kbd className="qq-kbd">{kbd}</kbd> {label}
+    <span className="qq-action-bar-hint caption-4">
+      <kbd className="qq-kbd mono caption-5">{kbd}</kbd> {label}
     </span>
   );
 }

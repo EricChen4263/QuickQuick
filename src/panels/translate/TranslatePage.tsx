@@ -6,7 +6,7 @@
  */
 
 import "./translate.css";
-import { useEffect, useState, useCallback, useRef } from "react";
+import { useEffect, useState, useCallback, useRef, useMemo } from "react";
 import { listen } from "@tauri-apps/api/event";
 import {
   TRANSLATE_HISTORY_CHANGED_EVENT,
@@ -50,6 +50,13 @@ function TranslatePage({ seed }: TranslatePageProps) {
   const [result, setResult] = useState<TranslateResult | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /**
+   * 上一次请求的纯 IPC 耗时（毫秒），只用于结果区元信息行。
+   * 在 await translateText 之后立刻取值，不含下面补足的最小可见时长，
+   * 否则「翻译耗时」会被 400ms 地板顶穿、永远是假数字。
+   * null 表示没有发生新请求（点历史条目回填、失败、或还没翻译过）。
+   */
+  const [elapsedMs, setElapsedMs] = useState<number | null>(null);
   const [history, setHistory] = useState<TranslateHistoryItem[]>([]);
   const [providers, setProviders] = useState<Provider[]>([]);
   const [selectedProviderId, setSelectedProviderId] = useState("");
@@ -225,12 +232,15 @@ function TranslatePage({ seed }: TranslatePageProps) {
     try {
       const sourceParam = sourceLang === "auto" ? undefined : sourceLang;
       const res = await translateText(text, targetLang, sourceParam);
+      // 先记纯 IPC 耗时，再走下面的最小可见时长补足（两者不能混在一起算）
+      setElapsedMs(Date.now() - startedAt);
       setResult(res);
       const cancelled = { current: false };
       await fetchHistory(cancelled);
     } catch (err) {
       setError(err instanceof Error ? err.message : "翻译失败，请稍后重试");
       setResult(null);
+      setElapsedMs(null);
     } finally {
       // 秒回时补足最小可见时长，确保 loading 帧能被浏览器绘制后再切到结果（见 MIN_LOADING_VISIBLE_MS）。
       const remainingMs = MIN_LOADING_VISIBLE_MS - (Date.now() - startedAt);
@@ -306,9 +316,21 @@ function TranslatePage({ seed }: TranslatePageProps) {
       targetLang: item.targetLang,
     });
     setError(null);
+    // 回填不是新请求，没有可报的耗时；保留上一次的数字会误导
+    setElapsedMs(null);
   }
 
+  // providerId → 展示名：历史条目只存 id，直接渲染会出现「deepl-free」这种内部标识。
+  // 只依赖 providers 列表，翻译过程中不会重建。
+  const providerNameById = useMemo(
+    () => Object.fromEntries(providers.map((p) => [p.id, p.name])),
+    [providers],
+  );
+
   return (
+    <>
+      {/* 页面级标题：让下方 EmptyState 的 h3 不再跳级 */}
+      <h2 className="sr-only">翻译</h2>
     <div className="view-translate">
       <TranslateWorkspace
         inputText={inputText}
@@ -320,6 +342,7 @@ function TranslatePage({ seed }: TranslatePageProps) {
         providers={providers}
         selectedProviderId={selectedProviderId}
         configuredIds={configuredIds}
+        elapsedMs={elapsedMs}
         onInputChange={setInputText}
         onTranslate={handleTranslate}
         onSourceChange={setSourceLang}
@@ -329,9 +352,11 @@ function TranslatePage({ seed }: TranslatePageProps) {
       />
       <TranslateHistoryPanel
         items={history}
+        providerNames={providerNameById}
         onSelectItem={handleSelectHistoryItem}
       />
-    </div>
+      </div>
+    </>
   );
 }
 

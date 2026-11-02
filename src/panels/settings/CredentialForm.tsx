@@ -49,7 +49,7 @@ function CredentialForm({ providerId, schema, onSaved, isConfigured = false }: C
         setSecretIsSet(setKeys);
       } catch {
         if (cancelled.current) return;
-        setError("加载凭据失败");
+        setError("凭据读取失败；可以直接重新填写，保存时会以新填入的值为准。");
       }
     }
 
@@ -103,16 +103,16 @@ function CredentialForm({ providerId, schema, onSaved, isConfigured = false }: C
   return (
     <div className="credential-form">
       {isConfigured && (
-        <div className="credential-configured-hint">
+        <div className="credential-configured-hint caption-5">
           已配置 · 重新填写下方字段将覆盖
         </div>
       )}
       {schema.map((field) => (
         <div key={field.key} className="credential-field">
-          <label htmlFor={`cred-${field.key}`}>{field.label}</label>
+          <label className="caption-1" htmlFor={`cred-${field.key}`}>{field.label}</label>
           <input
             id={`cred-${field.key}`}
-            className="set-input"
+            className="set-input body-6"
             type={field.isSecret ? "password" : "text"}
             value={formValues[field.key] ?? ""}
             placeholder={
@@ -127,12 +127,18 @@ function CredentialForm({ providerId, schema, onSaved, isConfigured = false }: C
         </div>
       ))}
       <div className="credential-actions">
-        <button className="btn btn-primary" onClick={() => void handleSave()} disabled={saving}>
+        <button
+          className="btn btn-primary button-sm"
+          type="button"
+          onClick={() => void handleSave()}
+          disabled={saving}
+        >
           保存
         </button>
         {isConfigured && (
           <button
-            className="btn btn-clear-cred"
+            className="btn btn-clear-cred button-sm"
+            type="button"
             onClick={() => void handleClear()}
             disabled={clearing}
           >
@@ -141,7 +147,7 @@ function CredentialForm({ providerId, schema, onSaved, isConfigured = false }: C
         )}
       </div>
       {error !== null && (
-        <div role="alert" style={{ color: "var(--danger)" }}>
+        <div role="alert" className="set-inline-error caption-5">
           {error}
         </div>
       )}

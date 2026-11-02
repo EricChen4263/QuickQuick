@@ -29,7 +29,7 @@ function truncate(text: string): string {
 function PopoverRowImage({ item }: { item: ClipItem }) {
   const thumbnailUrl = useClipItemThumbnail(item);
   if (thumbnailUrl === null) {
-    return <div className="popover-row-text">[图片]</div>;
+    return <div className="popover-row-text body-6">[图片]</div>;
   }
   return (
     <img
@@ -73,7 +73,13 @@ function PopoverRow({
         {item.kind === "image" ? (
           <PopoverRowImage item={item} />
         ) : (
-          <div className={item.kind === "richtext" ? "popover-row-text code" : "popover-row-text"}>
+          <div
+            className={
+              item.kind === "richtext"
+                ? "popover-row-text code body-6"
+                : "popover-row-text body-6"
+            }
+          >
             {/* 先按既有上限截断再切分高亮：区间落在被截掉的部分时会被自动丢弃 */}
             <HighlightedText text={truncate(clipSearchText(item))} ranges={hitRanges} />
           </div>
@@ -81,8 +87,10 @@ function PopoverRow({
       </div>
       {item.isFavorite && (
         <div className="popover-row-fav" aria-label="已收藏">
-          <svg viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-            <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
+          {/* 收藏星用实心（.ico 默认 fill:none，popover.css 里给本类补 fill）：
+              12px 尺度下空心星读不出「已收藏」这个状态 */}
+          <svg className="ico ico-14" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M12 3.5l2.6 5.3 5.9.9-4.3 4.1 1 5.8-5.2-2.7-5.2 2.7 1-5.8L3.5 9.7l5.9-.9z" />
           </svg>
         </div>
       )}
@@ -92,7 +100,7 @@ function PopoverRow({
 
 /** 分组标题行 */
 function GroupHeader({ label }: { label: string }) {
-  return <div className="popover-group-header">{label}</div>;
+  return <div className="popover-group-header caption-3">{label}</div>;
 }
 
 /** 渲染单个分组（有条目才显示） */
@@ -113,7 +121,9 @@ function PopoverGroup({
 }) {
   if (items.length === 0) return null;
   return (
-    <>
+    // role="group"：listbox 的直接子项只能是 option / group，
+    // 分组标题是裸 div，必须由 group 容器承载，否则分组语义不成立。
+    <div role="group" aria-label={label}>
       <GroupHeader label={label} />
       {items.map((item) => (
         <PopoverRow
@@ -125,7 +135,7 @@ function PopoverGroup({
           onHoverSelect={onHoverSelect}
         />
       ))}
-    </>
+    </div>
   );
 }
 
@@ -166,7 +176,7 @@ export function PopoverList({ groups, selectedId, hitRanges, onSelect, ownership
   if (isEmpty) {
     return (
       <div role="listbox" aria-label="剪贴板历史" className="popover-list popover-list-empty">
-        <span>剪贴板暂无内容</span>
+        <span className="caption-2">剪贴板暂无内容</span>
       </div>
     );
   }

@@ -488,7 +488,7 @@ export default function ClipPopoverApp() {
 
   if (loadError) {
     return (
-      <div className="popover-error">
+      <div className="popover-error body-5">
         加载失败：{loadError}
       </div>
     );
@@ -497,11 +497,19 @@ export default function ClipPopoverApp() {
   return (
     <div className="popover-shell" style={shellStyle} data-hit-style={appearance.highlightStyle}>
       <div className="popover-search-row">
+        <svg
+          className="ico ico-16 popover-search-icon"
+          viewBox="0 0 24 24"
+          aria-hidden="true"
+        >
+          <circle cx="11" cy="11" r="6.5" />
+          <path d="m16.5 16.5 3.5 3.5" />
+        </svg>
         <input
           ref={inputRef}
           type="text"
           role="searchbox"
-          className="popover-search-input"
+          className="popover-search-input body-2"
           placeholder="搜索剪贴板…"
           value={query}
           onChange={handleQueryChange}
@@ -510,9 +518,14 @@ export default function ClipPopoverApp() {
           autoFocus
           aria-label="搜索剪贴板"
         />
+        {/* 唤起本面板的全局热键（后端 HotkeyConfig 默认 CmdOrCtrl+Shift+C）。
+            面板已经打开，这枚键帽是「下次怎么再叫它出来」的备忘，不参与交互。 */}
+        <kbd className="qq-kbd popover-search-kbd" title="唤起快捷键">
+          ⌘⇧C
+        </kbd>
         {queryPlan.notice !== null && (
           // 模式降级这类「用户需要知道」的状态交给读屏播报，不静默吞掉
-          <div className="popover-search-notice" role="status">
+          <div className="popover-search-notice caption-5" role="status">
             {queryPlan.notice}
           </div>
         )}

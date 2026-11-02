@@ -194,9 +194,16 @@ function TransPopoverApp(): React.ReactElement {
   }
 
   if (status === "loading" || status === "translating") {
+    // 骨架而不是 spinner：三条递减的占位块能预告「译文大概占几行」，
+    // 转圈只能说「在等」。状态文案占住方向行的位置，屏幕阅读器与测试都靠它。
     return (
-      <div className="mini-status">
-        <span className="mini-hint">翻译中…</span>
+      <div className="mini-status mini-loading">
+        <span className="mini-hint caption-5">翻译中…</span>
+        <div className="mini-skeleton" aria-hidden="true">
+          <span className="skeleton mini-skel" />
+          <span className="skeleton mini-skel mini-skel--md" />
+          <span className="skeleton mini-skel mini-skel--sm" />
+        </div>
       </div>
     );
   }
@@ -206,9 +213,9 @@ function TransPopoverApp(): React.ReactElement {
     const degradedHint = fallbackHint(sourceInfo?.fallbackReason ?? null);
     return (
       <div className="mini-status mini-empty">
-        <span className="mini-hint">请先选中或复制文字再按 ⌘⇧T</span>
+        <span className="mini-hint body-6">请先选中或复制文字再按 ⌘⇧T</span>
         {degradedHint !== undefined && (
-          <span className="mini-degrade">{degradedHint}</span>
+          <span className="mini-degrade caption-5">{degradedHint}</span>
         )}
       </div>
     );
@@ -217,7 +224,7 @@ function TransPopoverApp(): React.ReactElement {
   if (status === "error") {
     return (
       <div className="mini-status">
-        <span className="mini-hint mini-error">{errorMsg}</span>
+        <span className="mini-hint mini-error body-6">{errorMsg}</span>
       </div>
     );
   }
