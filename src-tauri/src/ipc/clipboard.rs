@@ -10,6 +10,7 @@
 //! - `toggle_favorite_clip`      — 设置或取消指定条目的收藏状态
 //! - `get_clip_image_original`   — 按 image_id 取原图，返回 PNG data URL
 //! - `get_clip_thumbnail`        — 按 image_id 取缩略图，返回 WebP data URL（列表按需调用）
+//! - `get_clip_image_preview`    — 按 image_id 取原图并缩放为 WebP 预览图（Popover 大图预览按需调用）
 
 use base64::Engine;
 use rusqlite::Connection;
@@ -291,6 +292,44 @@ pub fn get_clip_thumbnail_impl(
         }
         _ => Ok(None),
     }
+}
+
+/// 把原图字节编码为 Popover 大图预览用的 WebP data URL。
+///
+/// 纯计算（解码 + 缩放 + 编码），不碰数据库：调用方应先释放 DB 锁再调用，
+/// 避免大图解码期间阻塞其他 IPC。
+///
+/// 无原图（`None` 或空 BLOB，即降级图）返回 `Ok(None)`，前端据此回落缩略图。
+/// 原图存在但解码失败返回 `Err`：这是数据异常，错误要带上下文上报，而不是静默吞掉。
+///
+/// # Errors
+/// 原图无法解码或 WebP 编码失败时返回带上下文的错误文案。
+pub fn encode_preview_data_url(original: Option<Vec<u8>>) -> Result<Option<String>, String> {
+    let bytes = match original {
+        Some(bytes) if !bytes.is_empty() => bytes,
+        _ => return Ok(None),
+    };
+    let webp = crate::image::make_preview(&bytes).map_err(|e| format!("预览生成失败: {e}"))?;
+    let b64 = base64::engine::general_purpose::STANDARD.encode(&webp);
+    Ok(Some(format!("data:image/webp;base64,{b64}")))
+}
+
+/// Tauri 命令：取原图并生成 Popover 大图预览（WebP data URL，最长边有上限）。
+///
+/// DB 锁只在读取原图字节时持有；解码与编码放到阻塞线程池执行，
+/// 避免大图处理卡住 IPC 线程。image_id 对应 clip_images 行 ID。
+/// 无原图时返回 `Ok(None)`，前端回落到缩略图。
+#[tauri::command]
+pub async fn get_clip_image_preview(
+    state: State<'_, AppDb>,
+    image_id: String,
+) -> Result<Option<String>, String> {
+    let original = with_db(&state, |conn| {
+        crate::image::get_image_original(conn, &image_id).map_err(|e| e.to_string())
+    })?;
+    tauri::async_runtime::spawn_blocking(move || encode_preview_data_url(original))
+        .await
+        .map_err(|e| format!("预览生成任务异常结束: {e}"))?
 }
 
 /// Tauri 命令：取缩略图并返回 WebP data URL。
@@ -851,5 +890,88 @@ mod tests {
             Some("content-old-created-recent-copied"),
             "翻译取数必须取最近复制的那条，不随展示排序漂移"
         );
+    }
+
+    /// 解码预览返回的 WebP data URL，返回其真实像素宽高（用于断言缩放结果）。
+    fn decode_webp_dims(data_url: &str) -> (u32, u32) {
+        let payload = data_url
+            .strip_prefix("data:image/webp;base64,")
+            .expect("应为 WebP data URL");
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(payload)
+            .expect("base64 应可解码");
+        let decoded = webp::Decoder::new(&bytes)
+            .decode()
+            .expect("预览应是合法 WebP");
+        (decoded.width(), decoded.height())
+    }
+
+    /// P1：超过上限的原图按最长边缩放到 PREVIEW_MAX_EDGE（1600），短边等比。
+    #[test]
+    fn encode_preview_scales_long_edge_to_cap_keeping_aspect_ratio() {
+        let original = make_test_png(3000, 2000);
+
+        let url = encode_preview_data_url(Some(original))
+            .expect("合法原图不应报错")
+            .expect("有原图时应返回 Some");
+
+        assert_eq!(
+            decode_webp_dims(&url),
+            (1600, 1067),
+            "3000×2000 按最长边 1600 等比缩放，短边 2000×1600/3000≈1067"
+        );
+    }
+
+    /// P2：不超过上限的原图不放大，保持原始尺寸。
+    #[test]
+    fn encode_preview_does_not_upscale_small_image() {
+        let original = make_test_png(120, 80);
+
+        let url = encode_preview_data_url(Some(original))
+            .expect("合法原图不应报错")
+            .expect("有原图时应返回 Some");
+
+        assert_eq!(decode_webp_dims(&url), (120, 80));
+    }
+
+    /// P3：无原图（None）或空 BLOB（降级图）返回 Ok(None)，前端据此回落缩略图。
+    #[test]
+    fn encode_preview_returns_none_without_original_bytes() {
+        assert_eq!(encode_preview_data_url(None), Ok(None));
+        assert_eq!(encode_preview_data_url(Some(Vec::new())), Ok(None));
+    }
+
+    /// P4：原图损坏无法解码时返回带上下文的 Err，不静默降级成 Ok(None)。
+    #[test]
+    fn encode_preview_reports_error_for_undecodable_original() {
+        let err = encode_preview_data_url(Some(b"not an image".to_vec()))
+            .expect_err("损坏原图必须返回 Err");
+
+        assert!(
+            err.starts_with("预览生成失败"),
+            "错误应带上下文前缀，实际：{err}"
+        );
+    }
+
+    /// P5：端到端取数链路——入库图片 → 取原图字节 → 生成预览，结果为 WebP 且受上限约束。
+    #[test]
+    fn stored_image_round_trips_into_capped_webp_preview() {
+        let conn = make_test_conn();
+        let png = make_test_png(2400, 1200);
+        ingest_image_as_clip(&conn, 2400, 1200, &png, 20 * 1024 * 1024).expect("图片入库失败");
+        let image_id: String = conn
+            .query_row(
+                "SELECT id FROM clip_images WHERE is_deleted = 0 LIMIT 1",
+                [],
+                |row| row.get(0),
+            )
+            .expect("应能查到 clip_images 行");
+
+        let original = crate::image::get_image_original(&conn, &image_id).expect("取原图不应失败");
+        let url = encode_preview_data_url(original)
+            .expect("预览生成不应失败")
+            .expect("有原图时应返回 Some");
+
+        assert_eq!(decode_webp_dims(&url), (1600, 800));
     }
 }

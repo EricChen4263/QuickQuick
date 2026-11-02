@@ -6,6 +6,7 @@
 //! 核心函数：
 //! - `image_hash`                — 原图字节哈希（FNV-1a 64-bit，与文本哈希区分）
 //! - `make_thumbnail`            — 解码原图，缩放至最长边 ≤256px，编码为 WebP q75
+//! - `make_preview`              — 解码原图，缩放至最长边 ≤1600px，编码为 WebP q85（Popover 大图预览）
 //! - `ingest_image`              — 去重入库（默认 policy，原图无损，向后兼容 s01）
 //! - `ingest_image_with_policy`  — 带超大图 policy 入库：超阈值跳过原图只留缩略图
 //! - `get_image_original`        — 按 id 取原图 BLOB
@@ -35,6 +36,15 @@ const THUMB_MAX_EDGE: u32 = 256;
 
 /// WebP 编码质量（0.0–100.0）。75 在文件大小与视觉质量间取得良好平衡。
 const THUMB_QUALITY: f32 = 75.0;
+
+/// 预览图最长边上限。
+///
+/// Popover 预览区约 320pt 宽、高度受窗口 480pt 约束；按 2x 屏幕取 640 点 ≈ 1280 物理像素即可，
+/// 取 1600 留出余量。不按整屏可见区缩放：预览区远小于屏幕，按屏幕缩放只会白传字节。
+const PREVIEW_MAX_EDGE: u32 = 1600;
+
+/// 预览图 WebP 质量。比缩略图略高，大图放大时可见的压缩痕迹更少。
+const PREVIEW_QUALITY: f32 = 85.0;
 
 /// 默认原图大小上限（20 MiB）。超出则跳过原图、只存缩略图。
 pub const DEFAULT_MAX_ORIGINAL: usize = 20 * 1024 * 1024;
@@ -83,15 +93,31 @@ pub enum IngestImageOutcome {
 /// - `ImageError::Decode`：原图字节无法解码（格式不支持或损坏）
 /// - `ImageError::Encode`：WebP 编码内部失败（libwebp 返回错误）
 pub fn make_thumbnail(original: &[u8]) -> Result<Vec<u8>, ImageError> {
+    encode_webp_within(original, THUMB_MAX_EDGE, THUMB_QUALITY)
+}
+
+/// 生成 Popover 大图预览用的 WebP：最长边 ≤ `PREVIEW_MAX_EDGE`，质量 `PREVIEW_QUALITY`。
+///
+/// 与缩略图只差尺寸与质量。预览按上限缩放而不是原样回传，避免把数千像素的原图
+/// 整包经 IPC 传给 WebView。
+///
+/// # Errors
+/// 同 `make_thumbnail`：解码失败或 WebP 编码失败。
+pub fn make_preview(original: &[u8]) -> Result<Vec<u8>, ImageError> {
+    encode_webp_within(original, PREVIEW_MAX_EDGE, PREVIEW_QUALITY)
+}
+
+/// 解码原图 → 最长边约束缩放 → WebP 编码，缩略图与预览共用的流水线。
+fn encode_webp_within(original: &[u8], max_edge: u32, quality: f32) -> Result<Vec<u8>, ImageError> {
     let img = image::load_from_memory(original)?;
 
-    let scaled = scale_to_max_edge(img, THUMB_MAX_EDGE);
+    let scaled = scale_to_max_edge(img, max_edge);
 
     let rgb = scaled.to_rgb8();
     let (w, h) = (rgb.width(), rgb.height());
     let encoder = webp::Encoder::from_rgb(rgb.as_raw(), w, h);
     let webp_memory = encoder
-        .encode_simple(false, THUMB_QUALITY)
+        .encode_simple(false, quality)
         .map_err(|e| ImageError::Encode(format!("{e:?}")))?;
     Ok(webp_memory.to_vec())
 }

@@ -335,8 +335,15 @@ body::before {
   border: 1px solid color-mix(in oklch, var(--border) 76%, transparent);
 }
 
+/* 大图预览：高度限制在 popover 视口之内（视口即 480pt 的 popover 窗口），
+   保证元信息行与内边距仍可见。min-height: 0 允许它作为预览列的 flex 子项被压缩，
+   否则 img 的 min-height:auto 会锁死在内容高度，超出部分被 overflow:hidden 裁掉。 */
 .popover-preview-img {
   max-width: 100%;
+  max-height: 70vh;
+  min-height: 0;
+  width: auto;
+  height: auto;
   border-radius: var(--r-8);
   border: 1px solid color-mix(in oklch, var(--border) 72%, transparent);
   display: block;

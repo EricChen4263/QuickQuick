@@ -3,6 +3,7 @@ import { sanitizeRichHtml } from "../panels/clipboard/sanitize-html";
 import { handleRichLinkClick } from "../panels/clipboard/rich-link";
 import { useClipItemThumbnail } from "../panels/clipboard/useClipThumbnail";
 import { PREVIEW_WAITING_TEXT, type PreviewState } from "./preview-state";
+import { useClipPreviewImage } from "./useClipPreviewImage";
 
 interface PopoverPreviewProps {
   /** 预览区三态，由 resolvePreviewState 判定（见 preview-state.ts） */
@@ -43,15 +44,22 @@ function TextContent({ item }: { item: ClipItem }) {
   return <div className="popover-preview-content body-3">{item.content}</div>;
 }
 
-/** 图片内容区：缩略图按需拉取，未就绪或取不到时保持既有 `[图片]` 占位 */
+/**
+ * 图片内容区：大图预览优先，缩略图回落，两者都没有时保持 `[图片]` 占位。
+ * 缩略图与预览都经 IPC 按需拉取；缩略图通常先到，预览到达后替换。
+ * 替换会改变图片的显示尺寸（缩略图是 256px 固有宽度，预览按容器宽度撑开），
+ * 这里不做尺寸占位，属于已知的一次性视觉变化。
+ */
 function ImageContent({ item }: { item: ClipItem }) {
   const thumbnailUrl = useClipItemThumbnail(item);
-  if (thumbnailUrl === null) {
+  const previewUrl = useClipPreviewImage(item.imageId ?? null);
+  const displayUrl = previewUrl ?? thumbnailUrl;
+  if (displayUrl === null) {
     return <div className="popover-preview-img-placeholder body-5">[图片]</div>;
   }
   return (
     <img
-      src={thumbnailUrl}
+      src={displayUrl}
       alt="图片预览"
       className="popover-preview-img"
     />

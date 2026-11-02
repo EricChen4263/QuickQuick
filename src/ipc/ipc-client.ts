@@ -441,6 +441,23 @@ export async function getClipThumbnail(imageId: string): Promise<string | null> 
   }
 }
 
+/**
+ * 获取图片剪贴板条目的大图预览（WebP data URL，最长边有上限）。
+ *
+ * 由 Popover 右侧预览区按需调用；与主窗口的原图（PNG）不同，预览图已缩放，
+ * 避免大图整包经 IPC 下发。无原图（降级图）时返回 null，调用方回落缩略图。
+ *
+ * @param imageId - clip_images 行的 ID
+ * @returns 预览 data URL（data:image/webp;base64,...）或 null
+ */
+export async function getClipImagePreview(imageId: string): Promise<string | null> {
+  try {
+    return await invoke<string | null>("get_clip_image_preview", { imageId });
+  } catch (err) {
+    throw toError(err);
+  }
+}
+
 /** 读取暂停捕获状态。 */
 export async function getPauseCapture(): Promise<boolean> {
   try {

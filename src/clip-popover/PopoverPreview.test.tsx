@@ -8,6 +8,8 @@ import { resetClipThumbnailCacheForTest } from "../panels/clipboard/clip-thumbna
 // 缩略图字节不随列表下发，图片行渲染时才按 imageId 拉取，故这里要 mock 取图通道
 vi.mock("../ipc/ipc-client", () => ({
   getClipThumbnail: vi.fn(),
+  // 大图预览同样按需取图；默认无原图，图片行回落缩略图
+  getClipImagePreview: vi.fn().mockResolvedValue(null),
 }));
 
 import { getClipThumbnail } from "../ipc/ipc-client";

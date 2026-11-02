@@ -169,6 +169,7 @@ pub fn run() {
             ipc::clipboard::toggle_favorite_clip,
             ipc::clipboard::get_clip_image_original,
             ipc::clipboard::get_clip_thumbnail,
+            ipc::clipboard::get_clip_image_preview,
             ipc::translate::translate_text,
             ipc::translate::list_translate_history,
             ipc::trans_popover::get_trans_popover_source,
