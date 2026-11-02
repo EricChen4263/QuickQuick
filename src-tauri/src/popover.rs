@@ -239,8 +239,7 @@ pub(crate) fn hide_clip_popover(app: &tauri::AppHandle) -> bool {
 /// `label` 必须是 `"clip-popover"` 或 `"trans-popover"`；
 /// 未知 label 会记录错误并立即返回。
 pub fn trigger_popover(handle: &tauri::AppHandle, label: &str) {
-    let Some(spec) = POPOVER_SPECS.iter().find(|s| s.label == label) else {
-        eprintln!("[QuickQuick] 未知 popover label: {label}");
+    let Some(spec) = find_spec(label) else {
         return;
     };
 
@@ -248,7 +247,54 @@ pub fn trigger_popover(handle: &tauri::AppHandle, label: &str) {
     // 键盘焦点就离开了源应用，AX 读到的选中文字与选区边界都只会是空。故先把「译什么 +
     // 来源 + 浮窗该放哪儿」一次定下来，后面只负责展示。
     let prepared = (spec.label == TRANS_POPOVER_LABEL).then(|| prepare_translate(handle));
+    // 热键已经译了当前选区：此前冒出的选中图标与它的待译内容都已过时，必须一并收起，
+    // 否则之后点击图标会再弹一次旧文字。
+    if prepared.is_some() {
+        crate::select_icon::dismiss(handle);
+    }
+    show_popover(handle, spec, prepared);
+}
 
+/// 用调用方已取好的选区快照唤起 trans-popover（选中图标点击路径）。
+///
+/// 选中图标在鼠标抬起时就已完成取词并停在屏幕上，点击时源应用仍是前台，但那时再读
+/// 既多一次 AX 往返，也会把「图标冒出时的选区」与「点击时的选区」混为一谈。故沿用冒图标
+/// 时的同一份快照，与热键路径的「同一次读取」约束保持一致。
+pub(crate) fn trigger_translate_prepared(
+    handle: &tauri::AppHandle,
+    source: TransSource,
+    selection_bounds: Option<ScreenRect>,
+) {
+    let Some(spec) = find_spec(TRANS_POPOVER_LABEL) else {
+        return;
+    };
+    remember_source(handle, &source);
+    show_popover(
+        handle,
+        spec,
+        Some(TranslatePreparation {
+            source,
+            selection_bounds,
+        }),
+    );
+}
+
+/// 按 label 查规格表；未知 label 记录错误并返回 `None`。
+fn find_spec(label: &str) -> Option<&'static PopoverSpec> {
+    let spec = POPOVER_SPECS.iter().find(|s| s.label == label);
+    if spec.is_none() {
+        eprintln!("[QuickQuick] 未知 popover label: {label}");
+    }
+    spec
+}
+
+/// 定位、唤起一个 popover。`prepared` 只对 trans-popover 有意义，由调用方先行取好。
+fn show_popover(
+    handle: &tauri::AppHandle,
+    spec: &PopoverSpec,
+    prepared: Option<TranslatePreparation>,
+) {
+    let label = spec.label;
     let Some(window) = get_or_create_popover(handle, spec) else {
         return;
     };
@@ -363,15 +409,21 @@ fn prepare_translate(handle: &tauri::AppHandle) -> TranslatePreparation {
     let source = build_trans_source(snapshot.outcome, clipboard);
 
     // 快照必须在窗口显示之前写入：前端首次挂载时 emit 已经过去，只能补读这一份。
-    // 状态未注册（测试环境或未来重构）时只降级成「冷启动走前端兜底」，不让热键路径 panic。
-    match handle.try_state::<TransSourceStore>() {
-        Some(store) => store.remember(source.clone()),
-        None => eprintln!("[QuickQuick] trans-popover 来源快照未注册，冷启动将退回前端自读"),
-    }
+    remember_source(handle, &source);
 
     TranslatePreparation {
         source,
         selection_bounds,
+    }
+}
+
+/// 把来源快照写入 [`TransSourceStore`]，供 trans-popover 冷启动补读。
+///
+/// 状态未注册（测试环境或未来重构）时只降级成「冷启动走前端兜底」，不让热键路径 panic。
+fn remember_source(handle: &tauri::AppHandle, source: &TransSource) {
+    match handle.try_state::<TransSourceStore>() {
+        Some(store) => store.remember(source.clone()),
+        None => eprintln!("[QuickQuick] trans-popover 来源快照未注册，冷启动将退回前端自读"),
     }
 }
 
@@ -602,7 +654,7 @@ fn hidden_space_behavior() -> tauri_nspanel::objc2_app_kit::NSWindowCollectionBe
 /// 与 `hidden_space_behavior` 成对切换：显示期间面板稳定跟随用户，
 /// 隐藏后复位，下次显示重新按当时所在的 Space 落位。
 #[cfg(target_os = "macos")]
-fn shown_space_behavior() -> tauri_nspanel::objc2_app_kit::NSWindowCollectionBehavior {
+pub(crate) fn shown_space_behavior() -> tauri_nspanel::objc2_app_kit::NSWindowCollectionBehavior {
     use tauri_nspanel::CollectionBehavior;
 
     CollectionBehavior::new()
@@ -667,7 +719,7 @@ fn observe_resign_key_hide(window: &WebviewWindow) {
 /// crate 的 `to_panel` / `get_webview_panel` 内部直接取插件状态，未注册时会 panic；
 /// 本函数让所有面板入口先探测再调用，把「崩溃」降级成「保持普通窗口」。
 #[cfg(target_os = "macos")]
-fn panel_registered(app: &tauri::AppHandle) -> bool {
+pub(crate) fn panel_registered(app: &tauri::AppHandle) -> bool {
     app.try_state::<tauri_nspanel::WebviewPanelManager<tauri::Wry>>()
         .is_some()
 }
@@ -780,7 +832,7 @@ fn on_main_thread_blocking(
 /// 越线程调用属于未定义行为且不报错。用一次探针把这种可能性显式化：
 /// 万一将来唤起点换了线程，降级成普通窗口并在日志里说清楚，而不是静默踩 UB。
 #[cfg(target_os = "macos")]
-fn on_main_thread() -> bool {
+pub(crate) fn on_main_thread() -> bool {
     objc2::MainThreadMarker::new().is_some()
 }
 

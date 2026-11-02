@@ -230,6 +230,12 @@ pub struct AppSettings {
     /// 搜索命中高亮样式（四档，默认 `Bold`；对齐 Maccy 的 `HighlightMatch`）
     #[serde(default)]
     pub highlight_style: HighlightStyle,
+    /// 选中文字后是否在光标旁冒出翻译图标（默认关闭）
+    ///
+    /// 开启后每次鼠标抬起都会读取前台应用的选中文字（只读，不写剪贴板）。
+    /// 默认关闭：这是高频读取其他应用 AX 选区的能力，应由用户明确开启。
+    #[serde(default)]
+    pub select_icon_enabled: bool,
 }
 
 impl Default for AppSettings {
@@ -250,6 +256,7 @@ impl Default for AppSettings {
             image_height_px: default_image_height_px(),
             preview_first_delay_ms: default_preview_first_delay_ms(),
             highlight_style: HighlightStyle::default(),
+            select_icon_enabled: false,
         }
     }
 }
@@ -440,6 +447,12 @@ impl AppSettings {
                 map,
                 "highlight_style",
                 defaults.highlight_style,
+                &mut problems,
+            ),
+            select_icon_enabled: read_field(
+                map,
+                "select_icon_enabled",
+                defaults.select_icon_enabled,
                 &mut problems,
             ),
         };
@@ -925,6 +938,10 @@ mod tests {
         assert!(!settings.pause_capture, "pause_capture 默认应为 false");
         assert!(settings.skip_sensitive, "skip_sensitive 默认应为 true");
         assert!(settings.stay_in_tray, "stay_in_tray 默认应为 true");
+        assert!(
+            !settings.select_icon_enabled,
+            "选中图标默认关闭：该能力会高频读取其他应用的选区，须用户明确开启"
+        );
         assert!(settings.auto_update, "auto_update 默认应为 true");
         assert_eq!(settings.theme, "auto", "theme 默认应为 auto");
     }
@@ -978,6 +995,7 @@ mod tests {
             image_height_px: 40,
             preview_first_delay_ms: 800,
             highlight_style: HighlightStyle::Underline,
+            select_icon_enabled: true,
         };
         let json = serde_json::to_string(&original).expect("序列化应成功");
         let restored: AppSettings = serde_json::from_str(&json).expect("反序列化应成功");
@@ -997,6 +1015,7 @@ mod tests {
         assert_eq!(restored.image_height_px, 40);
         assert_eq!(restored.preview_first_delay_ms, 800);
         assert_eq!(restored.highlight_style, HighlightStyle::Underline);
+        assert!(restored.select_icon_enabled, "选中图标开关应原样保留");
     }
 
     /// 旧 JSON（没有 exclude_mode / ignore_regexes）能反序列化：模式回落到黑名单、
@@ -1957,6 +1976,20 @@ mod tests {
         );
         assert_eq!(problems.len(), 1);
         assert!(problems[0].contains("highlight_style"));
+    }
+
+    /// 选中图标开关的坏值（非布尔）按字段级容错回落为关闭，并记入 problems，
+    /// 不得因此整份设置回退（那会连带丢掉用户的其它设置）。
+    #[test]
+    fn select_icon_bad_value_falls_back_to_disabled_with_problem() {
+        let (settings, problems, whole) =
+            AppSettings::lenient_from_json_str(r#"{"select_icon_enabled":"yes","theme":"dark"}"#);
+
+        assert!(!whole, "单字段坏值不算整份回退");
+        assert!(!settings.select_icon_enabled, "坏值必须回落为关闭");
+        assert_eq!(settings.theme, "dark", "其它字段必须保留");
+        assert_eq!(problems.len(), 1);
+        assert!(problems[0].contains("select_icon_enabled"));
     }
 
     /// 整份回退的判定：语法坏/根不是对象 → 需要提示；字段级坏值 → 不需要。

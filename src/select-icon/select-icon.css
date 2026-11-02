@@ -1,0 +1,40 @@
+@import "../theme/tokens.css";
+
+html,
+body {
+  margin: 0;
+  background: transparent;
+  overflow: hidden;
+}
+
+#root {
+  width: 100vw;
+  height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* 图标本体：窗口即按钮大小，外圈阴影由窗口承担；透明背景让它看起来像浮在选区旁。 */
+.select-icon {
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border-radius: 50%;
+  border: 1px solid var(--glass-border);
+  background: var(--glass);
+  color: var(--fg);
+  font: 600 13px/1 var(--font);
+  cursor: pointer;
+  box-shadow: var(--shadow-pop);
+  backdrop-filter: blur(12px) saturate(1.6);
+}
+
+.select-icon:hover {
+  background: var(--hover);
+}
+
+.select-icon:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}

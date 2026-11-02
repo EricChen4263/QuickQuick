@@ -19,6 +19,7 @@ export default defineConfig(async () => ({
         main: resolve(__dirname, "index.html"),
         "clip-popover": resolve(__dirname, "src/clip-popover/index.html"),
         "trans-popover": resolve(__dirname, "src/trans-popover/index.html"),
+        "select-icon": resolve(__dirname, "src/select-icon/index.html"),
       },
     },
   },

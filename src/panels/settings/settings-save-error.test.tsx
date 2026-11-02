@@ -34,6 +34,8 @@ vi.mock("../../ipc/ipc-client", () => ({
   getLaunchOnLogin: vi.fn().mockResolvedValue(true),
   setLaunchOnLogin: vi.fn().mockResolvedValue(undefined),
   getStayInTray: vi.fn().mockResolvedValue(true),
+  getSelectIconEnabled: vi.fn().mockResolvedValue(false),
+  setSelectIconEnabled: vi.fn().mockResolvedValue(undefined),
   setStayInTray: vi.fn().mockResolvedValue(undefined),
   getAutoUpdate: vi.fn().mockResolvedValue(true),
   setAutoUpdate: vi.fn().mockResolvedValue(undefined),

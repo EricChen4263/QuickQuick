@@ -495,6 +495,33 @@ export async function setStayInTray(enabled: boolean): Promise<void> {
   }
 }
 
+/** 读取选中图标开关（仅 macOS 有取词通道，其它平台开启也不会出现图标）。 */
+export async function getSelectIconEnabled(): Promise<boolean> {
+  try {
+    return await invoke<boolean>("get_select_icon_enabled");
+  } catch (err) {
+    throw toError(err);
+  }
+}
+
+/** 设置选中图标开关（运行时生效 + 持久化；关闭时立即收起已冒出的图标）。 */
+export async function setSelectIconEnabled(enabled: boolean): Promise<void> {
+  try {
+    await invoke<void>("set_select_icon_enabled", { value: enabled });
+  } catch (err) {
+    throw toError(err);
+  }
+}
+
+/** 点击选中图标：以冒图标时取得的选中文字唤起翻译浮窗（由 Rust 侧持有待译内容）。 */
+export async function selectIconTranslate(): Promise<void> {
+  try {
+    await invoke<void>("select_icon_translate");
+  } catch (err) {
+    throw toError(err);
+  }
+}
+
 /** 读取自动更新开关。 */
 export async function getAutoUpdate(): Promise<boolean> {
   try {

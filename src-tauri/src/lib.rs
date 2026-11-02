@@ -30,6 +30,7 @@ pub mod pipeline;
 mod popover;
 pub mod portable;
 pub mod privacy;
+pub mod select_icon;
 pub mod selection;
 pub mod settings;
 pub mod translate;
@@ -189,6 +190,9 @@ pub fn run() {
             ipc::settings::set_skip_sensitive,
             ipc::settings::get_stay_in_tray,
             ipc::settings::set_stay_in_tray,
+            ipc::settings::get_select_icon_enabled,
+            ipc::settings::set_select_icon_enabled,
+            select_icon::select_icon_translate,
             ipc::settings::get_auto_update,
             ipc::settings::set_auto_update,
             ipc::settings::get_theme,
@@ -229,6 +233,14 @@ pub fn run() {
             // 热键唤起 trans-popover 时写入的来源快照：前端窗口首次挂载晚于那次推送事件，
             // 靠它补读同一份数据，冷启动与暖触发的来源标签才一致。
             app.manage(ipc::trans_popover::TransSourceStore::default());
+            // 选中图标：启用状态取自设置文件；全局鼠标监听在 setup（主线程）注册，关闭时监听内部直接不工作。
+            let select_icon_enabled = ipc::settings::resolve_config_dir(app.handle())
+                .ok()
+                .map(|dir| dir.join("settings.json"))
+                .map(|path| settings::AppSettings::load_or_default(&path).select_icon_enabled)
+                .unwrap_or(false);
+            app.manage(select_icon::SelectIconState::new(select_icon_enabled));
+            select_icon::install_mouse_monitors(app.handle());
             let capture_state = init_capture_state(app);
             // 提前克隆 Arc，让 capture_state 的所有权移交 manage 之前完成
             let paused = Arc::clone(&capture_state.paused);
