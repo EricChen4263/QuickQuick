@@ -70,6 +70,8 @@ beforeEach(() => {
   Element.prototype.scrollIntoView = vi.fn();
   mockGetClipThumbnail.mockResolvedValue(THUMB_URL);
   mockGetClipImagePreview.mockResolvedValue(PREVIEW_URL);
+  // 生产的 hideAndReturnFocus 是 async 函数，必须返回 Promise；否则第二次 Esc 调用 .catch 时抛错。
+  mockHideAndReturnFocus.mockResolvedValue(undefined);
 });
 
 /** 渲染浮窗并选中图片条目：默认选中第一条，因此把图片条目放在第一位 */
