@@ -258,8 +258,8 @@ pub fn trigger_popover(handle: &tauri::AppHandle, label: &str) {
     // 定位放在 show 之前：面板 order front 时就已经落在目标位置，避免可见的跳动。
     // 优先级：选区边界（有且落在某显示器内）→ 光标所在屏居中靠上。
     // 两条路径都先算出逻辑点与目标屏，再由平台出口决定交逻辑点（macOS）还是按目标屏换算的物理点（Windows）。
-    // clip-popover 没有取词，走的是后者。注意：回退路径的位置在 macOS 单屏 2x 下相对改动前
-    // 有意改变（改动前偏右窗口宽/4，现为真正居中），见 window_pos 模块头与 TP1-M02。
+    // clip-popover 没有取词，走的是后者。回退落点按目标屏自身的逻辑尺寸居中，
+    // 与窗口此刻停在哪块屏、当前 scale 是几无关（见 window_pos 模块头）。
     // Windows 上两条路径都按目标屏的 scale 换算物理点，不依赖窗口当前所在屏。
     let (logical, target) = match prepared.as_ref().and_then(|p| p.selection_bounds) {
         Some(bounds) => translate_popover_placement(&window, spec, bounds),
@@ -443,7 +443,7 @@ fn push_translate_source(window: &WebviewWindow, source: TransSource) {
 /// clip-popover 改走非激活面板后不再需要它，但 trans-popover 与托盘显示 main
 /// 仍是普通窗口路径，依然依赖它。
 ///
-/// 拿不到 MainThreadMarker（理论上不应发生：热键回调在主线程）时优雅跳过，
+/// 调用方须在主线程（热键、托盘与单实例回调均已保证）；拿不到 MainThreadMarker 时优雅跳过，
 /// 不 panic，与本文件其他错误处理风格（eprintln 降级）一致。
 #[cfg(target_os = "macos")]
 pub(crate) fn activate_app_macos() {
@@ -451,7 +451,7 @@ pub(crate) fn activate_app_macos() {
     use objc2_app_kit::NSApplication;
 
     // MainThreadMarker::new() 是安全函数：内部读 pthread_main_np() 判断线程，
-    // 全局热键回调在主线程，实践中此处总返回 Some；拿不到时优雅跳过。
+    // 调用方均已投递到主线程，此处应总返回 Some；拿不到时优雅跳过。
     let Some(mtm) = MainThreadMarker::new() else {
         eprintln!("[QuickQuick] activate_app_macos: 非主线程，跳过激活");
         return;

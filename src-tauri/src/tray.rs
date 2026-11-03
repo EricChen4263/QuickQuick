@@ -664,6 +664,12 @@ pub fn clear_unpinned_history(
     Ok(result)
 }
 
+/// 主窗口（`main`）的逻辑宽度，仅用于计算水平居中落点。
+///
+/// 必须与 `src-tauri/tauri.conf.json` 中 `main` 窗口的 `width` 保持一致：宽度取值偏了，
+/// 居中落点会整体偏离屏幕中线。
+const MAIN_WINDOW_WIDTH: i32 = 960;
+
 /// 显示 main 窗口并设置焦点；失败时记录日志不 panic。
 ///
 /// 可见性为 `pub(crate)` 供 single-instance 插件回调复用：第二个实例启动时，
@@ -676,6 +682,20 @@ pub(crate) fn show_and_focus_window(app: &tauri::AppHandle) {
     // Windows：show 前快照当前外部前台窗口，供粘贴还焦时 SetForegroundWindow 还原。
     #[cfg(target_os = "windows")]
     crate::frontmost::capture_foreground_window(app);
+    // 每次唤出都重新落到光标所在屏（与 popover 同一策略）：用户可能先把鼠标挪到另一块屏
+    // 再按热键，窗口跟着光标走才符合预期。定位必须在 show 之前，否则会看到窗口先闪在旧位置。
+    let (logical, target) = crate::window_pos::placement_for_width(&window, MAIN_WINDOW_WIDTH);
+    match target {
+        Some(monitor) => {
+            if let Err(e) =
+                window.set_position(crate::window_pos::place_for_platform(logical, monitor))
+            {
+                eprintln!("[QuickQuick] 托盘：定位窗口失败: {e}");
+            }
+        }
+        // 显示器列表为空时算不出目标屏：保持窗口上次位置，不强行挪到臆造坐标。
+        None => eprintln!("[QuickQuick] 托盘：取不到目标显示器，保持窗口原位置"),
+    }
     if let Err(e) = window.show() {
         eprintln!("[QuickQuick] 托盘：显示窗口失败: {e}");
         return;

@@ -18,8 +18,17 @@
 //! scale 把屏内逻辑偏移换算成物理偏移。`to_physical` 对 Physical 变体是直通的，因此物理点不依赖
 //! 窗口旧 scale。纯几何计算仍全部在逻辑点空间完成，只在最后一步按平台选择出口。
 //!
-//! 输入侧因此要分清两套单位：AX 的选区矩形（[`ScreenRect`]）本身就是逻辑点；tauri 的
-//! `Monitor` 位置与尺寸是物理像素，用 [`MonitorSpec::logical_bounds`] 除回逻辑点后参与计算。
+//! **判屏（哪块屏上有光标）是另一处平台差异，同样按平台分开。** tao 的 macOS
+//! `cursor_position()` 返回「左上原点点 × 主屏 scale」，而 `Monitor` 的物理边界是「点 × 本屏
+//! scale」：混合 DPI（如 2x 主屏 + 1x 副屏）下两者不在同一坐标空间，光标点被主屏 scale 放大后
+//! 会超出 1x 副屏的物理边界，判屏必然落空并回退主屏。因此 macOS 由 [`cursor_monitor`] 走 AppKit
+//! 路径（`NSScreen` + `NSEvent::mouseLocation`，全程点空间），不经过 tao 的光标与显示器列表；
+//! Windows 的 `cursor_position()` 与 `Monitor` 边界同为物理像素，仍在物理空间用 `find_monitor_at`
+//! 判定。
+//!
+//! 输入侧因此还要分清两套单位：AX 的选区矩形（[`ScreenRect`]）本身就是逻辑点；tauri 的
+//! `Monitor` 位置与尺寸是物理像素，用 [`MonitorSpec::logical_bounds`] 除回逻辑点后参与计算
+//! （AppKit 给的点坐标也按同一关系包装成 [`MonitorSpec`]，见 [`monitor_spec_from_points`]）。
 
 use tauri::{LogicalPosition, Position, WebviewWindow};
 
@@ -31,23 +40,15 @@ const TOP_RATIO: f64 = 0.15;
 /// 回退路径的完整放置：光标所在屏水平居中、靠上约 15%。
 ///
 /// 返回**逻辑点坐标**与它所在的目标屏（交给 [`place_for_platform`] 做平台出口）。
-/// 1x 单屏下与改动前逐值相同；2x 单屏下真正居中（改动前把逻辑宽度当物理宽度减，偏右窗口宽/4）。
+/// 屏内计算一律用目标屏的逻辑尺寸：物理尺寸先除回点、窗口宽度本就是逻辑值，落点与
+/// 「窗口此刻停在哪块屏、当前 scale 是几」无关。
 pub fn placement_for_width(
     window: &WebviewWindow,
     width: i32,
 ) -> (LogicalPosition<i32>, Option<MonitorSpec>) {
-    // 1. 取光标位置。这里刻意留在**物理**空间：tao 的 macOS `cursor_position()` 把
-    //    `pixels_high`（物理像素）与鼠标点（逻辑点）混算，它给出的值并不是干净的逻辑点。
-    //    沿用改动前「物理光标 vs 物理显示器边界」的判定，显示器归属与改动前逐值一致；
-    //    tao 那处单位混用属于既有缺陷，不在本模块修正范围内。
-    let cursor = window
-        .cursor_position()
-        .map(|position| (position.x, position.y))
-        .unwrap_or((0.0, 0.0));
-
-    // 2. 找到光标所在显示器（或主显示器、列表首个显示器回退）
-    let monitors = monitor_specs(window);
-    let target_monitor = find_monitor_at(cursor, &monitors)
+    // 1. 判屏：坐标系按平台分流，见 [`cursor_monitor`]。
+    // 2. 取不到光标所在屏时回退：主显示器 → 显示器列表首个 → (0, 0) 原点。
+    let target_monitor = cursor_monitor(window)
         .or_else(|| {
             window
                 .primary_monitor()
@@ -55,13 +56,119 @@ pub fn placement_for_width(
                 .flatten()
                 .map(|monitor| monitor_spec(&monitor))
         })
-        .or_else(|| monitors.first().copied());
+        .or_else(|| monitor_specs(window).first().copied());
 
     // 3. 计算居中靠上位置（逻辑点）
     match target_monitor {
         Some(monitor) => (center_top_logical(monitor, width), Some(monitor)),
         None => (LogicalPosition::new(0, 0), None),
     }
+}
+
+/// 光标所在显示器；取不到光标或显示器列表时返回 `None`，由调用方回退主显示器。
+///
+/// 坐标空间必须按平台分开：macOS 的 AppKit 几何与鼠标位置都是点（见模块头），
+/// 其它平台的 `cursor_position()` 与 `Monitor` 边界同为物理像素。
+#[cfg(target_os = "macos")]
+pub fn cursor_monitor(_window: &WebviewWindow) -> Option<MonitorSpec> {
+    use objc2::MainThreadMarker;
+    use objc2_app_kit::{NSEvent, NSScreen};
+
+    // 判屏用不到窗口句柄：macOS 侧的显示器几何与鼠标位置都直接从 AppKit 读，
+    // 不经过 tao 的 cursor_position / available_monitors。
+    let Some(mtm) = MainThreadMarker::new() else {
+        eprintln!("[QuickQuick] 判屏：当前不在主线程，无法读取 NSScreen / NSEvent");
+        return None;
+    };
+
+    let screens: Vec<AppKitScreen> = NSScreen::screens(mtm)
+        .iter()
+        .map(|screen| {
+            let frame = screen.frame();
+            AppKitScreen {
+                origin_x: frame.origin.x,
+                origin_y: frame.origin.y,
+                width: frame.size.width,
+                height: frame.size.height,
+                scale: screen.backingScaleFactor(),
+            }
+        })
+        .collect();
+    if screens.is_empty() {
+        eprintln!("[QuickQuick] 判屏：NSScreen 列表为空");
+        return None;
+    }
+
+    let mouse = NSEvent::mouseLocation();
+    let (cursor, monitors) = appkit_layout_to_points(&screens, (mouse.x, mouse.y));
+    find_monitor_containing_point_pts(cursor, &monitors)
+}
+
+/// AppKit 报告的一块屏幕：frame 以主屏左下角为原点、y 向上，单位为点。
+///
+/// 独立成纯数据类型，让翻转逻辑能在没有 `NSScreen` 的环境里被单测覆盖（见
+/// [`appkit_layout_to_points`]）。
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct AppKitScreen {
+    /// frame 左下角 x（点）。
+    pub origin_x: f64,
+    /// frame 左下角 y（点，主屏为 0，上方屏为正，下方屏为负）。
+    pub origin_y: f64,
+    /// frame 宽（点）。
+    pub width: f64,
+    /// frame 高（点）。
+    pub height: f64,
+    /// `backingScaleFactor`。
+    pub scale: f64,
+}
+
+/// 把 AppKit 的屏幕布局与鼠标位置换算到**左上原点的点坐标**空间。
+///
+/// 纵向翻转基准取 `screens[0]` 的高度：AppKit 以主屏左下角为原点，主屏即带菜单栏的那块，
+/// 它的顶边在左上原点空间里恰好是 y = 0。每屏的顶边 `top = mainH - (origin_y + height)`，
+/// 鼠标的 `y = mainH - mouse_y`。返回的 `MonitorSpec` 列表与鼠标点处在同一空间，
+/// 可直接交给 [`find_monitor_containing_point_pts`]。
+///
+/// `screens` 为空时调用方应先行拦截；这里对空切片直接返回空列表，避免越界。
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+#[must_use]
+pub fn appkit_layout_to_points(
+    screens: &[AppKitScreen],
+    mouse_appkit: (f64, f64),
+) -> ((f64, f64), Vec<MonitorSpec>) {
+    let Some(main) = screens.first() else {
+        return ((mouse_appkit.0, mouse_appkit.1), Vec::new());
+    };
+    let main_height = main.height;
+    let cursor = (mouse_appkit.0, main_height - mouse_appkit.1);
+    let monitors = screens
+        .iter()
+        .map(|screen| {
+            let top = main_height - (screen.origin_y + screen.height);
+            monitor_spec_from_points(
+                screen.origin_x,
+                top,
+                screen.width,
+                screen.height,
+                screen.scale,
+            )
+        })
+        .collect();
+    (cursor, monitors)
+}
+
+/// 光标所在显示器；取不到光标或显示器列表时返回 `None`，由调用方回退主显示器。
+///
+/// 物理空间判定：这里的 `cursor_position()`（GetCursorPos）与 `Monitor` 边界（rcMonitor）
+/// 是同一套物理像素坐标，直接比较即正确。
+#[cfg(not(target_os = "macos"))]
+pub fn cursor_monitor(window: &WebviewWindow) -> Option<MonitorSpec> {
+    let Some(cursor) = window.cursor_position().ok() else {
+        eprintln!("[QuickQuick] 判屏：读取光标位置失败，回退主显示器");
+        return None;
+    };
+    find_monitor_at((cursor.x, cursor.y), &monitor_specs(window))
 }
 
 /// 把「逻辑点」坐标交给 tauri 的最终出口：按平台选择单位。
@@ -125,6 +232,46 @@ pub fn monitor_spec(monitor: &tauri::Monitor) -> MonitorSpec {
     }
 }
 
+/// 把「左上原点点坐标」的显示器几何包装成 [`MonitorSpec`]。
+///
+/// `MonitorSpec` 的字段语义是物理像素，故这里把点乘上该屏 scale 存进去，
+/// [`MonitorSpec::logical_bounds`] 再除回同一组点坐标。AppKit 给出的屏幕矩形本来就是点，
+/// 需要这层包装才能与其它来源的 [`MonitorSpec`] 走同一套逻辑点计算。
+///
+/// scale 非法（非有限或非正）时两侧都退成 1.0（见 [`normalized_scale`]），点坐标原样保留。
+///
+/// 生产路径上只有 macOS 的 [`cursor_monitor`] 用它（其它平台的判屏留在物理空间），
+/// 所以在那些平台它是测试专用的纯函数。
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+#[must_use]
+pub fn monitor_spec_from_points(
+    left_pt: f64,
+    top_pt: f64,
+    width_pt: f64,
+    height_pt: f64,
+    scale_factor: f64,
+) -> MonitorSpec {
+    let scale = normalized_scale(scale_factor);
+    // 点 → 物理像素：乘本屏 scale 后四舍五入；`as i32` 在越界或 NaN 时饱和，不 panic。
+    let to_physical = |points: f64| (points * scale).round() as i32;
+    MonitorSpec {
+        x: to_physical(left_pt),
+        y: to_physical(top_pt),
+        width: to_physical(width_pt),
+        height: to_physical(height_pt),
+        scale_factor,
+    }
+}
+
+/// 参与换算的缩放比；非有限或非正的值退成 1.0，避免除零与 NaN 扩散到坐标里。
+fn normalized_scale(scale_factor: f64) -> f64 {
+    if scale_factor.is_finite() && scale_factor > 0.0 {
+        scale_factor
+    } else {
+        1.0
+    }
+}
+
 /// 当前全部显示器的几何数据；取不到列表时返回空表（调用方据此降级到主显示器或光标兜底）。
 pub fn monitor_specs(window: &WebviewWindow) -> Vec<MonitorSpec> {
     match window.available_monitors() {
@@ -138,7 +285,9 @@ pub fn monitor_specs(window: &WebviewWindow) -> Vec<MonitorSpec> {
 
 /// 在给定显示器列表中查找包含物理点 `(x, y)` 的显示器。
 ///
-/// 用物理点：调用方给的是 tao 的 `cursor_position()`，它本身不是干净的逻辑点（见调用处注释）。
+/// 只在 Windows 等平台使用：那里的 `cursor_position()` 与 `Monitor` 边界同为物理像素，
+/// 物理空间比较才成立。macOS 走 [`cursor_monitor`] 的 AppKit 点空间路径。
+#[cfg(not(target_os = "macos"))]
 fn find_monitor_at((cx, cy): (f64, f64), monitors: &[MonitorSpec]) -> Option<MonitorSpec> {
     monitors.iter().copied().find(|monitor| {
         let left = f64::from(monitor.x);
@@ -149,13 +298,31 @@ fn find_monitor_at((cx, cy): (f64, f64), monitors: &[MonitorSpec]) -> Option<Mon
     })
 }
 
+/// 在给定显示器列表中查找**点空间**包含点 `(px, py)` 的显示器。
+///
+/// 边界约定与 `find_monitor_at` 一致：半开区间 `[left, right) × [top, bottom)`。
+/// 区别只在坐标空间——这里先把各屏物理边界经 [`MonitorSpec::logical_bounds`] 还原成点，
+/// 混合 DPI 下每块屏的边界因此都与光标点处在同一空间：若拿点去比物理边界，2x 主屏会把
+/// (5000, 600) 这种点放大成 10000，落在 1x 副屏物理范围 [4616, 7176) 之外而误判为「不在任何屏」。
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+#[must_use]
+pub fn find_monitor_containing_point_pts(
+    (px, py): (f64, f64),
+    monitors: &[MonitorSpec],
+) -> Option<MonitorSpec> {
+    monitors.iter().copied().find(|monitor| {
+        let (left, top, width, height) = monitor.logical_bounds();
+        px >= left && px < left + width && py >= top && py < top + height
+    })
+}
+
 /// 在给定显示器区域内计算水平居中、靠上 TOP_RATIO 的**逻辑点**坐标。
 ///
 /// 参数均为逻辑点：`mon_x` / `mon_y` 是显示器左上角，`mon_w` / `mon_h` 是显示器宽高，
 /// `width` 是窗口逻辑宽度。
 ///
-/// 内部退到 f64 再截断：既与改动前的整数除法逐值一致（1x 单屏行为不变），又不会在极端
-/// 显示器尺寸下整数溢出。`as i32` 在越界时饱和，不 panic。
+/// 内部退到 f64 再截断：避免整数除法丢掉奇数宽度的半个像素，并且在极端显示器尺寸下
+/// 不会整数溢出。`as i32` 在越界时饱和，不 panic。
 fn center_top_position(
     mon_x: i32,
     mon_y: i32,
@@ -171,7 +338,7 @@ fn center_top_position(
 /// 光标兜底落点的纯计算：显示器逻辑边界 + 窗口逻辑宽度 → 逻辑坐标。
 ///
 /// 这里不接收任何 scale：显示器物理边界先除回逻辑点，窗口尺寸本来就是逻辑尺寸，
-/// 算出来的结果与「窗口当前在哪块屏、当前 scale 是几」无关——这正是本次修掉的那条耦合。
+/// 算出来的结果与「窗口当前在哪块屏、当前 scale 是几」无关。
 fn center_top_logical(monitor: MonitorSpec, width: i32) -> LogicalPosition<i32> {
     let (left, top, mon_width, mon_height) = monitor.logical_bounds();
     center_top_position(
@@ -207,17 +374,14 @@ pub struct MonitorSpec {
 impl MonitorSpec {
     /// 参与换算的缩放比；非有限或非正的值退成 1.0，避免除零与 NaN 扩散到坐标里。
     fn scale(&self) -> f64 {
-        if self.scale_factor.is_finite() && self.scale_factor > 0.0 {
-            self.scale_factor
-        } else {
-            1.0
-        }
+        normalized_scale(self.scale_factor)
     }
 
     /// 显示器边界的逻辑点表示。
     ///
     /// 为什么可以直接除：tauri 的显示器位置与尺寸由 `CGDisplayBounds`（点）× scale_factor
-    /// 得到，因此「物理 = 点 × 本屏 scale」在全局坐标空间里逐屏成立。
+    /// 得到，因此「物理 = 点 × 本屏 scale」在全局坐标空间里逐屏成立；AppKit 来源的点几何
+    /// 由 [`monitor_spec_from_points`] 按同一关系包装，所以这里对两种来源都成立。
     fn logical_bounds(&self) -> (f64, f64, f64, f64) {
         let scale = self.scale();
         (
@@ -360,6 +524,9 @@ mod tests {
     }
 
     /// 验证 find_monitor_at：空列表返回 None
+    ///
+    /// 物理空间判屏只在 Windows 等非 macOS 平台使用，故单测随函数一起按平台门禁。
+    #[cfg(not(target_os = "macos"))]
     #[test]
     fn find_monitor_at_no_monitors_returns_none() {
         // Arrange
@@ -551,8 +718,8 @@ mod tests {
         let position = compute_position_near_rect(rect, (320, 200), &[retina]);
 
         // Assert: 中心 450 点、窗口宽 320 点 → x = 450 - 160 = 290；下沿 70 + 8 → y = 78。
-        //         若把选区乘 scale 算成物理像素（旧实现的做法）会得到 (580,148)；tao 对 Logical
-        //         是原样透传，物理值当逻辑点下发会落到相邻屏/屏外，故两者必须区分。
+        //         若把选区乘 scale 算成物理像素会得到 (580,148)；tao 对 Logical 是原样透传，
+        //         物理值当逻辑点下发会落到相邻屏或屏外，故两者必须区分。
         assert_eq!(position, Some(LogicalPosition::new(290, 78)));
     }
 
@@ -593,8 +760,8 @@ mod tests {
     /// 极端 bounds（高度 1e9）：不 panic，且结果被夹紧在屏内。
     #[test]
     fn position_with_extreme_bounds_is_clamped_not_panicking() {
-        // Arrange: 高度 1e10 的「选区」。旧实现把 bottom 在 `as i32` 时饱和到 i32::MAX，
-        // 再加 ANCHOR_GAP 就会在 debug 下溢出 panic；取 1e9 时旧实现碰不到这个边界，测试判别力不足。
+        // Arrange: 高度 1e10 的选区。bottom 超出 i32 时 `as i32` 饱和到 i32::MAX，若在 i32 上
+        // 再加 ANCHOR_GAP 就会在 debug 下溢出 panic；取 1e10 能越过这个边界，因此测试有判别力。
         let rect = ScreenRect {
             x: 100.0,
             y: 100.0,
@@ -658,7 +825,7 @@ mod tests {
         );
     }
 
-    /// 光标兜底：1x 单屏与改动前逐值一致（旧实现把同样的数值当物理坐标交出，1x 下等价）。
+    /// 1x 单屏：逻辑点直接输出，居中结果逐值可算。
     #[test]
     fn fallback_on_1x_matches_previous_position() {
         // Act
@@ -683,8 +850,8 @@ mod tests {
         // Act
         let position = center_top_logical(retina, 720);
 
-        // Assert: 逻辑 (600,162)。旧实现按物理像素算得 (1560,324) 当物理值下发，会被窗口
-        //         scale 2 除成逻辑 (780,162)——偏右 180pt（窗口宽/4），本次修正为真正居中。
+        // Assert: 逻辑点 (600,162)。屏内计算一律用逻辑尺寸，窗口 scale 不参与换算，因此 2x 屏
+        //         与 1x 屏上的居中结果一致。
         assert_eq!(position, LogicalPosition::new(600, 162));
     }
 
@@ -731,5 +898,222 @@ mod tests {
 
         // Assert: x 夹到 0；y = (10 + 10) + 8 = 28
         assert_eq!(position, Some(LogicalPosition::new(0, 28)));
+    }
+
+    // ===== 点空间几何：点坐标 ↔ MonitorSpec / 点空间判屏 =====
+
+    /// 1x 屏：物理字段与点坐标相同，`logical_bounds` 原样还原。
+    #[test]
+    fn monitor_spec_from_points_round_trips_points_on_1x() {
+        // Arrange & Act
+        let spec = monitor_spec_from_points(4616.0, 0.0, 2560.0, 1440.0, 1.0);
+
+        // Assert
+        assert_eq!(
+            (spec.x, spec.y, spec.width, spec.height),
+            (4616, 0, 2560, 1440),
+            "1x 下物理字段等于点坐标"
+        );
+        assert_eq!(spec.logical_bounds(), (4616.0, 0.0, 2560.0, 1440.0));
+    }
+
+    /// 2x 屏：物理字段存「点 × 2」，`logical_bounds` 除回原始点坐标。
+    #[test]
+    fn monitor_spec_from_points_round_trips_points_on_2x() {
+        // Arrange & Act
+        let spec = monitor_spec_from_points(0.0, 0.0, 1028.0, 664.5, 2.0);
+
+        // Assert
+        assert_eq!(
+            (spec.x, spec.y, spec.width, spec.height),
+            (0, 0, 2056, 1329),
+            "2x 下物理字段是点 × 2"
+        );
+        assert_eq!(spec.logical_bounds(), (0.0, 0.0, 1028.0, 664.5));
+    }
+
+    /// 非法 scale（0）退成 1.0：点坐标原样保留，不产生除零或 NaN。
+    #[test]
+    fn monitor_spec_from_points_falls_back_to_unit_scale_when_invalid() {
+        // Arrange & Act
+        let spec = monitor_spec_from_points(100.0, 50.0, 800.0, 600.0, 0.0);
+
+        // Assert
+        assert_eq!(
+            (spec.x, spec.y, spec.width, spec.height),
+            (100, 50, 800, 600)
+        );
+        assert_eq!(spec.logical_bounds(), (100.0, 50.0, 800.0, 600.0));
+    }
+
+    /// 2x 主屏：逻辑 2056×1329（物理 4112×2658），左上原点 (0,0)。
+    fn mixed_primary_2x() -> MonitorSpec {
+        monitor_spec_from_points(0.0, 0.0, 2056.0, 1329.0, 2.0)
+    }
+
+    /// 2x 非原点副屏（逻辑原点 x=2056，2560×1440）。
+    fn mixed_secondary_2x() -> MonitorSpec {
+        monitor_spec_from_points(2056.0, 0.0, 2560.0, 1440.0, 2.0)
+    }
+
+    /// 1x 副屏（逻辑原点 x=4616，2560×1440）。
+    fn mixed_tertiary_1x() -> MonitorSpec {
+        monitor_spec_from_points(4616.0, 0.0, 2560.0, 1440.0, 1.0)
+    }
+
+    /// 混合 DPI：点落在 1x 副屏的逻辑范围内时，命中该屏。
+    #[test]
+    fn find_monitor_containing_point_pts_finds_1x_screen_in_mixed_dpi() {
+        // Arrange: 2x 主屏 + 2x 副屏 + 1x 副屏；光标点 (5896, 720) 在 1x 屏逻辑范围内
+        let monitors = [
+            mixed_primary_2x(),
+            mixed_secondary_2x(),
+            mixed_tertiary_1x(),
+        ];
+
+        // Act
+        let monitor = find_monitor_containing_point_pts((5896.0, 720.0), &monitors);
+
+        // Assert
+        assert_eq!(monitor, Some(mixed_tertiary_1x()), "点空间判屏应命中 1x 屏");
+    }
+
+    /// 非原点的 2x 屏：点空间判屏直接命中。
+    #[test]
+    fn find_monitor_containing_point_pts_finds_offset_2x_screen() {
+        // Arrange
+        let monitors = [
+            mixed_primary_2x(),
+            mixed_secondary_2x(),
+            mixed_tertiary_1x(),
+        ];
+
+        // Act
+        let monitor = find_monitor_containing_point_pts((3336.0, 720.0), &monitors);
+
+        // Assert
+        assert_eq!(
+            monitor,
+            Some(mixed_secondary_2x()),
+            "点空间判屏应命中非原点 2x 屏"
+        );
+    }
+
+    /// 所有屏之外的点返回 None，由调用方回退主屏。
+    #[test]
+    fn find_monitor_containing_point_pts_returns_none_outside_all_screens() {
+        // Arrange: 最右屏（1x，右边缘 7176）之外
+        let monitors = [
+            mixed_primary_2x(),
+            mixed_secondary_2x(),
+            mixed_tertiary_1x(),
+        ];
+
+        // Act
+        let monitor = find_monitor_containing_point_pts((7200.0, 720.0), &monitors);
+
+        // Assert
+        assert_eq!(monitor, None, "屏外的点不得臆造屏幕");
+    }
+
+    /// AppKit 布局：主屏 2x，副屏 1x 且 frame.origin.y 为负（位于主屏下方）。
+    fn appkit_mixed_layout() -> [AppKitScreen; 2] {
+        [
+            AppKitScreen {
+                origin_x: 0.0,
+                origin_y: 0.0,
+                width: 2056.0,
+                height: 1329.0,
+                scale: 2.0,
+            },
+            AppKitScreen {
+                origin_x: 4616.0,
+                origin_y: -111.0,
+                width: 2560.0,
+                height: 1440.0,
+                scale: 1.0,
+            },
+        ]
+    }
+
+    /// AppKit 翻转：副屏顶边在左上原点空间为 0（1329 - (-111 + 1440) = 0）。
+    #[test]
+    fn appkit_layout_places_lower_screen_top_at_zero() {
+        // Arrange
+        let screens = appkit_mixed_layout();
+
+        // Act
+        let (_, monitors) = appkit_layout_to_points(&screens, (5896.0, 609.0));
+
+        // Assert
+        assert_eq!(monitors[1].logical_bounds(), (4616.0, 0.0, 2560.0, 1440.0));
+    }
+
+    /// AppKit 翻转：鼠标左下原点 y=609 → 左上原点 y=720，并落在 1x 副屏内。
+    #[test]
+    fn appkit_layout_flips_mouse_and_resolves_lower_screen() {
+        // Arrange
+        let screens = appkit_mixed_layout();
+
+        // Act
+        let (cursor, monitors) = appkit_layout_to_points(&screens, (5896.0, 609.0));
+        let monitor = find_monitor_containing_point_pts(cursor, &monitors);
+
+        // Assert
+        assert_eq!(cursor, (5896.0, 720.0));
+        assert_eq!(monitor, Some(monitors[1]), "翻转后的光标应落在 1x 副屏");
+    }
+
+    /// 空布局：不 panic，返回空列表。
+    #[test]
+    fn appkit_layout_with_no_screens_returns_empty() {
+        // Arrange & Act
+        let (_, monitors) = appkit_layout_to_points(&[], (10.0, 10.0));
+
+        // Assert
+        assert!(monitors.is_empty());
+    }
+
+    /// 边界半开：右边缘与下边缘上的点不属于该屏。
+    #[test]
+    fn find_monitor_containing_point_pts_treats_right_and_bottom_edges_as_exclusive() {
+        // Arrange
+        let monitors = [primary_monitor()];
+
+        // Act
+        let inside = find_monitor_containing_point_pts((1919.0, 1079.0), &monitors);
+        let at_right = find_monitor_containing_point_pts((1920.0, 500.0), &monitors);
+        let at_bottom = find_monitor_containing_point_pts((500.0, 1080.0), &monitors);
+
+        // Assert: [left, right) × [top, bottom)
+        assert_eq!(inside, Some(primary_monitor()));
+        assert_eq!(at_right, None, "右边界不包含");
+        assert_eq!(at_bottom, None, "下边界不包含");
+    }
+
+    /// 屏外点不属于任何显示器。
+    #[test]
+    fn find_monitor_containing_point_pts_returns_none_outside_all_monitors() {
+        // Arrange
+        let monitors = [primary_monitor()];
+
+        // Act
+        let monitor = find_monitor_containing_point_pts((-1.0, 500.0), &monitors);
+
+        // Assert
+        assert_eq!(monitor, None, "屏外点应返回 None");
+    }
+
+    /// 空显示器列表返回 None。
+    #[test]
+    fn find_monitor_containing_point_pts_with_empty_list_returns_none() {
+        // Arrange
+        let monitors: Vec<MonitorSpec> = vec![];
+
+        // Act
+        let monitor = find_monitor_containing_point_pts((100.0, 100.0), &monitors);
+
+        // Assert
+        assert_eq!(monitor, None, "空列表应返回 None");
     }
 }

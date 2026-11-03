@@ -150,7 +150,12 @@ pub fn run() {
     // 回调签名为 Fn(&AppHandle, Vec<String>, String)，依次是 app/argv/cwd，此处仅需 app。
     #[cfg(desktop)]
     let builder = builder.plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
-        tray::show_and_focus_window(app);
+        // 插件在 async runtime 线程回调，而定位（NSScreen）与激活（NSApplication）都要求主线程；
+        // 投递到主线程，否则光标屏判定会回退主屏，且激活被跳过、搜索框拿不到焦点。
+        let handle = app.clone();
+        if let Err(e) = app.run_on_main_thread(move || tray::show_and_focus_window(&handle)) {
+            eprintln!("[QuickQuick] 单实例唤出：投递主线程失败: {e}");
+        }
     }));
 
     let builder = register_plugins(builder);

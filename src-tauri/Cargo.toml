@@ -75,8 +75,13 @@ objc2-app-kit = { version = "0.3", features = [
     "NSControl",
     "NSButton",
     # 托盘点击读取点击时刻的修饰键：NSEvent 的类方法 modifierFlags()
-    # （全局当前修饰键状态，不依赖具体事件对象）。
+    # （全局当前修饰键状态，不依赖具体事件对象）；NSEvent::mouseLocation() 给出
+    # 光标所在的点坐标（左下原点），供光标屏判定使用。
     "NSEvent",
+    # 光标屏判定：NSScreen 提供各屏的 frame（点坐标）与 backingScaleFactor()。
+    # tao 的 cursor_position() 在混合 DPI 下与 Monitor 的物理边界不在同一空间，
+    # 故 macOS 判屏改走 AppKit。
+    "NSScreen",
 ] }
 # NSWorkspace 通知中心走 block 形式注册观察者（addObserverForName:object:queue:usingBlock:），
 # 需 objc2-foundation 提供 NSNotification/NSDictionary/NSString，block2 提供 RcBlock；
