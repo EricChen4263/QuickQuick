@@ -3,6 +3,24 @@
 本项目每个发布版本的更新内容。排版约定：每版先一整段**中文**，分隔线后一整段 **English**（分语言成段，不行内混排）。
 发版时 `release.yml` 会自动抽取对应 `## v<版本>` 段拼到 GitHub Release 顶部；`release.sh` 预检要求新版在此有对应段，否则阻断发版。
 
+## v0.5.1
+
+### 🖥️ 多显示器
+- **唤出时跟随光标所在屏**：在分辨率与缩放比例不同的多显示器上（如 Retina 主屏配 1x 外接屏），快捷键与托盘唤出的窗口会落在光标所在的显示器，不再回退到主屏。
+- **主窗口唤出时重新定位**：⌘⇧M 以及托盘的「显示」「打开设置」等入口，唤出前会按光标所在屏居中靠上定位，不再停在上次的位置。
+- **再次启动 app 唤出**同样按光标所在屏定位。
+- Windows 上的判屏逻辑保持不变；主窗口同样会按光标所在屏定位。
+
+---
+
+### 🖥️ Multi-display
+- **Shows on the cursor's display**: on multi-monitor setups with different resolutions or scale factors (for example a Retina main display plus a 1x external one), the window summoned by a hotkey or the tray now appears on the display under the cursor, instead of falling back to the main display.
+- **Main window repositions on summon**: ⌘⇧M and tray items such as Show and Open Settings now center the window near the top of the cursor's display before showing it, instead of reappearing where it was last.
+- **Launching the app again** also places the window on the cursor's display.
+- On Windows, display detection is unchanged; the main window is likewise placed on the cursor's display.
+
+---
+
 ## v0.5.0
 
 ### 🖼️ 图片预览
