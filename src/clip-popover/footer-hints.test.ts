@@ -53,7 +53,7 @@ describe("applyModifierKey 修饰键状态转移", () => {
 describe("selectHints 徽标集合随修饰键切换", () => {
   it("无修饰键时显示默认层，且包含数字直达", () => {
     const hints = kbdLabels(NO_MODIFIERS);
-    expect(hints).toEqual(["↵ 粘贴", "⌥↵ 复制", "1–0 直达", "↑↓ 选择", "esc 关闭"]);
+    expect(hints).toEqual(["↵ 粘贴", "⌥↵ 复制", "1–0 数字直达粘贴", "↑↓ 选择", "esc 关闭"]);
     // 数字直达是 discoverability 的主要缺口，默认层必须能看见
     expect(hints.some((hint) => hint.includes("直达"))).toBe(true);
   });

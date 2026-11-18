@@ -3,6 +3,22 @@
 本项目每个发布版本的更新内容。排版约定：每版先一整段**中文**，分隔线后一整段 **English**（分语言成段，不行内混排）。
 发版时 `release.yml` 会自动抽取对应 `## v<版本>` 段拼到 GitHub Release 顶部；`release.sh` 预检要求新版在此有对应段，否则阻断发版。
 
+## v0.5.2
+
+### 🖱️ 快捷粘贴浮窗
+- **双击粘贴**：单击条目只选中，双击直接粘贴到前台应用并关闭浮窗。
+- **点击后键盘不再失效**：之前点击条目会把焦点从搜索框抢走，导致 Enter、方向键、数字键全部失灵，必须重开浮窗；现在点击后焦点保留在搜索框。
+- **数字直达更清楚**：搜索框为空时，前 10 条左侧显示 1–9、0 序号；底部提示改为「1–0 数字直达粘贴」。
+
+---
+
+### 🖱️ Quick-paste popover
+- **Double-click to paste**: a single click only selects an item; a double click pastes it into the front app and closes the popover.
+- **Keyboard keeps working after a click**: clicking an item used to steal focus from the search box, disabling Enter, arrows and digit keys until the popover was reopened. Focus now stays in the search box.
+- **Clearer digit shortcuts**: with an empty search box, the first 10 rows show 1–9, 0 indices; the footer hint now reads "1–0 数字直达粘贴".
+
+---
+
 ## v0.5.1
 
 ### 🖥️ 多显示器

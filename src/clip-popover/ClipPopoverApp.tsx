@@ -550,6 +550,8 @@ export default function ClipPopoverApp() {
           selectedId={selectedId}
           hitRanges={hitRangesById}
           onSelect={(item) => setSelectedId(item.id)}
+          onActivate={(item) => confirmPasteById(item.id)}
+          showDirectIndex={query === ""}
           ownership={ownership}
         />
         <PopoverPreview state={preview} onOpenImage={(item) => setImageViewId(item.id)} />

@@ -137,10 +137,10 @@ body::before {
 .popover-row {
   position: relative;
   display: grid;
-  grid-template-columns: var(--icon-16) minmax(0, 1fr) auto;
+  grid-template-columns: var(--sp-16) var(--icon-16) minmax(0, 1fr) auto;
   align-items: center;
   gap: var(--sp-8);
-  padding: var(--sp-8) var(--sp-8) var(--sp-8) var(--sp-12);
+  padding: var(--sp-8) var(--sp-8) var(--sp-8) var(--sp-8);
   border-radius: var(--r-8);
   cursor: default;
   transition: var(--t-color);
@@ -172,6 +172,17 @@ body::before {
 .popover-row[aria-selected="true"]::before {
   opacity: 1;
   transform: translateY(-50%) scaleY(1);
+}
+
+/* 直达序号：固定宽度占位，序号出现/消失（搜索词非空时）不引起列表横向抖动 */
+.popover-row-index {
+  text-align: center;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.popover-row-index::before {
+  content: attr(data-index);
 }
 
 .popover-row-icon {

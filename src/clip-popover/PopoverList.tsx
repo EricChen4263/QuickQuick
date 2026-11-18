@@ -13,9 +13,16 @@ interface PopoverListProps {
   /** 条目 id → 命中区间；缺省表示无搜索条件，整段按普通文本渲染 */
   hitRanges?: ReadonlyMap<string, SearchRange[]>;
   onSelect: (item: ClipItem) => void;
+  /** 双击某行：取用该条（与 Enter 同一条粘贴路径）；单击只选中 */
+  onActivate?: (item: ClipItem) => void;
+  /** 是否在前 10 行左侧显示直达序号（仅搜索词为空时数字直达才生效） */
+  showDirectIndex?: boolean;
   /** 悬停与键盘的主导权仲裁器：只有鼠标真实位移过，悬停才允许改选中项 */
   ownership: InputOwnership;
 }
+
+/** 全局第 1–10 行对应的直达键：1..9 然后 0（与 directPickIndex 一致） */
+const DIRECT_LABELS = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"];
 
 /** 内容摘要最大字符数（超出截断加省略号） */
 const SUMMARY_MAX = 50;
@@ -45,9 +52,14 @@ function PopoverRow({
   item,
   isSelected,
   hitRanges,
+  directLabel,
   onSelect,
+  onActivate,
   onHoverSelect,
 }: {
+  /** 直达序号（"1".."9","0"）；缺省表示该行不可直达 */
+  directLabel?: string;
+  onActivate?: (item: ClipItem) => void;
   item: ClipItem;
   isSelected: boolean;
   hitRanges?: SearchRange[];
@@ -60,12 +72,18 @@ function PopoverRow({
       role="option"
       aria-selected={isSelected}
       className="popover-row"
+      // 阻止 mousedown 的默认行为：否则点击会把焦点从搜索框抢到 body，
+      // 之后 Enter / 方向键 / 数字键（都挂在搜索框上）全部失效。
+      onMouseDown={(e) => e.preventDefault()}
       onClick={() => onSelect(item)}
+      onDoubleClick={() => onActivate?.(item)}
       onMouseEnter={() => onHoverSelect(item)}
       // 真实移动往往先进入某行（进入事件）再产生移动事件，所以两个事件都要接：
       // 只有移动事件才能让仲裁器确认「鼠标真的动了」，进入事件负责本行的选中。
       onMouseMove={() => onHoverSelect(item)}
     >
+      {/* 序号走 data 属性 + CSS 伪元素渲染：不进入行的文本内容，读屏与文本断言都不受影响 */}
+      <span className="popover-row-index caption-3" data-index={directLabel} aria-hidden="true" />
       <div className="popover-row-icon">
         <KindIcon kind={item.kind} />
       </div>
@@ -110,8 +128,15 @@ function PopoverGroup({
   selectedId,
   hitRanges,
   onSelect,
+  onActivate,
   onHoverSelect,
+  startIndex,
+  showDirectIndex,
 }: {
+  /** 本组第一行在全局扁平顺序中的下标 */
+  startIndex: number;
+  showDirectIndex: boolean;
+  onActivate?: (item: ClipItem) => void;
   label: string;
   items: ClipItem[];
   selectedId: string | null;
@@ -125,13 +150,15 @@ function PopoverGroup({
     // 分组标题是裸 div，必须由 group 容器承载，否则分组语义不成立。
     <div role="group" aria-label={label}>
       <GroupHeader label={label} />
-      {items.map((item) => (
+      {items.map((item, i) => (
         <PopoverRow
           key={item.id}
           item={item}
           isSelected={item.id === selectedId}
           hitRanges={hitRanges?.get(item.id)}
+          directLabel={showDirectIndex ? DIRECT_LABELS[startIndex + i] : undefined}
           onSelect={onSelect}
+          onActivate={onActivate}
           onHoverSelect={onHoverSelect}
         />
       ))}
@@ -147,7 +174,15 @@ function PopoverGroup({
  * 悬停选中受 ownership 仲裁：键盘导航后鼠标停在原处时，列表滚动会把别的行送到指针下，
  * 浏览器随即补发进入事件与同坐标移动事件——这类「没有真实位移」的悬停不得改选中项。
  */
-export function PopoverList({ groups, selectedId, hitRanges, onSelect, ownership }: PopoverListProps) {
+export function PopoverList({
+  groups,
+  selectedId,
+  hitRanges,
+  onSelect,
+  onActivate,
+  showDirectIndex = false,
+  ownership,
+}: PopoverListProps) {
   const { favorites, today, earlier } = groups;
   const isEmpty = favorites.length === 0 && today.length === 0 && earlier.length === 0;
   const listRef = useRef<HTMLDivElement>(null);
@@ -190,9 +225,9 @@ export function PopoverList({ groups, selectedId, hitRanges, onSelect, ownership
       // 捕获阶段先于行自身的移动事件执行：行处理悬停时，本次移动是否真实已经裁决完毕
       onMouseMoveCapture={handlePointerMoveCapture}
     >
-      <PopoverGroup label="收藏" items={favorites} selectedId={selectedId} hitRanges={hitRanges} onSelect={onSelect} onHoverSelect={handleHoverSelect} />
-      <PopoverGroup label="今天" items={today} selectedId={selectedId} hitRanges={hitRanges} onSelect={onSelect} onHoverSelect={handleHoverSelect} />
-      <PopoverGroup label="更早" items={earlier} selectedId={selectedId} hitRanges={hitRanges} onSelect={onSelect} onHoverSelect={handleHoverSelect} />
+      <PopoverGroup label="收藏" items={favorites} selectedId={selectedId} hitRanges={hitRanges} onSelect={onSelect} onActivate={onActivate} onHoverSelect={handleHoverSelect} showDirectIndex={showDirectIndex} startIndex={0} />
+      <PopoverGroup label="今天" items={today} selectedId={selectedId} hitRanges={hitRanges} onSelect={onSelect} onActivate={onActivate} onHoverSelect={handleHoverSelect} showDirectIndex={showDirectIndex} startIndex={favorites.length} />
+      <PopoverGroup label="更早" items={earlier} selectedId={selectedId} hitRanges={hitRanges} onSelect={onSelect} onActivate={onActivate} onHoverSelect={handleHoverSelect} showDirectIndex={showDirectIndex} startIndex={favorites.length + today.length} />
     </div>
   );
 }

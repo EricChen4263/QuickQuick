@@ -217,3 +217,33 @@ describe("PopoverList 悬停与键盘仲裁", () => {
     expect(onSelect).not.toHaveBeenCalled();
   });
 });
+
+describe("PopoverList 鼠标交互与直达序号", () => {
+  it("单击只选中，双击才触发取用", () => {
+    const onSelect = vi.fn();
+    const onActivate = vi.fn();
+    const groups: ClipGroups = { favorites: [], today: [makeItem("t1")], earlier: [] };
+    render(<PopoverList groups={groups} selectedId={null} onSelect={onSelect} onActivate={onActivate} ownership={createInputOwnership()} />);
+    const row = screen.getAllByRole("option")[0];
+    fireEvent.click(row);
+    expect(onSelect).toHaveBeenCalledTimes(1);
+    expect(onActivate).not.toHaveBeenCalled();
+    fireEvent.doubleClick(row);
+    expect(onActivate).toHaveBeenCalledTimes(1);
+  });
+
+  it("mousedown 被 preventDefault，避免抢走搜索框焦点", () => {
+    const groups: ClipGroups = { favorites: [], today: [makeItem("t1")], earlier: [] };
+    render(<PopoverList groups={groups} selectedId={null} onSelect={noop} ownership={createInputOwnership()} />);
+    const notPrevented = fireEvent.mouseDown(screen.getAllByRole("option")[0]);
+    expect(notPrevented).toBe(false);
+  });
+
+  it("showDirectIndex 时跨组显示 1..9,0 序号，第 11 行无序号", () => {
+    const items = Array.from({ length: 11 }, (_, i) => makeItem("t" + i));
+    const groups: ClipGroups = { favorites: [], today: items, earlier: [] };
+    const { container } = render(<PopoverList groups={groups} selectedId={null} onSelect={noop} showDirectIndex ownership={createInputOwnership()} />);
+    const labels = Array.from(container.querySelectorAll(".popover-row-index")).map((n) => n.getAttribute("data-index"));
+    expect(labels).toEqual(["1", "2", "3", "4", "5", "6", "7", "8", "9", "0", null]);
+  });
+});
